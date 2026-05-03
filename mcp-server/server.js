@@ -11,6 +11,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { wakeMostRecentThread } from './codex-app-server.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -356,10 +357,26 @@ const PENDING_PERMISSION_FILE = path.join(SESSION_DIR, 'pending-permission.json'
 const PERMISSION_RESPONSE_FILE = path.join(SESSION_DIR, 'permission-response.json');
 const SLASH_COMMAND_FILE = path.join(SESSION_DIR, 'slash-command.json');
 
-// Trigger Enter keystroke by writing a trigger file (watcher script picks this up)
+// Wake the host agent so it picks up the freshly queued message.
+//
+// Claude Code: drop a trigger file for the PowerShell watcher, which
+// PostMessages WM_CHAR `.` + Enter into the cmd.exe console.
+//
+// Codex: call turn/start on the local app-server's control socket. The
+// placeholder input fires Codex's UserPromptSubmit hook, which injects
+// the queued messages as additionalContext. No watcher, no keystrokes.
 function triggerEnterKey() {
-  // Small delay to ensure message is queued before triggering
+  // Small delay to ensure the queue write is visible before waking.
   setTimeout(() => {
+    if (AGENT === 'codex') {
+      wakeMostRecentThread('.')
+        .then((ok) => {
+          if (ok) log('Started Codex turn via app-server JSON-RPC');
+          else log('Codex wake skipped (no socket, no thread, or thread busy)');
+        })
+        .catch((e) => log(`Codex wake error: ${e.message}`));
+      return;
+    }
     try {
       fs.writeFileSync(TRIGGER_FILE, Date.now().toString());
       log('Wrote trigger file for Enter keystroke');
