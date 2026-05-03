@@ -40,11 +40,14 @@ const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 9 * 60 * 1000;
 
 function getCredentials() {
+  const home = os.homedir();
   const candidates = [
     path.join(process.cwd(), '.codex', 'telegram.json'),
     path.join(__dirname, '..', '..', '.codex', 'telegram.json'),
+    path.join(home, '.codex', 'telegram.json'),
     path.join(process.cwd(), '.claude', 'telegram.json'),
     path.join(__dirname, '..', '..', '.claude', 'telegram.json'),
+    path.join(home, '.claude', 'telegram.json'),
   ];
   for (const p of candidates) {
     try {

@@ -46,16 +46,23 @@ function getSessionDir(cwd) {
 
 // Load credentials from project-specific config or environment variables.
 // The candidate order depends on the active agent: each agent prefers its
-// own config dir, with the other as a legacy fallback.
+// own config dir, with the other as a legacy fallback. The home-dir
+// fallbacks (~/.codex/telegram.json, ~/.claude/telegram.json) catch the
+// Remote-TUI case where the MCP server is spawned by an app-server in a
+// different cwd than the project — without those, no per-project file is
+// reachable and the server would exit with code 1 on startup.
 function loadCredentials() {
   const pluginRoot = path.resolve(__dirname, '..', '..');
+  const home = os.homedir();
   const codexCandidates = [
     path.join(process.cwd(), '.codex', 'telegram.json'),
     path.join(pluginRoot, '.codex', 'telegram.json'),
+    path.join(home, '.codex', 'telegram.json'),
   ];
   const claudeCandidates = [
     path.join(process.cwd(), '.claude', 'telegram.json'),
     path.join(pluginRoot, '.claude', 'telegram.json'),
+    path.join(home, '.claude', 'telegram.json'),
   ];
   const candidatePaths =
     AGENT === 'codex'

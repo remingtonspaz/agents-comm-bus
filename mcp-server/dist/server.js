@@ -85623,13 +85623,16 @@ function getSessionDir(cwd) {
 }
 function loadCredentials() {
   const pluginRoot = path.resolve(__dirname, "..", "..");
+  const home = os.homedir();
   const codexCandidates = [
     path.join(process.cwd(), ".codex", "telegram.json"),
-    path.join(pluginRoot, ".codex", "telegram.json")
+    path.join(pluginRoot, ".codex", "telegram.json"),
+    path.join(home, ".codex", "telegram.json")
   ];
   const claudeCandidates = [
     path.join(process.cwd(), ".claude", "telegram.json"),
-    path.join(pluginRoot, ".claude", "telegram.json")
+    path.join(pluginRoot, ".claude", "telegram.json"),
+    path.join(home, ".claude", "telegram.json")
   ];
   const candidatePaths = AGENT === "codex" ? [...codexCandidates, ...claudeCandidates] : [...claudeCandidates, ...codexCandidates];
   for (const configPath of candidatePaths) {
