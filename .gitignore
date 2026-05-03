@@ -4,6 +4,10 @@ node_modules/
 # Local Claude settings
 .claude/settings.local.json
 
+# Local MCP override for in-tree development
+# (canonical config lives in .claude-plugin/plugin.json under mcpServers)
+.mcp.json
+
 # Queue files
 queue.json
 

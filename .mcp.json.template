@@ -2,11 +2,7 @@
   "mcpServers": {
     "telegram": {
       "command": "node",
-      "args": ["./mcp-server/server.js"],
-      "env": {
-        "TELEGRAM_BOT_TOKEN": "YOUR_BOT_TOKEN_HERE",
-        "TELEGRAM_USER_ID": "YOUR_USER_ID_HERE"
-      }
+      "args": ["ABSOLUTE_REPO_PATH/mcp-server/dist/server.js"]
     }
   }
 }
