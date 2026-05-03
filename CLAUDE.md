@@ -3,11 +3,13 @@
 ## Current Status: FULLY OPERATIONAL
 - Bidirectional Telegram messaging: WORKING
 - Auto-enter (no manual Enter needed): WORKING
-- Session-specific PID targeting: WORKING
+- Multi-session support (focus-independent input via PostMessage WM_CHAR): WORKING
+- Session-specific PID/window targeting: WORKING
 - Watcher auto-spawn: WORKING
-- Permission control via Telegram: WORKING
+- Permission control via Telegram (`y`/`n`/`a`): WORKING
+- AskUserQuestion / ExitPlanMode / EnterPlanMode (auto-approve + numbered option selection): WORKING
 - Slash command forwarding (`;cmd` → `/cmd`): WORKING
-- **Plugin structure: CONVERTED** (new)
+- Plugin structure: CONVERTED
 
 ---
 
@@ -34,9 +36,10 @@ Major debugging session to fix watcher auto-spawn and reliable keystroke deliver
    - PowerShell script syntax errors when newlines replaced with spaces
    - Fixed by using incremental WMIC calls (same as session-start.js)
 
-5. **Focus/keystroke delivery failing**
+5. **Focus/keystroke delivery failing** (later superseded — see Session 5)
    - `SetForegroundWindow` blocked by Windows focus-stealing prevention
-   - Fixed by using `AppActivate` as primary method (works reliably)
+   - Initially fixed by using `AppActivate` as primary method
+   - **This approach was later replaced** by PostMessage WM_CHAR because AppActivate steals focus and breaks multi-session use.
 
 6. **Multiple Claude windows targeting wrong window**
    - Search mode would find first matching window
@@ -57,6 +60,36 @@ Major debugging session to fix watcher auto-spawn and reliable keystroke deliver
 | `~/.claude-telegram/session-info.json` | Debug: hookPid, cmdPid, windowHandle |
 | `~/.claude-telegram/watcher.pid` | Tracks spawned watcher process |
 | `~/.claude-telegram/debug.log` | Error logging |
+
+---
+
+## SESSION SUMMARY (2026-02-14 - Session 5)
+
+### PostMessage WM_CHAR + AskUserQuestion Support
+
+#### Problems Solved
+
+1. **AppActivate steals focus, breaks multi-session**
+   - Replaced with `PostMessage(hwnd, WM_CHAR, charCode, 1)`
+   - Focus-independent: target window does not need to be foregrounded
+   - Each watcher targets its own `hwnd` via `session-info.json`, so concurrent sessions don't fight over focus
+
+2. **`findCmdAncestor` returning the wrong cmd.exe**
+   - Old implementation returned the first cmd.exe encountered in the process tree
+   - That was the *transient* cmd.exe (child of claude.exe), which dies when the hook exits → watcher targeted a dead PID
+   - Fixed to walk the full tree and return the *persistent* cmd.exe (parent of claude.exe), which owns the visible console window
+
+3. **AskUserQuestion / ExitPlanMode / EnterPlanMode UX**
+   - Permission hook now auto-approves these (`{ decision: { behavior: 'allow' } }`) so the question UI renders immediately
+   - Without auto-approve, the `y`+Enter from permission approval carried over and selected option 1
+   - Numbered options surface in Telegram; replying with the number sends just the digit via WM_CHAR
+
+#### Key Technical Discoveries
+
+- `lParam` MUST be `1` in PostMessage WM_CHAR (the repeat-count field). `lParam=0` triggers **65536 repeats** because the 16-bit repeat count wraps.
+- 20ms delay between characters prevents dropped chars on the receiving console.
+- `WM_KEYDOWN` does **not** work for console windows via PostMessage — only `WM_CHAR` reaches them.
+- VT escape sequences (e.g. `ESC [ B` for arrow keys) sent via WM_CHAR do **not** combine — the console processes each character individually. Use number-key selection instead.
 
 ---
 
@@ -107,10 +140,59 @@ Initial watcher auto-spawn and debug logging.
 | MCP Server (source) | `mcp-server/server.js` | Telegram bot, MCP tools |
 | MCP Server (bundle) | `mcp-server/dist/server.js` | Bundled server (what `.mcp.json` points to) |
 | Context Hook | `hooks/telegram-context.js` | Injects messages + spawns watcher |
-| Permission Hook | `hooks/permission-telegram.cjs` | Permission notifications |
-| Session Hook | `hooks/session-start.js` | (Unused - SessionStart hook bug) |
-| Watcher Script | `scripts/enter-watcher.ps1` | Keystroke automation |
+| Permission Hook | `hooks/permission-telegram.cjs` | Permission notifications + auto-approve AskUserQuestion/plan-mode prompts |
+| Session Hook | `hooks/session-start.js` | (Unused - SessionStart hook bug; spawn moved to UserPromptSubmit) |
+| Watcher Script | `scripts/enter-watcher.ps1` | Keystroke automation via PostMessage WM_CHAR |
 | Skill | `skills/telegram/SKILL.md` | Claude instructions |
+
+---
+
+## Implementation Details
+
+### Keystroke delivery: PostMessage WM_CHAR
+
+The watcher delivers keystrokes to the Claude Code console window using:
+
+```
+PostMessage(hwnd, WM_CHAR, charCode, /* lParam */ 1)
+```
+
+This is **focus-independent** — the target window does not need to be foregrounded. This is what enables multi-session: each session's watcher targets its own `hwnd` (read from `session-info.json`) and concurrent sessions don't fight over focus.
+
+**Critical quirks:**
+- `lParam` MUST be `1` (repeat count). `lParam=0` triggers **65536 repeats** (16-bit wrap).
+- 20ms delay between characters prevents drops.
+- `WM_KEYDOWN` does **not** work for console windows via PostMessage — only `WM_CHAR`.
+- VT escape sequences via WM_CHAR don't combine — chars processed individually. Use number-key selection.
+- Earlier `WriteConsoleInputW` experiments reported success but didn't reach Claude Code (ConPTY bypasses the console input buffer). Preserved on the `dev` branch.
+
+### Process tree topology
+
+```
+explorer.exe
+  └─ cmd.exe (persistent — has the console window)
+       └─ claude.exe
+            └─ cmd.exe (transient — exists only while a hook runs)
+                 └─ node.exe (the hook process itself)
+```
+
+The hook needs the **persistent** cmd.exe (parent of claude.exe) — that's the one with the visible console window. The transient cmd.exe child of claude.exe dies as soon as the hook exits.
+
+`findCmdAncestor()` in `hooks/telegram-context.js` walks the full tree via WMIC and returns the cmd.exe whose **child** is claude.exe. Returning the first cmd.exe found (the transient one) results in a dead-PID target by the time the watcher runs.
+
+### Hook process has no console
+
+The hook is invoked headlessly, so `GetConsoleWindow()` from inside the hook always returns `0`. The window handle has to come from walking the process tree, not from the hook's own console.
+
+### MCP server bundling (esbuild)
+
+The MCP server is bundled to a single file via esbuild (no `node_modules` needed at runtime). Because the source is ESM but some deps (`node-telegram-bot-api`) are CJS, the build needs the CJS-interop banner:
+
+```
+--banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);"
+```
+
+Required for Node.js v24+. Without it, the bundle fails at runtime when CJS deps try to use `require`.
 
 ---
 
@@ -130,6 +212,14 @@ Control Claude's permission prompts remotely via Telegram.
 1. Claude requests permission → notification sent to Telegram
 2. Reply: `y` (yes), `n` (no), or `a` (always)
 3. Watcher sends keystroke → Claude continues
+
+### AskUserQuestion / Plan Mode
+Numbered options surface in Telegram for `AskUserQuestion`, `ExitPlanMode`, and `EnterPlanMode` prompts.
+
+1. Claude reaches one of these prompts
+2. Permission hook auto-approves it (so the question UI renders immediately, without a `y`+Enter that would carry over and select option 1)
+3. Numbered options are sent to Telegram with descriptions
+4. Reply with the number (`1`, `2`, ...) → watcher sends just that digit via WM_CHAR
 
 ### Slash Command Forwarding
 Send Claude Code slash commands from Telegram using `;` as the prefix (since Telegram reserves `/` for bot commands).
@@ -240,8 +330,10 @@ Then restart the MCP server in Claude Code (`/mcp` → restart telegram).
 | Messages not appearing | Check queue file, verify hook config |
 | Watcher not running | Check `watcher.pid`, verify process exists |
 | Watcher dies immediately | Check `debug.log` for errors |
-| Keystrokes to wrong window | Verify `session-info.json` has correct `cmdPid` |
+| Keystrokes to wrong window | Verify `session-info.json` has correct `cmdPid` (must be parent of claude.exe, not transient child) |
 | Permission notifications broken | Check hook in settings.local.json |
+| Characters dropped or repeated 65536× | Verify PostMessage call uses `lParam=1`, not `0` |
+| AskUserQuestion selects option 1 immediately | Verify permission hook auto-approves the prompt instead of requiring `y`+Enter |
 
 ### Debug Commands
 
