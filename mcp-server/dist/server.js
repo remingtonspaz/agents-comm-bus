@@ -81886,10 +81886,14 @@ function getSessionDir(cwd) {
 }
 function loadCredentials() {
   const pluginRoot = path.resolve(__dirname, "..", "..");
-  const pluginConfigPath = path.join(pluginRoot, ".claude", "telegram.json");
-  const cwdConfigPath = path.join(process.cwd(), ".claude", "telegram.json");
-  const configPath = fs.existsSync(pluginConfigPath) ? pluginConfigPath : cwdConfigPath;
-  if (fs.existsSync(configPath)) {
+  const candidatePaths = [
+    path.join(process.cwd(), ".codex", "telegram.json"),
+    path.join(pluginRoot, ".codex", "telegram.json"),
+    path.join(process.cwd(), ".claude", "telegram.json"),
+    path.join(pluginRoot, ".claude", "telegram.json")
+  ];
+  for (const configPath of candidatePaths) {
+    if (!fs.existsSync(configPath)) continue;
     try {
       const config2 = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       if (config2.botToken && config2.userId) {

@@ -24,18 +24,23 @@ function getSessionDir(cwd) {
 }
 
 // Load credentials from project-specific config or environment variables
-// Priority: .claude/telegram.json > environment variables
+// Lookup order:
+//   1. <cwd>/.codex/telegram.json       (Codex per-project)
+//   2. <pluginRoot>/.codex/telegram.json (Codex plugin-bundled)
+//   3. <cwd>/.claude/telegram.json       (Claude per-project — legacy)
+//   4. <pluginRoot>/.claude/telegram.json (Claude plugin-bundled — legacy)
+//   5. environment variables
 function loadCredentials() {
-  // Try multiple locations for .claude/telegram.json
-  // 1. Plugin root (relative to this script: ../. )
   const pluginRoot = path.resolve(__dirname, '..', '..');
-  const pluginConfigPath = path.join(pluginRoot, '.claude', 'telegram.json');
-  // 2. Current working directory
-  const cwdConfigPath = path.join(process.cwd(), '.claude', 'telegram.json');
+  const candidatePaths = [
+    path.join(process.cwd(), '.codex', 'telegram.json'),
+    path.join(pluginRoot, '.codex', 'telegram.json'),
+    path.join(process.cwd(), '.claude', 'telegram.json'),
+    path.join(pluginRoot, '.claude', 'telegram.json'),
+  ];
 
-  const configPath = fs.existsSync(pluginConfigPath) ? pluginConfigPath : cwdConfigPath;
-
-  if (fs.existsSync(configPath)) {
+  for (const configPath of candidatePaths) {
+    if (!fs.existsSync(configPath)) continue;
     try {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       if (config.botToken && config.userId) {
