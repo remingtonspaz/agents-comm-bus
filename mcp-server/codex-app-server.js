@@ -1,39 +1,50 @@
 // Minimal client for the Codex local app-server JSON-RPC interface.
 //
-// Codex's interactive sessions (CLI and desktop) listen on a Unix-domain
-// socket at $CODEX_HOME/app-server-control/app-server-control.sock. The
-// transport is WebSocket-over-UDS (RFC 6455 over an AF_UNIX socket). On
-// top of that, the messages are JSON-RPC 2.0.
+// The Codex TUI's `--remote` flag only accepts ws://host:port or
+// wss://host:port (no Unix sockets), so the canonical working
+// architecture is TCP-based:
 //
-// We use this to wake an idle Codex thread when a Telegram message
-// arrives — equivalent to the "auto-enter" PostMessage WM_CHAR trick the
-// Claude Code version uses, but routed through Codex's own protocol so
-// no console focus or keystroke injection is needed.
+//   codex app-server --listen ws://127.0.0.1:4500     # one terminal
+//   codex --remote ws://127.0.0.1:4500                # the TUI session
+//
+// Both Codex *and* this MCP server connect to that same app-server, so
+// they see the same set of loaded threads. We use turn/start to wake an
+// idle thread when a Telegram message arrives — equivalent to the
+// "auto-enter" PostMessage WM_CHAR trick the Claude Code version uses,
+// but routed through Codex's own protocol.
+//
+// URL precedence:
+//   1. --app-server-url=<url> argv flag
+//   2. CODEX_APP_SERVER_URL env var
+//   3. default: ws://127.0.0.1:4500
 
 import WebSocket from 'ws';
-import http from 'http';
-import path from 'path';
-import os from 'os';
-import fs from 'fs';
 
-function getControlSocketPath() {
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
-  return path.join(codexHome, 'app-server-control', 'app-server-control.sock');
+const DEFAULT_URL = 'ws://127.0.0.1:4500';
+
+function getAppServerUrl() {
+  for (const arg of process.argv.slice(2)) {
+    const m = arg.match(/^--app-server-url=(.+)$/);
+    if (m) return m[1];
+  }
+  if (process.env.CODEX_APP_SERVER_URL) return process.env.CODEX_APP_SERVER_URL;
+  return DEFAULT_URL;
 }
 
-// Send one JSON-RPC request over the control socket and resolve with the
-// response. Closes the connection after the reply (or timeout) — this is
-// not meant for high-frequency or streaming use.
+const APP_SERVER_URL = getAppServerUrl();
+
+// Send one JSON-RPC request and resolve with the response. Closes the
+// connection after the reply (or timeout) — not meant for streaming.
 function callOnce(method, params, { timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
-    const socketPath = getControlSocketPath();
-    if (!fs.existsSync(socketPath)) {
-      reject(new Error(`app-server control socket not found at ${socketPath}`));
+    let ws;
+    try {
+      ws = new WebSocket(APP_SERVER_URL);
+    } catch (e) {
+      reject(e);
       return;
     }
 
-    const agent = new http.Agent({ socketPath });
-    const ws = new WebSocket('ws://localhost/', { agent });
     const id = Math.floor(Math.random() * 1e9);
     let settled = false;
 
@@ -45,7 +56,7 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
     };
 
     const timer = setTimeout(() => {
-      finish(new Error(`app-server JSON-RPC timeout after ${timeoutMs}ms (method=${method})`));
+      finish(new Error(`app-server JSON-RPC timeout after ${timeoutMs}ms (method=${method}, url=${APP_SERVER_URL})`));
     }, timeoutMs);
 
     ws.on('open', () => {
@@ -57,10 +68,10 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
       let msg;
       try {
         msg = JSON.parse(data.toString('utf-8'));
-      } catch (e) {
+      } catch {
         return; // Ignore unparseable frames
       }
-      if (msg.id !== id) return;
+      if (msg.id !== id) return; // Ignore notifications and other replies
       clearTimeout(timer);
       if (msg.error) {
         finish(new Error(`app-server JSON-RPC error ${msg.error.code}: ${msg.error.message || ''}`));
@@ -81,6 +92,10 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
   });
 }
 
+export function getAppServerUrlInUse() {
+  return APP_SERVER_URL;
+}
+
 export async function listLoadedThreads() {
   return callOnce('thread/loaded/list', {});
 }
@@ -97,10 +112,9 @@ export async function startTurn(threadId, text) {
 // UserPromptSubmit hook, which injects the queued Telegram messages as
 // additionalContext. Returns true on success, false on any failure.
 //
-// Failures are silent by design — there might be no Codex session
-// running, the socket might not exist yet, the thread might already be
-// mid-turn. In all those cases we just leave the message in the queue
-// for the next prompt to pick up.
+// Failures are silent by design — there might be no app-server running,
+// no loaded thread, or the thread might already be mid-turn. In those
+// cases the message stays in the queue for the next user prompt.
 export async function wakeMostRecentThread(placeholderText = '.') {
   let result;
   try {
@@ -110,7 +124,6 @@ export async function wakeMostRecentThread(placeholderText = '.') {
   }
 
   // The exact response shape isn't fully documented; handle common variants.
-  // Expect something like { threads: [{ threadId, lastActiveAt, ... }] }.
   const threads =
     (result && (result.threads || result.items || result.loaded)) ||
     (Array.isArray(result) ? result : []);
@@ -131,8 +144,8 @@ export async function wakeMostRecentThread(placeholderText = '.') {
     await startTurn(threadId, placeholderText);
     return true;
   } catch {
-    // turn/start can refuse if the thread is already mid-turn. We swallow
-    // the error — the message will be picked up on the next user prompt.
+    // turn/start can refuse if the thread is already mid-turn. Swallow —
+    // the message will be picked up on the next user prompt.
     return false;
   }
 }
