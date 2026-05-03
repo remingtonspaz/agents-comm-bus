@@ -279,12 +279,26 @@ cp .mcp.json.template .mcp.json
 
 The server checks for `.claude/telegram.json` first, then falls back to environment variables from `.mcp.json`.
 
+### MCP Server Registration
+
+Two paths register the MCP server, depending on how the plugin is loaded:
+
+| Mode | Source of MCP config | Path used |
+|------|----------------------|-----------|
+| Installed plugin (via marketplace) | `.claude-plugin/plugin.json` → `mcpServers` block | `${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/server.js` (substituted at load time) |
+| In-tree development (`cd` into repo and run Claude) | `.mcp.json` at repo root (gitignored) | absolute path on your machine |
+
+The canonical config is in `plugin.json` — that's what end users get when they `/plugin install`. `.mcp.json` is a local-dev override that lets you run the plugin directly from the source repo without installing it. **`.mcp.json` is gitignored** so per-machine paths don't leak into commits and don't override the plugin install.
+
+To bootstrap dev mode after a fresh clone: copy `.mcp.json.template` to `.mcp.json` and replace `ABSOLUTE_REPO_PATH` with the absolute path to your clone.
+
 ### Other Files
 
 | File | Purpose |
 |------|---------|
-| `.mcp.json` | MCP server config + fallback credentials |
-| `.mcp.json.template` | Template for distribution |
+| `.mcp.json` | Local-dev MCP config (gitignored). Not used by plugin install. |
+| `.mcp.json.template` | Seed for local `.mcp.json` after cloning. |
+| `.claude-plugin/plugin.json` | Plugin metadata + canonical `mcpServers` block for plugin install. |
 
 ### Session-Specific Files
 
