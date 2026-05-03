@@ -36,7 +36,7 @@ if (!fs.existsSync(serverPath)) {
 
 const desiredBlock = formatBlock({
   command: 'node',
-  args: [serverPath],
+  args: [serverPath, '--agent=codex'],
 });
 
 function formatBlock({ command, args }) {

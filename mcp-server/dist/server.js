@@ -81879,25 +81879,38 @@ import crypto4 from "crypto";
 import { fileURLToPath } from "url";
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
+function detectAgent() {
+  for (const arg of process.argv.slice(2)) {
+    const m = arg.match(/^--agent=(\w+)$/);
+    if (m) return m[1].toLowerCase();
+  }
+  if (process.env.TELEGRAM_AGENT) return process.env.TELEGRAM_AGENT.toLowerCase();
+  return "claude";
+}
+var AGENT = detectAgent();
+var SESSION_DIR_PARENT = AGENT === "codex" ? ".codex-telegram" : ".claude-telegram";
 function getSessionDir(cwd) {
   const basename = path.basename(cwd).replace(/[^a-zA-Z0-9-_]/g, "_");
   const hash2 = crypto4.createHash("md5").update(cwd).digest("hex").substring(0, 6);
-  return path.join(os.homedir(), ".claude-telegram", `${basename}-${hash2}`);
+  return path.join(os.homedir(), SESSION_DIR_PARENT, `${basename}-${hash2}`);
 }
 function loadCredentials() {
   const pluginRoot = path.resolve(__dirname, "..", "..");
-  const candidatePaths = [
+  const codexCandidates = [
     path.join(process.cwd(), ".codex", "telegram.json"),
-    path.join(pluginRoot, ".codex", "telegram.json"),
+    path.join(pluginRoot, ".codex", "telegram.json")
+  ];
+  const claudeCandidates = [
     path.join(process.cwd(), ".claude", "telegram.json"),
     path.join(pluginRoot, ".claude", "telegram.json")
   ];
+  const candidatePaths = AGENT === "codex" ? [...codexCandidates, ...claudeCandidates] : [...claudeCandidates, ...codexCandidates];
   for (const configPath of candidatePaths) {
     if (!fs.existsSync(configPath)) continue;
     try {
       const config2 = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       if (config2.botToken && config2.userId) {
-        console.error(`[telegram-mcp] Using credentials from ${configPath}`);
+        console.error(`[telegram-mcp] (agent=${AGENT}) Using credentials from ${configPath}`);
         return {
           botToken: config2.botToken,
           userId: config2.userId.toString()

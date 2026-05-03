@@ -29,7 +29,7 @@ const crypto = require('crypto');
 function getSessionDir(cwd) {
   const basename = path.basename(cwd).replace(/[^a-zA-Z0-9-_]/g, '_');
   const hash = crypto.createHash('md5').update(cwd).digest('hex').substring(0, 6);
-  return path.join(os.homedir(), '.claude-telegram', `${basename}-${hash}`);
+  return path.join(os.homedir(), '.codex-telegram', `${basename}-${hash}`);
 }
 
 const SESSION_DIR = getSessionDir(process.cwd());

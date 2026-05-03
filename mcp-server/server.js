@@ -15,36 +15,58 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Generate session-specific directory based on project path
-// Format: ~/.claude-telegram/<basename>-<hash>/
+// Detect which agent is hosting this MCP server. Codex installs pass
+// `--agent=codex` in the args block; Claude Code installs don't pass
+// anything, so the default keeps existing setups working.
+//
+// The agent identity drives two things:
+//   1. Session directory: ~/.codex-telegram/ vs ~/.claude-telegram/
+//      (so a Claude session and a Codex session in the same project
+//      don't race on shared state files)
+//   2. Credential lookup priority: codex → check .codex/telegram.json
+//      first, claude → check .claude/telegram.json first
+function detectAgent() {
+  for (const arg of process.argv.slice(2)) {
+    const m = arg.match(/^--agent=(\w+)$/);
+    if (m) return m[1].toLowerCase();
+  }
+  if (process.env.TELEGRAM_AGENT) return process.env.TELEGRAM_AGENT.toLowerCase();
+  return 'claude';
+}
+
+const AGENT = detectAgent();
+const SESSION_DIR_PARENT = AGENT === 'codex' ? '.codex-telegram' : '.claude-telegram';
+
 function getSessionDir(cwd) {
   const basename = path.basename(cwd).replace(/[^a-zA-Z0-9-_]/g, '_');
   const hash = crypto.createHash('md5').update(cwd).digest('hex').substring(0, 6);
-  return path.join(os.homedir(), '.claude-telegram', `${basename}-${hash}`);
+  return path.join(os.homedir(), SESSION_DIR_PARENT, `${basename}-${hash}`);
 }
 
-// Load credentials from project-specific config or environment variables
-// Lookup order:
-//   1. <cwd>/.codex/telegram.json       (Codex per-project)
-//   2. <pluginRoot>/.codex/telegram.json (Codex plugin-bundled)
-//   3. <cwd>/.claude/telegram.json       (Claude per-project — legacy)
-//   4. <pluginRoot>/.claude/telegram.json (Claude plugin-bundled — legacy)
-//   5. environment variables
+// Load credentials from project-specific config or environment variables.
+// The candidate order depends on the active agent: each agent prefers its
+// own config dir, with the other as a legacy fallback.
 function loadCredentials() {
   const pluginRoot = path.resolve(__dirname, '..', '..');
-  const candidatePaths = [
+  const codexCandidates = [
     path.join(process.cwd(), '.codex', 'telegram.json'),
     path.join(pluginRoot, '.codex', 'telegram.json'),
+  ];
+  const claudeCandidates = [
     path.join(process.cwd(), '.claude', 'telegram.json'),
     path.join(pluginRoot, '.claude', 'telegram.json'),
   ];
+  const candidatePaths =
+    AGENT === 'codex'
+      ? [...codexCandidates, ...claudeCandidates]
+      : [...claudeCandidates, ...codexCandidates];
 
   for (const configPath of candidatePaths) {
     if (!fs.existsSync(configPath)) continue;
     try {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       if (config.botToken && config.userId) {
-        console.error(`[telegram-mcp] Using credentials from ${configPath}`);
+        console.error(`[telegram-mcp] (agent=${AGENT}) Using credentials from ${configPath}`);
         return {
           botToken: config.botToken,
           userId: config.userId.toString()

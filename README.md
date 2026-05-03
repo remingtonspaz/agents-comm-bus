@@ -134,23 +134,36 @@ Numbered options surface in Telegram. Reply with the number; the response goes b
 
 ## Project structure
 
-**Planned layout** (work in progress — most of the Codex-specific files below don't exist yet on this branch):
-
 ```
 claude-code-telegram/
 ├── .codex-plugin/
-│   └── plugin.json              # Codex plugin manifest                       [planned]
+│   └── plugin.json              # Codex plugin manifest
 ├── hooks/codex/
-│   ├── user-prompt-submit.js    # Inject pending Telegram messages            [planned]
-│   └── permission-request.js    # Blocking permission decisions via Telegram  [planned]
+│   ├── user-prompt-submit.js    # Inject pending Telegram messages
+│   └── permission-request.js    # Blocking permission decisions via Telegram
 ├── mcp-server/
-│   ├── server.js                # MCP server source (Telegram bot, RPC client)
+│   ├── server.js                # MCP server source (Telegram bot, agent-aware)
 │   └── dist/server.js           # Bundled (esbuild) — what Codex runs
-├── install-codex.js             # Writes mcp_servers + hooks to config.toml   [planned]
+├── install-codex.js             # Writes [mcp_servers.telegram] to ~/.codex/config.toml
 └── README.md
 ```
 
-The Claude Code surface from `main` (`.claude-plugin/`, `hooks/telegram-context.js`, `hooks/permission-telegram.cjs`, `scripts/enter-watcher.ps1`) is still present on this branch and is **not used** by the Codex port. It will remain only as long as it helps make the port reviewable, and is planned for removal once the Codex side reaches feature parity.
+The Claude Code surface from `main` (`.claude-plugin/`, `hooks/telegram-context.js`, `hooks/permission-telegram.cjs`, `scripts/enter-watcher.ps1`) is still present on this branch and is **not used** by the Codex port. The two ecosystems share the *same* MCP server bundle — agent identity is selected at spawn time via `--agent=codex` (see [Agent identity and channel split](#agent-identity-and-channel-split)). The Claude surface will be removed once Codex parity is reached.
+
+## Agent identity and channel split
+
+The MCP server bundle serves both Claude Code and Codex. To keep them from racing on shared session state when both run in the *same project directory*, the server picks its identity at spawn time:
+
+| Spawn | Agent | Session dir | Credential preference |
+|-------|-------|-------------|------------------------|
+| Codex (via `install-codex.js`) | `codex` | `~/.codex-telegram/<basename>-<hash>/` | `<project>/.codex/telegram.json` first, then `.claude/telegram.json` |
+| Claude Code (no flag) | `claude` (default) | `~/.claude-telegram/<basename>-<hash>/` | `<project>/.claude/telegram.json` first, then `.codex/telegram.json` |
+
+The flag is passed in `args` — `install-codex.js` writes `args = ["<...>/server.js", "--agent=codex"]`. Equivalently, set `TELEGRAM_AGENT=codex` in the environment.
+
+The Codex hooks (`hooks/codex/*.js`) always read/write `~/.codex-telegram/`, so they pair correctly with the agent-flagged MCP server. A simultaneous Claude Code session in the same project keeps reading/writing `~/.claude-telegram/` through the Claude hooks.
+
+**Per-bot tokens:** if you want each agent to use a different Telegram bot account (recommended — Telegram allows only one polling consumer per bot token), put codex creds in `<project>/.codex/telegram.json` and claude creds in `<project>/.claude/telegram.json`. Each agent's MCP server will pick up its own.
 
 ## Manual setup
 
@@ -159,7 +172,7 @@ If you don't want to run `install-codex.js`, append this to `~/.codex/config.tom
 ```toml
 [mcp_servers.telegram]
 command = "node"
-args = ["<ABSOLUTE_REPO_PATH>/mcp-server/dist/server.js"]
+args = ["<ABSOLUTE_REPO_PATH>/mcp-server/dist/server.js", "--agent=codex"]
 
 [features]
 codex_hooks = true
@@ -177,6 +190,8 @@ matcher = "*"
 type = "command"
 command = "node <ABSOLUTE_REPO_PATH>/hooks/codex/permission-request.js"
 ```
+
+> The `--agent=codex` flag is what tells the MCP server to use `~/.codex-telegram/` (instead of the default `~/.claude-telegram/`). Without it, a Codex session in the same project as a Claude session will race on shared state. See [Agent identity and channel split](#agent-identity-and-channel-split).
 
 Then restart Codex.
 
