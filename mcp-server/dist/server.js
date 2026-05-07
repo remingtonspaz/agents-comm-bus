@@ -85609,9 +85609,15 @@ var __dirname = path.dirname(__filename);
 try {
   const debugDir = path.join(os.homedir(), ".codex-telegram");
   fs.mkdirSync(debugDir, { recursive: true });
+  const envSubset = {};
+  for (const k of Object.keys(process.env)) {
+    if (/^(CODEX|WORKSPACE|PROJECT|PWD|OLDPWD|INIT_CWD|MCP|TELEGRAM)/i.test(k)) {
+      envSubset[k] = process.env[k];
+    }
+  }
   fs.appendFileSync(
     path.join(debugDir, "startup.log"),
-    `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} cwd=${process.cwd()} argv=${JSON.stringify(process.argv.slice(1))}
+    `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} cwd=${process.cwd()} argv=${JSON.stringify(process.argv.slice(1))} env=${JSON.stringify(envSubset)}
 `
   );
 } catch {

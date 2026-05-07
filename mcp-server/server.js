@@ -18,14 +18,22 @@ const __dirname = path.dirname(__filename);
 
 // Startup debug log — written before anything that can crash the process,
 // so we can diagnose Codex Remote-TUI spawning (which cwd does the
-// app-server pass us? does the per-project config's cwd field apply?).
+// app-server pass us? does the per-project config's cwd field apply?
+// is there a workspace/project env var we can use?).
 // Path is fixed so it's findable without knowing the session dir yet.
 try {
   const debugDir = path.join(os.homedir(), '.codex-telegram');
   fs.mkdirSync(debugDir, { recursive: true });
+  // Capture env vars that might point at the project dir.
+  const envSubset = {};
+  for (const k of Object.keys(process.env)) {
+    if (/^(CODEX|WORKSPACE|PROJECT|PWD|OLDPWD|INIT_CWD|MCP|TELEGRAM)/i.test(k)) {
+      envSubset[k] = process.env[k];
+    }
+  }
   fs.appendFileSync(
     path.join(debugDir, 'startup.log'),
-    `[${new Date().toISOString()}] pid=${process.pid} cwd=${process.cwd()} argv=${JSON.stringify(process.argv.slice(1))}\n`
+    `[${new Date().toISOString()}] pid=${process.pid} cwd=${process.cwd()} argv=${JSON.stringify(process.argv.slice(1))} env=${JSON.stringify(envSubset)}\n`
   );
 } catch {}
 
