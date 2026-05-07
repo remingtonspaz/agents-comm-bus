@@ -16,6 +16,41 @@ import { wakeMostRecentThread } from './codex-app-server.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Startup debug log — written before anything that can crash the process,
+// so we can diagnose Codex Remote-TUI spawning (which cwd does the
+// app-server pass us? does the per-project config's cwd field apply?).
+// Path is fixed so it's findable without knowing the session dir yet.
+try {
+  const debugDir = path.join(os.homedir(), '.codex-telegram');
+  fs.mkdirSync(debugDir, { recursive: true });
+  fs.appendFileSync(
+    path.join(debugDir, 'startup.log'),
+    `[${new Date().toISOString()}] pid=${process.pid} cwd=${process.cwd()} argv=${JSON.stringify(process.argv.slice(1))}\n`
+  );
+} catch {}
+
+// Last-ditch error logging so unhandled exceptions don't disappear into
+// "connection closed: initialize response" with no clue why.
+process.on('uncaughtException', (err) => {
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), '.codex-telegram', 'startup.log'),
+      `[${new Date().toISOString()}] pid=${process.pid} uncaughtException: ${err.stack || err.message || err}\n`
+    );
+  } catch {}
+  console.error(`[telegram-mcp] uncaughtException: ${err.stack || err.message}`);
+  process.exit(1);
+});
+process.on('unhandledRejection', (err) => {
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), '.codex-telegram', 'startup.log'),
+      `[${new Date().toISOString()}] pid=${process.pid} unhandledRejection: ${err?.stack || err?.message || err}\n`
+    );
+  } catch {}
+  console.error(`[telegram-mcp] unhandledRejection: ${err?.stack || err?.message}`);
+});
+
 // Detect which agent is hosting this MCP server. Codex installs pass
 // `--agent=codex` in the args block; Claude Code installs don't pass
 // anything, so the default keeps existing setups working.
@@ -99,15 +134,19 @@ const SESSION_DIR = getSessionDir(process.cwd());
 const QUEUE_FILE = path.join(SESSION_DIR, 'queue.json');
 
 // Validate configuration
-if (!TELEGRAM_BOT_TOKEN) {
-  console.error('TELEGRAM_BOT_TOKEN environment variable is required');
+function exitMissingCreds(which) {
+  const msg = `${which} not found — searched per-project (.codex/.claude), pluginRoot, and home-dir locations. Set credentials via <project>/.codex/telegram.json, ~/.codex/telegram.json, or ${which} env var.`;
+  console.error(`[telegram-mcp] ${msg}`);
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), '.codex-telegram', 'startup.log'),
+      `[${new Date().toISOString()}] pid=${process.pid} agent=${AGENT} cwd=${process.cwd()} ${msg}\n`
+    );
+  } catch {}
   process.exit(1);
 }
-
-if (!TELEGRAM_USER_ID) {
-  console.error('TELEGRAM_USER_ID environment variable is required');
-  process.exit(1);
-}
+if (!TELEGRAM_BOT_TOKEN) exitMissingCreds('TELEGRAM_BOT_TOKEN');
+if (!TELEGRAM_USER_ID) exitMissingCreds('TELEGRAM_USER_ID');
 
 // Ensure queue directory exists
 if (!fs.existsSync(SESSION_DIR)) {

@@ -85606,6 +85606,39 @@ async function wakeMostRecentThread(placeholderText = ".") {
 // server.js
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
+try {
+  const debugDir = path.join(os.homedir(), ".codex-telegram");
+  fs.mkdirSync(debugDir, { recursive: true });
+  fs.appendFileSync(
+    path.join(debugDir, "startup.log"),
+    `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} cwd=${process.cwd()} argv=${JSON.stringify(process.argv.slice(1))}
+`
+  );
+} catch {
+}
+process.on("uncaughtException", (err) => {
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), ".codex-telegram", "startup.log"),
+      `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} uncaughtException: ${err.stack || err.message || err}
+`
+    );
+  } catch {
+  }
+  console.error(`[telegram-mcp] uncaughtException: ${err.stack || err.message}`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (err) => {
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), ".codex-telegram", "startup.log"),
+      `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} unhandledRejection: ${err?.stack || err?.message || err}
+`
+    );
+  } catch {
+  }
+  console.error(`[telegram-mcp] unhandledRejection: ${err?.stack || err?.message}`);
+});
 function detectAgent() {
   for (const arg of process.argv.slice(2)) {
     const m = arg.match(/^--agent=(\w+)$/);
@@ -85660,14 +85693,21 @@ var TELEGRAM_BOT_TOKEN = credentials.botToken;
 var TELEGRAM_USER_ID = credentials.userId;
 var SESSION_DIR = getSessionDir(process.cwd());
 var QUEUE_FILE = path.join(SESSION_DIR, "queue.json");
-if (!TELEGRAM_BOT_TOKEN) {
-  console.error("TELEGRAM_BOT_TOKEN environment variable is required");
+function exitMissingCreds(which) {
+  const msg = `${which} not found \u2014 searched per-project (.codex/.claude), pluginRoot, and home-dir locations. Set credentials via <project>/.codex/telegram.json, ~/.codex/telegram.json, or ${which} env var.`;
+  console.error(`[telegram-mcp] ${msg}`);
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), ".codex-telegram", "startup.log"),
+      `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} agent=${AGENT} cwd=${process.cwd()} ${msg}
+`
+    );
+  } catch {
+  }
   process.exit(1);
 }
-if (!TELEGRAM_USER_ID) {
-  console.error("TELEGRAM_USER_ID environment variable is required");
-  process.exit(1);
-}
+if (!TELEGRAM_BOT_TOKEN) exitMissingCreds("TELEGRAM_BOT_TOKEN");
+if (!TELEGRAM_USER_ID) exitMissingCreds("TELEGRAM_USER_ID");
 if (!fs.existsSync(SESSION_DIR)) {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
