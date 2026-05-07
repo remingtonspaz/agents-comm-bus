@@ -85582,11 +85582,17 @@ async function wakeMostRecentThread(placeholderText = ".") {
   let result;
   try {
     result = await listLoadedThreads();
-  } catch {
-    return false;
+  } catch (e) {
+    return { ok: false, reason: "listLoadedThreads-failed", error: e.message, url: APP_SERVER_URL };
   }
   const threads = result && (result.threads || result.items || result.loaded) || (Array.isArray(result) ? result : []);
-  if (!Array.isArray(threads) || threads.length === 0) return false;
+  if (!Array.isArray(threads) || threads.length === 0) {
+    return {
+      ok: false,
+      reason: "no-threads-loaded",
+      raw: result === void 0 ? null : JSON.stringify(result).slice(0, 500)
+    };
+  }
   const sorted = [...threads].sort((a, b) => {
     const ta = Date.parse(a?.lastActiveAt || a?.updatedAt || a?.startedAt || 0) || 0;
     const tb = Date.parse(b?.lastActiveAt || b?.updatedAt || b?.startedAt || 0) || 0;
@@ -85594,12 +85600,18 @@ async function wakeMostRecentThread(placeholderText = ".") {
   });
   const target = sorted[0];
   const threadId = target?.threadId || target?.id;
-  if (!threadId) return false;
+  if (!threadId) {
+    return {
+      ok: false,
+      reason: "no-thread-id-in-response",
+      raw: JSON.stringify(target).slice(0, 500)
+    };
+  }
   try {
     await startTurn(threadId, placeholderText);
-    return true;
-  } catch {
-    return false;
+    return { ok: true, threadId };
+  } catch (e) {
+    return { ok: false, reason: "startTurn-failed", error: e.message, threadId };
   }
 }
 
@@ -85621,6 +85633,16 @@ try {
 `
   );
 } catch {
+}
+function debugLog(line) {
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), ".codex-telegram", "startup.log"),
+      `[${(/* @__PURE__ */ new Date()).toISOString()}] pid=${process.pid} ${line}
+`
+    );
+  } catch {
+  }
 }
 process.on("uncaughtException", (err) => {
   try {
@@ -85785,6 +85807,7 @@ function writePermissionResponse(response, promptType) {
   log(`Wrote permission response: ${response} (type: ${promptType || "permission"})`);
 }
 bot.on("message", async (msg) => {
+  debugLog(`message received from=${msg.from?.id} text=${(msg.text || "").slice(0, 60)}`);
   if (msg.from.id.toString() !== TELEGRAM_USER_ID) {
     log(`Ignored message from unauthorized user: ${msg.from.id}`);
     return;
@@ -85900,10 +85923,19 @@ var SLASH_COMMAND_FILE = path.join(SESSION_DIR, "slash-command.json");
 function triggerEnterKey() {
   setTimeout(() => {
     if (AGENT === "codex") {
-      wakeMostRecentThread(".").then((ok) => {
-        if (ok) log("Started Codex turn via app-server JSON-RPC");
-        else log("Codex wake skipped (no socket, no thread, or thread busy)");
-      }).catch((e) => log(`Codex wake error: ${e.message}`));
+      debugLog(`wake: starting (agent=codex, url=${process.argv.slice(1).find((a) => a.startsWith("--app-server-url=")) || "default"})`);
+      wakeMostRecentThread(".").then((res) => {
+        if (res?.ok) {
+          log(`Started Codex turn via app-server JSON-RPC (thread=${res.threadId})`);
+          debugLog(`wake: success threadId=${res.threadId}`);
+        } else {
+          log(`Codex wake skipped: ${res?.reason || "unknown"}`);
+          debugLog(`wake: skipped ${JSON.stringify(res)}`);
+        }
+      }).catch((e) => {
+        log(`Codex wake error: ${e.message}`);
+        debugLog(`wake: error: ${e.stack || e.message}`);
+      });
       return;
     }
     try {

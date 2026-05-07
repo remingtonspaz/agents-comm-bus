@@ -110,24 +110,33 @@ export async function startTurn(threadId, text) {
 // Best-effort wake: pick the most recently active loaded thread and call
 // turn/start with a tiny placeholder. The placeholder fires the
 // UserPromptSubmit hook, which injects the queued Telegram messages as
-// additionalContext. Returns true on success, false on any failure.
+// additionalContext. Returns a diagnostic object so callers can log what
+// happened — `ok: true` on success, `ok: false` with `reason` and
+// (optionally) `raw` listing/error info otherwise.
 //
-// Failures are silent by design — there might be no app-server running,
-// no loaded thread, or the thread might already be mid-turn. In those
-// cases the message stays in the queue for the next user prompt.
+// Failures are recoverable by design — there might be no app-server
+// running, no loaded thread, or the thread might already be mid-turn.
+// In those cases the message stays in the queue for the next user
+// prompt.
 export async function wakeMostRecentThread(placeholderText = '.') {
   let result;
   try {
     result = await listLoadedThreads();
-  } catch {
-    return false;
+  } catch (e) {
+    return { ok: false, reason: 'listLoadedThreads-failed', error: e.message, url: APP_SERVER_URL };
   }
 
   // The exact response shape isn't fully documented; handle common variants.
   const threads =
     (result && (result.threads || result.items || result.loaded)) ||
     (Array.isArray(result) ? result : []);
-  if (!Array.isArray(threads) || threads.length === 0) return false;
+  if (!Array.isArray(threads) || threads.length === 0) {
+    return {
+      ok: false,
+      reason: 'no-threads-loaded',
+      raw: result === undefined ? null : JSON.stringify(result).slice(0, 500),
+    };
+  }
 
   // Pick the most recently active thread by lastActiveAt / updatedAt /
   // startedAt timestamp, falling back to the first one.
@@ -138,14 +147,20 @@ export async function wakeMostRecentThread(placeholderText = '.') {
   });
   const target = sorted[0];
   const threadId = target?.threadId || target?.id;
-  if (!threadId) return false;
+  if (!threadId) {
+    return {
+      ok: false,
+      reason: 'no-thread-id-in-response',
+      raw: JSON.stringify(target).slice(0, 500),
+    };
+  }
 
   try {
     await startTurn(threadId, placeholderText);
-    return true;
-  } catch {
-    // turn/start can refuse if the thread is already mid-turn. Swallow —
-    // the message will be picked up on the next user prompt.
-    return false;
+    return { ok: true, threadId };
+  } catch (e) {
+    // turn/start can refuse if the thread is already mid-turn. Surface
+    // the error so the caller can decide whether to retry/steer later.
+    return { ok: false, reason: 'startTurn-failed', error: e.message, threadId };
   }
 }

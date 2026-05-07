@@ -37,6 +37,18 @@ try {
   );
 } catch {}
 
+// debugLog writes a line to ~/.codex-telegram/startup.log. Used for
+// events we want visible regardless of whether stderr reaches Codex's
+// session log. Cheap, fire-and-forget.
+function debugLog(line) {
+  try {
+    fs.appendFileSync(
+      path.join(os.homedir(), '.codex-telegram', 'startup.log'),
+      `[${new Date().toISOString()}] pid=${process.pid} ${line}\n`
+    );
+  } catch {}
+}
+
 // Last-ditch error logging so unhandled exceptions don't disappear into
 // "connection closed: initialize response" with no clue why.
 process.on('uncaughtException', (err) => {
@@ -258,6 +270,7 @@ function writePermissionResponse(response, promptType) {
 
 // Queue incoming messages from Telegram
 bot.on('message', async (msg) => {
+  debugLog(`message received from=${msg.from?.id} text=${(msg.text || '').slice(0, 60)}`);
   // Only accept messages from authorized user
   if (msg.from.id.toString() !== TELEGRAM_USER_ID) {
     log(`Ignored message from unauthorized user: ${msg.from.id}`);
@@ -423,12 +436,21 @@ function triggerEnterKey() {
   // Small delay to ensure the queue write is visible before waking.
   setTimeout(() => {
     if (AGENT === 'codex') {
+      debugLog(`wake: starting (agent=codex, url=${process.argv.slice(1).find(a => a.startsWith('--app-server-url=')) || 'default'})`);
       wakeMostRecentThread('.')
-        .then((ok) => {
-          if (ok) log('Started Codex turn via app-server JSON-RPC');
-          else log('Codex wake skipped (no socket, no thread, or thread busy)');
+        .then((res) => {
+          if (res?.ok) {
+            log(`Started Codex turn via app-server JSON-RPC (thread=${res.threadId})`);
+            debugLog(`wake: success threadId=${res.threadId}`);
+          } else {
+            log(`Codex wake skipped: ${res?.reason || 'unknown'}`);
+            debugLog(`wake: skipped ${JSON.stringify(res)}`);
+          }
         })
-        .catch((e) => log(`Codex wake error: ${e.message}`));
+        .catch((e) => {
+          log(`Codex wake error: ${e.message}`);
+          debugLog(`wake: error: ${e.stack || e.message}`);
+        });
       return;
     }
     try {
