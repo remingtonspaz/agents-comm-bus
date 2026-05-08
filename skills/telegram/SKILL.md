@@ -1,9 +1,9 @@
 ---
 name: telegram-integration
-description: Set up, check status, or use the Telegram integration for Claude Code. Use this skill when the user mentions Telegram, wants to send messages to Telegram, check Telegram status, or troubleshoot Telegram connectivity. This skill should be active for ALL sessions in this project.
+description: Set up, check status, or use the Telegram integration for Agents. Use this skill when the user mentions Telegram, wants to send messages to Telegram, check Telegram status, or troubleshoot Telegram connectivity. This skill should be active for ALL sessions in this project.
 ---
 
-# Telegram Integration for Claude Code
+# Telegram Integration for Agents
 
 This skill enables bidirectional communication with Telegram.
 
@@ -26,11 +26,11 @@ This skill enables bidirectional communication with Telegram.
 ```
 User sends Telegram message: "Fix the bug in auth.js"
 
-Claude sends to Telegram: "Looking at auth.js to fix the bug..."
-Claude reads files, investigates
-Claude sends to Telegram: "Found it - the token validation is missing a null check"
-Claude makes edits
-Claude sends to Telegram: "Fixed! Added null check on line 42. Ready for testing."
+Agent sends to Telegram: "Looking at auth.js to fix the bug..."
+Agent reads files, investigates
+Agent sends to Telegram: "Found it - the token validation is missing a null check"
+Agent makes edits
+Agent sends to Telegram: "Fixed! Added null check on line 42. Ready for testing."
 ```
 
 Keep Telegram messages concise but informative.
@@ -68,8 +68,8 @@ Use the telegram_check_messages tool
 
 ## How It Works
 
-1. **Outbound (Claude to Telegram)**: Call the `telegram_send` or `telegram_send_image` tools
-2. **Inbound (Telegram to Claude)**: Messages are automatically injected as context before each prompt via a UserPromptSubmit hook
+1. **Outbound (Agent to Telegram)**: Call the `telegram_send` or `telegram_send_image` tools
+2. **Inbound (Telegram to Agent)**: Messages are automatically injected as context before each prompt via a UserPromptSubmit hook
 
 ## Installation
 

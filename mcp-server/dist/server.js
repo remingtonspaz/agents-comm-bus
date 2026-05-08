@@ -85706,6 +85706,11 @@ function getSessionDir(cwd) {
   const hash2 = crypto4.createHash("md5").update(cwd).digest("hex").substring(0, 6);
   return path.join(os.homedir(), SESSION_DIR_PARENT, `${basename}-${hash2}`);
 }
+function normalizeUserIds(raw) {
+  if (raw == null) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  return arr.map((v) => v == null ? "" : v.toString().trim()).filter((v) => v.length > 0);
+}
 function loadCredentials() {
   const pluginRoot = path.resolve(__dirname, "..", "..");
   const home = os.homedir();
@@ -85724,25 +85729,25 @@ function loadCredentials() {
     if (!fs.existsSync(configPath)) continue;
     try {
       const config2 = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      if (config2.botToken && config2.userId) {
-        console.error(`[telegram-mcp] (agent=${AGENT}) Using credentials from ${configPath}`);
-        return {
-          botToken: config2.botToken,
-          userId: config2.userId.toString()
-        };
+      const userIds = normalizeUserIds(config2.userId);
+      if (config2.botToken && userIds.length > 0) {
+        console.error(`[telegram-mcp] (agent=${AGENT}) Using credentials from ${configPath} (${userIds.length} allowed user${userIds.length === 1 ? "" : "s"})`);
+        return { botToken: config2.botToken, userIds };
       }
     } catch (e) {
       console.error(`[telegram-mcp] Error reading ${configPath}: ${e.message}`);
     }
   }
+  const envIds = (process.env.TELEGRAM_USER_ID || "").split(",").map((s) => s.trim()).filter(Boolean);
   return {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
-    userId: process.env.TELEGRAM_USER_ID
+    userIds: envIds
   };
 }
 var credentials = loadCredentials();
 var TELEGRAM_BOT_TOKEN = credentials.botToken;
-var TELEGRAM_USER_ID = credentials.userId;
+var ALLOWED_USER_IDS = credentials.userIds;
+var DEFAULT_CHAT_ID = ALLOWED_USER_IDS[0];
 var SESSION_DIR = getSessionDir(process.cwd());
 var QUEUE_FILE = path.join(SESSION_DIR, "queue.json");
 function exitMissingCreds(which) {
@@ -85759,7 +85764,7 @@ function exitMissingCreds(which) {
   process.exit(1);
 }
 if (!TELEGRAM_BOT_TOKEN) exitMissingCreds("TELEGRAM_BOT_TOKEN");
-if (!TELEGRAM_USER_ID) exitMissingCreds("TELEGRAM_USER_ID");
+if (ALLOWED_USER_IDS.length === 0) exitMissingCreds("TELEGRAM_USER_ID");
 if (!fs.existsSync(SESSION_DIR)) {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
@@ -85830,10 +85835,61 @@ function writePermissionResponse(response, promptType) {
   fs.writeFileSync(PERMISSION_RESPONSE_FILE, JSON.stringify(responseData, null, 2));
   log(`Wrote permission response: ${response} (type: ${promptType || "permission"})`);
 }
+function writeLastChat(msg) {
+  try {
+    const data = {
+      chat_id: msg.chat.id,
+      message_thread_id: msg.message_thread_id ?? null,
+      from_user_id: msg.from?.id?.toString() ?? null,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    fs.writeFileSync(LAST_CHAT_FILE, JSON.stringify(data, null, 2));
+  } catch (e) {
+    log(`Failed to write last-chat: ${e.message}`);
+  }
+}
+function readLastChat() {
+  try {
+    if (!fs.existsSync(LAST_CHAT_FILE)) return null;
+    return JSON.parse(fs.readFileSync(LAST_CHAT_FILE, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function resolveReplyTarget(overrides = {}) {
+  if (overrides.chat_id != null) {
+    return {
+      chat_id: overrides.chat_id,
+      message_thread_id: overrides.message_thread_id ?? null,
+      source: "override"
+    };
+  }
+  const last = readLastChat();
+  if (last && last.chat_id != null) {
+    return {
+      chat_id: last.chat_id,
+      message_thread_id: last.message_thread_id ?? null,
+      source: "last-chat"
+    };
+  }
+  return {
+    chat_id: DEFAULT_CHAT_ID,
+    message_thread_id: null,
+    source: "default"
+  };
+}
+function sendOpts(target, extra = {}) {
+  const opts = { ...extra };
+  if (target.message_thread_id != null) {
+    opts.message_thread_id = target.message_thread_id;
+  }
+  return opts;
+}
 bot.on("message", async (msg) => {
   debugLog(`message received from=${msg.from?.id} text=${(msg.text || "").slice(0, 60)}`);
-  if (msg.from.id.toString() !== TELEGRAM_USER_ID) {
-    log(`Ignored message from unauthorized user: ${msg.from.id}`);
+  const fromId = msg.from?.id?.toString();
+  if (!fromId || !ALLOWED_USER_IDS.includes(fromId)) {
+    log(`Ignored message from unauthorized user: ${fromId}`);
     return;
   }
   if (isMessageProcessed(msg.message_id)) {
@@ -85841,10 +85897,16 @@ bot.on("message", async (msg) => {
     return;
   }
   markMessageProcessed(msg.message_id);
+  writeLastChat(msg);
+  const replyTarget = {
+    chat_id: msg.chat.id,
+    message_thread_id: msg.message_thread_id ?? null
+  };
   const text = msg.text || msg.caption || "";
   if (msg.text && hasPendingPermission()) {
     const pending = getPendingPermission();
     const promptType = pending?.prompt_type || "permission";
+    const ackTarget = pending?.chat_id != null ? { chat_id: pending.chat_id, message_thread_id: pending.message_thread_id ?? null } : replyTarget;
     if (promptType === "question" && isNumericResponse(text)) {
       const optionNum = parseInt(text.trim(), 10);
       log(`Received question response: option ${optionNum} (type: ${promptType})`);
@@ -85858,7 +85920,7 @@ bot.on("message", async (msg) => {
       } else {
         confirmText = `Option ${optionNum}`;
       }
-      bot.sendMessage(TELEGRAM_USER_ID, `\u2705 Selected: ${confirmText}`).catch(() => {
+      bot.sendMessage(ackTarget.chat_id, `\u2705 Selected: ${confirmText}`, sendOpts(ackTarget)).catch(() => {
       });
       writePermissionResponse(optionNum.toString(), "question");
       clearPendingPermission();
@@ -85869,7 +85931,7 @@ bot.on("message", async (msg) => {
       const response = normalizePermissionResponse(text);
       log(`Received permission response: ${text} -> ${response}`);
       const responseText = response === "y" ? "Yes (allow once)" : response === "n" ? "No (deny)" : response === "a" ? "Always (allow permanently)" : text;
-      bot.sendMessage(TELEGRAM_USER_ID, `\u2705 Permission: ${responseText}`).catch(() => {
+      bot.sendMessage(ackTarget.chat_id, `\u2705 Permission: ${responseText}`, sendOpts(ackTarget)).catch(() => {
       });
       writePermissionResponse(response, promptType);
       clearPendingPermission();
@@ -85886,7 +85948,7 @@ bot.on("message", async (msg) => {
         timestamp: (/* @__PURE__ */ new Date()).toISOString(),
         command
       }, null, 2));
-      bot.sendMessage(TELEGRAM_USER_ID, `Forwarding /${command} to Claude Code...`).catch(() => {
+      bot.sendMessage(replyTarget.chat_id, `Forwarding /${command} to Claude Code...`, sendOpts(replyTarget)).catch(() => {
       });
       triggerEnterKey();
       return;
@@ -85946,6 +86008,7 @@ var TRIGGER_FILE = path.join(SESSION_DIR, "trigger-enter");
 var PENDING_PERMISSION_FILE = path.join(SESSION_DIR, "pending-permission.json");
 var PERMISSION_RESPONSE_FILE = path.join(SESSION_DIR, "permission-response.json");
 var SLASH_COMMAND_FILE = path.join(SESSION_DIR, "slash-command.json");
+var LAST_CHAT_FILE = path.join(SESSION_DIR, "last-chat.json");
 function triggerEnterKey() {
   setTimeout(() => {
     if (AGENT === "codex") {
@@ -85988,13 +86051,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     tools: [
       {
         name: "telegram_send",
-        description: "Send a text message to the authorized Telegram user",
+        description: "Send a text message via Telegram. By default replies to the chat the most recent inbound message came from (DM, group, or supergroup topic). Supply chat_id to override.",
         inputSchema: {
           type: "object",
           properties: {
             message: {
               type: "string",
               description: "The message text to send"
+            },
+            chat_id: {
+              type: ["string", "number"],
+              description: "Optional. Telegram chat id to send to. Defaults to the chat of the most recent inbound message (or, if none, the first allowlisted user as a DM)."
+            },
+            message_thread_id: {
+              type: "number",
+              description: "Optional. Forum/topic thread id within a supergroup. Only meaningful when chat_id refers to a forum-enabled supergroup."
             }
           },
           required: ["message"]
@@ -86002,7 +86073,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "telegram_send_image",
-        description: "Send an image file to the authorized Telegram user",
+        description: "Send an image file via Telegram. Same default-reply-target behavior as telegram_send.",
         inputSchema: {
           type: "object",
           properties: {
@@ -86013,6 +86084,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             caption: {
               type: "string",
               description: "Optional caption for the image"
+            },
+            chat_id: {
+              type: ["string", "number"],
+              description: "Optional. Telegram chat id to send to. See telegram_send for default behavior."
+            },
+            message_thread_id: {
+              type: "number",
+              description: "Optional. Forum/topic thread id within a supergroup."
             }
           },
           required: ["path"]
@@ -86034,34 +86113,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   switch (name) {
     case "telegram_send": {
-      const { message } = args;
+      const { message, chat_id, message_thread_id } = args;
       if (!message) {
         return {
           content: [{ type: "text", text: "Error: message is required" }],
           isError: true
         };
       }
+      const target = resolveReplyTarget({ chat_id, message_thread_id });
+      const targetDesc = `${target.chat_id}${target.message_thread_id != null ? `:${target.message_thread_id}` : ""} (${target.source})`;
       try {
-        await bot.sendMessage(TELEGRAM_USER_ID, message, { parse_mode: "Markdown" });
+        await bot.sendMessage(target.chat_id, message, sendOpts(target, { parse_mode: "Markdown" }));
         return {
-          content: [{ type: "text", text: `Message sent successfully to Telegram` }]
+          content: [{ type: "text", text: `Message sent to Telegram chat ${targetDesc}` }]
         };
       } catch (error2) {
         try {
-          await bot.sendMessage(TELEGRAM_USER_ID, message);
+          await bot.sendMessage(target.chat_id, message, sendOpts(target));
           return {
-            content: [{ type: "text", text: `Message sent successfully to Telegram (plain text)` }]
+            content: [{ type: "text", text: `Message sent to Telegram chat ${targetDesc} (plain text)` }]
           };
         } catch (retryError) {
           return {
-            content: [{ type: "text", text: `Error sending message: ${retryError.message}` }],
+            content: [{ type: "text", text: `Error sending message to ${targetDesc}: ${retryError.message}` }],
             isError: true
           };
         }
       }
     }
     case "telegram_send_image": {
-      const { path: imagePath, caption } = args;
+      const { path: imagePath, caption, chat_id, message_thread_id } = args;
       if (!imagePath) {
         return {
           content: [{ type: "text", text: "Error: path is required" }],
@@ -86074,14 +86155,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           isError: true
         };
       }
+      const target = resolveReplyTarget({ chat_id, message_thread_id });
+      const targetDesc = `${target.chat_id}${target.message_thread_id != null ? `:${target.message_thread_id}` : ""} (${target.source})`;
       try {
-        await bot.sendPhoto(TELEGRAM_USER_ID, imagePath, { caption: caption || "" });
+        await bot.sendPhoto(target.chat_id, imagePath, sendOpts(target, { caption: caption || "" }));
         return {
-          content: [{ type: "text", text: `Image sent successfully to Telegram` }]
+          content: [{ type: "text", text: `Image sent to Telegram chat ${targetDesc}` }]
         };
       } catch (error2) {
         return {
-          content: [{ type: "text", text: `Error sending image: ${error2.message}` }],
+          content: [{ type: "text", text: `Error sending image to ${targetDesc}: ${error2.message}` }],
           isError: true
         };
       }

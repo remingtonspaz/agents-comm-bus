@@ -35,10 +35,23 @@ function getSessionDir(cwd) {
 const SESSION_DIR = getSessionDir(process.cwd());
 const PENDING_PERMISSION_FILE = path.join(SESSION_DIR, 'pending-permission.json');
 const PERMISSION_RESPONSE_FILE = path.join(SESSION_DIR, 'permission-response.json');
+const LAST_CHAT_FILE = path.join(SESSION_DIR, 'last-chat.json');
 
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 9 * 60 * 1000;
 
+// Normalize a userId field to an array of strings. Accepts a scalar
+// (string/number, the legacy single-user form) or an array.
+function normalizeUserIds(raw) {
+  if (raw == null) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  return arr
+    .map((v) => (v == null ? '' : v.toString().trim()))
+    .filter((v) => v.length > 0);
+}
+
+// Returns { botToken, userIds: string[] } — userIds is the allowlist;
+// first entry doubles as the proactive-send default.
 function getCredentials() {
   const home = os.homedir();
   const candidates = [
@@ -53,28 +66,42 @@ function getCredentials() {
     try {
       if (fs.existsSync(p)) {
         const cfg = JSON.parse(fs.readFileSync(p, 'utf-8'));
-        if (cfg.botToken && cfg.userId) {
-          return { botToken: cfg.botToken, userId: cfg.userId.toString() };
+        const userIds = normalizeUserIds(cfg.userId);
+        if (cfg.botToken && userIds.length > 0) {
+          return { botToken: cfg.botToken, userIds };
         }
       }
     } catch {}
   }
-  if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_USER_ID) {
-    return {
-      botToken: process.env.TELEGRAM_BOT_TOKEN,
-      userId: process.env.TELEGRAM_USER_ID,
-    };
+  const envIds = (process.env.TELEGRAM_USER_ID || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (process.env.TELEGRAM_BOT_TOKEN && envIds.length > 0) {
+    return { botToken: process.env.TELEGRAM_BOT_TOKEN, userIds: envIds };
   }
   return null;
 }
 
-function sendTelegram(botToken, userId, message) {
+// Last inbound chat (DM, group, supergroup topic) the bot saw — written
+// by the MCP server on every accepted message. Used to route the
+// permission prompt back to the same chat instead of always DM'ing the
+// configured user.
+function readLastChat() {
+  try {
+    if (!fs.existsSync(LAST_CHAT_FILE)) return null;
+    return JSON.parse(fs.readFileSync(LAST_CHAT_FILE, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function sendTelegram(botToken, chatId, message, messageThreadId) {
   return new Promise((resolve, reject) => {
-    const data = JSON.stringify({
-      chat_id: userId,
+    const payload = {
+      chat_id: chatId,
       text: message,
       parse_mode: 'HTML',
-    });
+    };
+    if (messageThreadId != null) payload.message_thread_id = messageThreadId;
+    const data = JSON.stringify(payload);
     const req = https.request(
       {
         hostname: 'api.telegram.org',
@@ -182,6 +209,15 @@ async function main() {
     fs.unlinkSync(PERMISSION_RESPONSE_FILE);
   } catch {}
 
+  // Resolve where to send the prompt: most recent inbound chat if we
+  // know one (DM, group, or supergroup topic), else the first
+  // allowlisted userId as a DM.
+  const lastChat = readLastChat();
+  const targetChatId = lastChat?.chat_id ?? creds.userIds[0];
+  const targetThreadId = lastChat?.message_thread_id ?? null;
+
+  // Pending state — chat_id/message_thread_id let the MCP server's
+  // y/n/a-handler ack in the same chat the prompt landed in.
   fs.writeFileSync(
     PENDING_PERMISSION_FILE,
     JSON.stringify(
@@ -190,6 +226,8 @@ async function main() {
         tool_name,
         tool_input,
         prompt_type: 'permission',
+        chat_id: targetChatId,
+        message_thread_id: targetThreadId,
       },
       null,
       2
@@ -198,7 +236,7 @@ async function main() {
 
   const message = formatToolPermission(tool_name, tool_input);
   try {
-    await sendTelegram(creds.botToken, creds.userId, message);
+    await sendTelegram(creds.botToken, targetChatId, message, targetThreadId);
   } catch {}
 
   const response = await pollForResponse(POLL_TIMEOUT_MS);

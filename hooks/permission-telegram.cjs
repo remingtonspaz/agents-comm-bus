@@ -27,47 +27,77 @@ function getSessionDir(cwd) {
 
 const SESSION_DIR = getSessionDir(process.cwd());
 const PENDING_PERMISSION_PATH = path.join(SESSION_DIR, 'pending-permission.json');
+const LAST_CHAT_PATH = path.join(SESSION_DIR, 'last-chat.json');
 
-// Read Telegram credentials from multiple sources
+// Normalize a userId field to an array of strings. Accepts a scalar
+// (string/number, the legacy form) or an array of either.
+function normalizeUserIds(raw) {
+    if (raw == null) return [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return arr
+        .map(v => (v == null ? '' : v.toString().trim()))
+        .filter(v => v.length > 0);
+}
+
+// Read Telegram credentials from multiple sources. Returns
+// { botToken, userIds: string[] } — userIds is the allowlist; first
+// entry doubles as the proactive-send default.
 function getCredentials() {
     // 1. Try project-specific config first
     try {
         const configPath = path.join(process.cwd(), '.claude', 'telegram.json');
         if (fs.existsSync(configPath)) {
             const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            if (config.botToken && config.userId) {
-                return { botToken: config.botToken, userId: config.userId.toString() };
+            const userIds = normalizeUserIds(config.userId);
+            if (config.botToken && userIds.length > 0) {
+                return { botToken: config.botToken, userIds };
             }
         }
     } catch (err) {}
 
-    // 2. Try environment variables
+    // 2. Try environment variables (TELEGRAM_USER_ID may be comma-separated)
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    const userId = process.env.TELEGRAM_USER_ID;
-    if (botToken && userId) return { botToken, userId };
+    const envIds = (process.env.TELEGRAM_USER_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (botToken && envIds.length > 0) return { botToken, userIds: envIds };
 
     // 3. Fallback: .mcp.json
     try {
         const projectDir = process.env.CLAUDE_PROJECT_DIR || path.join(__dirname, '..');
         const mcpConfigPath = path.join(projectDir, '.mcp.json');
         const config = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
-        return {
-            botToken: config.mcpServers?.telegram?.env?.TELEGRAM_BOT_TOKEN,
-            userId: config.mcpServers?.telegram?.env?.TELEGRAM_USER_ID
-        };
-    } catch (err) {
+        const mcpToken = config.mcpServers?.telegram?.env?.TELEGRAM_BOT_TOKEN;
+        const mcpIds = normalizeUserIds(config.mcpServers?.telegram?.env?.TELEGRAM_USER_ID);
+        if (mcpToken && mcpIds.length > 0) {
+            return { botToken: mcpToken, userIds: mcpIds };
+        }
+    } catch (err) {}
+    return null;
+}
+
+// Read the most recent inbound chat the bot saw, if any. The MCP server
+// writes this on every accepted message so hooks can route prompts back
+// to the same chat (DM, group, or supergroup topic) instead of always
+// dropping into the configured user's DM.
+function readLastChat() {
+    try {
+        if (!fs.existsSync(LAST_CHAT_PATH)) return null;
+        return JSON.parse(fs.readFileSync(LAST_CHAT_PATH, 'utf8'));
+    } catch {
         return null;
     }
 }
 
-// Send message via Telegram Bot API
-function sendTelegram(botToken, userId, message) {
+// Send message via Telegram Bot API. message_thread_id is omitted when
+// null/undefined so non-supergroup chats aren't confused.
+function sendTelegram(botToken, chatId, message, messageThreadId) {
     return new Promise((resolve, reject) => {
-        const data = JSON.stringify({
-            chat_id: userId,
+        const payload = {
+            chat_id: chatId,
             text: message,
             parse_mode: 'HTML'
-        });
+        };
+        if (messageThreadId != null) payload.message_thread_id = messageThreadId;
+        const data = JSON.stringify(payload);
 
         const options = {
             hostname: 'api.telegram.org',
@@ -195,7 +225,7 @@ async function main() {
     const { tool_name, tool_input } = hookInput;
 
     const creds = getCredentials();
-    if (!creds || !creds.botToken || !creds.userId) {
+    if (!creds || !creds.botToken || creds.userIds.length === 0) {
         console.log(JSON.stringify({ decision: { behavior: 'ask' } }));
         return;
     }
@@ -204,7 +234,14 @@ async function main() {
         fs.mkdirSync(SESSION_DIR, { recursive: true });
     }
 
-    // Write pending info with prompt type for the watcher/MCP server
+    // Resolve where to send the prompt: most recent inbound chat if we
+    // know one, else the first allowlisted userId as a DM.
+    const lastChat = readLastChat();
+    const targetChatId = lastChat?.chat_id ?? creds.userIds[0];
+    const targetThreadId = lastChat?.message_thread_id ?? null;
+
+    // Write pending info — include chat context so the MCP server's
+    // y/n/a-handler can ack in the same chat the prompt landed in.
     const pendingInfo = {
         timestamp: new Date().toISOString(),
         tool_name,
@@ -212,14 +249,16 @@ async function main() {
         prompt_type: tool_name === 'AskUserQuestion' ? 'question'
             : tool_name === 'ExitPlanMode' ? 'plan_approval'
             : tool_name === 'EnterPlanMode' ? 'plan_entry'
-            : 'permission'
+            : 'permission',
+        chat_id: targetChatId,
+        message_thread_id: targetThreadId,
     };
     fs.writeFileSync(PENDING_PERMISSION_PATH, JSON.stringify(pendingInfo, null, 2));
 
     const message = formatMessage(tool_name, tool_input);
 
     try {
-        await sendTelegram(creds.botToken, creds.userId, message);
+        await sendTelegram(creds.botToken, targetChatId, message, targetThreadId);
     } catch (err) {
         // Failed to send, don't block
     }
