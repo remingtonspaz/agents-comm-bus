@@ -85913,9 +85913,11 @@ bot.on("message", async (msg) => {
 });
 bot.on("polling_error", (error2) => {
   log(`Polling error: ${error2.message}`);
+  debugLog(`polling_error: ${error2.message}`);
 });
 log(`Telegram bot listener started`);
 log(`Session directory: ${SESSION_DIR}`);
+debugLog(`bot listener started session_dir=${SESSION_DIR}`);
 var TRIGGER_FILE = path.join(SESSION_DIR, "trigger-enter");
 var PENDING_PERMISSION_FILE = path.join(SESSION_DIR, "pending-permission.json");
 var PERMISSION_RESPONSE_FILE = path.join(SESSION_DIR, "permission-response.json");

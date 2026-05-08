@@ -413,10 +413,15 @@ bot.on('message', async (msg) => {
 // Handle polling errors
 bot.on('polling_error', (error) => {
   log(`Polling error: ${error.message}`);
+  // Surface to startup.log too — Telegram 409s (another consumer polling
+  // the same token) are silent in normal use but completely break message
+  // reception. Worth seeing this without digging into Codex's logs.
+  debugLog(`polling_error: ${error.message}`);
 });
 
 log(`Telegram bot listener started`);
 log(`Session directory: ${SESSION_DIR}`);
+debugLog(`bot listener started session_dir=${SESSION_DIR}`);
 
 // Trigger file for the watcher script
 const TRIGGER_FILE = path.join(SESSION_DIR, 'trigger-enter');
