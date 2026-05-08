@@ -82017,6 +82017,22 @@ function readLastChat() {
     return null;
   }
 }
+function isForbidden(error2) {
+  if (!error2) return false;
+  const msg = error2.message || "";
+  return /403\b|Forbidden|kicked|blocked|deactivated/i.test(msg) || error2?.response?.statusCode === 403 || error2?.response?.body?.error_code === 403;
+}
+function clearLastChatIfMatches(chatId) {
+  try {
+    const last = readLastChat();
+    if (last && String(last.chat_id) === String(chatId)) {
+      fs.unlinkSync(LAST_CHAT_FILE);
+      log(`Cleared stale last-chat (chat_id=${chatId} returned 403)`);
+    }
+  } catch (e) {
+    log(`Failed to clear last-chat: ${e.message}`);
+  }
+}
 function resolveReplyTarget(overrides = {}) {
   if (overrides.chat_id != null) {
     return {
@@ -82276,6 +82292,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{ type: "text", text: `Message sent to Telegram chat ${targetDesc} (plain text)` }]
           };
         } catch (retryError) {
+          if (isForbidden(retryError)) clearLastChatIfMatches(target.chat_id);
           return {
             content: [{ type: "text", text: `Error sending message to ${targetDesc}: ${retryError.message}` }],
             isError: true
@@ -82305,6 +82322,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: "text", text: `Image sent to Telegram chat ${targetDesc}` }]
         };
       } catch (error2) {
+        if (isForbidden(error2)) clearLastChatIfMatches(target.chat_id);
         return {
           content: [{ type: "text", text: `Error sending image to ${targetDesc}: ${error2.message}` }],
           isError: true

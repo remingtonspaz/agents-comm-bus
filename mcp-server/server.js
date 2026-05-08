@@ -218,6 +218,30 @@ function readLastChat() {
   }
 }
 
+// If a send to last-chat returns 403 (bot kicked, blocked, etc.), the
+// stored chat is unreachable — clear it so the next reply doesn't keep
+// blindly retrying. Only clears when the failed chat_id matches what's
+// in last-chat, so caller-supplied overrides don't poison shared state.
+function isForbidden(error) {
+  if (!error) return false;
+  const msg = error.message || '';
+  return /403\b|Forbidden|kicked|blocked|deactivated/i.test(msg) ||
+    error?.response?.statusCode === 403 ||
+    error?.response?.body?.error_code === 403;
+}
+
+function clearLastChatIfMatches(chatId) {
+  try {
+    const last = readLastChat();
+    if (last && String(last.chat_id) === String(chatId)) {
+      fs.unlinkSync(LAST_CHAT_FILE);
+      log(`Cleared stale last-chat (chat_id=${chatId} returned 403)`);
+    }
+  } catch (e) {
+    log(`Failed to clear last-chat: ${e.message}`);
+  }
+}
+
 // Resolve the target {chat_id, message_thread_id} for an outbound
 // message. Caller may pass explicit overrides; otherwise uses the most
 // recent inbound chat; otherwise falls back to the configured default
@@ -547,6 +571,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{ type: 'text', text: `Message sent to Telegram chat ${targetDesc} (plain text)` }],
           };
         } catch (retryError) {
+          if (isForbidden(retryError)) clearLastChatIfMatches(target.chat_id);
           return {
             content: [{ type: 'text', text: `Error sending message to ${targetDesc}: ${retryError.message}` }],
             isError: true,
@@ -580,6 +605,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [{ type: 'text', text: `Image sent to Telegram chat ${targetDesc}` }],
         };
       } catch (error) {
+        if (isForbidden(error)) clearLastChatIfMatches(target.chat_id);
         return {
           content: [{ type: 'text', text: `Error sending image to ${targetDesc}: ${error.message}` }],
           isError: true,
