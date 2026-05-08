@@ -72,9 +72,27 @@ This appends absolute-path entries for the MCP server and hooks into `~/.codex/c
 
 > See [Manual setup](#manual-setup) below if you'd rather paste the TOML by hand.
 
-### 5. Restart Codex
+### 5. Launch with Telegram support
 
-Restart the Codex CLI or desktop app to pick up the new config.
+The Telegram-capable workflow needs Codex's app-server running separately and the TUI attached via `--remote` (so this MCP server's auto-submission can call into the same shared session). The easiest way to do that is the bundled launcher:
+
+```powershell
+# from your project dir
+./scripts/launch-codex.ps1
+# or with an explicit project path
+./scripts/launch-codex.ps1 D:\Documents\web\stonks
+```
+
+It kills any stale codex MCP processes (avoids polling-409 races on restart), starts `codex app-server --listen ws://127.0.0.1:4500` in a new window with the project dir as cwd (so credential lookup resolves correctly), and launches `codex --remote ws://127.0.0.1:4500` in the current terminal.
+
+Manual equivalent (two terminals, both `cd <project>` first):
+
+```bash
+# terminal A
+codex app-server --listen ws://127.0.0.1:4500
+# terminal B
+codex --remote ws://127.0.0.1:4500
+```
 
 ### 6. Verify
 
