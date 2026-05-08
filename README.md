@@ -175,7 +175,7 @@ command = "node"
 args = ["<ABSOLUTE_REPO_PATH>/mcp-server/dist/server.js", "--agent=codex"]
 
 [features]
-codex_hooks = true
+hooks = true
 
 [[hooks.UserPromptSubmit]]
 
@@ -211,7 +211,7 @@ Then restart Codex.
 
 ### Permission notifications don't appear
 
-- Ensure `[features] codex_hooks = true` is set
+- Ensure `[features] hooks = true` is set (older Codex versions used `codex_hooks` — that key is now deprecated)
 - Verify the `PermissionRequest` hook entry in `~/.codex/config.toml` points to a path that exists
 - Check the hook's stderr output (Codex surfaces it in the TUI status bar)
 

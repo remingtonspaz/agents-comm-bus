@@ -157,9 +157,11 @@ export async function wakeMostRecentThread(placeholderText = '.') {
     return { ok: false, reason: 'listLoadedThreads-failed', error: e.message, url: APP_SERVER_URL };
   }
 
-  // The exact response shape isn't fully documented; handle common variants.
+  // Response shape (Codex 0.128): {data: ["<threadId>", ...], nextCursor: null}.
+  // Earlier guesses (`threads`, `items`, `loaded`) and bare arrays are
+  // kept as fallbacks in case the protocol shifts again.
   const threads =
-    (result && (result.threads || result.items || result.loaded)) ||
+    (result && (result.data || result.threads || result.items || result.loaded)) ||
     (Array.isArray(result) ? result : []);
   if (!Array.isArray(threads) || threads.length === 0) {
     return {
@@ -169,15 +171,21 @@ export async function wakeMostRecentThread(placeholderText = '.') {
     };
   }
 
-  // Pick the most recently active thread by lastActiveAt / updatedAt /
-  // startedAt timestamp, falling back to the first one.
+  // Each entry may be either a bare thread-ID string (current shape) or a
+  // metadata object. Sort by timestamp if available; otherwise the order
+  // is whatever the server returned (most-recent-first is the common
+  // convention but not guaranteed).
   const sorted = [...threads].sort((a, b) => {
+    if (typeof a === 'string' || typeof b === 'string') return 0;
     const ta = Date.parse(a?.lastActiveAt || a?.updatedAt || a?.startedAt || 0) || 0;
     const tb = Date.parse(b?.lastActiveAt || b?.updatedAt || b?.startedAt || 0) || 0;
     return tb - ta;
   });
   const target = sorted[0];
-  const threadId = target?.threadId || target?.id;
+  const threadId =
+    typeof target === 'string'
+      ? target
+      : target?.threadId || target?.id;
   if (!threadId) {
     return {
       ok: false,

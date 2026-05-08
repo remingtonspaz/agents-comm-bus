@@ -85608,7 +85608,7 @@ async function wakeMostRecentThread(placeholderText = ".") {
   } catch (e) {
     return { ok: false, reason: "listLoadedThreads-failed", error: e.message, url: APP_SERVER_URL };
   }
-  const threads = result && (result.threads || result.items || result.loaded) || (Array.isArray(result) ? result : []);
+  const threads = result && (result.data || result.threads || result.items || result.loaded) || (Array.isArray(result) ? result : []);
   if (!Array.isArray(threads) || threads.length === 0) {
     return {
       ok: false,
@@ -85617,12 +85617,13 @@ async function wakeMostRecentThread(placeholderText = ".") {
     };
   }
   const sorted = [...threads].sort((a, b) => {
+    if (typeof a === "string" || typeof b === "string") return 0;
     const ta = Date.parse(a?.lastActiveAt || a?.updatedAt || a?.startedAt || 0) || 0;
     const tb = Date.parse(b?.lastActiveAt || b?.updatedAt || b?.startedAt || 0) || 0;
     return tb - ta;
   });
   const target = sorted[0];
-  const threadId = target?.threadId || target?.id;
+  const threadId = typeof target === "string" ? target : target?.threadId || target?.id;
   if (!threadId) {
     return {
       ok: false,
