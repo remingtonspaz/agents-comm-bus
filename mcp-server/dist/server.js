@@ -85508,11 +85508,11 @@ var wrapper_default = import_websocket.default;
 // codex-app-server.js
 var DEFAULT_URL = "ws://127.0.0.1:4500";
 function getAppServerUrl() {
+  if (process.env.CODEX_APP_SERVER_URL) return process.env.CODEX_APP_SERVER_URL;
   for (const arg of process.argv.slice(2)) {
     const m = arg.match(/^--app-server-url=(.+)$/);
     if (m) return m[1];
   }
-  if (process.env.CODEX_APP_SERVER_URL) return process.env.CODEX_APP_SERVER_URL;
   return DEFAULT_URL;
 }
 var APP_SERVER_URL = getAppServerUrl();

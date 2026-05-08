@@ -13,21 +13,24 @@
 // "auto-enter" PostMessage WM_CHAR trick the Claude Code version uses,
 // but routed through Codex's own protocol.
 //
-// URL precedence:
-//   1. --app-server-url=<url> argv flag
-//   2. CODEX_APP_SERVER_URL env var
-//   3. default: ws://127.0.0.1:4500
+// URL precedence (env wins over argv on purpose — the launcher script
+// picks a session-specific open port at start time and exports it via
+// CODEX_APP_SERVER_URL; the argv flag from the global mcp_servers
+// config acts as a fallback default for direct/manual invocations):
+//   1. CODEX_APP_SERVER_URL env var
+//   2. --app-server-url=<url> argv flag
+//   3. compiled-in default: ws://127.0.0.1:4500
 
 import WebSocket from 'ws';
 
 const DEFAULT_URL = 'ws://127.0.0.1:4500';
 
 function getAppServerUrl() {
+  if (process.env.CODEX_APP_SERVER_URL) return process.env.CODEX_APP_SERVER_URL;
   for (const arg of process.argv.slice(2)) {
     const m = arg.match(/^--app-server-url=(.+)$/);
     if (m) return m[1];
   }
-  if (process.env.CODEX_APP_SERVER_URL) return process.env.CODEX_APP_SERVER_URL;
   return DEFAULT_URL;
 }
 
