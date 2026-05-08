@@ -33,8 +33,17 @@ function getAppServerUrl() {
 
 const APP_SERVER_URL = getAppServerUrl();
 
-// Send one JSON-RPC request and resolve with the response. Closes the
-// connection after the reply (or timeout) — not meant for streaming.
+// Send one JSON-RPC request and resolve with the response. Per the
+// Codex app-server protocol, every fresh connection must first send an
+// `initialize` request before any other method is callable — otherwise
+// the server returns -32600 "Not initialized". We do that handshake
+// inline on each call (one-shot connection model; cheap enough for our
+// once-per-Telegram-message usage).
+const CLIENT_INFO = {
+  name: 'telegram-mcp-bridge',
+  version: '0.1.0',
+};
+
 function callOnce(method, params, { timeoutMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
     let ws;
@@ -45,8 +54,10 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
       return;
     }
 
-    const id = Math.floor(Math.random() * 1e9);
+    const initId = 1;
+    const callId = 2;
     let settled = false;
+    let initialized = false;
 
     const finish = (err, value) => {
       if (settled) return;
@@ -60,8 +71,12 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
     }, timeoutMs);
 
     ws.on('open', () => {
-      const req = { jsonrpc: '2.0', id, method, params };
-      ws.send(JSON.stringify(req));
+      ws.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: initId,
+        method: 'initialize',
+        params: { clientInfo: CLIENT_INFO },
+      }));
     });
 
     ws.on('message', (data) => {
@@ -71,13 +86,25 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
       } catch {
         return; // Ignore unparseable frames
       }
-      if (msg.id !== id) return; // Ignore notifications and other replies
-      clearTimeout(timer);
-      if (msg.error) {
-        finish(new Error(`app-server JSON-RPC error ${msg.error.code}: ${msg.error.message || ''}`));
-      } else {
-        finish(null, msg.result);
+      if (msg.id === initId) {
+        if (msg.error) {
+          finish(new Error(`app-server initialize failed: ${msg.error.code} ${msg.error.message || ''}`));
+          return;
+        }
+        initialized = true;
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id: callId, method, params }));
+        return;
       }
+      if (msg.id === callId) {
+        clearTimeout(timer);
+        if (msg.error) {
+          finish(new Error(`app-server JSON-RPC error ${msg.error.code}: ${msg.error.message || ''}`));
+        } else {
+          finish(null, msg.result);
+        }
+        return;
+      }
+      // Ignore notifications and other unrelated replies.
     });
 
     ws.on('error', (err) => {
@@ -87,7 +114,11 @@ function callOnce(method, params, { timeoutMs = 5000 } = {}) {
 
     ws.on('close', () => {
       clearTimeout(timer);
-      if (!settled) finish(new Error('app-server connection closed before reply'));
+      if (!settled) {
+        finish(new Error(initialized
+          ? 'app-server connection closed after initialize but before reply'
+          : 'app-server connection closed before initialize completed'));
+      }
     });
   });
 }

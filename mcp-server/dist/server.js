@@ -85516,6 +85516,10 @@ function getAppServerUrl() {
   return DEFAULT_URL;
 }
 var APP_SERVER_URL = getAppServerUrl();
+var CLIENT_INFO = {
+  name: "telegram-mcp-bridge",
+  version: "0.1.0"
+};
 function callOnce(method, params, { timeoutMs = 5e3 } = {}) {
   return new Promise((resolve, reject) => {
     let ws;
@@ -85525,8 +85529,10 @@ function callOnce(method, params, { timeoutMs = 5e3 } = {}) {
       reject(e);
       return;
     }
-    const id = Math.floor(Math.random() * 1e9);
+    const initId = 1;
+    const callId = 2;
     let settled = false;
+    let initialized = false;
     const finish = (err, value) => {
       if (settled) return;
       settled = true;
@@ -85541,8 +85547,12 @@ function callOnce(method, params, { timeoutMs = 5e3 } = {}) {
       finish(new Error(`app-server JSON-RPC timeout after ${timeoutMs}ms (method=${method}, url=${APP_SERVER_URL})`));
     }, timeoutMs);
     ws.on("open", () => {
-      const req = { jsonrpc: "2.0", id, method, params };
-      ws.send(JSON.stringify(req));
+      ws.send(JSON.stringify({
+        jsonrpc: "2.0",
+        id: initId,
+        method: "initialize",
+        params: { clientInfo: CLIENT_INFO }
+      }));
     });
     ws.on("message", (data) => {
       let msg;
@@ -85551,12 +85561,23 @@ function callOnce(method, params, { timeoutMs = 5e3 } = {}) {
       } catch {
         return;
       }
-      if (msg.id !== id) return;
-      clearTimeout(timer);
-      if (msg.error) {
-        finish(new Error(`app-server JSON-RPC error ${msg.error.code}: ${msg.error.message || ""}`));
-      } else {
-        finish(null, msg.result);
+      if (msg.id === initId) {
+        if (msg.error) {
+          finish(new Error(`app-server initialize failed: ${msg.error.code} ${msg.error.message || ""}`));
+          return;
+        }
+        initialized = true;
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: callId, method, params }));
+        return;
+      }
+      if (msg.id === callId) {
+        clearTimeout(timer);
+        if (msg.error) {
+          finish(new Error(`app-server JSON-RPC error ${msg.error.code}: ${msg.error.message || ""}`));
+        } else {
+          finish(null, msg.result);
+        }
+        return;
       }
     });
     ws.on("error", (err) => {
@@ -85565,7 +85586,9 @@ function callOnce(method, params, { timeoutMs = 5e3 } = {}) {
     });
     ws.on("close", () => {
       clearTimeout(timer);
-      if (!settled) finish(new Error("app-server connection closed before reply"));
+      if (!settled) {
+        finish(new Error(initialized ? "app-server connection closed after initialize but before reply" : "app-server connection closed before initialize completed"));
+      }
     });
   });
 }
