@@ -4,9 +4,12 @@
   "description": "Telegram MCP integration for Claude Code",
   "type": "module",
   "main": "mcp-server/server.js",
+  "workspaces": ["agents-core", "mcp-server"],
   "scripts": {
     "install-telegram": "node install.js",
-    "status": "node install.js --status"
+    "status": "node install.js --status",
+    "test:core": "npm test --workspace=agents-core",
+    "build:core": "npm run build --workspace=agents-core"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.66.0",
