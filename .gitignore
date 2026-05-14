@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Build output
+agents-core/dist/
+
 # Local Claude settings
 .claude/settings.local.json
 .claude/telegram.json
