@@ -5,3 +5,4 @@ export * from "./capabilities.js";
 export * from "./contracts/agent-adapter.js";
 export * from "./contracts/comm-adapter.js";
 export * from "./contracts/tool-registry.js";
+export * from "./records/index.js";
