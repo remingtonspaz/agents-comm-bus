@@ -1,4 +1,10 @@
-// Branded string ID types — distinct nominal types backed by string at runtime.
+/**
+ * Core branded ID types and shared structural types for the agents-comm-bus.
+ *
+ * Branded string types prevent accidental cross-assignment between different
+ * ID categories at compile time without any runtime overhead.
+ */
+
 export type AgentId = string & { readonly __brand: "AgentId" };
 export type CommId = string & { readonly __brand: "CommId" };
 export type AccountId = string & { readonly __brand: "AccountId" };
@@ -8,16 +14,24 @@ export type MessageId = string & { readonly __brand: "MessageId" };
 export type ConversationId = string & { readonly __brand: "ConversationId" };
 export type QueryId = string & { readonly __brand: "QueryId" };
 
-// Schema-version constants — bumped per record type whenever the on-disk shape changes.
+/**
+ * Schema-version constants for each durable record family. Bump when a
+ * breaking change requires a migration.
+ */
 export const SCHEMA_VERSION_MESSAGE = 1 as const;
 export const SCHEMA_VERSION_QUERY = 1 as const;
 export const SCHEMA_VERSION_CONVERSATION = 1 as const;
 export const SCHEMA_VERSION_ACCOUNT = 1 as const;
 export const SCHEMA_VERSION_SESSION = 1 as const;
 
+/**
+ * Stable reference to a chat (or thread within a chat) on a specific comm.
+ * `account` is part of the addressing tuple from day one so multi-account
+ * deployments are well-defined.
+ */
 export interface ChatRef {
   comm: CommId;
-  account: AccountId;
+  account: string;
   chat_native_id: string;
   thread_native_id?: string;
 }
