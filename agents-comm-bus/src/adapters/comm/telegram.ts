@@ -30,6 +30,7 @@ export class TelegramCommAdapter implements CommAdapter {
   private readonly sentByKey = new Map<string, SendResult>();
   private inboundHandler: ((msg: Message) => Promise<void>) | null = null;
   private stateHandler: ((state: CommConnectionState) => void) | null = null;
+  private connectionState: CommConnectionState | null = null;
   private bot: TelegramBot | null;
   private botUserId: string | null = null;
 
@@ -40,7 +41,7 @@ export class TelegramCommAdapter implements CommAdapter {
   }
 
   async start(): Promise<void> {
-    this.stateHandler?.("connecting");
+    this.emitState("connecting");
     if (!this.bot) {
       this.bot = new TelegramBot(this.options.botToken, {
         polling: this.options.polling ?? true,
@@ -49,19 +50,19 @@ export class TelegramCommAdapter implements CommAdapter {
     const me = await this.bot.getMe();
     this.botUserId = String(me.id);
     this.bot.on("message", (message) => {
-      void this.handleTelegramMessage(message).catch(() => {
-        this.stateHandler?.("degraded");
-      });
+      void this.handleTelegramMessage(message)
+        .then(() => this.emitState("connected"))
+        .catch(() => this.emitState("degraded"));
     });
-    this.bot.on("polling_error", () => this.stateHandler?.("degraded"));
-    this.stateHandler?.("connected");
+    this.bot.on("polling_error", () => this.emitState("degraded"));
+    this.emitState("connected");
   }
 
   async stop(): Promise<void> {
     if (this.bot?.isPolling()) {
       await this.bot.stopPolling();
     }
-    this.stateHandler?.("disconnected");
+    this.emitState("disconnected");
   }
 
   onInbound(handler: (msg: Message) => Promise<void>): void {
@@ -70,6 +71,9 @@ export class TelegramCommAdapter implements CommAdapter {
 
   onConnectionState(handler: (state: CommConnectionState) => void): void {
     this.stateHandler = handler;
+    if (this.connectionState) {
+      handler(this.connectionState);
+    }
   }
 
   async send(
@@ -103,6 +107,7 @@ export class TelegramCommAdapter implements CommAdapter {
       sent_at: this.now(),
     };
     this.sentByKey.set(idempotencyKey, result);
+    this.emitState("connected");
     return result;
   }
 
@@ -170,6 +175,12 @@ export class TelegramCommAdapter implements CommAdapter {
   private requireBot(): TelegramBot {
     if (!this.bot) throw new Error("Telegram adapter is not started");
     return this.bot;
+  }
+
+  private emitState(state: CommConnectionState): void {
+    if (this.connectionState === state) return;
+    this.connectionState = state;
+    this.stateHandler?.(state);
   }
 }
 

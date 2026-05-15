@@ -135,6 +135,22 @@ function sleep(ms) {
 export async function writeDaemonDiscoveryFiles(input) {
     const paths = resolveStatePaths({ stateRoot: input.stateRoot });
     await mkdir(paths.root, { recursive: true });
+    const existingPort = await readPortFile(paths.portFile);
+    if (existingPort !== undefined && existingPort !== input.port) {
+        const probe = input.probeDaemon ?? ((port) => defaultProbeDaemon({ port }));
+        let existingDaemonIsLive = false;
+        try {
+            await probe(existingPort);
+            existingDaemonIsLive = true;
+        }
+        catch {
+            existingDaemonIsLive = false;
+        }
+        if (existingDaemonIsLive) {
+            throw new Error(`agents-comm-bus daemon already running on port ${existingPort}; ` +
+                `refusing to overwrite discovery with port ${input.port}`);
+        }
+    }
     await writeFile(paths.pidFile, `${input.pid ?? process.pid}\n`, "utf8");
     await writeFile(paths.portFile, `${input.port}\n`, "utf8");
 }

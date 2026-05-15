@@ -20,5 +20,6 @@ export declare function writeDaemonDiscoveryFiles(input: {
     stateRoot?: string;
     pid?: number;
     port: number;
+    probeDaemon?: (port: number) => Promise<DaemonHello>;
 }): Promise<void>;
 //# sourceMappingURL=ensure-daemon.d.ts.map

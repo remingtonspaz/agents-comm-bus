@@ -79,7 +79,13 @@ export async function main(argv = process.argv.slice(2)) {
             socket,
         }),
     });
-    await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
+    try {
+        await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
+    }
+    catch (error) {
+        await server.close();
+        throw error;
+    }
     await bus.start();
     console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }

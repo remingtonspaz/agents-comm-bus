@@ -113,4 +113,46 @@ describe("ensureDaemon", () => {
     assert.equal(result.port, port);
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(port));
   });
+
+  it("refuses to overwrite discovery for a live daemon on another port", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.pidFile, `${process.pid}\n`, "utf8");
+    await writeFile(paths.portFile, "41113\n", "utf8");
+
+    await assert.rejects(
+      writeDaemonDiscoveryFiles({
+        stateRoot,
+        pid: process.pid,
+        port: 41_114,
+        probeDaemon: async (candidatePort) => {
+          assert.equal(candidatePort, 41_113);
+          return daemonHello();
+        },
+      }),
+      /already running on port 41113/,
+    );
+
+    assert.equal((await readFile(paths.portFile, "utf8")).trim(), "41113");
+  });
+
+  it("overwrites stale discovery when the old port cannot be probed", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.pidFile, "99999999\n", "utf8");
+    await writeFile(paths.portFile, "41115\n", "utf8");
+
+    await writeDaemonDiscoveryFiles({
+      stateRoot,
+      pid: process.pid,
+      port: 41_116,
+      probeDaemon: async () => {
+        throw new Error("stale");
+      },
+    });
+
+    assert.equal((await readFile(paths.portFile, "utf8")).trim(), "41116");
+  });
 });

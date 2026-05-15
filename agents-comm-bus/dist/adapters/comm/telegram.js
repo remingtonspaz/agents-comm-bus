@@ -7,6 +7,7 @@ export class TelegramCommAdapter {
     sentByKey = new Map();
     inboundHandler = null;
     stateHandler = null;
+    connectionState = null;
     bot;
     botUserId = null;
     constructor(options) {
@@ -16,7 +17,7 @@ export class TelegramCommAdapter {
         this.bot = options.bot ?? null;
     }
     async start() {
-        this.stateHandler?.("connecting");
+        this.emitState("connecting");
         if (!this.bot) {
             this.bot = new TelegramBot(this.options.botToken, {
                 polling: this.options.polling ?? true,
@@ -25,24 +26,27 @@ export class TelegramCommAdapter {
         const me = await this.bot.getMe();
         this.botUserId = String(me.id);
         this.bot.on("message", (message) => {
-            void this.handleTelegramMessage(message).catch(() => {
-                this.stateHandler?.("degraded");
-            });
+            void this.handleTelegramMessage(message)
+                .then(() => this.emitState("connected"))
+                .catch(() => this.emitState("degraded"));
         });
-        this.bot.on("polling_error", () => this.stateHandler?.("degraded"));
-        this.stateHandler?.("connected");
+        this.bot.on("polling_error", () => this.emitState("degraded"));
+        this.emitState("connected");
     }
     async stop() {
         if (this.bot?.isPolling()) {
             await this.bot.stopPolling();
         }
-        this.stateHandler?.("disconnected");
+        this.emitState("disconnected");
     }
     onInbound(handler) {
         this.inboundHandler = handler;
     }
     onConnectionState(handler) {
         this.stateHandler = handler;
+        if (this.connectionState) {
+            handler(this.connectionState);
+        }
     }
     async send(target, payload, idempotencyKey) {
         const cached = this.sentByKey.get(idempotencyKey);
@@ -63,6 +67,7 @@ export class TelegramCommAdapter {
             sent_at: this.now(),
         };
         this.sentByKey.set(idempotencyKey, result);
+        this.emitState("connected");
         return result;
     }
     reportPressure() {
@@ -124,6 +129,12 @@ export class TelegramCommAdapter {
         if (!this.bot)
             throw new Error("Telegram adapter is not started");
         return this.bot;
+    }
+    emitState(state) {
+        if (this.connectionState === state)
+            return;
+        this.connectionState = state;
+        this.stateHandler?.(state);
     }
 }
 export async function probeTelegramIdentity(botToken) {

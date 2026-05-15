@@ -15,6 +15,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private readonly sentByKey;
     private inboundHandler;
     private stateHandler;
+    private connectionState;
     private bot;
     private botUserId;
     constructor(options: TelegramCommAdapterOptions);
@@ -30,6 +31,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     classifyFailure(error: unknown): FailureClassification;
     private handleTelegramMessage;
     private requireBot;
+    private emitState;
 }
 export declare function probeTelegramIdentity(botToken: string): Promise<{
     bot_user_id: string;
