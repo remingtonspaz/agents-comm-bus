@@ -23,7 +23,7 @@
     "./cli": { "import": "./dist/cli/index.js", "types": "./dist/cli/index.d.ts" }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx \"../tests/architecture/bootstrap-race.test.ts\" \"../tests/architecture/ipc-versioning.test.ts\""
   },
