@@ -1,0 +1,29 @@
+{
+  "name": "agents-comm-bus-core",
+  "version": "0.1.0",
+  "description": "Shared types, contracts, and invariants for the agents-comm-bus daemon and adapter shims.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "import": "./dist/index.js", "types": "./dist/index.d.ts" },
+    "./records": { "import": "./dist/records/index.js", "types": "./dist/records/index.d.ts" },
+    "./contracts/agent-adapter": { "import": "./dist/contracts/agent-adapter.js", "types": "./dist/contracts/agent-adapter.d.ts" },
+    "./contracts/comm-adapter": { "import": "./dist/contracts/comm-adapter.js", "types": "./dist/contracts/comm-adapter.d.ts" },
+    "./contracts/tool-registry": { "import": "./dist/contracts/tool-registry.js", "types": "./dist/contracts/tool-registry.d.ts" },
+    "./storage/storage": { "import": "./dist/storage/storage.js", "types": "./dist/storage/storage.d.ts" },
+    "./query-semantics": { "import": "./dist/query-semantics.js", "types": "./dist/query-semantics.d.ts" },
+    "./security": { "import": "./dist/security.js", "types": "./dist/security.d.ts" }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx ../tests/architecture"
+  },
+  "engines": { "node": ">=22" },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.0.0"
+  }
+}
