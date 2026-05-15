@@ -5,6 +5,9 @@ node_modules/
 .claude/settings.local.json
 .claude/telegram.json
 
+# Local Codex settings
+.codex/telegram.json
+
 # Local MCP override for in-tree development
 # (canonical config lives in .claude-plugin/plugin.json under mcpServers)
 .mcp.json
