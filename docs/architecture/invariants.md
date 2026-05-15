@@ -52,31 +52,36 @@ The siblings of this doc walk through the flows these invariants govern:
   By default a message from comm A bound for agent X is never delivered to
   agent Y. Cross-agent fanout requires an explicit opt-in subscription
   rule. Default deny, opt-in allow.
-  *Tests:* `tests/architecture/cross-agent-default-deny.spec.ts`.
+  *Tests:* `tests/architecture/bus-invariants.test.ts`,
+  `tests/architecture/security-loop-prevention.test.ts`.
 
 - **Query semantics: at-most-one-open per session.**
   A session may have at most one open query at a time. Enforced at the DB
   level via a partial unique index on `queries(session_id) WHERE status =
   'open'`.
-  *Tests:* `tests/architecture/query-at-most-one-open.spec.ts`.
+  *Tests:* `tests/architecture/query-resolution.test.ts` for the pure
+  preflight predicate; SQLite partial-index coverage lands in Phase 1.
 
 - **Query semantics: resolved-once.**
   Once a query transitions out of `open`, no further reply can change its
   resolution. Late replies receive an informational "already answered"
   notice.
-  *Tests:* `tests/architecture/query-resolved-once.spec.ts`.
+  *Tests:* `tests/architecture/query-staleness.test.ts`,
+  `tests/architecture/query-resolution.test.ts`.
 
 - **Query semantics: TTL fail-closed.**
   When a query's TTL elapses without resolution, the daemon marks the
   query `expired` and returns the safe-default resolution to the agent
   (deny for permissions, cancel for choices).
-  *Tests:* `tests/architecture/query-ttl-fail-closed.spec.ts`.
+  *Tests:* `tests/architecture/query-staleness.test.ts`,
+  `tests/architecture/query-resolution.test.ts`.
 
 - **Query semantics: same-chat-match enforced.**
   A reply resolves a query only if it arrives on the same `ChatRef` the
   query prompt was sent to. Replies from other chats are rejected (the
   query stays open).
-  *Tests:* `tests/architecture/query-same-chat-match.spec.ts`.
+  *Tests:* `tests/architecture/query-staleness.test.ts`,
+  `tests/architecture/query-resolution.test.ts`.
 
 - **Session and query leases bound to IPC connection lifetime.**
   A session is active iff its control connection is open. A query is open
