@@ -1,0 +1,42 @@
+{
+  "name": "agents-comm-bus",
+  "version": "0.1.0",
+  "description": "Per-user daemon and localhost IPC layer for agent communication adapters.",
+  "type": "module",
+  "main": "./dist/daemon.js",
+  "types": "./dist/daemon.d.ts",
+  "bin": {
+    "agents-comm-bus": "./dist/daemon.js"
+  },
+  "exports": {
+    ".": { "import": "./dist/daemon.js", "types": "./dist/daemon.d.ts" },
+    "./paths": { "import": "./dist/paths.js", "types": "./dist/paths.d.ts" },
+    "./config": { "import": "./dist/config.js", "types": "./dist/config.d.ts" },
+    "./bootstrap/ensure-daemon": { "import": "./dist/bootstrap/ensure-daemon.js", "types": "./dist/bootstrap/ensure-daemon.d.ts" },
+    "./bootstrap/spawn-lock": { "import": "./dist/bootstrap/spawn-lock.js", "types": "./dist/bootstrap/spawn-lock.d.ts" },
+    "./bootstrap/handshake": { "import": "./dist/bootstrap/handshake.js", "types": "./dist/bootstrap/handshake.d.ts" },
+    "./ipc/protocol": { "import": "./dist/ipc/protocol.js", "types": "./dist/ipc/protocol.d.ts" },
+    "./ipc/server": { "import": "./dist/ipc/server.js", "types": "./dist/ipc/server.d.ts" },
+    "./ipc/client": { "import": "./dist/ipc/client.js", "types": "./dist/ipc/client.d.ts" },
+    "./bus": { "import": "./dist/bus.js", "types": "./dist/bus.d.ts" },
+    "./storage/sqlite": { "import": "./dist/storage/sqlite.js", "types": "./dist/storage/sqlite.d.ts" },
+    "./cli": { "import": "./dist/cli/index.js", "types": "./dist/cli/index.d.ts" }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx \"../tests/architecture/bootstrap-race.test.ts\" \"../tests/architecture/ipc-versioning.test.ts\""
+  },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/node-telegram-bot-api": "^0.64.9",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

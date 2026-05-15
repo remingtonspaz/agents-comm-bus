@@ -17,8 +17,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const QUEUE_DIR = path.join(os.homedir(), '.claude-telegram');
-const QUEUE_FILE = path.join(QUEUE_DIR, 'queue.json');
+const STATE_ROOT = path.join(os.homedir(), '.agents-comm-bus');
+const CORE_DIR = path.join(__dirname, 'agents-comm-bus-core');
+const DAEMON_DIR = path.join(__dirname, 'agents-comm-bus');
 const MCP_SERVER_DIR = path.join(__dirname, 'mcp-server');
 const HOOKS_DIR = path.join(__dirname, 'hooks');
 const MCP_CONFIG = path.join(__dirname, '.mcp.json');
@@ -46,21 +47,20 @@ function log(message, type = 'info') {
 function checkNodeVersion() {
   const version = process.versions.node;
   const major = parseInt(version.split('.')[0], 10);
-  if (major < 18) {
-    log(`Node.js version ${version} is too old. Requires >= 18.`, 'error');
+  if (major < 22) {
+    log(`Node.js version ${version} is too old. Requires >= 22 for node:sqlite.`, 'error');
     return false;
   }
   log(`Node.js version ${version}`, 'success');
   return true;
 }
 
-function checkMcpServerDeps() {
-  const nodeModules = path.join(MCP_SERVER_DIR, 'node_modules');
-  return fs.existsSync(nodeModules);
+function checkPackageBuilt(dir, entry) {
+  return fs.existsSync(path.join(dir, entry));
 }
 
-function checkQueueDir() {
-  return fs.existsSync(QUEUE_DIR);
+function checkStateRoot() {
+  return fs.existsSync(STATE_ROOT);
 }
 
 function checkMcpConfig() {
@@ -110,18 +110,28 @@ async function showStatus() {
   // Node.js version
   checkNodeVersion();
 
-  // MCP server dependencies
-  if (checkMcpServerDeps()) {
-    log('MCP server dependencies installed', 'success');
+  if (checkPackageBuilt(CORE_DIR, 'dist/index.js')) {
+    log('agents-comm-bus-core built', 'success');
   } else {
-    log('MCP server dependencies not installed (run: cd mcp-server && npm install)', 'warn');
+    log('agents-comm-bus-core not built', 'warn');
   }
 
-  // Queue directory
-  if (checkQueueDir()) {
-    log(`Queue directory exists: ${QUEUE_DIR}`, 'success');
+  if (checkPackageBuilt(DAEMON_DIR, 'dist/daemon.js')) {
+    log('agents-comm-bus daemon built', 'success');
   } else {
-    log(`Queue directory missing: ${QUEUE_DIR}`, 'warn');
+    log('agents-comm-bus daemon not built', 'warn');
+  }
+
+  if (checkPackageBuilt(MCP_SERVER_DIR, 'dist/server.js')) {
+    log('MCP IPC shim built', 'success');
+  } else {
+    log('MCP IPC shim not built', 'warn');
+  }
+
+  if (checkStateRoot()) {
+    log(`State root exists: ${STATE_ROOT}`, 'success');
+  } else {
+    log(`State root will be created lazily: ${STATE_ROOT}`, 'info');
   }
 
   // MCP config
@@ -156,12 +166,20 @@ async function showStatus() {
   }
 
   console.log('\n' + colors.bold('Next steps:'));
-  if (!checkMcpServerDeps()) {
-    console.log('  1. Run: cd mcp-server && npm install');
-  }
-  console.log('  2. Restart Claude Code to load the MCP server');
+  console.log('  1. Register a Telegram account: node agents-comm-bus/dist/cli/index.js account-add --project <path> --agent claude --account-label main');
+  console.log('  2. Restart Claude Code to load the MCP IPC shim');
   console.log('  3. Check /mcp to verify server is connected');
-  console.log('  4. Test with: telegram_send tool\n');
+  console.log('  4. Test list_conversations or telegram_send with an explicit chat_id\n');
+}
+
+function installAndBuildPackage(label, dir, build = true) {
+  log(`Installing ${label} dependencies...`);
+  execSync('npm install --silent', { cwd: dir, stdio: 'inherit' });
+  if (build) {
+    log(`Building ${label}...`);
+    execSync('npm run build', { cwd: dir, stdio: 'inherit' });
+  }
+  log(`${label} ready`, 'success');
 }
 
 async function install() {
@@ -172,28 +190,18 @@ async function install() {
     process.exit(1);
   }
 
-  // Create queue directory
-  if (!checkQueueDir()) {
-    log(`Creating queue directory: ${QUEUE_DIR}`);
-    fs.mkdirSync(QUEUE_DIR, { recursive: true });
-    fs.writeFileSync(QUEUE_FILE, JSON.stringify({ messages: [] }, null, 2));
-    log('Queue directory created', 'success');
-  } else {
-    log('Queue directory already exists', 'success');
+  if (!checkStateRoot()) {
+    fs.mkdirSync(STATE_ROOT, { recursive: true });
+    log(`Created daemon state root: ${STATE_ROOT}`, 'success');
   }
 
-  // Install MCP server dependencies
-  if (!checkMcpServerDeps()) {
-    log('Installing MCP server dependencies...');
-    try {
-      execSync('npm install', { cwd: MCP_SERVER_DIR, stdio: 'inherit' });
-      log('MCP server dependencies installed', 'success');
-    } catch (e) {
-      log(`Failed to install dependencies: ${e.message}`, 'error');
-      process.exit(1);
-    }
-  } else {
-    log('MCP server dependencies already installed', 'success');
+  try {
+    installAndBuildPackage('agents-comm-bus-core', CORE_DIR);
+    installAndBuildPackage('agents-comm-bus daemon', DAEMON_DIR);
+    installAndBuildPackage('MCP IPC shim', MCP_SERVER_DIR);
+  } catch (e) {
+    log(`Failed to install/build packages: ${e.message}`, 'error');
+    process.exit(1);
   }
 
   // Check MCP config (optional - credentials can be in project .mcp.json)
@@ -239,10 +247,11 @@ async function install() {
 
   console.log(colors.bold('\n=== Installation Complete ===\n'));
   console.log('Next steps:');
-  console.log('  1. Restart Claude Code to load the MCP server');
-  console.log('  2. Check /mcp to verify "telegram" server is connected');
-  console.log('  3. Ask Claude to send a test message to Telegram');
-  console.log('  4. Send a message from Telegram, then submit a prompt to see it\n');
+  console.log('  1. Register the Telegram bot explicitly:');
+  console.log('     TELEGRAM_BOT_TOKEN=... node agents-comm-bus/dist/cli/index.js account-add --project "<project>" --agent claude --account-label main');
+  console.log('  2. Restart Claude Code to load the MCP IPC shim');
+  console.log('  3. Check /mcp to verify "telegram" server is connected');
+  console.log('  4. Use list_conversations or telegram_send with an explicit chat_id\n');
 }
 
 function showHelp() {
@@ -256,10 +265,10 @@ Usage:
   node install.js --help   Show this help
 
 This installer:
-  1. Creates the message queue directory (~/.claude-telegram/)
-  2. Installs MCP server dependencies
+  1. Creates the daemon state root (~/.agents-comm-bus/)
+  2. Installs and builds core, daemon, and MCP IPC shim packages
   3. Verifies configuration files
-  4. Tests Telegram bot connectivity
+  4. Tests Telegram bot connectivity when credentials are present
 `);
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "telegram",
-  "description": "Bidirectional Telegram messaging for Claude Code with remote permission control",
+  "description": "Telegram messaging for Claude Code through the agents-comm-bus daemon",
   "author": {
     "name": "Satrio"
   },

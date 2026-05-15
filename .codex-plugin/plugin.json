@@ -1,0 +1,13 @@
+{
+  "name": "telegram",
+  "description": "Telegram messaging for Codex through the agents-comm-bus daemon",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "telegram": {
+      "command": "node",
+      "args": ["${CODEX_PLUGIN_ROOT}/mcp-server/dist/server.js"]
+    }
+  }
+}

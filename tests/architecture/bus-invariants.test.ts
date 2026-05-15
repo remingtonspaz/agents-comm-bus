@@ -5,11 +5,60 @@ import {
   isCrossAgentAllowed,
   type SubscriptionRule,
 } from "../../agents-comm-bus-core/src/security.js";
-import type { AgentId } from "../../agents-comm-bus-core/src/types.js";
+import type {
+  AccountId,
+  AccountRegistration,
+  AgentId,
+  AuditEvent,
+  ChatRef,
+  CommId,
+  Conversation,
+  ConversationId,
+  Message,
+  MessageId,
+  QueryId,
+  QueryRecord,
+  ResolvedDecision,
+  Session,
+  SessionId,
+  Storage,
+  TranscriptEntry,
+} from "../../agents-comm-bus-core/src/index.js";
+import {
+  SCHEMA_VERSION_ACCOUNT,
+  SCHEMA_VERSION_CONVERSATION,
+} from "../../agents-comm-bus-core/src/index.js";
+import { MessageBus } from "../../agents-comm-bus/src/bus.js";
 
 const CLAUDE = "claude" as AgentId;
 const CODEX = "codex" as AgentId;
 const REVIEWER = "reviewer" as AgentId;
+const TELEGRAM = "telegram" as CommId;
+const ACCOUNT = "12345" as AccountId;
+
+function makeMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    schema_version: 1,
+    message_id: "telegram:1" as MessageId,
+    chat: {
+      comm: TELEGRAM,
+      account: ACCOUNT,
+      chat_native_id: "chat-1",
+    },
+    sender: {
+      id: "user-1",
+      display_name: "User",
+      isBot: false,
+      isForeignBot: false,
+    },
+    origin: { comm: TELEGRAM },
+    text: "hello",
+    hop_count: 0,
+    received_at: 1000,
+    platform_message_id: "1",
+    ...overrides,
+  };
+}
 
 describe("bus invariants", () => {
   describe("no implicit cross-agent delivery", () => {
@@ -32,3 +81,205 @@ describe("bus invariants", () => {
     });
   });
 });
+
+describe("MessageBus phase 1 invariants", () => {
+  it("routes inbound messages by explicit account registration, not conversation recency", async () => {
+    const storage = new MemoryStorage([
+      {
+        schema_version: SCHEMA_VERSION_ACCOUNT,
+        project: "/repo",
+        comm: TELEGRAM,
+        agent: CLAUDE,
+        account_label: "main",
+        bot_user_id: String(ACCOUNT),
+        credentials_ref: "env:TELEGRAM_BOT_TOKEN",
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    const transcripts = new MemoryTranscriptStore();
+    const bus = new MessageBus({
+      project: "/repo",
+      storage,
+      transcripts,
+      audit: new MemoryAuditStore(),
+      now: () => 2000,
+    });
+
+    const conversation = await bus.receiveInbound(makeMessage());
+
+    assert.equal(conversation.agent, CLAUDE);
+    assert.equal(conversation.account_label, "main");
+    assert.equal(storage.conversations.size, 1);
+  });
+
+  it("records transcript before dispatching inbound wake work", async () => {
+    const storage = new MemoryStorage([
+      {
+        schema_version: SCHEMA_VERSION_ACCOUNT,
+        project: "/repo",
+        comm: TELEGRAM,
+        agent: CLAUDE,
+        account_label: "main",
+        bot_user_id: String(ACCOUNT),
+        credentials_ref: "env:TELEGRAM_BOT_TOKEN",
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    const transcripts = new MemoryTranscriptStore();
+    const order: string[] = [];
+    transcripts.onAppend = () => order.push("transcript");
+    const bus = new MessageBus({
+      project: "/repo",
+      storage,
+      transcripts,
+      audit: new MemoryAuditStore(),
+      now: () => 2000,
+    });
+    bus.setDispatchSink({
+      async enqueueInbound() {
+        order.push("dispatch");
+      },
+    });
+
+    await bus.receiveInbound(makeMessage());
+
+    assert.deepEqual(order, ["transcript", "dispatch"]);
+  });
+});
+
+class MemoryTranscriptStore {
+  readonly entries: TranscriptEntry[] = [];
+  onAppend?: () => void;
+
+  async append(entry: TranscriptEntry): Promise<void> {
+    this.entries.push(entry);
+    this.onAppend?.();
+  }
+
+  async *read(): AsyncIterable<TranscriptEntry> {
+    yield* this.entries;
+  }
+}
+
+class MemoryAuditStore {
+  readonly entries: AuditEvent[] = [];
+
+  async append(event: AuditEvent): Promise<void> {
+    this.entries.push(event);
+  }
+}
+
+class MemoryStorage implements Storage {
+  readonly registrations = new Map<string, AccountRegistration>();
+  readonly conversations = new Map<ConversationId, Conversation>();
+  readonly queries = new Map<QueryId, QueryRecord>();
+  readonly sessions = new Map<SessionId, Session>();
+
+  constructor(registrations: AccountRegistration[]) {
+    for (const rec of registrations) {
+      this.registrations.set(`${rec.comm}:${rec.bot_user_id}`, rec);
+    }
+  }
+
+  async putAccountRegistration(rec: AccountRegistration): Promise<void> {
+    this.registrations.set(`${rec.comm}:${rec.bot_user_id}`, rec);
+  }
+
+  async getAccountByBot(comm: CommId, bot_user_id: string): Promise<AccountRegistration | null> {
+    return this.registrations.get(`${comm}:${bot_user_id}`) ?? null;
+  }
+
+  async listAccountRegistrations(): Promise<AccountRegistration[]> {
+    return [...this.registrations.values()];
+  }
+
+  async deleteAccountRegistration(): Promise<void> {}
+
+  async upsertConversation(rec: Conversation): Promise<ConversationId> {
+    this.conversations.set(rec.conversation_id, rec);
+    return rec.conversation_id;
+  }
+
+  async getConversation(id: ConversationId): Promise<Conversation | null> {
+    return this.conversations.get(id) ?? null;
+  }
+
+  async findConversation(pk: {
+    project: string;
+    comm: CommId;
+    account_label: string;
+    chat_native_id: string;
+    thread_native_id: string | null;
+  }): Promise<Conversation | null> {
+    return [...this.conversations.values()].find((c) =>
+      c.project === pk.project &&
+      c.comm === pk.comm &&
+      c.account_label === pk.account_label &&
+      c.chat_native_id === pk.chat_native_id &&
+      c.thread_native_id === pk.thread_native_id) ?? null;
+  }
+
+  async listConversations(): Promise<Conversation[]> {
+    return [...this.conversations.values()];
+  }
+
+  async touchConversationInbound(
+    id: ConversationId,
+    at: number,
+    message_id: MessageId,
+  ): Promise<void> {
+    const current = this.conversations.get(id);
+    if (current) {
+      this.conversations.set(id, {
+        ...current,
+        schema_version: SCHEMA_VERSION_CONVERSATION,
+        last_inbound_at: at,
+        last_message_id: message_id,
+      });
+    }
+  }
+
+  async touchConversationOutbound(): Promise<void> {}
+
+  async insertQuery(rec: QueryRecord): Promise<void> {
+    this.queries.set(rec.query_id, rec);
+  }
+
+  async resolveQuery(
+    query_id: QueryId,
+    resolution: ResolvedDecision,
+    resolved_at: number,
+  ): Promise<boolean> {
+    const rec = this.queries.get(query_id);
+    if (!rec || rec.resolved_at != null) return false;
+    this.queries.set(query_id, { ...rec, resolution, resolved_at });
+    return true;
+  }
+
+  async getOpenQueryForSession(session: SessionId): Promise<QueryRecord | null> {
+    return [...this.queries.values()].find((q) =>
+      q.session === session && q.resolved_at == null) ?? null;
+  }
+
+  async getQuery(query_id: QueryId): Promise<QueryRecord | null> {
+    return this.queries.get(query_id) ?? null;
+  }
+
+  async upsertSession(rec: Session): Promise<void> {
+    this.sessions.set(rec.session_id, rec);
+  }
+
+  async acquireSessionLease(): Promise<boolean> {
+    return true;
+  }
+
+  async releaseSessionLease(): Promise<void> {}
+
+  async getSession(session: SessionId): Promise<Session | null> {
+    return this.sessions.get(session) ?? null;
+  }
+
+  async close(): Promise<void> {}
+}

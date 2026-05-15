@@ -1,0 +1,141 @@
+import { spawn } from "node:child_process";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, } from "../config.js";
+import { resolveStatePaths } from "../paths.js";
+import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
+import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
+export async function ensureDaemon(options = {}) {
+    const paths = resolveStatePaths(options);
+    await mkdir(paths.root, { recursive: true });
+    const timeoutMs = options.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
+    const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
+    const deadline = Date.now() + timeoutMs;
+    const probe = options.probeDaemon ?? ((port) => defaultProbeDaemon({
+        port,
+        clientVersion: options.clientVersion ?? DAEMON_VERSION,
+        protocolVersion: options.protocolVersion ?? IPC_PROTOCOL_VERSION,
+        metadata: options.metadata,
+        timeoutMs: Math.min(1_000, retryMs * 4),
+    }));
+    const existing = await probeFromPortFile(paths.portFile, probe);
+    if (existing) {
+        return { ...existing, spawned: false };
+    }
+    await cleanupStalePidAndPort({
+        pidFile: paths.pidFile,
+        portFile: paths.portFile,
+        isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+    });
+    let spawned = false;
+    while (Date.now() <= deadline) {
+        const lock = await tryAcquireSpawnLock(paths.spawnLock);
+        if (lock) {
+            try {
+                const recheck = await probeFromPortFile(paths.portFile, probe);
+                if (recheck) {
+                    return { ...recheck, spawned };
+                }
+                await (options.spawnDaemon ?? defaultSpawnDaemon)(paths);
+                spawned = true;
+            }
+            finally {
+                await lock.release();
+            }
+        }
+        const found = await waitForDaemon(paths.portFile, probe, deadline, retryMs);
+        if (found) {
+            return { ...found, spawned };
+        }
+        await cleanupStalePidAndPort({
+            pidFile: paths.pidFile,
+            portFile: paths.portFile,
+            isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+        });
+        await removeSpawnLock(paths.spawnLock);
+    }
+    throw new Error(`Timed out starting agents-comm-bus daemon under ${paths.root}.`);
+}
+async function probeFromPortFile(portFile, probe) {
+    const port = await readPortFile(portFile);
+    if (port === undefined) {
+        return undefined;
+    }
+    try {
+        return { port, hello: await probe(port) };
+    }
+    catch {
+        await rm(portFile, { force: true });
+        return undefined;
+    }
+}
+async function waitForDaemon(portFile, probe, deadline, retryMs) {
+    while (Date.now() <= deadline) {
+        const found = await probeFromPortFile(portFile, probe);
+        if (found) {
+            return found;
+        }
+        await sleep(retryMs);
+    }
+    return undefined;
+}
+async function cleanupStalePidAndPort(input) {
+    const pid = await readPidFile(input.pidFile);
+    if (pid !== undefined && !input.isPidAlive(pid)) {
+        await rm(input.pidFile, { force: true });
+        await rm(input.portFile, { force: true });
+    }
+}
+async function readPortFile(portFile) {
+    try {
+        const raw = (await readFile(portFile, "utf8")).trim();
+        const port = Number(raw);
+        return Number.isInteger(port) && port > 0 && port < 65_536 ? port : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+async function readPidFile(pidFile) {
+    try {
+        const raw = (await readFile(pidFile, "utf8")).trim();
+        const pid = Number(raw);
+        return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+function defaultIsPidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function defaultSpawnDaemon(paths) {
+    const thisFile = fileURLToPath(import.meta.url);
+    const daemonEntry = path.resolve(path.dirname(thisFile), "../daemon.js");
+    const child = spawn(process.execPath, [daemonEntry, "serve"], {
+        detached: true,
+        stdio: "ignore",
+        env: {
+            ...process.env,
+            AGENTS_COMM_BUS_STATE_ROOT: paths.root,
+        },
+    });
+    child.unref();
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+export async function writeDaemonDiscoveryFiles(input) {
+    const paths = resolveStatePaths({ stateRoot: input.stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.pidFile, `${input.pid ?? process.pid}\n`, "utf8");
+    await writeFile(paths.portFile, `${input.port}\n`, "utf8");
+}
+//# sourceMappingURL=ensure-daemon.js.map

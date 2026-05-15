@@ -1,0 +1,19 @@
+import type { Migration, MigrationRunner } from "../../../../agents-comm-bus-core/dist/storage/migrations.js";
+export interface SqliteLike {
+    exec(sql: string): void;
+    prepare(sql: string): {
+        all(...params: unknown[]): unknown[];
+        get(...params: unknown[]): unknown;
+        run(...params: unknown[]): unknown;
+    };
+}
+export declare class SqliteMigrationRunner implements MigrationRunner {
+    private readonly db;
+    constructor(db: SqliteLike);
+    getCurrentVersion(): Promise<number>;
+    setVersion(version: number): Promise<void>;
+    apply(migrations: Migration[]): Promise<void>;
+}
+export declare const initialMigration: Migration;
+export declare function runStorageMigrations(db: SqliteLike): Promise<void>;
+//# sourceMappingURL=runner.d.ts.map

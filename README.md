@@ -1,6 +1,17 @@
-# Claude Code Telegram Plugin
+# agents-comm-bus Telegram Plugin
 
-Bidirectional Telegram messaging for Claude Code with remote permission control.
+Bidirectional Telegram messaging through a per-user `agents-comm-bus` daemon.
+Claude and Codex entrypoints remain plugin/MCP shims, but Telegram polling and
+durable state now live in one daemon under `~/.agents-comm-bus/`.
+
+## Phase 1 Architecture
+
+- `agents-comm-bus` owns Telegram polling; MCP servers no longer start their own pollers.
+- Structured state lives in SQLite at `~/.agents-comm-bus/agents-comm-bus.db`.
+- Transcripts and audit logs are JSONL under `~/.agents-comm-bus/chats/` and `~/.agents-comm-bus/audit/`.
+- Account registration is explicit with `agents-comm-bus account-add`; inbound routing resolves `(comm, bot_user_id)`.
+- The MCP tool surface talks to the daemon over localhost WebSocket IPC and includes `list_conversations`.
+- The daemon is started lazily by plugin/MCP shims through `ensureDaemon()`. No service install is required for Phase 1.
 
 ## Features
 
@@ -13,8 +24,7 @@ Bidirectional Telegram messaging for Claude Code with remote permission control.
 
 ## Requirements
 
-- **Windows only** (macOS/Linux support planned)
-- Node.js 18+
+- Node.js 22+ (`node:sqlite` is required)
 - Telegram Bot Token (from [@BotFather](https://t.me/botfather))
 - Your Telegram User ID
 
@@ -32,14 +42,12 @@ Bidirectional Telegram messaging for Claude Code with remote permission control.
    /plugin install telegram-integration:telegram
    ```
 
-3. Install MCP server dependencies:
+3. Run the installer from the plugin directory if your plugin manager did not build packages automatically:
    ```bash
-   cd ~/.claude/plugins/marketplaces/telegram-integration/mcp-server
-   npm install
+   node install.js
    ```
-   On Windows: `cd %USERPROFILE%\.claude\plugins\marketplaces\telegram-integration\mcp-server`
 
-4. Configure credentials in your project (see Setup below)
+4. Register a Telegram account explicitly (see Setup below)
 
 5. Restart Claude Code
 
@@ -56,15 +64,11 @@ Bidirectional Telegram messaging for Claude Code with remote permission control.
 ### Manual Installation
 
 1. Clone or download this repository
-2. Install dependencies:
+2. Install and build dependencies:
    ```bash
-   cd mcp-server && npm install
+   node install.js
    ```
-3. Create the queue directory:
-   ```bash
-   mkdir ~/.claude-telegram
-   ```
-4. Copy `.mcp.json.template` to `.mcp.json` and add your credentials
+3. Copy `.mcp.json.template` to `.mcp.json` and add your credentials
 5. Configure hooks in `.claude/settings.local.json` (see Hooks Configuration below)
 6. Restart Claude Code
 
@@ -81,7 +85,25 @@ Bidirectional Telegram messaging for Claude Code with remote permission control.
 1. Message [@userinfobot](https://t.me/userinfobot) on Telegram
 2. It will reply with your user ID (a number like `123456789`)
 
-### 3. Configure Credentials
+### 3. Register the Telegram Account
+
+Phase 1 uses explicit account registrations. The daemon writes credentials by
+reference and stores account ownership in SQLite.
+
+```bash
+TELEGRAM_BOT_TOKEN="your_bot_token_here" \
+node agents-comm-bus/dist/cli/index.js account-add \
+  --project "/path/to/project" \
+  --agent claude \
+  --account-label main
+```
+
+The registration refuses duplicate ownership for the same `(comm, bot_user_id)`.
+For a transition release, legacy `.claude/telegram.json`, `.codex/telegram.json`,
+`~/.claude-telegram/*`, and `~/.codex-telegram/*` files are readable only as
+migration inputs. New writes go to `~/.agents-comm-bus/`.
+
+### 4. Configure MCP Environment
 
 Add the MCP server to your project's `.mcp.json` with your credentials:
 
@@ -106,15 +128,15 @@ Replace `/path/to/claude-code-telegram` with:
 
 Each project can have its own `.mcp.json` with different Telegram credentials.
 
-### 4. Start Your Bot
+### 5. Start Your Bot
 
 Message your bot on Telegram to start the conversation. The bot can only message you if you've messaged it first.
 
-### 5. Restart Claude Code
+### 6. Restart Claude Code
 
 Restart Claude Code to load the MCP server and hooks.
 
-### 6. Verify Installation
+### 7. Verify Installation
 
 Run the status check to verify everything is configured:
 ```bash
@@ -122,6 +144,15 @@ node install.js --status
 ```
 
 Or check `/mcp` in Claude Code to see if the telegram server is connected.
+
+The MCP tools are:
+- `telegram_send(message, chat_id?, message_thread_id?)`
+- `telegram_send_image(path, caption?, chat_id?, message_thread_id?)`
+- `telegram_check_messages()`
+- `list_conversations(comm?, limit?)`
+
+If `chat_id` is omitted, the daemon uses the session's most recent inbound
+conversation when available; otherwise it returns an explicit-target error.
 
 ## Hooks Configuration
 
@@ -247,9 +278,10 @@ claude-code-telegram/
 
 | Component | Purpose |
 |-----------|---------|
-| MCP Server | Hosts Telegram bot, exposes tools to Claude |
-| UserPromptSubmit Hook | Injects Telegram messages into context |
-| PermissionRequest Hook | Sends permission requests to Telegram |
+| agents-comm-bus daemon | Owns Telegram polling, SQLite state, transcripts, audit, and IPC |
+| MCP Server | Thin IPC shim exposing tools to Claude/Codex |
+| UserPromptSubmit Hook | Starts the daemon lazily and injects daemon-delivered context |
+| PermissionRequest Hook | Routes query/permission work through daemon-backed records |
 | SessionStart Hook | Auto-spawns the watcher on session start |
 | Enter Watcher | PowerShell script for keystroke automation |
 | Skill | Guides Claude on using the integration |
@@ -260,14 +292,15 @@ claude-code-telegram/
 
 1. Check `/mcp` in Claude Code
 2. Verify `.mcp.json` exists with valid credentials
-3. Ensure `mcp-server/node_modules` exists (run `cd mcp-server && npm install`)
+3. Ensure the daemon and MCP shim are built (`node install.js`)
 4. Restart Claude Code
 
 ### Messages not being received
 
-1. Check queue file: `~/.claude-telegram/queue.json`
+1. Run `list_conversations` to confirm daemon conversation inventory
 2. Verify bot token is valid
 3. Ensure you're messaging from the authorized user ID
+4. Check `~/.agents-comm-bus/port` and `~/.agents-comm-bus/daemon.pid` for stale daemon discovery files
 
 ### Auto-enter not working
 
@@ -294,9 +327,11 @@ node install.js --status
 |------|---------|
 | `.mcp.json` | MCP server config with credentials (gitignored) |
 | `.mcp.json.template` | Template for credentials |
-| `~/.claude-telegram/queue.json` | Message queue |
-| `~/.claude-telegram/pending-permission.json` | Current permission request |
-| `~/.claude-telegram/permission-response.json` | Permission response |
+| `~/.agents-comm-bus/agents-comm-bus.db` | SQLite structured daemon state |
+| `~/.agents-comm-bus/chats/*/transcript.jsonl` | Conversation transcripts |
+| `~/.agents-comm-bus/audit/*.jsonl` | Daily audit logs |
+| `~/.agents-comm-bus/port` | Daemon IPC discovery port |
+| `~/.agents-comm-bus/daemon.pid` | Daemon process discovery |
 
 ## License
 
