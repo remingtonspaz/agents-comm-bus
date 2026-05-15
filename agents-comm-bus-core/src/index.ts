@@ -12,3 +12,4 @@ export * from "./storage/transcript-store.js";
 export * from "./storage/audit-store.js";
 export * from "./storage/blob-store.js";
 export * from "./query-semantics.js";
+export * from "./security.js";
