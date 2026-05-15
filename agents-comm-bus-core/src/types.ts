@@ -1,18 +1,16 @@
-// Core branded ID types and shared value types for the agents-comm-bus.
-// v4 vocabulary freeze — see UNIVERSAL-OVERHAUL-IMPLEMENTATION-PLAN.md issue #7.
+// Branded ID types and shared primitives for the agents-comm-bus.
+// Branded strings prevent accidental cross-type mixups at compile time.
 
-declare const brand: unique symbol;
-type Brand<T, B> = T & { readonly [brand]: B };
+export type AgentId = string & { readonly __brand: "AgentId" };
+export type CommId = string & { readonly __brand: "CommId" };
+export type AccountId = string & { readonly __brand: "AccountId" };
+export type SessionId = string & { readonly __brand: "SessionId" };
+export type RequestId = string & { readonly __brand: "RequestId" };
+export type MessageId = string & { readonly __brand: "MessageId" };
+export type ConversationId = string & { readonly __brand: "ConversationId" };
+export type QueryId = string & { readonly __brand: "QueryId" };
 
-export type AgentId = Brand<string, "AgentId">;
-export type CommId = Brand<string, "CommId">;
-export type AccountId = Brand<string, "AccountId">;
-export type SessionId = Brand<string, "SessionId">;
-export type RequestId = Brand<string, "RequestId">;
-export type MessageId = Brand<string, "MessageId">;
-export type ConversationId = Brand<string, "ConversationId">;
-export type QueryId = Brand<string, "QueryId">;
-
+// Schema-version constants. Bump when a record shape changes incompatibly.
 export const SCHEMA_VERSION_MESSAGE = 1 as const;
 export const SCHEMA_VERSION_QUERY = 1 as const;
 export const SCHEMA_VERSION_CONVERSATION = 1 as const;
@@ -21,7 +19,7 @@ export const SCHEMA_VERSION_SESSION = 1 as const;
 
 export interface ChatRef {
   comm: CommId;
-  account: string;
+  account: AccountId;
   chat_native_id: string;
   thread_native_id?: string;
 }
@@ -32,7 +30,7 @@ export interface Attachment {
   size: number;
   blob_hash?: string;
   local_path?: string;
-  platform_metadata?: Record<string, unknown>;
+  platform_metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface Origin {

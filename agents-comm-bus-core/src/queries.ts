@@ -5,12 +5,11 @@ import type {
   QueryId,
   SessionId,
 } from "./types.js";
-import { SCHEMA_VERSION_QUERY } from "./types.js";
 
 export type QueryKind = "approval" | "choice" | "freetext";
 
 export interface Query {
-  schema_version: typeof SCHEMA_VERSION_QUERY;
+  schema_version: number;
   query_id: QueryId;
   agent: AgentId;
   session: SessionId;
@@ -18,15 +17,22 @@ export interface Query {
   origin_chat?: ChatRef;
   source_message_id?: MessageId;
   prompt_text: string;
-  options?: string[];
+  options?: ReadonlyArray<string>;
   created_at: number;
   ttl_seconds: number;
   resolution?: ResolvedDecision;
 }
 
+export type Decision =
+  | "allow"
+  | "deny"
+  | "always_allow"
+  | "select_option"
+  | "text";
+
 export interface ResolvedDecision {
   query_id: QueryId;
-  decision: "allow" | "deny" | "always_allow" | "select_option" | "text";
+  decision: Decision;
   selected_option_index?: number;
   text?: string;
   decided_by_sender_id: string;
@@ -34,7 +40,9 @@ export interface ResolvedDecision {
   decided_at: number;
 }
 
-// Explicitly NOT a query — turn control is out-of-band steering.
+// TurnControl and SlashCommand are explicitly NOT queries — they are
+// direct agent-control records, not awaiting-resolution prompts.
+
 export interface TurnControl {
   agent: AgentId;
   session: SessionId;
@@ -42,12 +50,11 @@ export interface TurnControl {
   payload?: unknown;
 }
 
-// Explicitly NOT a query — slash commands are direct execution requests.
 export interface SlashCommand {
   agent: AgentId;
   session: SessionId;
   command: string;
-  args?: string[];
+  args?: ReadonlyArray<string>;
   requested_in_chat: ChatRef;
   requested_at: number;
 }
