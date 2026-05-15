@@ -1,34 +1,24 @@
-/**
- * Core branded ID types and shared structural types for the agents-comm-bus.
- *
- * Branded string types prevent accidental cross-assignment between different
- * ID categories at compile time without any runtime overhead.
- */
+// Core branded ID types and shared value types for the agents-comm-bus.
+// v4 vocabulary freeze — see UNIVERSAL-OVERHAUL-IMPLEMENTATION-PLAN.md issue #7.
 
-export type AgentId = string & { readonly __brand: "AgentId" };
-export type CommId = string & { readonly __brand: "CommId" };
-export type AccountId = string & { readonly __brand: "AccountId" };
-export type SessionId = string & { readonly __brand: "SessionId" };
-export type RequestId = string & { readonly __brand: "RequestId" };
-export type MessageId = string & { readonly __brand: "MessageId" };
-export type ConversationId = string & { readonly __brand: "ConversationId" };
-export type QueryId = string & { readonly __brand: "QueryId" };
+declare const brand: unique symbol;
+type Brand<T, B> = T & { readonly [brand]: B };
 
-/**
- * Schema-version constants for each durable record family. Bump when a
- * breaking change requires a migration.
- */
+export type AgentId = Brand<string, "AgentId">;
+export type CommId = Brand<string, "CommId">;
+export type AccountId = Brand<string, "AccountId">;
+export type SessionId = Brand<string, "SessionId">;
+export type RequestId = Brand<string, "RequestId">;
+export type MessageId = Brand<string, "MessageId">;
+export type ConversationId = Brand<string, "ConversationId">;
+export type QueryId = Brand<string, "QueryId">;
+
 export const SCHEMA_VERSION_MESSAGE = 1 as const;
 export const SCHEMA_VERSION_QUERY = 1 as const;
 export const SCHEMA_VERSION_CONVERSATION = 1 as const;
 export const SCHEMA_VERSION_ACCOUNT = 1 as const;
 export const SCHEMA_VERSION_SESSION = 1 as const;
 
-/**
- * Stable reference to a chat (or thread within a chat) on a specific comm.
- * `account` is part of the addressing tuple from day one so multi-account
- * deployments are well-defined.
- */
 export interface ChatRef {
   comm: CommId;
   account: string;
