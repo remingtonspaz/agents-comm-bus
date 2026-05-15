@@ -7,21 +7,8 @@ import type {
 } from "./types.js";
 import { SCHEMA_VERSION_QUERY } from "./types.js";
 
-/**
- * The three kinds of agent-initiated queries the bus understands.
- *
- * - `approval`: yes/no/always-allow gate (e.g. permission prompt).
- * - `choice`: pick one of N options.
- * - `freetext`: open-ended response.
- */
 export type QueryKind = "approval" | "choice" | "freetext";
 
-/**
- * Unified query record. The same shape covers approvals, multiple-choice
- * prompts, and free-text questions — distinguished by `kind`.
- *
- * `resolution` is null until the query is resolved exactly once.
- */
 export interface Query {
   schema_version: typeof SCHEMA_VERSION_QUERY;
   query_id: QueryId;
@@ -39,12 +26,7 @@ export interface Query {
 
 export interface ResolvedDecision {
   query_id: QueryId;
-  decision:
-    | "allow"
-    | "deny"
-    | "always_allow"
-    | "select_option"
-    | "text";
+  decision: "allow" | "deny" | "always_allow" | "select_option" | "text";
   selected_option_index?: number;
   text?: string;
   decided_by_sender_id: string;
@@ -52,10 +34,7 @@ export interface ResolvedDecision {
   decided_at: number;
 }
 
-/**
- * Turn-control signal: explicitly NOT a query. Used to start, steer, or
- * interrupt an agent's turn.
- */
+// Explicitly NOT a query — turn control is out-of-band steering.
 export interface TurnControl {
   agent: AgentId;
   session: SessionId;
@@ -63,9 +42,7 @@ export interface TurnControl {
   payload?: unknown;
 }
 
-/**
- * Slash-command request from a user via a comm. Explicitly NOT a query.
- */
+// Explicitly NOT a query — slash commands are direct execution requests.
 export interface SlashCommand {
   agent: AgentId;
   session: SessionId;

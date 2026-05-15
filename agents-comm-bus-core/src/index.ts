@@ -6,3 +6,8 @@ export * from "./contracts/agent-adapter.js";
 export * from "./contracts/comm-adapter.js";
 export * from "./contracts/tool-registry.js";
 export * from "./records/index.js";
+export * from "./storage/storage.js";
+export * from "./storage/migrations.js";
+export * from "./storage/transcript-store.js";
+export * from "./storage/audit-store.js";
+export * from "./storage/blob-store.js";
