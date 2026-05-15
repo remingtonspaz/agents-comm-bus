@@ -1,10 +1,19 @@
-# Watcher script that monitors for trigger file and sends Enter to Claude Code
-# Uses PostMessage WM_CHAR for focus-independent keystroke delivery (multi-session safe)
+# Claude wake watcher.
+#
+# This script is intentionally scoped to Claude Code wake/keystroke delivery.
+# It watches a Claude wake directory for trigger files and sends characters to
+# the target Claude window with PostMessage WM_CHAR. It does not own Telegram,
+# comm routing, conversation state, or durable query state; those belong to the
+# agents-comm-bus daemon.
+#
+# A caller may pass -SessionDir for transition compatibility. New callers should
+# prefer ~/.agents-comm-bus/claude-wake/sessions/<session-key>.
 #
 # Usage:
 #   Manual:     powershell -ExecutionPolicy Bypass -File enter-watcher.ps1
 #   With handle: powershell -ExecutionPolicy Bypass -File enter-watcher.ps1 -WindowHandle 12345
 #   With PID:   powershell -ExecutionPolicy Bypass -File enter-watcher.ps1 -TargetPid 12345
+#   With wake dir: powershell -ExecutionPolicy Bypass -File enter-watcher.ps1 -SessionDir <path>
 
 param(
     [int]$TargetPid = 0,
@@ -32,14 +41,18 @@ $VK_RETURN = 0x0D
 $LPARAM_REPEAT_1 = [IntPtr]1
 $CHAR_DELAY_MS = 20
 
-# Determine session directory
+# Determine Claude wake/session directory. -SessionDir is kept as-is so legacy
+# hooks that still pass ~/.claude-telegram/<session> continue to work during the
+# transition release.
 if ($SessionDir -ne "") {
     $sessionPath = $SessionDir
 } else {
-    $sessionPath = "$env:USERPROFILE\.claude-telegram"
+    $sessionPath = Join-Path $env:USERPROFILE ".agents-comm-bus\claude-wake\sessions\default"
 }
 
 $triggerFile = Join-Path $sessionPath "trigger-enter"
+# Transition bridge files. They only tell the watcher what to type into Claude;
+# they are not durable comm/query ownership state.
 $permissionResponseFile = Join-Path $sessionPath "permission-response.json"
 $slashCommandFile = Join-Path $sessionPath "slash-command.json"
 $debugLog = Join-Path $sessionPath "debug.log"
@@ -141,7 +154,7 @@ if ($hwnd -ne [IntPtr]::Zero) {
 } else {
     Log "Watcher started: No valid window handle yet (will resolve on trigger)"
 }
-Log "  SessionDir=$sessionPath"
+Log "  ClaudeWakeDir=$sessionPath"
 Log "  TriggerFile=$triggerFile"
 Log "  ClaudePid=$ClaudePid"
 Log "  Method=PostMessage WM_CHAR (focus-independent)"
@@ -173,7 +186,9 @@ while ($true) {
         # Remove trigger file first
         Remove-Item $triggerFile -Force
 
-        # Determine what to send
+        # Determine what to send. Query wake suppression and normal turn wake
+        # policy are daemon/adapter decisions; this watcher only types the
+        # requested wake or response characters after a trigger exists.
         $charsToSend = "."
         $logMessage = "Period+Enter"
         $promptType = "message"

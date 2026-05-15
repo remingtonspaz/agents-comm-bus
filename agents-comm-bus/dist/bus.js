@@ -83,6 +83,9 @@ export class MessageBus {
                 platform_message_id: message.platform_message_id,
             },
         });
+        const consumedByQuery = await this.tryResolveOpenQuery(conversation, message);
+        if (consumedByQuery)
+            return conversation;
         if (this.dispatchSink) {
             await this.dispatchSink.enqueueInbound(message, conversation);
         }
@@ -116,6 +119,23 @@ export class MessageBus {
         return messageId;
     }
     async openQuery(query) {
+        let originChatId = null;
+        if (query.origin_chat) {
+            try {
+                const registration = await this.registrationFor(query.origin_chat);
+                const conversation = await this.options.storage.findConversation({
+                    project: registration.project,
+                    comm: query.origin_chat.comm,
+                    account_label: registration.account_label,
+                    chat_native_id: query.origin_chat.chat_native_id,
+                    thread_native_id: query.origin_chat.thread_native_id ?? null,
+                });
+                originChatId = conversation?.conversation_id ?? null;
+            }
+            catch {
+                originChatId = null;
+            }
+        }
         const record = {
             schema_version: SCHEMA_VERSION_QUERY,
             query_id: query.query_id,
@@ -125,7 +145,7 @@ export class MessageBus {
             prompt_text: query.prompt_text,
             created_at: query.created_at,
             ttl_seconds: query.ttl_seconds,
-            origin_chat_id: query.origin_chat ? conversationIdForChat(query.origin_chat) : null,
+            origin_chat_id: originChatId,
             source_message_id: query.source_message_id ?? null,
             resolved_at: null,
             resolution: null,
@@ -140,6 +160,15 @@ export class MessageBus {
             conversation_id: record.origin_chat_id ?? undefined,
             detail: { query_id: query.query_id, kind: query.kind },
         });
+    }
+    async tryResolveOpenQuery(conversation, message) {
+        const query = await this.options.storage.getOpenQueryByConversation(conversation.conversation_id);
+        if (!query || !message.text)
+            return false;
+        const decision = decisionFromMessage(query, message, chatRefFromConversation(conversation), this.now());
+        if (!decision)
+            return false;
+        return this.resolveQuery(query.query_id, decision);
     }
     async resolveQuery(queryId, decision) {
         const record = await this.options.storage.getQuery(queryId);
@@ -307,5 +336,44 @@ function makeMessageId(comm, platformMessageId) {
 }
 function randomId(prefix) {
     return `${prefix}_${crypto.randomUUID()}`;
+}
+function decisionFromMessage(query, message, chat, now) {
+    const text = message.text?.trim();
+    if (!text)
+        return null;
+    const lower = text.toLowerCase();
+    let decision = null;
+    let selected_option_index;
+    let responseText;
+    if (query.kind === "approval") {
+        if (["y", "yes", "allow"].includes(lower))
+            decision = "allow";
+        else if (["n", "no", "deny"].includes(lower))
+            decision = "deny";
+        else if (["a", "always", "always_allow"].includes(lower))
+            decision = "always_allow";
+    }
+    else if (query.kind === "choice") {
+        const choice = Number.parseInt(text, 10);
+        if (!Number.isNaN(choice) && choice > 0) {
+            decision = "select_option";
+            selected_option_index = choice - 1;
+        }
+    }
+    else {
+        decision = "text";
+        responseText = text;
+    }
+    if (!decision)
+        return null;
+    return {
+        query_id: query.query_id,
+        decision,
+        selected_option_index,
+        text: responseText,
+        decided_by_sender_id: message.sender.id,
+        decided_in_chat: chat,
+        decided_at: now,
+    };
 }
 //# sourceMappingURL=bus.js.map

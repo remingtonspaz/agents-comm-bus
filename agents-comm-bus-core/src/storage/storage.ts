@@ -74,6 +74,9 @@ export interface Storage {
     resolved_at: number,
   ): Promise<boolean>;
   getOpenQueryForSession(session: SessionId): Promise<QueryRecord | null>;
+  getOpenQueryByConversation(
+    conversation_id: ConversationId,
+  ): Promise<QueryRecord | null>;
   getQuery(query_id: QueryId): Promise<QueryRecord | null>;
 
   // sessions
@@ -88,6 +91,10 @@ export interface Storage {
     session: SessionId,
     connection_id: string,
     at: number,
+  ): Promise<void>;
+  setSessionMostRecentInbound(
+    session: SessionId,
+    conversation_id: ConversationId,
   ): Promise<void>;
   getSession(session: SessionId): Promise<Session | null>;
 

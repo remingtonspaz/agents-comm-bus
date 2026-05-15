@@ -8,6 +8,7 @@ declare module "ws" {
     once(event: "open", handler: () => void): void;
     once(event: "message", handler: (data: RawData) => void): void;
     once(event: "error", handler: (error: Error) => void): void;
+    once(event: "close", handler: () => void): void;
     on(event: "message", handler: (data: RawData) => void): void;
     on(event: string, handler: (...args: unknown[]) => void): void;
     off(event: "message", handler: (data: RawData) => void): void;

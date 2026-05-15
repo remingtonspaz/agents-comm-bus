@@ -285,6 +285,20 @@ export class SqliteStorage implements Storage {
     return row ? this.queryFromRow(row) : null;
   }
 
+  async getOpenQueryByConversation(
+    conversation_id: ConversationId,
+  ): Promise<QueryRecord | null> {
+    const row = this.db
+      .prepare(`
+        SELECT * FROM queries
+        WHERE origin_chat_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+        LIMIT 1
+      `)
+      .get(conversation_id);
+    return row ? this.queryFromRow(row) : null;
+  }
+
   async getQuery(query_id: QueryId): Promise<QueryRecord | null> {
     const row = this.db
       .prepare("SELECT * FROM queries WHERE query_id = ?")
@@ -328,17 +342,22 @@ export class SqliteStorage implements Storage {
     connection_id: string,
     at: number,
   ): Promise<boolean> {
-    const result = this.db
-      .prepare(`
-        UPDATE sessions
-        SET lease_holder_connection_id = ?,
-            lease_acquired_at = ?,
-            lease_released_at = NULL
-        WHERE session_id = ?
-          AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
-      `)
-      .run(connection_id, at, session, connection_id) as { changes?: number };
-    return result.changes === 1;
+    try {
+      const result = this.db
+        .prepare(`
+          UPDATE sessions
+          SET lease_holder_connection_id = ?,
+              lease_acquired_at = ?,
+              lease_released_at = NULL
+          WHERE session_id = ?
+            AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
+        `)
+        .run(connection_id, at, session, connection_id) as { changes?: number };
+      return result.changes === 1;
+    } catch (error) {
+      if (isConstraintError(error)) return false;
+      throw error;
+    }
   }
 
   async releaseSessionLease(
@@ -361,6 +380,19 @@ export class SqliteStorage implements Storage {
       .prepare("SELECT * FROM sessions WHERE session_id = ?")
       .get(session);
     return row ? this.sessionFromRow(row) : null;
+  }
+
+  async setSessionMostRecentInbound(
+    session: SessionId,
+    conversation_id: ConversationId,
+  ): Promise<void> {
+    this.db
+      .prepare(`
+        UPDATE sessions
+        SET most_recent_inbound_conversation_id = ?
+        WHERE session_id = ?
+      `)
+      .run(conversation_id, session);
   }
 
   async close(): Promise<void> {
@@ -442,4 +474,14 @@ export class SqliteStorage implements Storage {
 
 export async function openSqliteStorage(path: string): Promise<SqliteStorage> {
   return SqliteStorage.open(path);
+}
+
+function isConstraintError(error: unknown): boolean {
+  const sqliteError = error as { code?: string; errcode?: number; errstr?: string };
+  return (
+    sqliteError.code === "SQLITE_CONSTRAINT" ||
+    sqliteError.code === "ERR_SQLITE_CONSTRAINT" ||
+    (sqliteError.code === "ERR_SQLITE_ERROR" && sqliteError.errcode === 2067) ||
+    sqliteError.errstr === "constraint failed"
+  );
 }

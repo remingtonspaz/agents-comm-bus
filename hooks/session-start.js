@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * SessionStart Hook - Auto-spawns the enter watcher for Telegram integration
+ * SessionStart Hook - Auto-spawns the Claude wake watcher
  *
  * This hook runs when Claude Code starts a session. It spawns the PowerShell
- * watcher script that monitors for Telegram message triggers and sends
- * keystrokes to the Claude window.
+ * watcher script that monitors the Claude wake path and sends keystrokes to
+ * the Claude window. The watcher is not a Telegram/comm-state owner; daemon
+ * code decides when a normal turn wake or query wake suppression should happen.
  */
 
 import { spawn, execSync } from 'child_process';
@@ -18,7 +19,32 @@ const __dirname = path.dirname(__filename);
 
 // Log to stderr (stdout may be used for hook response)
 function log(message) {
-  console.error(`[telegram-session-start] ${message}`);
+  console.error(`[claude-session-start] ${message}`);
+}
+
+function hashProjectKey(projectPath) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < projectPath.length; i++) {
+    hash ^= projectPath.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+function resolveProjectPath() {
+  return process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd();
+}
+
+function resolveClaudeWakeDir() {
+  const projectPath = path.resolve(resolveProjectPath());
+  const basename = path.basename(projectPath) || 'project';
+  return path.join(
+    os.homedir(),
+    '.agents-comm-bus',
+    'claude-wake',
+    'sessions',
+    `${basename}-${hashProjectKey(projectPath)}`
+  );
 }
 
 // Find the Claude Code window PID by walking up process tree
@@ -70,9 +96,10 @@ function findClaudeWindowPid() {
   }
 }
 
-// Spawn the enter watcher script with target PID
+// Spawn the Claude wake watcher script with target PID
 function spawnEnterWatcher(targetPid) {
   const watcherScript = path.join(__dirname, '..', 'scripts', 'enter-watcher.ps1');
+  const wakeDir = resolveClaudeWakeDir();
 
   log(`Watcher script path: ${watcherScript}`);
   if (!fs.existsSync(watcherScript)) {
@@ -85,6 +112,8 @@ function spawnEnterWatcher(targetPid) {
     '-WindowStyle', 'Hidden',
     '-File', watcherScript
   ];
+
+  args.push('-SessionDir', wakeDir);
 
   if (targetPid) {
     args.push('-TargetPid', targetPid.toString());
@@ -104,7 +133,7 @@ function spawnEnterWatcher(targetPid) {
     });
 
     watcher.unref();
-    log(`Spawned enter watcher (PID: ${watcher.pid}, mode: ${targetPid || 'search'})`);
+    log(`Spawned Claude wake watcher (PID: ${watcher.pid}, mode: ${targetPid || 'search'}, wakeDir: ${wakeDir})`);
   } catch (err) {
     log(`ERROR spawning watcher: ${err.message}`);
   }
@@ -148,7 +177,7 @@ async function main() {
 }
 
 function initializeWatcher() {
-  log('Initializing Telegram watcher...');
+  log('Initializing Claude wake watcher...');
   const claudePid = findClaudeWindowPid();
   spawnEnterWatcher(claudePid);
 

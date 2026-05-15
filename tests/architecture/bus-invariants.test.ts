@@ -263,6 +263,11 @@ class MemoryStorage implements Storage {
       q.session === session && q.resolved_at == null) ?? null;
   }
 
+  async getOpenQueryByConversation(conversation_id: ConversationId): Promise<QueryRecord | null> {
+    return [...this.queries.values()].find((q) =>
+      q.origin_chat_id === conversation_id && q.resolved_at == null) ?? null;
+  }
+
   async getQuery(query_id: QueryId): Promise<QueryRecord | null> {
     return this.queries.get(query_id) ?? null;
   }
@@ -276,6 +281,19 @@ class MemoryStorage implements Storage {
   }
 
   async releaseSessionLease(): Promise<void> {}
+
+  async setSessionMostRecentInbound(
+    session: SessionId,
+    conversation_id: ConversationId,
+  ): Promise<void> {
+    const current = this.sessions.get(session);
+    if (current) {
+      this.sessions.set(session, {
+        ...current,
+        most_recent_inbound_conversation_id: conversation_id,
+      });
+    }
+  }
 
   async getSession(session: SessionId): Promise<Session | null> {
     return this.sessions.get(session) ?? null;

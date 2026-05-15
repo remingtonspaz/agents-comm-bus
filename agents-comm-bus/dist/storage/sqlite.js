@@ -168,6 +168,17 @@ export class SqliteStorage {
             .get(session);
         return row ? this.queryFromRow(row) : null;
     }
+    async getOpenQueryByConversation(conversation_id) {
+        const row = this.db
+            .prepare(`
+        SELECT * FROM queries
+        WHERE origin_chat_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+        LIMIT 1
+      `)
+            .get(conversation_id);
+        return row ? this.queryFromRow(row) : null;
+    }
     async getQuery(query_id) {
         const row = this.db
             .prepare("SELECT * FROM queries WHERE query_id = ?")
@@ -194,17 +205,24 @@ export class SqliteStorage {
             .run(rec.schema_version, rec.session_id, rec.agent, rec.project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.most_recent_inbound_conversation_id, rec.status);
     }
     async acquireSessionLease(session, connection_id, at) {
-        const result = this.db
-            .prepare(`
-        UPDATE sessions
-        SET lease_holder_connection_id = ?,
-            lease_acquired_at = ?,
-            lease_released_at = NULL
-        WHERE session_id = ?
-          AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
-      `)
-            .run(connection_id, at, session, connection_id);
-        return result.changes === 1;
+        try {
+            const result = this.db
+                .prepare(`
+          UPDATE sessions
+          SET lease_holder_connection_id = ?,
+              lease_acquired_at = ?,
+              lease_released_at = NULL
+          WHERE session_id = ?
+            AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
+        `)
+                .run(connection_id, at, session, connection_id);
+            return result.changes === 1;
+        }
+        catch (error) {
+            if (isConstraintError(error))
+                return false;
+            throw error;
+        }
     }
     async releaseSessionLease(session, connection_id, at) {
         this.db
@@ -221,6 +239,15 @@ export class SqliteStorage {
             .prepare("SELECT * FROM sessions WHERE session_id = ?")
             .get(session);
         return row ? this.sessionFromRow(row) : null;
+    }
+    async setSessionMostRecentInbound(session, conversation_id) {
+        this.db
+            .prepare(`
+        UPDATE sessions
+        SET most_recent_inbound_conversation_id = ?
+        WHERE session_id = ?
+      `)
+            .run(conversation_id, session);
     }
     async close() {
         this.db.close();
@@ -295,5 +322,12 @@ export class SqliteStorage {
 }
 export async function openSqliteStorage(path) {
     return SqliteStorage.open(path);
+}
+function isConstraintError(error) {
+    const sqliteError = error;
+    return (sqliteError.code === "SQLITE_CONSTRAINT" ||
+        sqliteError.code === "ERR_SQLITE_CONSTRAINT" ||
+        (sqliteError.code === "ERR_SQLITE_ERROR" && sqliteError.errcode === 2067) ||
+        sqliteError.errstr === "constraint failed");
 }
 //# sourceMappingURL=sqlite.js.map

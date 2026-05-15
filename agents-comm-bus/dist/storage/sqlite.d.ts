@@ -37,11 +37,13 @@ export declare class SqliteStorage implements Storage {
     insertQuery(rec: QueryRecord): Promise<void>;
     resolveQuery(query_id: QueryId, resolution: ResolvedDecision, resolved_at: number): Promise<boolean>;
     getOpenQueryForSession(session: SessionId): Promise<QueryRecord | null>;
+    getOpenQueryByConversation(conversation_id: ConversationId): Promise<QueryRecord | null>;
     getQuery(query_id: QueryId): Promise<QueryRecord | null>;
     upsertSession(rec: Session): Promise<void>;
     acquireSessionLease(session: SessionId, connection_id: string, at: number): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;
     getSession(session: SessionId): Promise<Session | null>;
+    setSessionMostRecentInbound(session: SessionId, conversation_id: ConversationId): Promise<void>;
     close(): Promise<void>;
     private accountFromRow;
     private conversationFromRow;

@@ -32,6 +32,7 @@ export declare class MessageBus {
     receiveInbound(message: Message): Promise<Conversation>;
     send(request: SendRequest): Promise<MessageId>;
     openQuery(query: Query): Promise<void>;
+    private tryResolveOpenQuery;
     resolveQuery(queryId: QueryId, decision: ResolvedDecision): Promise<boolean>;
     listConversations(filter?: {
         comm?: CommId;

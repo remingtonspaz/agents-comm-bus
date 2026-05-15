@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import crypto from "node:crypto";
+import { SCHEMA_VERSION_SESSION, } from "../../agents-comm-bus-core/dist/index.js";
 import { DAEMON_VERSION } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
 import { startIpcServer } from "./ipc/server.js";
@@ -50,7 +52,12 @@ export async function main(argv = process.argv.slice(2)) {
         metadata: {
             stateRoot: paths.root,
         },
-        onRequest: async (request) => handleIpcRequest(request, { bus, storage, pendingInbound }),
+        onRequest: async (request, socket) => handleIpcRequest(request, {
+            bus,
+            storage,
+            pendingInbound,
+            socket,
+        }),
     });
     await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
     await bus.start();
@@ -68,6 +75,12 @@ async function handleIpcRequest(request, context) {
             const drained = context.pendingInbound.splice(0);
             return drained.map(({ message, conversation }) => ({ message, conversation }));
         }
+        case "claude_register_session":
+            return registerClaudeSession(context, params);
+        case "claude_drain_inbound":
+            return drainClaudeInbound(context, params);
+        case "claude_open_query":
+            return openClaudeQuery(context, params);
         case "telegram_send":
             return sendTelegram(context, params, false);
         case "telegram_send_image":
@@ -75,6 +88,101 @@ async function handleIpcRequest(request, context) {
         default:
             throw new Error(`unknown IPC method: ${request.method}`);
     }
+}
+async function registerClaudeSession(context, params) {
+    const session = requiredString(params.session, "session");
+    const project = requiredString(params.project, "project");
+    const connectionId = typeof params.connection_id === "string"
+        ? params.connection_id
+        : `claude:${session}:${crypto.randomUUID()}`;
+    const now = Date.now();
+    await context.storage.upsertSession({
+        schema_version: SCHEMA_VERSION_SESSION,
+        session_id: session,
+        agent: "claude",
+        project,
+        created_at: now,
+        lease_holder_connection_id: null,
+        lease_acquired_at: null,
+        lease_released_at: null,
+        most_recent_inbound_conversation_id: null,
+        status: "active",
+    });
+    const acquired = await context.storage.acquireSessionLease(session, connectionId, now);
+    if (!acquired) {
+        return { ok: false, reason: "same-project claude session lease already held" };
+    }
+    context.socket?.once("close", () => {
+        void context.storage.releaseSessionLease(session, connectionId, Date.now());
+    });
+    return { ok: true };
+}
+async function drainClaudeInbound(context, params) {
+    const session = typeof params.session === "string" ? params.session : undefined;
+    const drained = context.pendingInbound.splice(0);
+    if (session && drained.length > 0) {
+        await context.storage.setSessionMostRecentInbound(session, drained[drained.length - 1].conversation.conversation_id);
+    }
+    return drained;
+}
+async function openClaudeQuery(context, params) {
+    const session = requiredString(params.session, "session");
+    const queryInput = recordOrEmpty(params.query);
+    const claudeInput = recordOrEmpty(params.claude);
+    const toolName = typeof params.tool_name === "string"
+        ? params.tool_name
+        : typeof claudeInput.tool_name === "string"
+            ? claudeInput.tool_name
+            : undefined;
+    const promptText = requiredString(params.prompt_text ?? queryInput.prompt_text, "prompt_text");
+    const rawKind = params.kind ?? queryInput.kind;
+    const kind = (rawKind === "choice" || rawKind === "freetext" || rawKind === "approval")
+        ? rawKind
+        : "approval";
+    const queryId = `q_${crypto.randomUUID()}`;
+    const sessionRecord = await context.storage.getSession(session);
+    const conversation = sessionRecord?.most_recent_inbound_conversation_id
+        ? await context.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id)
+        : null;
+    const originChat = conversation ? {
+        comm: conversation.comm,
+        account: conversation.account_label,
+        chat_native_id: conversation.chat_native_id,
+        thread_native_id: conversation.thread_native_id ?? undefined,
+    } : undefined;
+    const query = {
+        schema_version: 1,
+        query_id: queryId,
+        agent: "claude",
+        session,
+        kind,
+        prompt_text: promptText,
+        options: Array.isArray(params.options)
+            ? params.options.map(String)
+            : Array.isArray(queryInput.options)
+                ? queryInput.options.map(String)
+                : undefined,
+        origin_chat: originChat,
+        created_at: Date.now(),
+        ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : 300,
+    };
+    await context.bus.openQuery(query);
+    if (originChat) {
+        await context.bus.send({
+            session,
+            comm: originChat.comm,
+            target: originChat,
+            payload: { text: promptText },
+            idempotencyKey: `query:${queryId}`,
+        });
+    }
+    const hookResponse = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });
+    return {
+        query_id: queryId,
+        hook_response: hookResponse,
+        hookJson: hookResponse,
+        nativeHookJson: hookResponse,
+    };
 }
 async function sendTelegram(context, params, image) {
     const target = params.chat_id == null ? undefined : await targetFromParams(context.storage, params);
@@ -116,6 +224,23 @@ async function targetFromParams(storage, params) {
 }
 function normalizeCsv(value) {
     return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+function requiredString(paramsValue, name) {
+    if (typeof paramsValue !== "string" || paramsValue.length === 0) {
+        throw new Error(`${name} is required`);
+    }
+    return paramsValue;
+}
+function hookResponseForUnresolvedClaudeQuery(params) {
+    if (params.tool_name === "AskUserQuestion") {
+        return { decision: { behavior: "allow" } };
+    }
+    return { decision: { behavior: "ask" } };
+}
+function recordOrEmpty(value) {
+    return value && typeof value === "object" && !Array.isArray(value)
+        ? value
+        : {};
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     main().catch((error) => {

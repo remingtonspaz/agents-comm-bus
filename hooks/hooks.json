@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/telegram-context.js"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/claude/user-prompt-submit.js"
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/permission-telegram.cjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/claude/permission-request.js"
           }
         ]
       }

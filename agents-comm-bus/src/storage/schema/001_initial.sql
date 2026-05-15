@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_agent_project
   ON sessions(agent, project, status);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_live_lease_per_agent_project
+  ON sessions(agent, project)
+  WHERE lease_holder_connection_id IS NOT NULL AND status = 'active';
+
 CREATE TABLE IF NOT EXISTS queries (
   schema_version INTEGER NOT NULL,
   query_id TEXT NOT NULL PRIMARY KEY,
@@ -92,6 +96,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_queries_one_open_per_session
 
 CREATE INDEX IF NOT EXISTS idx_queries_session_created
   ON queries(session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_queries_origin_open
+  ON queries(origin_chat_id, created_at)
+  WHERE resolved_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   scope TEXT NOT NULL,
