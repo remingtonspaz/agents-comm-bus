@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import path from "node:path";
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "../../agents-comm-bus-core/dist/index.js";
 import { DAEMON_VERSION } from "./config.js";
@@ -26,12 +27,31 @@ export async function main(argv = process.argv.slice(2)) {
     const blobs = new ContentAddressedBlobStore(paths.root);
     const pendingInbound = [];
     const comms = [];
-    const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (telegramToken) {
+    const attachedBotIds = new Set();
+    const registrations = await storage.listAccountRegistrations({ comm: "telegram" });
+    for (const registration of registrations) {
+        if (attachedBotIds.has(registration.bot_user_id))
+            continue;
+        const resolved = await resolveTelegramCredentials(registration);
+        if (!resolved) {
+            console.error(`agents-comm-bus: skipping telegram account ${registration.account_label} ` +
+                `for project ${registration.project} (could not resolve credentials_ref=${registration.credentials_ref})`);
+            continue;
+        }
         comms.push(new TelegramCommAdapter({
-            botToken: telegramToken,
-            allowedUserIds: normalizeCsv(process.env.TELEGRAM_USER_ID),
+            botToken: resolved.botToken,
+            allowedUserIds: resolved.allowedUserIds,
         }));
+        attachedBotIds.add(registration.bot_user_id);
+    }
+    if (comms.length === 0) {
+        const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (telegramToken) {
+            comms.push(new TelegramCommAdapter({
+                botToken: telegramToken,
+                allowedUserIds: normalizeCsv(process.env.TELEGRAM_USER_ID),
+            }));
+        }
     }
     const bus = new MessageBus({
         project: process.cwd(),
@@ -224,6 +244,62 @@ async function targetFromParams(storage, params) {
 }
 function normalizeCsv(value) {
     return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+async function resolveTelegramCredentials(registration) {
+    const ref = registration.credentials_ref ?? "";
+    const envAllowed = normalizeCsv(process.env.TELEGRAM_USER_ID);
+    if (ref.startsWith("env:")) {
+        const name = ref.slice("env:".length);
+        const fromEnv = name ? process.env[name] : undefined;
+        if (fromEnv) {
+            return { botToken: fromEnv, allowedUserIds: envAllowed };
+        }
+        const fromFile = await readProjectTelegramConfig(registration.project);
+        if (fromFile?.botToken) {
+            return {
+                botToken: fromFile.botToken,
+                allowedUserIds: mergeAllowed(envAllowed, fromFile.userId),
+            };
+        }
+        return undefined;
+    }
+    if (ref.startsWith("file:")) {
+        const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
+        if (fromFile?.botToken) {
+            return {
+                botToken: fromFile.botToken,
+                allowedUserIds: mergeAllowed(envAllowed, fromFile.userId),
+            };
+        }
+        return undefined;
+    }
+    return undefined;
+}
+async function readProjectTelegramConfig(project) {
+    return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
+}
+async function readJsonTelegramConfig(filePath) {
+    try {
+        const raw = await readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw);
+        const botToken = typeof parsed.botToken === "string" ? parsed.botToken : undefined;
+        const userId = typeof parsed.userId === "string"
+            ? parsed.userId
+            : typeof parsed.userId === "number"
+                ? String(parsed.userId)
+                : undefined;
+        if (!botToken && !userId)
+            return undefined;
+        return { botToken, userId };
+    }
+    catch {
+        return undefined;
+    }
+}
+function mergeAllowed(fromEnv, fromFile) {
+    if (!fromFile)
+        return fromEnv;
+    return fromEnv.includes(fromFile) ? fromEnv : [...fromEnv, fromFile];
 }
 function requiredString(paramsValue, name) {
     if (typeof paramsValue !== "string" || paramsValue.length === 0) {
