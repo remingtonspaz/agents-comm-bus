@@ -8,12 +8,11 @@
  * `attach` to the bus + the running comm adapters; everything Claude-specific
  * stays inside this module.
  */
-import { type CommAdapter, type Conversation, type Message, type QueryId, type Storage } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { type AgentId, type CommAdapter, type Conversation, type QueryId, type Storage } from "../../../../../agents-comm-bus-core/dist/index.js";
 import type { MessageBus } from "../../../bus.js";
-export interface PendingInboundEntry {
-    message: Message;
-    conversation: Conversation;
-}
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory } from "../../../runtime/agent-bridge.js";
+import type { PendingInboundEntry } from "../../../runtime/pending-inbound.js";
+export type { PendingInboundEntry } from "../../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
     storage: Storage;
     bus: MessageBus;
@@ -44,16 +43,25 @@ export interface OpenQueryResult {
     hookJson: unknown;
     nativeHookJson: unknown;
 }
-export declare class ClaudeBridge {
+export declare class ClaudeBridge implements AgentBridge {
     private readonly options;
+    readonly agentId: AgentId;
+    readonly ipcMethods: ReadonlySet<string>;
     private readonly wake;
-    private readonly pendingInboundMax;
     constructor(options: ClaudeBridgeOptions);
     /**
-     * Wire Claude-specific behaviors into the bus and each comm adapter.
-     * Must be called after the bus is constructed but before `bus.start()`.
+     * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
+     * shared dispatch sink (pendingInbound + onInboundConversation fan-out)
+     * is set up by the daemon; here we only own resolve-on-sink (write the
+     * wake response) and the inline-keyboard callback handler.
      */
     attach(comms: CommAdapter[]): void;
+    onInboundConversation(conversation: Conversation): Promise<void>;
+    handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
+        socket?: {
+            once(event: "close", handler: () => void): void;
+        };
+    }): Promise<unknown>;
     /**
      * Drain entries from the pending-inbound queue. Used by both
      * `claude_drain_inbound` (which also updates the session's most-recent
@@ -66,5 +74,9 @@ export declare class ClaudeBridge {
     drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]>;
     openQuery(params: Record<string, unknown>): Promise<OpenQueryResult>;
     private handleCommCallback;
+}
+export declare class ClaudeBridgeFactory implements AgentBridgeFactory {
+    readonly agentId: AgentId;
+    create(context: AgentBridgeContext): AgentBridge;
 }
 //# sourceMappingURL=bridge.d.ts.map

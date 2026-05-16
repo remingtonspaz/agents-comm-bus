@@ -6,7 +6,7 @@
   "main": "./dist/daemon.js",
   "types": "./dist/daemon.d.ts",
   "bin": {
-    "agents-comm-bus": "./dist/daemon.js"
+    "agents-comm-bus": "./dist/serve.js"
   },
   "exports": {
     ".": { "import": "./dist/daemon.js", "types": "./dist/daemon.d.ts" },

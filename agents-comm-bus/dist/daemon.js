@@ -1,20 +1,35 @@
-#!/usr/bin/env node
-import { mkdir, readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
-import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import { DAEMON_VERSION } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
 import { MessageBus } from "./bus.js";
-import { TelegramCommAdapter } from "./adapters/comm/telegram/adapter.js";
-import { ClaudeBridge } from "./adapters/agent/claude/bridge.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
-export async function main(argv = process.argv.slice(2)) {
-    const paths = resolveStatePaths({ stateRoot: process.env.AGENTS_COMM_BUS_STATE_ROOT });
+/**
+ * Generic daemon entry point. Knows nothing about specific agents or
+ * comms — adapter wiring is supplied by the composition root.
+ *
+ * Layout:
+ *   1. Resolve filesystem paths, open storage / transcript / audit / blob stores.
+ *   2. For each comm factory, load matching `account_registrations`, resolve
+ *      credentials, instantiate one adapter per registration, dedup by bot id,
+ *      fall back to `factory.fallbackFromEnv` when no rows are registered.
+ *   3. Construct the bus.
+ *   4. For each agent bridge factory, construct the bridge with shared deps
+ *      and ask it to attach to the live comms.
+ *   5. Index IPC methods (bridges contribute `claude_*`-style methods;
+ *      comm factories contribute their MCP-tool surface) into a single
+ *      dispatcher map.
+ *   6. Start the IPC server, write the discovery files, start the bus
+ *      (which starts the comm pollers).
+ */
+export async function runDaemon(options) {
+    const argv = options.argv ?? process.argv.slice(2);
+    const env = options.env ?? process.env;
+    const paths = resolveStatePaths({ stateRoot: options.stateRoot ?? env.AGENTS_COMM_BUS_STATE_ROOT });
     if (argv.includes("--print-paths")) {
         console.log(JSON.stringify(paths, null, 2));
         return;
@@ -25,33 +40,11 @@ export async function main(argv = process.argv.slice(2)) {
     const audit = new JsonlAuditStore(paths.root);
     const blobs = new ContentAddressedBlobStore(paths.root);
     const pendingInbound = [];
-    const comms = [];
-    const attachedBotIds = new Set();
-    const registrations = await storage.listAccountRegistrations({ comm: "telegram" });
-    for (const registration of registrations) {
-        if (attachedBotIds.has(registration.bot_user_id))
-            continue;
-        const resolved = await resolveTelegramCredentials(registration);
-        if (!resolved) {
-            console.error(`agents-comm-bus: skipping telegram account ${registration.account_label} ` +
-                `for project ${registration.project} (could not resolve credentials_ref=${registration.credentials_ref})`);
-            continue;
-        }
-        comms.push(new TelegramCommAdapter({
-            botToken: resolved.botToken,
-            allowedUserIds: resolved.allowedUserIds,
-        }));
-        attachedBotIds.add(registration.bot_user_id);
-    }
-    if (comms.length === 0) {
-        const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
-        if (telegramToken) {
-            comms.push(new TelegramCommAdapter({
-                botToken: telegramToken,
-                allowedUserIds: normalizeCsv(process.env.TELEGRAM_USER_ID),
-            }));
-        }
-    }
+    const comms = await loadCommAdapters({
+        factories: options.commAdapterFactories,
+        storage,
+        env,
+    });
     const bus = new MessageBus({
         project: process.cwd(),
         storage,
@@ -60,11 +53,46 @@ export async function main(argv = process.argv.slice(2)) {
         blobs,
         comms,
     });
-    const claude = new ClaudeBridge({ storage, bus, pendingInbound });
-    claude.attach(comms);
+    const bridges = options.agentBridgeFactories.map((factory) => factory.create({ storage, bus, pendingInbound }));
+    bus.setDispatchSink({
+        enqueueInbound: async (message, conversation) => {
+            pendingInbound.push({ message, conversation });
+            if (pendingInbound.length > 100) {
+                pendingInbound.splice(0, pendingInbound.length - 100);
+            }
+            for (const bridge of bridges) {
+                if (bridge.onInboundConversation) {
+                    try {
+                        await bridge.onInboundConversation(conversation);
+                    }
+                    catch (error) {
+                        console.error(`agents-comm-bus: bridge ${bridge.agentId} onInboundConversation failed: ` +
+                            `${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+            }
+        },
+    });
+    for (const bridge of bridges) {
+        bridge.attach(comms);
+    }
+    const ipcMethods = new Map();
+    for (const factory of options.commAdapterFactories) {
+        if (factory.ipcMethods) {
+            for (const [method, handler] of factory.ipcMethods({ bus, storage, pendingInbound })) {
+                ipcMethods.set(method, handler);
+            }
+        }
+    }
+    const bridgesByMethod = new Map();
+    for (const bridge of bridges) {
+        for (const method of bridge.ipcMethods) {
+            bridgesByMethod.set(method, bridge);
+        }
+    }
     const server = await startIpcServer({
         metadata: { stateRoot: paths.root },
-        onRequest: async (request, socket) => handleIpcRequest(request, { bus, storage, claude, socket }),
+        onRequest: async (request, socket) => dispatchIpc(request, { bus, ipcMethods, bridgesByMethod, socket }),
     });
     try {
         await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
@@ -76,131 +104,50 @@ export async function main(argv = process.argv.slice(2)) {
     await bus.start();
     console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }
-async function handleIpcRequest(request, context) {
-    const params = (request.params ?? {});
-    switch (request.method) {
-        case "list_conversations":
-            return context.bus.listConversations({
-                comm: params.comm,
-                limit: typeof params.limit === "number" ? params.limit : 25,
-            });
-        case "telegram_check_messages":
-            return context.claude.drainPendingInbound();
-        case "claude_register_session":
-            return context.claude.registerSession(params, context.socket);
-        case "claude_drain_inbound":
-            return context.claude.drainInbound(params);
-        case "claude_open_query":
-            return context.claude.openQuery(params);
-        case "telegram_send":
-            return sendTelegram(context, params, false);
-        case "telegram_send_image":
-            return sendTelegram(context, params, true);
-        default:
-            throw new Error(`unknown IPC method: ${request.method}`);
-    }
-}
-async function sendTelegram(context, params, image) {
-    const target = params.chat_id == null ? undefined : await targetFromParams(context.storage, params);
-    const sent = await context.bus.send({
-        session: String(params.session ?? "mcp"),
-        comm: "telegram",
-        target,
-        payload: image
-            ? {
-                text: typeof params.caption === "string" ? params.caption : undefined,
-                attachments: [{
-                        filename: String(params.path),
-                        local_path: String(params.path),
-                        mime: "application/octet-stream",
-                        size: 0,
-                    }],
+async function loadCommAdapters(input) {
+    const comms = [];
+    const attachedBotIds = new Set();
+    for (const factory of input.factories) {
+        const registrations = await input.storage.listAccountRegistrations({
+            comm: factory.commId,
+        });
+        for (const registration of registrations) {
+            if (attachedBotIds.has(registration.bot_user_id))
+                continue;
+            const resolved = await factory.resolveCredentials(registration, input.env);
+            if (!resolved) {
+                console.error(`agents-comm-bus: skipping ${factory.commId} account ${registration.account_label} ` +
+                    `for project ${registration.project} (could not resolve credentials_ref=${registration.credentials_ref})`);
+                continue;
             }
-            : { text: String(params.message ?? "") },
-        idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
-    });
-    return { message_id: sent };
-}
-async function targetFromParams(storage, params) {
-    if (params.chat_id == null) {
-        throw new Error("omitted Telegram target requires a session most-recent-inbound conversation");
-    }
-    const registration = (await storage.listAccountRegistrations({
-        comm: "telegram",
-    }))[0];
-    if (!registration) {
-        throw new Error("no Telegram account registration exists; run agents-comm-bus account-add first");
-    }
-    return {
-        comm: "telegram",
-        account: registration.bot_user_id,
-        chat_native_id: String(params.chat_id),
-        thread_native_id: params.message_thread_id == null ? undefined : String(params.message_thread_id),
-    };
-}
-function normalizeCsv(value) {
-    return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-}
-async function resolveTelegramCredentials(registration) {
-    const ref = registration.credentials_ref ?? "";
-    const envAllowed = normalizeCsv(process.env.TELEGRAM_USER_ID);
-    if (ref.startsWith("env:")) {
-        const name = ref.slice("env:".length);
-        const fromEnv = name ? process.env[name] : undefined;
-        if (fromEnv) {
-            return { botToken: fromEnv, allowedUserIds: envAllowed };
+            comms.push(factory.create(resolved.credentials));
+            attachedBotIds.add(registration.bot_user_id);
         }
-        const fromFile = await readProjectTelegramConfig(registration.project);
-        if (fromFile?.botToken) {
-            return {
-                botToken: fromFile.botToken,
-                allowedUserIds: mergeAllowed(envAllowed, fromFile.userId),
-            };
+        if (registrations.length === 0 && factory.fallbackFromEnv) {
+            const fallback = factory.fallbackFromEnv(input.env);
+            if (fallback) {
+                comms.push(factory.create(fallback.credentials));
+            }
         }
-        return undefined;
     }
-    if (ref.startsWith("file:")) {
-        const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
-        if (fromFile?.botToken) {
-            return {
-                botToken: fromFile.botToken,
-                allowedUserIds: mergeAllowed(envAllowed, fromFile.userId),
-            };
-        }
-        return undefined;
+    return comms;
+}
+async function dispatchIpc(request, context) {
+    const params = (request.params ?? {});
+    if (request.method === "list_conversations") {
+        return context.bus.listConversations({
+            comm: params.comm,
+            limit: typeof params.limit === "number" ? params.limit : 25,
+        });
     }
-    return undefined;
-}
-async function readProjectTelegramConfig(project) {
-    return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
-}
-async function readJsonTelegramConfig(filePath) {
-    try {
-        const raw = await readFile(filePath, "utf8");
-        const parsed = JSON.parse(raw);
-        const botToken = typeof parsed.botToken === "string" ? parsed.botToken : undefined;
-        const userId = typeof parsed.userId === "string"
-            ? parsed.userId
-            : typeof parsed.userId === "number"
-                ? String(parsed.userId)
-                : undefined;
-        if (!botToken && !userId)
-            return undefined;
-        return { botToken, userId };
+    const bridge = context.bridgesByMethod.get(request.method);
+    if (bridge) {
+        return bridge.handleIpcMethod(request.method, params, { socket: context.socket });
     }
-    catch {
-        return undefined;
+    const commHandler = context.ipcMethods.get(request.method);
+    if (commHandler) {
+        return commHandler(params, { socket: context.socket });
     }
-}
-function mergeAllowed(fromEnv, fromFile) {
-    if (!fromFile)
-        return fromEnv;
-    return fromEnv.includes(fromFile) ? fromEnv : [...fromEnv, fromFile];
-}
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-    main().catch((error) => {
-        console.error(error);
-        process.exitCode = 1;
-    });
+    throw new Error(`unknown IPC method: ${request.method}`);
 }
 //# sourceMappingURL=daemon.js.map

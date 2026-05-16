@@ -19,7 +19,6 @@ import {
   type CommAdapter,
   type Conversation,
   type InlineKeyboardButton,
-  type Message,
   type Query,
   type QueryId,
   type QueryRecord,
@@ -29,12 +28,15 @@ import {
 } from "../../../../../agents-comm-bus-core/dist/index.js";
 
 import type { MessageBus } from "../../../bus.js";
+import type {
+  AgentBridge,
+  AgentBridgeContext,
+  AgentBridgeFactory,
+} from "../../../runtime/agent-bridge.js";
+import type { PendingInboundEntry } from "../../../runtime/pending-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 
-export interface PendingInboundEntry {
-  message: Message;
-  conversation: Conversation;
-}
+export type { PendingInboundEntry } from "../../../runtime/pending-inbound.js";
 
 export interface ClaudeBridgeOptions {
   storage: Storage;
@@ -50,7 +52,6 @@ export interface ClaudeBridgeOptions {
   pendingInboundMax?: number;
 }
 
-const DEFAULT_PENDING_INBOUND_MAX = 100;
 const DEFAULT_TTL_SECONDS = 3600;
 
 /**
@@ -72,39 +73,31 @@ export interface OpenQueryResult {
   nativeHookJson: unknown;
 }
 
-export class ClaudeBridge {
+const CLAUDE_IPC_METHODS = new Set<string>([
+  "claude_register_session",
+  "claude_drain_inbound",
+  "claude_open_query",
+]);
+
+export class ClaudeBridge implements AgentBridge {
+  readonly agentId = "claude" as AgentId;
+  readonly ipcMethods: ReadonlySet<string> = CLAUDE_IPC_METHODS;
+
   private readonly wake = new ClaudeWakeRegistry();
-  private readonly pendingInboundMax: number;
 
   constructor(private readonly options: ClaudeBridgeOptions) {
-    this.pendingInboundMax = options.pendingInboundMax ?? DEFAULT_PENDING_INBOUND_MAX;
+    // pendingInboundMax preserved as an option for symmetry but the daemon
+    // now caps the shared queue itself; this class only drains it.
+    void options.pendingInboundMax;
   }
 
   /**
-   * Wire Claude-specific behaviors into the bus and each comm adapter.
-   * Must be called after the bus is constructed but before `bus.start()`.
+   * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
+   * shared dispatch sink (pendingInbound + onInboundConversation fan-out)
+   * is set up by the daemon; here we only own resolve-on-sink (write the
+   * wake response) and the inline-keyboard callback handler.
    */
   attach(comms: CommAdapter[]): void {
-    this.options.bus.setDispatchSink({
-      enqueueInbound: async (message, conversation) => {
-        this.options.pendingInbound.push({ message, conversation });
-        if (this.options.pendingInbound.length > this.pendingInboundMax) {
-          this.options.pendingInbound.splice(
-            0,
-            this.options.pendingInbound.length - this.pendingInboundMax,
-          );
-        }
-        try {
-          await this.wake.wakeConversation(conversation);
-        } catch (error) {
-          console.error(
-            `agents-comm-bus: failed to write Claude wake trigger for ` +
-              `${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      },
-    });
-
     this.options.bus.setResolveSink({
       onResolved: async (query, decision) => {
         const payload = wakePayloadFromDecision(decision);
@@ -119,6 +112,34 @@ export class ClaudeBridge {
           await this.handleCommCallback(comm, event);
         });
       }
+    }
+  }
+
+  async onInboundConversation(conversation: Conversation): Promise<void> {
+    try {
+      await this.wake.wakeConversation(conversation);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to write Claude wake trigger for ` +
+          `${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async handleIpcMethod(
+    method: string,
+    params: Record<string, unknown>,
+    ctx: { socket?: { once(event: "close", handler: () => void): void } },
+  ): Promise<unknown> {
+    switch (method) {
+      case "claude_register_session":
+        return this.registerSession(params, ctx.socket);
+      case "claude_drain_inbound":
+        return this.drainInbound(params);
+      case "claude_open_query":
+        return this.openQuery(params);
+      default:
+        throw new Error(`ClaudeBridge does not handle IPC method: ${method}`);
     }
   }
 
@@ -450,4 +471,15 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+export class ClaudeBridgeFactory implements AgentBridgeFactory {
+  readonly agentId = "claude" as AgentId;
+  create(context: AgentBridgeContext): AgentBridge {
+    return new ClaudeBridge({
+      storage: context.storage,
+      bus: context.bus,
+      pendingInbound: context.pendingInbound,
+    });
+  }
 }

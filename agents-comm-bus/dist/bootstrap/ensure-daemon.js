@@ -162,7 +162,7 @@ function defaultTerminateDaemon(pid) {
 }
 function defaultSpawnDaemon(paths) {
     const thisFile = fileURLToPath(import.meta.url);
-    const daemonEntry = path.resolve(path.dirname(thisFile), "../daemon.js");
+    const daemonEntry = path.resolve(path.dirname(thisFile), "../serve.js");
     const child = spawn(process.execPath, [daemonEntry, "serve"], {
         detached: true,
         stdio: "ignore",
