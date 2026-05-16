@@ -71,4 +71,4 @@ export class ClaudeWakeRegistry {
         return true;
     }
 }
-//# sourceMappingURL=claude-wake.js.map
+//# sourceMappingURL=wake.js.map

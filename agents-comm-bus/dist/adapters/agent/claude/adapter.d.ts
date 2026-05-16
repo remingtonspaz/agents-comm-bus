@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentCapabilities, AgentId, ControlChannel, Message, Query, QueryChannel, QueryId, ResolvedDecision, SessionId } from "../../../../agents-comm-bus-core/dist/index.js";
+import type { AgentAdapter, AgentCapabilities, AgentId, ControlChannel, Message, Query, QueryChannel, QueryId, ResolvedDecision, SessionId } from "../../../../../agents-comm-bus-core/dist/index.js";
 export type ClaudePromptType = "permission" | "question" | "plan_approval" | "plan_entry";
 export interface ClaudeHookPayload {
     hook_event_name?: string;
@@ -57,4 +57,4 @@ export declare function mapClaudeHookPayloadToQuery(session: SessionId, payload:
     queryId?: QueryId;
 }): ClaudeQueryMapping;
 export declare function claudeDecisionFromResolution(query: Query, resolution: ResolvedDecision): ClaudeHookDecision;
-//# sourceMappingURL=claude.d.ts.map
+//# sourceMappingURL=adapter.d.ts.map

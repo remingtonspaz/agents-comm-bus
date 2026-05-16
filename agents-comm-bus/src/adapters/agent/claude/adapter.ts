@@ -12,8 +12,8 @@ import type {
   QueryKind,
   ResolvedDecision,
   SessionId,
-} from "../../../../agents-comm-bus-core/dist/index.js";
-import { SCHEMA_VERSION_QUERY } from "../../../../agents-comm-bus-core/dist/index.js";
+} from "../../../../../agents-comm-bus-core/dist/index.js";
+import { SCHEMA_VERSION_QUERY } from "../../../../../agents-comm-bus-core/dist/index.js";
 
 export type ClaudePromptType =
   | "permission"

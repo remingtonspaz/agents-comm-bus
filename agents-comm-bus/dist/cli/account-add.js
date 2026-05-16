@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION_ACCOUNT, } from "../../../agents-comm-bus-core/dist/index.js";
-import { probeTelegramIdentity } from "../adapters/comm/telegram.js";
+import { probeTelegramIdentity } from "../adapters/comm/telegram/adapter.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 export async function accountAdd(options) {

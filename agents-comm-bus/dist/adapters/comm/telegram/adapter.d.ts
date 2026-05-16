@@ -1,5 +1,5 @@
 import TelegramBot from "node-telegram-bot-api";
-import type { CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../agents-comm-bus-core/dist/index.js";
+import type { CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
 export interface TelegramCommAdapterOptions {
     botToken: string;
     allowedUserIds?: readonly string[];
@@ -47,4 +47,4 @@ export declare function probeTelegramIdentity(botToken: string): Promise<{
     bot_user_id: string;
     bot_username?: string;
 }>;
-//# sourceMappingURL=telegram.d.ts.map
+//# sourceMappingURL=adapter.d.ts.map

@@ -8,8 +8,8 @@
  * `attach` to the bus + the running comm adapters; everything Claude-specific
  * stays inside this module.
  */
-import { type CommAdapter, type Conversation, type Message, type QueryId, type Storage } from "../../../../agents-comm-bus-core/dist/index.js";
-import type { MessageBus } from "../../bus.js";
+import { type CommAdapter, type Conversation, type Message, type QueryId, type Storage } from "../../../../../agents-comm-bus-core/dist/index.js";
+import type { MessageBus } from "../../../bus.js";
 export interface PendingInboundEntry {
     message: Message;
     conversation: Conversation;
@@ -67,4 +67,4 @@ export declare class ClaudeBridge {
     openQuery(params: Record<string, unknown>): Promise<OpenQueryResult>;
     private handleCommCallback;
 }
-//# sourceMappingURL=claude-bridge.d.ts.map
+//# sourceMappingURL=bridge.d.ts.map

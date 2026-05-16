@@ -1,4 +1,4 @@
-import type { Conversation, SessionId } from "../../../../agents-comm-bus-core/dist/index.js";
+import type { Conversation, SessionId } from "../../../../../agents-comm-bus-core/dist/index.js";
 export interface ClaudeWakeRegistration {
     session: SessionId;
     project: string;
@@ -28,4 +28,4 @@ export declare class ClaudeWakeRegistry {
     writeResponseForSession(session: SessionId, payload: ClaudeWakeResponsePayload): Promise<boolean>;
     wakeConversation(conversation: Conversation): Promise<boolean>;
 }
-//# sourceMappingURL=claude-wake.d.ts.map
+//# sourceMappingURL=wake.d.ts.map

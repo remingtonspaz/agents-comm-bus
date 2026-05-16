@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type TelegramBot from "node-telegram-bot-api";
 
-import { TelegramCommAdapter } from "../../agents-comm-bus/src/adapters/comm/telegram.js";
+import { TelegramCommAdapter } from "../../agents-comm-bus/src/adapters/comm/telegram/adapter.js";
 import type { CommConnectionState } from "../../agents-comm-bus-core/src/index.js";
 
 describe("TelegramCommAdapter failure classification", () => {

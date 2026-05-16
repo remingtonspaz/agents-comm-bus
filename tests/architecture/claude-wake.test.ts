@@ -8,7 +8,7 @@ import {
   ClaudeWakeRegistry,
   claudeWakeDirForProject,
   hashProjectKey,
-} from "../../agents-comm-bus/src/adapters/agent/claude-wake.js";
+} from "../../agents-comm-bus/src/adapters/agent/claude/wake.js";
 import type { Conversation } from "../../agents-comm-bus-core/src/records/index.js";
 import type { AgentId, CommId, ConversationId, MessageId, SessionId } from "../../agents-comm-bus-core/src/types.js";
 

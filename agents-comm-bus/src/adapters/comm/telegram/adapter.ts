@@ -13,7 +13,7 @@ import type {
   OutboundPayload,
   SendResult,
   CommId,
-} from "../../../../agents-comm-bus-core/dist/index.js";
+} from "../../../../../agents-comm-bus-core/dist/index.js";
 
 export interface TelegramCommAdapterOptions {
   botToken: string;

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_QUERY } from "../../../../agents-comm-bus-core/dist/index.js";
+import { SCHEMA_VERSION_QUERY } from "../../../../../agents-comm-bus-core/dist/index.js";
 export class ClaudeAgentAdapter {
     options;
     id = "claude";
@@ -212,4 +212,4 @@ function formatPermissionPrompt(toolName, toolInput) {
 function recordOrEmpty(value) {
     return value && typeof value === "object" ? value : {};
 }
-//# sourceMappingURL=claude.js.map
+//# sourceMappingURL=adapter.js.map

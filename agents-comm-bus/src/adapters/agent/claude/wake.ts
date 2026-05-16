@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentId, Conversation, SessionId } from "../../../../agents-comm-bus-core/dist/index.js";
+import type { AgentId, Conversation, SessionId } from "../../../../../agents-comm-bus-core/dist/index.js";
 
 export interface ClaudeWakeRegistration {
   session: SessionId;

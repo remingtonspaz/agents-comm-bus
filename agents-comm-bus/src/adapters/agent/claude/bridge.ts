@@ -26,10 +26,10 @@ import {
   type ResolvedDecision,
   type SessionId,
   type Storage,
-} from "../../../../agents-comm-bus-core/dist/index.js";
+} from "../../../../../agents-comm-bus-core/dist/index.js";
 
-import type { MessageBus } from "../../bus.js";
-import { ClaudeWakeRegistry } from "./claude-wake.js";
+import type { MessageBus } from "../../../bus.js";
+import { ClaudeWakeRegistry } from "./wake.js";
 
 export interface PendingInboundEntry {
   message: Message;

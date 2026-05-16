@@ -224,4 +224,4 @@ function normalizeAttachments(raw) {
             platform_metadata: { file_id: photo.file_id },
         }];
 }
-//# sourceMappingURL=telegram.js.map
+//# sourceMappingURL=adapter.js.map

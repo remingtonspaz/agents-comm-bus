@@ -9,8 +9,8 @@
  * stays inside this module.
  */
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_SESSION, } from "../../../../agents-comm-bus-core/dist/index.js";
-import { ClaudeWakeRegistry } from "./claude-wake.js";
+import { SCHEMA_VERSION_SESSION, } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { ClaudeWakeRegistry } from "./wake.js";
 const DEFAULT_PENDING_INBOUND_MAX = 100;
 const DEFAULT_TTL_SECONDS = 3600;
 export class ClaudeBridge {
@@ -350,4 +350,4 @@ function recordOrEmpty(value) {
         ? value
         : {};
 }
-//# sourceMappingURL=claude-bridge.js.map
+//# sourceMappingURL=bridge.js.map
