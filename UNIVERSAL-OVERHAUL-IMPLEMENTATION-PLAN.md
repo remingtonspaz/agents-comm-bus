@@ -667,7 +667,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 3.1 — Create `CodexAgentAdapter`
 
 **Files:**
-- Create: `agents-comm-bus/src/adapters/agent/codex.ts`
+- Create: `agents-comm-bus/src/adapters/agent/codex/adapter.ts`
 - Create: `tests/architecture/codex-agent-adapter.test.ts`
 
 **Steps:**
