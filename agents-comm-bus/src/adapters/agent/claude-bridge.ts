@@ -1,0 +1,453 @@
+/**
+ * ClaudeBridge — Claude-side of the agents-comm-bus daemon.
+ *
+ * Hosts the `claude_*` IPC methods, the inline-keyboard label choices
+ * specific to Claude's permission / question UX, the wake-on-resolve write
+ * path (`permission-response.json` + `trigger-enter`), and the per-comm
+ * callback handler. The daemon constructs one ClaudeBridge and asks it to
+ * `attach` to the bus + the running comm adapters; everything Claude-specific
+ * stays inside this module.
+ */
+
+import crypto from "node:crypto";
+
+import {
+  SCHEMA_VERSION_SESSION,
+  type AgentId,
+  type CallbackEvent,
+  type ChatRef,
+  type CommAdapter,
+  type Conversation,
+  type InlineKeyboardButton,
+  type Message,
+  type Query,
+  type QueryId,
+  type QueryRecord,
+  type ResolvedDecision,
+  type SessionId,
+  type Storage,
+} from "../../../../agents-comm-bus-core/dist/index.js";
+
+import type { MessageBus } from "../../bus.js";
+import { ClaudeWakeRegistry } from "./claude-wake.js";
+
+export interface PendingInboundEntry {
+  message: Message;
+  conversation: Conversation;
+}
+
+export interface ClaudeBridgeOptions {
+  storage: Storage;
+  bus: MessageBus;
+  /**
+   * Shared inbound queue that Claude's `claude_drain_inbound` IPC method
+   * pulls from. The daemon owns the array reference so other consumers
+   * (e.g. the Telegram MCP shim's `telegram_check_messages`) can drain
+   * from the same queue.
+   */
+  pendingInbound: PendingInboundEntry[];
+  /** Max queue depth before old entries are dropped. */
+  pendingInboundMax?: number;
+}
+
+const DEFAULT_PENDING_INBOUND_MAX = 100;
+const DEFAULT_TTL_SECONDS = 3600;
+
+/**
+ * Outcome shape returned by claude_register_session.
+ */
+export interface RegisterSessionResult {
+  ok: boolean;
+  reason?: string;
+  wake_dir?: string;
+}
+
+/**
+ * Outcome shape returned by claude_open_query.
+ */
+export interface OpenQueryResult {
+  query_id: QueryId;
+  hook_response: unknown;
+  hookJson: unknown;
+  nativeHookJson: unknown;
+}
+
+export class ClaudeBridge {
+  private readonly wake = new ClaudeWakeRegistry();
+  private readonly pendingInboundMax: number;
+
+  constructor(private readonly options: ClaudeBridgeOptions) {
+    this.pendingInboundMax = options.pendingInboundMax ?? DEFAULT_PENDING_INBOUND_MAX;
+  }
+
+  /**
+   * Wire Claude-specific behaviors into the bus and each comm adapter.
+   * Must be called after the bus is constructed but before `bus.start()`.
+   */
+  attach(comms: CommAdapter[]): void {
+    this.options.bus.setDispatchSink({
+      enqueueInbound: async (message, conversation) => {
+        this.options.pendingInbound.push({ message, conversation });
+        if (this.options.pendingInbound.length > this.pendingInboundMax) {
+          this.options.pendingInbound.splice(
+            0,
+            this.options.pendingInbound.length - this.pendingInboundMax,
+          );
+        }
+        try {
+          await this.wake.wakeConversation(conversation);
+        } catch (error) {
+          console.error(
+            `agents-comm-bus: failed to write Claude wake trigger for ` +
+              `${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+    });
+
+    this.options.bus.setResolveSink({
+      onResolved: async (query, decision) => {
+        const payload = wakePayloadFromDecision(decision);
+        if (!payload) return;
+        await this.wake.writeResponseForSession(query.session, payload);
+      },
+    });
+
+    for (const comm of comms) {
+      if (typeof comm.onCallback === "function") {
+        comm.onCallback(async (event) => {
+          await this.handleCommCallback(comm, event);
+        });
+      }
+    }
+  }
+
+  /**
+   * Drain entries from the pending-inbound queue. Used by both
+   * `claude_drain_inbound` (which also updates the session's most-recent
+   * inbound) and the Telegram MCP shim's `telegram_check_messages`.
+   */
+  drainPendingInbound(): PendingInboundEntry[] {
+    return this.options.pendingInbound.splice(0);
+  }
+
+  async registerSession(
+    params: Record<string, unknown>,
+    socket?: { once(event: "close", handler: () => void): void },
+  ): Promise<RegisterSessionResult> {
+    const session = requiredString(params.session, "session") as SessionId;
+    const project = requiredString(params.project, "project");
+    const connectionId = typeof params.connection_id === "string"
+      ? params.connection_id
+      : `claude:${session}:${crypto.randomUUID()}`;
+    const now = Date.now();
+    const wakeDir = typeof params.wake_dir === "string"
+      ? params.wake_dir
+      : typeof params.wakeDir === "string"
+        ? params.wakeDir
+        : undefined;
+    await this.options.storage.upsertSession({
+      schema_version: SCHEMA_VERSION_SESSION,
+      session_id: session,
+      agent: "claude" as AgentId,
+      project,
+      created_at: now,
+      lease_holder_connection_id: null,
+      lease_acquired_at: null,
+      lease_released_at: null,
+      most_recent_inbound_conversation_id: null,
+      status: "active",
+    });
+    const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
+    if (!acquired) {
+      return { ok: false, reason: "same-project claude session lease already held" };
+    }
+    const registration = this.wake.register({ session, project, wakeDir });
+    socket?.once("close", () => {
+      void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
+    });
+    return { ok: true, wake_dir: registration.wakeDir };
+  }
+
+  async drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]> {
+    const session = typeof params.session === "string" ? params.session as SessionId : undefined;
+    const drained = this.drainPendingInbound();
+    if (session && drained.length > 0) {
+      await this.options.storage.setSessionMostRecentInbound(
+        session,
+        drained[drained.length - 1].conversation.conversation_id,
+      );
+    }
+    return drained;
+  }
+
+  async openQuery(params: Record<string, unknown>): Promise<OpenQueryResult> {
+    const session = requiredString(params.session, "session") as SessionId;
+    const queryInput = recordOrEmpty(params.query);
+    const claudeInput = recordOrEmpty(params.claude);
+    const toolName = typeof params.tool_name === "string"
+      ? params.tool_name
+      : typeof claudeInput.tool_name === "string"
+        ? claudeInput.tool_name
+        : undefined;
+    const promptText = requiredString(
+      params.prompt_text ?? queryInput.prompt_text,
+      "prompt_text",
+    );
+    const rawKind = params.kind ?? queryInput.kind;
+    const kind: "approval" | "choice" | "freetext" =
+      rawKind === "choice" || rawKind === "freetext" || rawKind === "approval"
+        ? rawKind
+        : "approval";
+    const queryId = `q_${crypto.randomUUID()}` as QueryId;
+    const sessionRecord = await this.options.storage.getSession(session);
+    const conversation = sessionRecord?.most_recent_inbound_conversation_id
+      ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id)
+      : null;
+    const originChat = conversation
+      ? ({
+          comm: conversation.comm,
+          account: conversation.account_label as ChatRef["account"],
+          chat_native_id: conversation.chat_native_id,
+          thread_native_id: conversation.thread_native_id ?? undefined,
+        } satisfies ChatRef)
+      : undefined;
+    const options = Array.isArray(params.options)
+      ? params.options.map(String)
+      : Array.isArray(queryInput.options)
+        ? queryInput.options.map(String)
+        : undefined;
+    const query: Query = {
+      schema_version: 1,
+      query_id: queryId,
+      agent: "claude" as AgentId,
+      session,
+      kind,
+      prompt_text: promptText,
+      options,
+      origin_chat: originChat,
+      created_at: Date.now(),
+      ttl_seconds:
+        typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS,
+    };
+    await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    await this.options.bus.openQuery(query);
+    if (originChat) {
+      const promptFormat = params.prompt_format ?? queryInput.prompt_format;
+      const inlineKeyboard = inlineKeyboardForQuery(queryId, kind, options);
+      await this.options.bus.send({
+        session,
+        comm: originChat.comm,
+        target: originChat,
+        payload: {
+          text: promptText,
+          format: promptFormat === "html" ? "html" : "plain",
+          inline_keyboard: inlineKeyboard,
+        },
+        idempotencyKey: `query:${queryId}`,
+      });
+    }
+
+    const hookResponse = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });
+    return {
+      query_id: queryId,
+      hook_response: hookResponse,
+      hookJson: hookResponse,
+      nativeHookJson: hookResponse,
+    };
+  }
+
+  private async handleCommCallback(
+    comm: CommAdapter,
+    event: CallbackEvent,
+  ): Promise<void> {
+    const parsed = parseCallbackData(event.data);
+    if (!parsed) {
+      if (comm.answerCallback) {
+        await comm.answerCallback(event.callback_id, {
+          text: "Unrecognized button payload",
+        });
+      }
+      return;
+    }
+
+    const chat: ChatRef = {
+      comm: comm.id,
+      account: "" as ChatRef["account"],
+      chat_native_id: event.chat_native_id,
+    };
+
+    const outcome = await this.options.bus.resolveQueryFromCallback({
+      queryId: parsed.queryId as QueryId,
+      value: parsed.value,
+      fromId: event.from_id,
+      chat,
+    });
+
+    if (!comm.answerCallback) return;
+
+    switch (outcome.kind) {
+      case "resolved": {
+        const text = ackTextFor(outcome.decision);
+        await comm.answerCallback(event.callback_id, { text });
+        if (comm.editMessage) {
+          try {
+            await comm.editMessage(
+              event.chat_native_id,
+              event.message_native_id,
+              `✓ Resolved via Telegram (${text}).`,
+            );
+          } catch {
+            // Best-effort UI polish; ignore failures.
+          }
+        }
+        return;
+      }
+      case "awaiting_freetext":
+        await comm.answerCallback(event.callback_id, {
+          text: "Now send your custom reply as a message.",
+          showAlert: true,
+        });
+        if (comm.editMessage) {
+          try {
+            await comm.editMessage(
+              event.chat_native_id,
+              event.message_native_id,
+              "💬 Awaiting your custom reply… (send any text in this chat).",
+            );
+          } catch {
+            // Best-effort.
+          }
+        }
+        return;
+      case "already_resolved":
+        await comm.answerCallback(event.callback_id, {
+          text: "Already resolved.",
+          showAlert: false,
+        });
+        return;
+      case "expired":
+        await comm.answerCallback(event.callback_id, {
+          text: "This prompt expired before you answered.",
+          showAlert: true,
+        });
+        return;
+      case "unknown_query":
+        await comm.answerCallback(event.callback_id, {
+          text: "Unknown query.",
+        });
+        return;
+      case "invalid_value":
+        await comm.answerCallback(event.callback_id, {
+          text: `Unrecognized value: ${outcome.value}`,
+        });
+        return;
+    }
+  }
+}
+
+function inlineKeyboardForQuery(
+  queryId: QueryId,
+  kind: "approval" | "choice" | "freetext",
+  options: readonly string[] | undefined,
+): InlineKeyboardButton[][] | undefined {
+  if (kind === "approval") {
+    return [
+      [
+        { text: "✅ Allow", callback_data: `q:${queryId}:y` },
+        { text: "❌ Deny", callback_data: `q:${queryId}:n` },
+      ],
+      [{ text: "🔓 Always", callback_data: `q:${queryId}:a` }],
+    ];
+  }
+  if (kind === "choice") {
+    const rows: InlineKeyboardButton[][] = (options ?? []).map((label, index) => [
+      {
+        text: `${index + 1}. ${truncateButtonText(label)}`,
+        callback_data: `q:${queryId}:${index + 1}`,
+      },
+    ]);
+    rows.push([
+      { text: "💬 Other (type a reply)", callback_data: `q:${queryId}:other` },
+    ]);
+    return rows;
+  }
+  return undefined;
+}
+
+function truncateButtonText(label: string): string {
+  const trimmed = label.replace(/\s+/g, " ").trim();
+  if (trimmed.length <= 48) return trimmed;
+  return `${trimmed.slice(0, 47)}…`;
+}
+
+function wakePayloadFromDecision(
+  decision: ResolvedDecision,
+): { response: string; prompt_type: "permission" | "question" | "freetext" } | null {
+  switch (decision.decision) {
+    case "allow":
+      return { response: "y", prompt_type: "permission" };
+    case "deny":
+      return { response: "n", prompt_type: "permission" };
+    case "always_allow":
+      return { response: "a", prompt_type: "permission" };
+    case "select_option": {
+      const idx = decision.selected_option_index;
+      if (typeof idx !== "number") return null;
+      return { response: String(idx + 1), prompt_type: "question" };
+    }
+    case "text":
+      if (!decision.text) return null;
+      return { response: decision.text, prompt_type: "freetext" };
+    default:
+      return null;
+  }
+}
+
+function parseCallbackData(data: string): { queryId: string; value: string } | null {
+  if (!data.startsWith("q:")) return null;
+  const rest = data.slice(2);
+  const sep = rest.lastIndexOf(":");
+  if (sep <= 0) return null;
+  const queryId = rest.slice(0, sep);
+  const value = rest.slice(sep + 1);
+  if (!queryId || !value) return null;
+  return { queryId, value };
+}
+
+function ackTextFor(decision: ResolvedDecision): string {
+  switch (decision.decision) {
+    case "allow":
+      return "Allowed";
+    case "deny":
+      return "Denied";
+    case "always_allow":
+      return "Always allowed";
+    case "select_option":
+      return `Selected option ${typeof decision.selected_option_index === "number" ? decision.selected_option_index + 1 : "?"}`;
+    case "text":
+      return "Reply received";
+    default:
+      return "Recorded";
+  }
+}
+
+function hookResponseForUnresolvedClaudeQuery(params: Record<string, unknown>): unknown {
+  if (params.tool_name === "AskUserQuestion") {
+    return { decision: { behavior: "allow" } };
+  }
+  return { decision: { behavior: "ask" } };
+}
+
+function requiredString(paramsValue: unknown, name: string): string {
+  if (typeof paramsValue !== "string" || paramsValue.length === 0) {
+    throw new Error(`${name} is required`);
+  }
+  return paramsValue;
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}

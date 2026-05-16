@@ -88,6 +88,16 @@ export interface Storage {
     query_id: QueryId,
     kind: "approval" | "choice" | "freetext",
   ): Promise<boolean>;
+  /**
+   * Mark every open query for `session_id` as resolved with
+   * `resolution_json = {"kind":"superseded"}`. Used when a new query opens
+   * for a session that has stale unresolved queries the local UI already
+   * answered. Returns the number of rows affected.
+   */
+  supersedeOpenQueriesForSession(
+    session_id: SessionId,
+    now: number,
+  ): Promise<number>;
 
   // sessions
   upsertSession(rec: Session): Promise<void>;
