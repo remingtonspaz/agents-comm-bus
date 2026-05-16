@@ -11,6 +11,13 @@ export interface OutboundPayload {
   text?: string;
   attachments?: Attachment[];
   reply_to?: MessageId;
+  /**
+   * Optional formatting hint for `text`. When set to `"html"`, comm adapters
+   * that support rich text (e.g. Telegram) should render the text with HTML
+   * markup. When omitted or `"plain"`, the text is sent verbatim. Adapters
+   * that do not support the requested format must fall back to plain text.
+   */
+  format?: "html" | "plain";
 }
 
 export interface SendResult {

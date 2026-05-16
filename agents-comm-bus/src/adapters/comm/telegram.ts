@@ -197,6 +197,9 @@ function telegramSendOptions(target: ChatRef, payload: OutboundPayload): Telegra
   if (target.thread_native_id != null) {
     options.message_thread_id = Number(target.thread_native_id);
   }
+  if (payload.format === "html") {
+    options.parse_mode = "HTML";
+  }
   if (payload.reply_to != null) {
     options.reply_parameters = {
       message_id: Number(String(payload.reply_to).replace(/^telegram:/, "")),

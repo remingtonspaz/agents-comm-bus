@@ -67,6 +67,7 @@ declare module "node-telegram-bot-api" {
       message_thread_id?: number;
       caption?: string;
       reply_parameters?: { message_id: number };
+      parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
     }
   }
 

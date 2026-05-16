@@ -44,13 +44,9 @@ async function openDaemonConnection(metadata) {
   });
 }
 
-function stringifyValue(value) {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+function escapeHtml(text) {
+  if (typeof text !== 'string') return String(text);
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function questionOptions(toolInput) {
@@ -62,23 +58,72 @@ function questionOptions(toolInput) {
   });
 }
 
+function formatAskUserQuestion(toolInput) {
+  const questions = toolInput?.questions || [];
+  if (questions.length === 0) return null;
+
+  let message = `❓ <b>Claude has a question</b>\n`;
+  for (const q of questions) {
+    message += `\n<b>${escapeHtml(q.question)}</b>\n`;
+    const options = q.options || [];
+    for (let i = 0; i < options.length; i += 1) {
+      const opt = options[i];
+      message += `\n<b>${i + 1}.</b> ${escapeHtml(opt.label)}`;
+      if (opt.description) {
+        message += `\n    <i>${escapeHtml(opt.description)}</i>`;
+      }
+    }
+    message += `\n<b>${options.length + 1}.</b> Other (custom text)`;
+    if (q.multiSelect) {
+      message += `\n\n<i>(Multi-select: reply with comma-separated numbers)</i>`;
+    }
+  }
+  message += `\n\nReply with <b>number</b> to select, or <b>y</b> to approve`;
+  return message;
+}
+
+function formatExitPlanMode() {
+  let message = `\u{1F4CB} <b>Plan Ready for Review</b>\n`;
+  message += `\nClaude has finished planning and wants your approval to proceed.`;
+  message += `\n\nReply: <b>y</b> (approve) / <b>n</b> (reject)`;
+  return message;
+}
+
+function formatEnterPlanMode() {
+  let message = `\u{1F4DD} <b>Enter Plan Mode?</b>\n`;
+  message += `\nClaude wants to switch to planning mode to design an approach before implementing.`;
+  message += `\n\nReply: <b>y</b> (approve) / <b>n</b> (reject)`;
+  return message;
+}
+
+function formatToolPermission(toolName, toolInput) {
+  let details = '';
+
+  if (toolName === 'Bash' && toolInput?.command) {
+    details = `<code>${escapeHtml(toolInput.command)}</code>`;
+  } else if ((toolName === 'Edit' || toolName === 'Write' || toolName === 'Read') && toolInput?.file_path) {
+    details = `File: <code>${escapeHtml(toolInput.file_path)}</code>`;
+  } else if (toolInput) {
+    const keys = Object.keys(toolInput).slice(0, 3);
+    details = keys
+      .map((k) => `${escapeHtml(k)}: ${escapeHtml(JSON.stringify(toolInput[k]).slice(0, 80))}`)
+      .join('\n');
+  }
+
+  let message = `\u{1F510} <b>Permission Request</b>\n`;
+  message += `\n<b>Tool:</b> ${escapeHtml(toolName)}`;
+  if (details) message += `\n${details}`;
+  message += `\n\nReply: <b>y</b> (yes) / <b>n</b> (no) / <b>a</b> (always)`;
+  return message;
+}
+
 function promptText(toolName, toolInput) {
   if (toolName === 'AskUserQuestion') {
-    const questions = toolInput?.questions || [];
-    return questions.map((question) => {
-      const options = (question.options || [])
-        .map((option, index) => `${index + 1}. ${option.label}${option.description ? ` - ${option.description}` : ''}`)
-        .join('\n');
-      return `${question.question}${options ? `\n${options}` : ''}`;
-    }).join('\n\n');
+    return formatAskUserQuestion(toolInput) || formatToolPermission(toolName, toolInput);
   }
-  if (toolName === 'ExitPlanMode') {
-    return 'Claude has finished planning and is requesting approval to proceed.';
-  }
-  if (toolName === 'EnterPlanMode') {
-    return 'Claude is requesting approval to enter plan mode.';
-  }
-  return `Claude requests permission for ${toolName || 'a tool'}.\n${stringifyValue(toolInput || {})}`;
+  if (toolName === 'ExitPlanMode') return formatExitPlanMode(toolInput);
+  if (toolName === 'EnterPlanMode') return formatEnterPlanMode(toolInput);
+  return formatToolPermission(toolName, toolInput);
 }
 
 function queryKind(toolName) {
@@ -187,6 +232,7 @@ async function main() {
       query: {
         kind: queryKind(toolName),
         prompt_text: promptText(toolName, toolInput),
+        prompt_format: 'html',
         options: questionOptions(toolInput),
         prompt_type: promptType(toolName),
       },

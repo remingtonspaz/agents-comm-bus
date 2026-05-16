@@ -273,11 +273,15 @@ async function openClaudeQuery(
   await context.storage.supersedeOpenQueriesForSession(session, Date.now());
   await context.bus.openQuery(query);
   if (originChat) {
+    const promptFormat = params.prompt_format ?? queryInput.prompt_format;
     await context.bus.send({
       session,
       comm: originChat.comm,
       target: originChat,
-      payload: { text: promptText },
+      payload: {
+        text: promptText,
+        format: promptFormat === "html" ? "html" : "plain",
+      },
       idempotencyKey: `query:${queryId}`,
     });
   }
