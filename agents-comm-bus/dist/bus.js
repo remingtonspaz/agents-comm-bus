@@ -6,6 +6,7 @@ export class MessageBus {
     seen = new RecentSeenCache();
     now;
     dispatchSink = null;
+    resolveSink = null;
     constructor(options) {
         this.options = options;
         this.now = options.now ?? Date.now;
@@ -28,6 +29,9 @@ export class MessageBus {
     }
     setDispatchSink(sink) {
         this.dispatchSink = sink;
+    }
+    setResolveSink(sink) {
+        this.resolveSink = sink;
     }
     async start() {
         for (const comm of this.comms.values()) {
@@ -207,8 +211,79 @@ export class MessageBus {
                 session: record.session,
                 detail: { query_id: queryId, decision: decision.decision },
             });
+            if (this.resolveSink) {
+                try {
+                    await this.resolveSink.onResolved(record, decision);
+                }
+                catch (error) {
+                    await this.options.audit.append({
+                        timestamp: this.now(),
+                        kind: "outbound_failed",
+                        agent: record.agent,
+                        session: record.session,
+                        detail: {
+                            query_id: queryId,
+                            reason: "resolve_sink_failed",
+                            error: error instanceof Error ? error.message : String(error),
+                        },
+                    });
+                }
+            }
         }
         return resolved;
+    }
+    async resolveQueryFromCallback(input) {
+        const open = await this.options.storage.getOpenQueryById(input.queryId);
+        if (!open) {
+            const existing = await this.options.storage.getQuery(input.queryId);
+            return { kind: existing ? "already_resolved" : "unknown_query" };
+        }
+        if (input.value === "other") {
+            const ok = await this.options.storage.updateQueryKind(input.queryId, "freetext");
+            if (!ok)
+                return { kind: "already_resolved" };
+            return { kind: "awaiting_freetext", query: open };
+        }
+        const decision = decisionFromCallbackValue(open, input.value, input.fromId, input.chat, this.now());
+        if (!decision)
+            return { kind: "invalid_value", value: input.value };
+        // Callback resolutions bypass TTL — the user actively responded via the
+        // inline keyboard, so "expired" doesn't apply the same way it does for
+        // unanswered text-reply windows. Write directly to storage and audit.
+        const stored = await this.options.storage.resolveQuery(input.queryId, decision, decision.decided_at);
+        if (!stored) {
+            // Storage refused — most likely already resolved by another path.
+            const post = await this.options.storage.getQuery(input.queryId);
+            if (post && post.resolved_at != null)
+                return { kind: "already_resolved" };
+            return { kind: "expired" };
+        }
+        await this.options.audit.append({
+            timestamp: this.now(),
+            kind: "query_resolved",
+            agent: open.agent,
+            session: open.session,
+            detail: { query_id: input.queryId, decision: decision.decision, via: "callback" },
+        });
+        if (this.resolveSink) {
+            try {
+                await this.resolveSink.onResolved(open, decision);
+            }
+            catch (error) {
+                await this.options.audit.append({
+                    timestamp: this.now(),
+                    kind: "outbound_failed",
+                    agent: open.agent,
+                    session: open.session,
+                    detail: {
+                        query_id: input.queryId,
+                        reason: "resolve_sink_failed",
+                        error: error instanceof Error ? error.message : String(error),
+                    },
+                });
+            }
+        }
+        return { kind: "resolved", decision, query: open };
     }
     async listConversations(filter) {
         return this.options.storage.listConversations({
@@ -372,6 +447,35 @@ function decisionFromMessage(query, message, chat, now) {
         selected_option_index,
         text: responseText,
         decided_by_sender_id: message.sender.id,
+        decided_in_chat: chat,
+        decided_at: now,
+    };
+}
+function decisionFromCallbackValue(query, value, fromId, chat, now) {
+    let decision = null;
+    let selected_option_index;
+    if (query.kind === "approval") {
+        if (value === "y")
+            decision = "allow";
+        else if (value === "n")
+            decision = "deny";
+        else if (value === "a")
+            decision = "always_allow";
+    }
+    else if (query.kind === "choice") {
+        const choice = Number.parseInt(value, 10);
+        if (!Number.isNaN(choice) && choice > 0) {
+            decision = "select_option";
+            selected_option_index = choice - 1;
+        }
+    }
+    if (!decision)
+        return null;
+    return {
+        query_id: query.query_id,
+        decision,
+        selected_option_index,
+        decided_by_sender_id: fromId,
         decided_in_chat: chat,
         decided_at: now,
     };

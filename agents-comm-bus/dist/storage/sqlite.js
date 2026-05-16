@@ -185,6 +185,18 @@ export class SqliteStorage {
             .get(query_id);
         return row ? this.queryFromRow(row) : null;
     }
+    async getOpenQueryById(query_id) {
+        const row = this.db
+            .prepare("SELECT * FROM queries WHERE query_id = ? AND resolved_at IS NULL")
+            .get(query_id);
+        return row ? this.queryFromRow(row) : null;
+    }
+    async updateQueryKind(query_id, kind) {
+        const result = this.db
+            .prepare("UPDATE queries SET kind = ? WHERE query_id = ? AND resolved_at IS NULL")
+            .run(kind, query_id);
+        return Number(result.changes ?? 0) > 0;
+    }
     async supersedeOpenQueriesForSession(session_id, now) {
         const result = this.db
             .prepare(`

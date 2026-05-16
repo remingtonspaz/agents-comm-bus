@@ -12,12 +12,13 @@ import crypto from 'node:crypto';
 import { ensureDaemon } from '../../agents-comm-bus/dist/bootstrap/ensure-daemon.js';
 import { connectIpc } from '../../agents-comm-bus/dist/ipc/client.js';
 import {
+  ensureClaudeWakeWatcher,
   resolveClaudeWakeDir,
   resolveProjectPath,
 } from './wake-support.js';
 
 const CLIENT_VERSION = 'claude-hook-phase2';
-const DEFAULT_TTL_SECONDS = 10 * 60;
+const DEFAULT_TTL_SECONDS = 60 * 60;
 
 function stableSessionId(hookInput) {
   const raw =
@@ -203,6 +204,11 @@ async function main() {
   const session = stableSessionId(hookInput);
   const project = resolveProjectPath();
   const wakeDir = resolveClaudeWakeDir(project);
+  ensureClaudeWakeWatcher({
+    projectPath: project,
+    wakeDir,
+    log: (message) => process.stderr.write(`[claude-permission-request] ${message}\n`),
+  });
   const metadata = {
     shimName: 'hooks/claude/permission-request.js',
     agent: 'claude',

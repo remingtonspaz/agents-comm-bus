@@ -7,6 +7,16 @@ export type CommConnectionState =
   | "degraded"
   | "disconnected";
 
+export interface InlineKeyboardButton {
+  text: string;
+  /**
+   * Adapter-defined callback payload. Telegram caps callback_data at 64
+   * bytes; adapters that don't support callbacks must ignore this field
+   * and render the button as decorative or omit it.
+   */
+  callback_data: string;
+}
+
 export interface OutboundPayload {
   text?: string;
   attachments?: Attachment[];
@@ -18,6 +28,25 @@ export interface OutboundPayload {
    * that do not support the requested format must fall back to plain text.
    */
   format?: "html" | "plain";
+  /**
+   * Optional inline keyboard, rendered as 2D rows of buttons. Adapters that
+   * do not support inline keyboards (e.g. SMS) must ignore this field and
+   * send the text alone.
+   */
+  inline_keyboard?: InlineKeyboardButton[][];
+}
+
+export interface CallbackEvent {
+  /** Comm-native callback id (used for acknowledgement). */
+  callback_id: string;
+  /** The `callback_data` from the clicked button. */
+  data: string;
+  /** Comm-native sender id of the clicking user. */
+  from_id: string;
+  /** Comm-native chat id where the keyboard was shown. */
+  chat_native_id: string;
+  /** Comm-native message id of the message that carried the keyboard. */
+  message_native_id: string;
 }
 
 export interface SendResult {
@@ -44,6 +73,32 @@ export interface CommAdapter {
 
   /** Register the inbound-message handler. */
   onInbound(handler: (msg: Message) => Promise<void>): void;
+
+  /**
+   * Optional: register a callback-event handler for adapters that support
+   * inline keyboards. Callbacks are not inbound messages — they're button
+   * presses that resolve queries directly. Adapters without callback support
+   * may omit this method.
+   */
+  onCallback?(handler: (event: CallbackEvent) => Promise<void>): void;
+
+  /**
+   * Optional: acknowledge a callback so the comm UI can stop its loading
+   * spinner. Adapters without callback support may omit this method.
+   */
+  answerCallback?(callbackId: string, options?: { text?: string; showAlert?: boolean }): Promise<void>;
+
+  /**
+   * Optional: edit a previously-sent message in place. Used to reflect the
+   * outcome of a button-resolved query (e.g. strikethrough + "answered").
+   * Adapters that can't edit may omit this method.
+   */
+  editMessage?(
+    chatNativeId: string,
+    messageNativeId: string,
+    text: string,
+    options?: { format?: "html" | "plain" },
+  ): Promise<void>;
 
   /** Subscribe to connection-state transitions for health reporting. */
   onConnectionState(handler: (state: CommConnectionState) => void): void;

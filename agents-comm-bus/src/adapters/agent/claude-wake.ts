@@ -43,6 +43,25 @@ export async function writeClaudeWakeTrigger(
   await writeFile(path.join(wakeDir, "trigger-enter"), `${now()}\n`, "utf8");
 }
 
+export type ClaudeWakeResponsePromptType = "permission" | "question" | "freetext";
+
+export interface ClaudeWakeResponsePayload {
+  response: string;
+  prompt_type: ClaudeWakeResponsePromptType;
+}
+
+export async function writeClaudeWakeResponse(
+  wakeDir: string,
+  payload: ClaudeWakeResponsePayload,
+): Promise<void> {
+  await mkdir(wakeDir, { recursive: true });
+  await writeFile(
+    path.join(wakeDir, "permission-response.json"),
+    JSON.stringify(payload),
+    "utf8",
+  );
+}
+
 export class ClaudeWakeRegistry {
   private readonly registrations = new Map<SessionId, ClaudeWakeRegistration>();
 
@@ -73,6 +92,21 @@ export class ClaudeWakeRegistry {
       }
     }
     return latest;
+  }
+
+  getForSession(session: SessionId): ClaudeWakeRegistration | undefined {
+    return this.registrations.get(session);
+  }
+
+  async writeResponseForSession(
+    session: SessionId,
+    payload: ClaudeWakeResponsePayload,
+  ): Promise<boolean> {
+    const registration = this.registrations.get(session);
+    if (!registration) return false;
+    await writeClaudeWakeResponse(registration.wakeDir, payload);
+    await writeClaudeWakeTrigger(registration.wakeDir, this.now);
+    return true;
   }
 
   async wakeConversation(conversation: Conversation): Promise<boolean> {

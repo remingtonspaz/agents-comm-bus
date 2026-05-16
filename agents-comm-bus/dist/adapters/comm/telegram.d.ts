@@ -1,5 +1,5 @@
 import TelegramBot from "node-telegram-bot-api";
-import type { ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../agents-comm-bus-core/dist/index.js";
+import type { CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../agents-comm-bus-core/dist/index.js";
 export interface TelegramCommAdapterOptions {
     botToken: string;
     allowedUserIds?: readonly string[];
@@ -14,6 +14,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private readonly allowedUserIds;
     private readonly sentByKey;
     private inboundHandler;
+    private callbackHandler;
     private stateHandler;
     private connectionState;
     private bot;
@@ -22,6 +23,14 @@ export declare class TelegramCommAdapter implements CommAdapter {
     start(): Promise<void>;
     stop(): Promise<void>;
     onInbound(handler: (msg: Message) => Promise<void>): void;
+    onCallback(handler: (event: CallbackEvent) => Promise<void>): void;
+    answerCallback(callbackId: string, options?: {
+        text?: string;
+        showAlert?: boolean;
+    }): Promise<void>;
+    editMessage(chatNativeId: string, messageNativeId: string, text: string, options?: {
+        format?: "html" | "plain";
+    }): Promise<void>;
     onConnectionState(handler: (state: CommConnectionState) => void): void;
     send(target: ChatRef, payload: OutboundPayload, idempotencyKey: string): Promise<SendResult>;
     reportPressure(): {
@@ -29,6 +38,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
         rateLimited: boolean;
     };
     classifyFailure(error: unknown): FailureClassification;
+    private handleTelegramCallback;
     private handleTelegramMessage;
     private requireBot;
     private emitState;

@@ -3,6 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import type {
   AccountId,
   Attachment,
+  CallbackEvent,
   ChatRef,
   CommConnectionState,
   CommAdapter,
@@ -29,6 +30,7 @@ export class TelegramCommAdapter implements CommAdapter {
   private readonly allowedUserIds: Set<string>;
   private readonly sentByKey = new Map<string, SendResult>();
   private inboundHandler: ((msg: Message) => Promise<void>) | null = null;
+  private callbackHandler: ((event: CallbackEvent) => Promise<void>) | null = null;
   private stateHandler: ((state: CommConnectionState) => void) | null = null;
   private connectionState: CommConnectionState | null = null;
   private bot: TelegramBot | null;
@@ -54,6 +56,11 @@ export class TelegramCommAdapter implements CommAdapter {
         .then(() => this.emitState("connected"))
         .catch(() => this.emitState("degraded"));
     });
+    this.bot.on("callback_query", (query) => {
+      void this.handleTelegramCallback(query)
+        .then(() => this.emitState("connected"))
+        .catch(() => this.emitState("degraded"));
+    });
     this.bot.on("polling_error", () => this.emitState("degraded"));
     this.emitState("connected");
   }
@@ -67,6 +74,35 @@ export class TelegramCommAdapter implements CommAdapter {
 
   onInbound(handler: (msg: Message) => Promise<void>): void {
     this.inboundHandler = handler;
+  }
+
+  onCallback(handler: (event: CallbackEvent) => Promise<void>): void {
+    this.callbackHandler = handler;
+  }
+
+  async answerCallback(
+    callbackId: string,
+    options: { text?: string; showAlert?: boolean } = {},
+  ): Promise<void> {
+    const bot = this.requireBot();
+    await bot.answerCallbackQuery(callbackId, {
+      text: options.text,
+      show_alert: options.showAlert ?? false,
+    });
+  }
+
+  async editMessage(
+    chatNativeId: string,
+    messageNativeId: string,
+    text: string,
+    options: { format?: "html" | "plain" } = {},
+  ): Promise<void> {
+    const bot = this.requireBot();
+    await bot.editMessageText(text, {
+      chat_id: chatNativeId,
+      message_id: Number(messageNativeId),
+      parse_mode: options.format === "html" ? "HTML" : undefined,
+    });
   }
 
   onConnectionState(handler: (state: CommConnectionState) => void): void {
@@ -130,6 +166,22 @@ export class TelegramCommAdapter implements CommAdapter {
       return "rate_limited";
     }
     return "transient";
+  }
+
+  private async handleTelegramCallback(raw: TelegramBot.CallbackQuery): Promise<void> {
+    if (!this.callbackHandler) return;
+    const fromId = String(raw.from.id);
+    if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(fromId)) {
+      return;
+    }
+    if (!raw.data || !raw.message) return;
+    await this.callbackHandler({
+      callback_id: raw.id,
+      data: raw.data,
+      from_id: fromId,
+      chat_native_id: String(raw.message.chat.id),
+      message_native_id: String(raw.message.message_id),
+    });
   }
 
   private async handleTelegramMessage(raw: TelegramBot.Message): Promise<void> {
@@ -199,6 +251,13 @@ function telegramSendOptions(target: ChatRef, payload: OutboundPayload): Telegra
   }
   if (payload.format === "html") {
     options.parse_mode = "HTML";
+  }
+  if (payload.inline_keyboard && payload.inline_keyboard.length > 0) {
+    options.reply_markup = {
+      inline_keyboard: payload.inline_keyboard.map((row) =>
+        row.map((button) => ({ text: button.text, callback_data: button.callback_data })),
+      ),
+    };
   }
   if (payload.reply_to != null) {
     options.reply_parameters = {

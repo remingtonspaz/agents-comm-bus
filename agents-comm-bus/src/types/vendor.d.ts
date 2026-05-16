@@ -63,11 +63,42 @@ declare module "node-telegram-bot-api" {
       reply_to_message?: Message;
     }
 
+    interface InlineKeyboardButton {
+      text: string;
+      callback_data?: string;
+      url?: string;
+    }
+
+    interface InlineKeyboardMarkup {
+      inline_keyboard: InlineKeyboardButton[][];
+    }
+
     interface SendMessageOptions {
       message_thread_id?: number;
       caption?: string;
       reply_parameters?: { message_id: number };
       parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+      reply_markup?: InlineKeyboardMarkup;
+    }
+
+    interface CallbackQuery {
+      id: string;
+      from: { id: number; is_bot: boolean; username?: string; first_name?: string };
+      message?: { message_id: number; chat: { id: number } };
+      data?: string;
+    }
+
+    interface AnswerCallbackQueryOptions {
+      text?: string;
+      show_alert?: boolean;
+      cache_time?: number;
+    }
+
+    interface EditMessageTextOptions {
+      chat_id: number | string;
+      message_id: number;
+      parse_mode?: "HTML" | "MarkdownV2" | "Markdown";
+      reply_markup?: InlineKeyboardMarkup;
     }
   }
 
@@ -76,6 +107,7 @@ declare module "node-telegram-bot-api" {
     getMe(): Promise<TelegramBot.User>;
     on(event: "message", handler: (message: TelegramBot.Message) => void): void;
     on(event: "polling_error", handler: (error: Error) => void): void;
+    on(event: "callback_query", handler: (query: TelegramBot.CallbackQuery) => void): void;
     isPolling(): boolean;
     stopPolling(): Promise<void>;
     sendMessage(
@@ -88,6 +120,14 @@ declare module "node-telegram-bot-api" {
       path: string,
       options?: TelegramBot.SendMessageOptions,
     ): Promise<TelegramBot.Message>;
+    answerCallbackQuery(
+      callbackQueryId: string,
+      options?: TelegramBot.AnswerCallbackQueryOptions,
+    ): Promise<boolean>;
+    editMessageText(
+      text: string,
+      options: TelegramBot.EditMessageTextOptions,
+    ): Promise<TelegramBot.Message | boolean>;
   }
 
   export default TelegramBot;

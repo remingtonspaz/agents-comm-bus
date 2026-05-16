@@ -201,6 +201,10 @@ while ($true) {
 
                 if ($promptType -eq "question" -and $response -match '^\d+$') {
                     $logMessage = "Question response: option $response"
+                } elseif ($promptType -eq "freetext" -and $response) {
+                    # Normalize newlines so we don't accidentally submit mid-reply.
+                    $charsToSend = ($response -replace "[\r\n]+", " ").Trim()
+                    $logMessage = "Freetext response: $charsToSend"
                 } elseif ($response -eq "y" -or $response -eq "n" -or $response -eq "a") {
                     $charsToSend = $response
                     $logMessage = "Permission response: $response"

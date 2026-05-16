@@ -9,12 +9,17 @@ import {
   SCHEMA_VERSION_SESSION,
   type AccountRegistration,
   type AgentId,
+  type CallbackEvent,
   type ChatRef,
+  type CommAdapter,
   type CommId,
   type Conversation,
+  type InlineKeyboardButton,
   type Message,
   type Query,
   type QueryId,
+  type QueryRecord,
+  type ResolvedDecision,
   type SessionId,
 } from "../../agents-comm-bus-core/dist/index.js";
 import { DAEMON_VERSION } from "./config.js";
@@ -98,6 +103,21 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       }
     },
   });
+  bus.setResolveSink({
+    async onResolved(query, decision) {
+      const payload = wakePayloadFromDecision(decision);
+      if (!payload) return;
+      await claudeWake.writeResponseForSession(query.session, payload);
+    },
+  });
+
+  for (const comm of comms) {
+    if (typeof comm.onCallback === "function") {
+      comm.onCallback(async (event) => {
+        await handleCommCallback(comm, bus, event);
+      });
+    }
+  }
 
   const server = await startIpcServer({
     metadata: {
@@ -268,12 +288,13 @@ async function openClaudeQuery(
         : undefined,
     origin_chat: originChat,
     created_at: Date.now(),
-    ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : 300,
+    ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : 3600,
   };
   await context.storage.supersedeOpenQueriesForSession(session, Date.now());
   await context.bus.openQuery(query);
   if (originChat) {
     const promptFormat = params.prompt_format ?? queryInput.prompt_format;
+    const inlineKeyboard = inlineKeyboardForQuery(queryId, kind, query.options);
     await context.bus.send({
       session,
       comm: originChat.comm,
@@ -281,6 +302,7 @@ async function openClaudeQuery(
       payload: {
         text: promptText,
         format: promptFormat === "html" ? "html" : "plain",
+        inline_keyboard: inlineKeyboard,
       },
       idempotencyKey: `query:${queryId}`,
     });
@@ -347,6 +369,181 @@ async function targetFromParams(
 
 function normalizeCsv(value: string | undefined): string[] {
   return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function inlineKeyboardForQuery(
+  queryId: QueryId,
+  kind: "approval" | "choice" | "freetext",
+  options: readonly string[] | undefined,
+): InlineKeyboardButton[][] | undefined {
+  if (kind === "approval") {
+    return [
+      [
+        { text: "✅ Allow", callback_data: `q:${queryId}:y` },
+        { text: "❌ Deny", callback_data: `q:${queryId}:n` },
+      ],
+      [{ text: "🔓 Always", callback_data: `q:${queryId}:a` }],
+    ];
+  }
+  if (kind === "choice") {
+    const rows: InlineKeyboardButton[][] = (options ?? []).map((label, index) => [
+      {
+        text: `${index + 1}. ${truncateButtonText(label)}`,
+        callback_data: `q:${queryId}:${index + 1}`,
+      },
+    ]);
+    rows.push([
+      { text: "💬 Other (type a reply)", callback_data: `q:${queryId}:other` },
+    ]);
+    return rows;
+  }
+  return undefined;
+}
+
+function truncateButtonText(label: string): string {
+  const trimmed = label.replace(/\s+/g, " ").trim();
+  if (trimmed.length <= 48) return trimmed;
+  return `${trimmed.slice(0, 47)}…`;
+}
+
+function wakePayloadFromDecision(
+  decision: ResolvedDecision,
+): { response: string; prompt_type: "permission" | "question" | "freetext" } | null {
+  switch (decision.decision) {
+    case "allow":
+      return { response: "y", prompt_type: "permission" };
+    case "deny":
+      return { response: "n", prompt_type: "permission" };
+    case "always_allow":
+      return { response: "a", prompt_type: "permission" };
+    case "select_option": {
+      const idx = decision.selected_option_index;
+      if (typeof idx !== "number") return null;
+      return { response: String(idx + 1), prompt_type: "question" };
+    }
+    case "text":
+      if (!decision.text) return null;
+      return { response: decision.text, prompt_type: "freetext" };
+    default:
+      return null;
+  }
+}
+
+async function handleCommCallback(
+  comm: CommAdapter,
+  bus: MessageBus,
+  event: CallbackEvent,
+): Promise<void> {
+  const parsed = parseCallbackData(event.data);
+  if (!parsed) {
+    if (comm.answerCallback) {
+      await comm.answerCallback(event.callback_id, {
+        text: "Unrecognized button payload",
+      });
+    }
+    return;
+  }
+
+  const chat: ChatRef = {
+    comm: comm.id,
+    account: "" as ChatRef["account"],
+    chat_native_id: event.chat_native_id,
+  };
+
+  const outcome = await bus.resolveQueryFromCallback({
+    queryId: parsed.queryId as QueryId,
+    value: parsed.value,
+    fromId: event.from_id,
+    chat,
+  });
+
+  if (!comm.answerCallback) return;
+
+  switch (outcome.kind) {
+    case "resolved": {
+      const text = ackTextFor(outcome.decision);
+      await comm.answerCallback(event.callback_id, { text });
+      if (comm.editMessage) {
+        try {
+          await comm.editMessage(
+            event.chat_native_id,
+            event.message_native_id,
+            `✓ Resolved via Telegram (${text}).`,
+          );
+        } catch {
+          // Best-effort UI polish; ignore failures.
+        }
+      }
+      return;
+    }
+    case "awaiting_freetext":
+      await comm.answerCallback(event.callback_id, {
+        text: "Now send your custom reply as a message.",
+        showAlert: true,
+      });
+      if (comm.editMessage) {
+        try {
+          await comm.editMessage(
+            event.chat_native_id,
+            event.message_native_id,
+            "💬 Awaiting your custom reply… (send any text in this chat).",
+          );
+        } catch {
+          // Best-effort.
+        }
+      }
+      return;
+    case "already_resolved":
+      await comm.answerCallback(event.callback_id, {
+        text: "Already resolved.",
+        showAlert: false,
+      });
+      return;
+    case "expired":
+      await comm.answerCallback(event.callback_id, {
+        text: "This prompt expired before you answered.",
+        showAlert: true,
+      });
+      return;
+    case "unknown_query":
+      await comm.answerCallback(event.callback_id, {
+        text: "Unknown query.",
+      });
+      return;
+    case "invalid_value":
+      await comm.answerCallback(event.callback_id, {
+        text: `Unrecognized value: ${outcome.value}`,
+      });
+      return;
+  }
+}
+
+function parseCallbackData(data: string): { queryId: string; value: string } | null {
+  if (!data.startsWith("q:")) return null;
+  const rest = data.slice(2);
+  const sep = rest.lastIndexOf(":");
+  if (sep <= 0) return null;
+  const queryId = rest.slice(0, sep);
+  const value = rest.slice(sep + 1);
+  if (!queryId || !value) return null;
+  return { queryId, value };
+}
+
+function ackTextFor(decision: ResolvedDecision): string {
+  switch (decision.decision) {
+    case "allow":
+      return "Allowed";
+    case "deny":
+      return "Denied";
+    case "always_allow":
+      return "Always allowed";
+    case "select_option":
+      return `Selected option ${typeof decision.selected_option_index === "number" ? decision.selected_option_index + 1 : "?"}`;
+    case "text":
+      return "Reply received";
+    default:
+      return "Recorded";
+  }
 }
 
 async function resolveTelegramCredentials(

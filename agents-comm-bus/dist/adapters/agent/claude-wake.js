@@ -18,6 +18,10 @@ export async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
     await mkdir(wakeDir, { recursive: true });
     await writeFile(path.join(wakeDir, "trigger-enter"), `${now()}\n`, "utf8");
 }
+export async function writeClaudeWakeResponse(wakeDir, payload) {
+    await mkdir(wakeDir, { recursive: true });
+    await writeFile(path.join(wakeDir, "permission-response.json"), JSON.stringify(payload), "utf8");
+}
 export class ClaudeWakeRegistry {
     now;
     registrations = new Map();
@@ -45,6 +49,17 @@ export class ClaudeWakeRegistry {
             }
         }
         return latest;
+    }
+    getForSession(session) {
+        return this.registrations.get(session);
+    }
+    async writeResponseForSession(session, payload) {
+        const registration = this.registrations.get(session);
+        if (!registration)
+            return false;
+        await writeClaudeWakeResponse(registration.wakeDir, payload);
+        await writeClaudeWakeTrigger(registration.wakeDir, this.now);
+        return true;
     }
     async wakeConversation(conversation) {
         if (conversation.agent !== "claude")

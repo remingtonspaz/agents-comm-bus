@@ -6,6 +6,7 @@ export class TelegramCommAdapter {
     allowedUserIds;
     sentByKey = new Map();
     inboundHandler = null;
+    callbackHandler = null;
     stateHandler = null;
     connectionState = null;
     bot;
@@ -30,6 +31,11 @@ export class TelegramCommAdapter {
                 .then(() => this.emitState("connected"))
                 .catch(() => this.emitState("degraded"));
         });
+        this.bot.on("callback_query", (query) => {
+            void this.handleTelegramCallback(query)
+                .then(() => this.emitState("connected"))
+                .catch(() => this.emitState("degraded"));
+        });
         this.bot.on("polling_error", () => this.emitState("degraded"));
         this.emitState("connected");
     }
@@ -41,6 +47,24 @@ export class TelegramCommAdapter {
     }
     onInbound(handler) {
         this.inboundHandler = handler;
+    }
+    onCallback(handler) {
+        this.callbackHandler = handler;
+    }
+    async answerCallback(callbackId, options = {}) {
+        const bot = this.requireBot();
+        await bot.answerCallbackQuery(callbackId, {
+            text: options.text,
+            show_alert: options.showAlert ?? false,
+        });
+    }
+    async editMessage(chatNativeId, messageNativeId, text, options = {}) {
+        const bot = this.requireBot();
+        await bot.editMessageText(text, {
+            chat_id: chatNativeId,
+            message_id: Number(messageNativeId),
+            parse_mode: options.format === "html" ? "HTML" : undefined,
+        });
     }
     onConnectionState(handler) {
         this.stateHandler = handler;
@@ -84,6 +108,23 @@ export class TelegramCommAdapter {
             return "rate_limited";
         }
         return "transient";
+    }
+    async handleTelegramCallback(raw) {
+        if (!this.callbackHandler)
+            return;
+        const fromId = String(raw.from.id);
+        if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(fromId)) {
+            return;
+        }
+        if (!raw.data || !raw.message)
+            return;
+        await this.callbackHandler({
+            callback_id: raw.id,
+            data: raw.data,
+            from_id: fromId,
+            chat_native_id: String(raw.message.chat.id),
+            message_native_id: String(raw.message.message_id),
+        });
     }
     async handleTelegramMessage(raw) {
         if (!this.inboundHandler)
@@ -149,6 +190,11 @@ function telegramSendOptions(target, payload) {
     }
     if (payload.format === "html") {
         options.parse_mode = "HTML";
+    }
+    if (payload.inline_keyboard && payload.inline_keyboard.length > 0) {
+        options.reply_markup = {
+            inline_keyboard: payload.inline_keyboard.map((row) => row.map((button) => ({ text: button.text, callback_data: button.callback_data }))),
+        };
     }
     if (payload.reply_to != null) {
         options.reply_parameters = {

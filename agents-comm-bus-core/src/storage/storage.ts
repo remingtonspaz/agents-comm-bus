@@ -77,7 +77,17 @@ export interface Storage {
   getOpenQueryByConversation(
     conversation_id: ConversationId,
   ): Promise<QueryRecord | null>;
+  getOpenQueryById(query_id: QueryId): Promise<QueryRecord | null>;
   getQuery(query_id: QueryId): Promise<QueryRecord | null>;
+  /**
+   * Update an open query's `kind` (e.g. flip `"choice"` → `"freetext"` when
+   * the user clicks an "Other" callback to provide a custom reply). Returns
+   * false if the query is missing or already resolved.
+   */
+  updateQueryKind(
+    query_id: QueryId,
+    kind: "approval" | "choice" | "freetext",
+  ): Promise<boolean>;
 
   // sessions
   upsertSession(rec: Session): Promise<void>;
