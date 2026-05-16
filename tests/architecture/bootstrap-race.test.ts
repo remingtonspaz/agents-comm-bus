@@ -114,6 +114,68 @@ describe("ensureDaemon", () => {
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(port));
   });
 
+  it("terminates and replaces a daemon with an older daemon version", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.pidFile, "12345\n", "utf8");
+    await writeFile(paths.portFile, "41117\n", "utf8");
+
+    let oldPidAlive = true;
+    let terminatedPid: number | undefined;
+    let spawned = false;
+    const newPort = 41_118;
+
+    const result = await ensureDaemon({
+      stateRoot,
+      desiredDaemonVersion: DAEMON_VERSION,
+      isPidAlive: (pid) => pid === 12_345 && oldPidAlive,
+      terminateDaemon: (pid) => {
+        terminatedPid = pid;
+        oldPidAlive = false;
+      },
+      probeDaemon: async (candidatePort) => {
+        if (candidatePort === 41_117) {
+          return { ...daemonHello(), daemonVersion: "0.0.1" };
+        }
+        assert.equal(candidatePort, newPort);
+        return daemonHello();
+      },
+      spawnDaemon: async () => {
+        spawned = true;
+        await writeDaemonDiscoveryFiles({ stateRoot, pid: process.pid, port: newPort });
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.equal(terminatedPid, 12_345);
+    assert.equal(spawned, true);
+    assert.equal(result.spawned, true);
+    assert.equal(result.port, newPort);
+    assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(newPort));
+  });
+
+  it("refuses a version-mismatched daemon when its pid is missing", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.portFile, "41119\n", "utf8");
+
+    await assert.rejects(
+      ensureDaemon({
+        stateRoot,
+        probeDaemon: async (candidatePort) => {
+          assert.equal(candidatePort, 41_119);
+          return { ...daemonHello(), daemonVersion: "0.0.1" };
+        },
+        timeoutMs: 100,
+        retryMs: 5,
+      }),
+      /cannot restart because .*daemon\.pid is missing/,
+    );
+  });
+
   it("refuses to overwrite discovery for a live daemon on another port", async () => {
     const stateRoot = await tempStateRoot();
     const paths = resolveStatePaths({ stateRoot });

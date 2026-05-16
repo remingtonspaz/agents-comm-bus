@@ -16,12 +16,14 @@ import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
 
 export interface EnsureDaemonOptions extends StatePathOptions {
   clientVersion?: string;
+  desiredDaemonVersion?: string;
   protocolVersion?: string;
   metadata?: DiagnosticMetadata;
   timeoutMs?: number;
   retryMs?: number;
   probeDaemon?: (port: number) => Promise<DaemonHello>;
   spawnDaemon?: (paths: ReturnType<typeof resolveStatePaths>) => Promise<void> | void;
+  terminateDaemon?: (pid: number) => Promise<void> | void;
   isPidAlive?: (pid: number) => boolean;
 }
 
@@ -37,6 +39,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
+  const desiredDaemonVersion = options.desiredDaemonVersion ?? DAEMON_VERSION;
   const deadline = Date.now() + timeoutMs;
   const probe = options.probeDaemon ?? ((port: number) => defaultProbeDaemon({
     port,
@@ -48,7 +51,26 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
 
   const existing = await probeFromPortFile(paths.portFile, probe);
   if (existing) {
-    return { ...existing, spawned: false };
+    if (existing.hello.daemonVersion !== desiredDaemonVersion) {
+      await terminateMismatchedDaemon({
+        paths,
+        livePort: existing.port,
+        liveVersion: existing.hello.daemonVersion,
+        desiredVersion: desiredDaemonVersion,
+        terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
+        isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+        retryMs,
+      });
+    } else {
+      return { ...existing, spawned: false };
+    }
+  }
+
+  const matchingAfterRestart = await probeFromPortFile(paths.portFile, probe);
+  if (matchingAfterRestart) {
+    if (matchingAfterRestart.hello.daemonVersion === desiredDaemonVersion) {
+      return { ...matchingAfterRestart, spawned: false };
+    }
   }
 
   await cleanupStalePidAndPort({
@@ -90,6 +112,39 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
   }
 
   throw new Error(`Timed out starting agents-comm-bus daemon under ${paths.root}.`);
+}
+
+async function terminateMismatchedDaemon(input: {
+  paths: ReturnType<typeof resolveStatePaths>;
+  livePort: number;
+  liveVersion: string;
+  desiredVersion: string;
+  terminateDaemon: (pid: number) => Promise<void> | void;
+  isPidAlive: (pid: number) => boolean;
+  retryMs: number;
+}): Promise<void> {
+  const pid = await readPidFile(input.paths.pidFile);
+  if (pid === undefined) {
+    throw new Error(
+      `agents-comm-bus daemon on port ${input.livePort} is version ` +
+        `${input.liveVersion}, but ${input.desiredVersion} is required; ` +
+        `cannot restart because ${input.paths.pidFile} is missing`,
+    );
+  }
+
+  await input.terminateDaemon(pid);
+  for (let attempt = 0; attempt < 20 && input.isPidAlive(pid); attempt += 1) {
+    await sleep(input.retryMs);
+  }
+  if (input.isPidAlive(pid)) {
+    throw new Error(
+      `agents-comm-bus daemon pid ${pid} is version ${input.liveVersion}, ` +
+        `but ${input.desiredVersion} is required; failed to terminate old daemon`,
+    );
+  }
+
+  await rm(input.paths.pidFile, { force: true });
+  await rm(input.paths.portFile, { force: true });
 }
 
 async function probeFromPortFile(
@@ -164,6 +219,13 @@ function defaultIsPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function defaultTerminateDaemon(pid: number): void {
+  if (pid === process.pid) {
+    throw new Error("refusing to terminate current process as daemon");
+  }
+  process.kill(pid, "SIGTERM");
 }
 
 function defaultSpawnDaemon(paths: ReturnType<typeof resolveStatePaths>): void {
