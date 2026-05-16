@@ -24,6 +24,7 @@ import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
 import { MessageBus } from "./bus.js";
 import { TelegramCommAdapter } from "./adapters/comm/telegram.js";
+import { ClaudeWakeRegistry } from "./adapters/agent/claude-wake.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
@@ -43,6 +44,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const audit = new JsonlAuditStore(paths.root);
   const blobs = new ContentAddressedBlobStore(paths.root);
   const pendingInbound: Array<{ message: Message; conversation: Conversation }> = [];
+  const claudeWake = new ClaudeWakeRegistry();
   const comms = [];
   const attachedBotIds = new Set<string>();
 
@@ -86,6 +88,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     async enqueueInbound(message, conversation) {
       pendingInbound.push({ message, conversation });
       if (pendingInbound.length > 100) pendingInbound.splice(0, pendingInbound.length - 100);
+      try {
+        await claudeWake.wakeConversation(conversation);
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to write Claude wake trigger for ` +
+            `${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     },
   });
 
@@ -97,6 +107,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       bus,
       storage,
       pendingInbound,
+      claudeWake,
       socket,
     }),
   });
@@ -117,6 +128,7 @@ async function handleIpcRequest(
     bus: MessageBus;
     storage: Awaited<ReturnType<typeof openSqliteStorage>>;
     pendingInbound: Array<{ message: Message; conversation: Conversation }>;
+    claudeWake: ClaudeWakeRegistry;
     socket?: { once(event: "close", handler: () => void): void };
   },
 ): Promise<unknown> {
@@ -149,16 +161,22 @@ async function handleIpcRequest(
 async function registerClaudeSession(
   context: {
     storage: Awaited<ReturnType<typeof openSqliteStorage>>;
+    claudeWake: ClaudeWakeRegistry;
     socket?: { once(event: "close", handler: () => void): void };
   },
   params: Record<string, unknown>,
-): Promise<{ ok: boolean; reason?: string }> {
+): Promise<{ ok: boolean; reason?: string; wake_dir?: string }> {
   const session = requiredString(params.session, "session") as SessionId;
   const project = requiredString(params.project, "project");
   const connectionId = typeof params.connection_id === "string"
     ? params.connection_id
     : `claude:${session}:${crypto.randomUUID()}`;
   const now = Date.now();
+  const wakeDir = typeof params.wake_dir === "string"
+    ? params.wake_dir
+    : typeof params.wakeDir === "string"
+      ? params.wakeDir
+      : undefined;
   await context.storage.upsertSession({
     schema_version: SCHEMA_VERSION_SESSION,
     session_id: session,
@@ -175,10 +193,11 @@ async function registerClaudeSession(
   if (!acquired) {
     return { ok: false, reason: "same-project claude session lease already held" };
   }
+  const wake = context.claudeWake.register({ session, project, wakeDir });
   context.socket?.once("close", () => {
     void context.storage.releaseSessionLease(session, connectionId, Date.now());
   });
-  return { ok: true };
+  return { ok: true, wake_dir: wake.wakeDir };
 }
 
 async function drainClaudeInbound(

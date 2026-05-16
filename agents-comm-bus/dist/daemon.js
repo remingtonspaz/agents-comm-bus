@@ -10,6 +10,7 @@ import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
 import { MessageBus } from "./bus.js";
 import { TelegramCommAdapter } from "./adapters/comm/telegram.js";
+import { ClaudeWakeRegistry } from "./adapters/agent/claude-wake.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
@@ -26,6 +27,7 @@ export async function main(argv = process.argv.slice(2)) {
     const audit = new JsonlAuditStore(paths.root);
     const blobs = new ContentAddressedBlobStore(paths.root);
     const pendingInbound = [];
+    const claudeWake = new ClaudeWakeRegistry();
     const comms = [];
     const attachedBotIds = new Set();
     const registrations = await storage.listAccountRegistrations({ comm: "telegram" });
@@ -66,6 +68,13 @@ export async function main(argv = process.argv.slice(2)) {
             pendingInbound.push({ message, conversation });
             if (pendingInbound.length > 100)
                 pendingInbound.splice(0, pendingInbound.length - 100);
+            try {
+                await claudeWake.wakeConversation(conversation);
+            }
+            catch (error) {
+                console.error(`agents-comm-bus: failed to write Claude wake trigger for ` +
+                    `${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`);
+            }
         },
     });
     const server = await startIpcServer({
@@ -76,6 +85,7 @@ export async function main(argv = process.argv.slice(2)) {
             bus,
             storage,
             pendingInbound,
+            claudeWake,
             socket,
         }),
     });
@@ -122,6 +132,11 @@ async function registerClaudeSession(context, params) {
         ? params.connection_id
         : `claude:${session}:${crypto.randomUUID()}`;
     const now = Date.now();
+    const wakeDir = typeof params.wake_dir === "string"
+        ? params.wake_dir
+        : typeof params.wakeDir === "string"
+            ? params.wakeDir
+            : undefined;
     await context.storage.upsertSession({
         schema_version: SCHEMA_VERSION_SESSION,
         session_id: session,
@@ -138,10 +153,11 @@ async function registerClaudeSession(context, params) {
     if (!acquired) {
         return { ok: false, reason: "same-project claude session lease already held" };
     }
+    const wake = context.claudeWake.register({ session, project, wakeDir });
     context.socket?.once("close", () => {
         void context.storage.releaseSessionLease(session, connectionId, Date.now());
     });
-    return { ok: true };
+    return { ok: true, wake_dir: wake.wakeDir };
 }
 async function drainClaudeInbound(context, params) {
     const session = typeof params.session === "string" ? params.session : undefined;

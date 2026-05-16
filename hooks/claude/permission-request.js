@@ -11,6 +11,10 @@
 import crypto from 'node:crypto';
 import { ensureDaemon } from '../../agents-comm-bus/dist/bootstrap/ensure-daemon.js';
 import { connectIpc } from '../../agents-comm-bus/dist/ipc/client.js';
+import {
+  resolveClaudeWakeDir,
+  resolveProjectPath,
+} from './wake-support.js';
 
 const CLIENT_VERSION = 'claude-hook-phase2';
 const DEFAULT_TTL_SECONDS = 10 * 60;
@@ -152,10 +156,12 @@ async function main() {
   const toolName = hookInput.tool_name || hookInput.toolName || 'PermissionRequest';
   const toolInput = hookInput.tool_input || hookInput.toolInput || {};
   const session = stableSessionId(hookInput);
+  const project = resolveProjectPath();
+  const wakeDir = resolveClaudeWakeDir(project);
   const metadata = {
     shimName: 'hooks/claude/permission-request.js',
     agent: 'claude',
-    project: process.cwd(),
+    project,
     hookEventName: 'PermissionRequest',
     session,
   };
@@ -166,16 +172,17 @@ async function main() {
     await ipc.request('claude_register_session', {
       agent: 'claude',
       session,
-      project: process.cwd(),
-      cwd: process.cwd(),
+      project,
+      cwd: project,
+      wake_dir: wakeDir,
       hook: 'PermissionRequest',
       claude: hookInput,
     });
     const result = await ipc.request('claude_open_query', {
       agent: 'claude',
       session,
-      project: process.cwd(),
-      cwd: process.cwd(),
+      project,
+      cwd: project,
       ttl_seconds: DEFAULT_TTL_SECONDS,
       query: {
         kind: queryKind(toolName),

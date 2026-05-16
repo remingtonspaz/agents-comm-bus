@@ -11,6 +11,11 @@
 import crypto from 'node:crypto';
 import { ensureDaemon } from '../../agents-comm-bus/dist/bootstrap/ensure-daemon.js';
 import { connectIpc } from '../../agents-comm-bus/dist/ipc/client.js';
+import {
+  ensureClaudeWakeWatcher,
+  resolveClaudeWakeDir,
+  resolveProjectPath,
+} from './wake-support.js';
 
 const CLIENT_VERSION = 'claude-hook-phase2';
 
@@ -92,10 +97,17 @@ function formatInboundMessages(items) {
 async function main() {
   const hookInput = await readStdinJson();
   const session = stableSessionId(hookInput);
+  const project = resolveProjectPath();
+  const wakeDir = resolveClaudeWakeDir(project);
+  ensureClaudeWakeWatcher({
+    projectPath: project,
+    wakeDir,
+    log: (message) => process.stderr.write(`[claude-user-prompt-submit] ${message}\n`),
+  });
   const metadata = {
     shimName: 'hooks/claude/user-prompt-submit.js',
     agent: 'claude',
-    project: process.cwd(),
+    project,
     hookEventName: 'UserPromptSubmit',
     session,
   };
@@ -106,15 +118,16 @@ async function main() {
     await ipc.request('claude_register_session', {
       agent: 'claude',
       session,
-      project: process.cwd(),
-      cwd: process.cwd(),
+      project,
+      cwd: project,
+      wake_dir: wakeDir,
       hook: 'UserPromptSubmit',
       claude: hookInput,
     });
     const result = await ipc.request('claude_drain_inbound', {
       agent: 'claude',
       session,
-      project: process.cwd(),
+      project,
       limit: 100,
     });
     const messages = Array.isArray(result) ? result : Array.isArray(result?.messages) ? result.messages : [];
