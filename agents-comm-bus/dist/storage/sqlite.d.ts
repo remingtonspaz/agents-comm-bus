@@ -39,6 +39,7 @@ export declare class SqliteStorage implements Storage {
     getOpenQueryForSession(session: SessionId): Promise<QueryRecord | null>;
     getOpenQueryByConversation(conversation_id: ConversationId): Promise<QueryRecord | null>;
     getQuery(query_id: QueryId): Promise<QueryRecord | null>;
+    supersedeOpenQueriesForSession(session_id: SessionId, now: number): Promise<number>;
     upsertSession(rec: Session): Promise<void>;
     acquireSessionLease(session: SessionId, connection_id: string, at: number): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;

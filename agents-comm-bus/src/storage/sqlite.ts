@@ -306,6 +306,22 @@ export class SqliteStorage implements Storage {
     return row ? this.queryFromRow(row) : null;
   }
 
+  async supersedeOpenQueriesForSession(
+    session_id: SessionId,
+    now: number,
+  ): Promise<number> {
+    const result = this.db
+      .prepare(`
+        UPDATE queries
+        SET resolved_at = ?,
+            resolution_json = ?
+        WHERE session_id = ?
+          AND resolved_at IS NULL
+      `)
+      .run(now, JSON.stringify({ kind: "superseded" }), session_id) as { changes?: number };
+    return Number(result.changes ?? 0);
+  }
+
   async upsertSession(rec: Session): Promise<void> {
     this.db
       .prepare(`
@@ -320,7 +336,6 @@ export class SqliteStorage implements Storage {
           lease_holder_connection_id = excluded.lease_holder_connection_id,
           lease_acquired_at = excluded.lease_acquired_at,
           lease_released_at = excluded.lease_released_at,
-          most_recent_inbound_conversation_id = excluded.most_recent_inbound_conversation_id,
           status = excluded.status
       `)
       .run(

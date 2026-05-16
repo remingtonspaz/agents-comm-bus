@@ -185,6 +185,18 @@ export class SqliteStorage {
             .get(query_id);
         return row ? this.queryFromRow(row) : null;
     }
+    async supersedeOpenQueriesForSession(session_id, now) {
+        const result = this.db
+            .prepare(`
+        UPDATE queries
+        SET resolved_at = ?,
+            resolution_json = ?
+        WHERE session_id = ?
+          AND resolved_at IS NULL
+      `)
+            .run(now, JSON.stringify({ kind: "superseded" }), session_id);
+        return Number(result.changes ?? 0);
+    }
     async upsertSession(rec) {
         this.db
             .prepare(`
@@ -199,7 +211,6 @@ export class SqliteStorage {
           lease_holder_connection_id = excluded.lease_holder_connection_id,
           lease_acquired_at = excluded.lease_acquired_at,
           lease_released_at = excluded.lease_released_at,
-          most_recent_inbound_conversation_id = excluded.most_recent_inbound_conversation_id,
           status = excluded.status
       `)
             .run(rec.schema_version, rec.session_id, rec.agent, rec.project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.most_recent_inbound_conversation_id, rec.status);

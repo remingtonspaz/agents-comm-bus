@@ -270,6 +270,7 @@ async function openClaudeQuery(
     created_at: Date.now(),
     ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : 300,
   };
+  await context.storage.supersedeOpenQueriesForSession(session, Date.now());
   await context.bus.openQuery(query);
   if (originChat) {
     await context.bus.send({
