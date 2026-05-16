@@ -6,7 +6,7 @@ export class TelegramCommAdapter {
     allowedUserIds;
     sentByKey = new Map();
     inboundHandler = null;
-    callbackHandler = null;
+    callbackHandlers = [];
     stateHandler = null;
     connectionState = null;
     bot;
@@ -49,7 +49,7 @@ export class TelegramCommAdapter {
         this.inboundHandler = handler;
     }
     onCallback(handler) {
-        this.callbackHandler = handler;
+        this.callbackHandlers.push(handler);
     }
     async answerCallback(callbackId, options = {}) {
         const bot = this.requireBot();
@@ -110,7 +110,7 @@ export class TelegramCommAdapter {
         return "transient";
     }
     async handleTelegramCallback(raw) {
-        if (!this.callbackHandler)
+        if (this.callbackHandlers.length === 0)
             return;
         const fromId = String(raw.from.id);
         if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(fromId)) {
@@ -118,13 +118,16 @@ export class TelegramCommAdapter {
         }
         if (!raw.data || !raw.message)
             return;
-        await this.callbackHandler({
+        const event = {
             callback_id: raw.id,
             data: raw.data,
             from_id: fromId,
             chat_native_id: String(raw.message.chat.id),
             message_native_id: String(raw.message.message_id),
-        });
+        };
+        for (const handler of this.callbackHandlers) {
+            await handler(event);
+        }
     }
     async handleTelegramMessage(raw) {
         if (!this.inboundHandler)

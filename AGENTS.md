@@ -20,6 +20,10 @@ End-to-end working on Windows + Telegram with Claude Code as the agent:
 
 Open follow-ups (none blocking):
 
+- Codex is daemon-backed with `CodexBridge` plus Codex hooks/install metadata,
+  but the Codex + Telegram combination still needs the same human E2E pass
+  Claude already completed.
+
 - `💬 Other` → freetext path is wired but its observable behavior depends on
   how Claude Code's local `AskUserQuestion` UI handles typed freetext while
   in option-select mode; needs verification.
@@ -65,8 +69,10 @@ Three perpendicular layers meeting at the bus:
 - **Agent side** — `ClaudeBridge` (in `adapters/agent/claude/bridge.ts`)
   handles Claude's IPC methods, owns the inline-keyboard label choices
   specific to Claude's permission/question UX, writes wake responses to the
-  watcher's filesystem dropbox. Future Codex / Gemini / etc. bridges live as
-  siblings under `adapters/agent/`.
+  watcher's filesystem dropbox. `CodexBridge`
+  (`adapters/agent/codex/bridge.ts`) handles Codex IPC methods, app-server
+  wake/steer capability dispatch, and blocking permission-query resolution.
+  Future Gemini / etc. bridges live as siblings under `adapters/agent/`.
 - **Comm side** — `TelegramCommAdapter` (in `adapters/comm/telegram/adapter.ts`)
   plus `TelegramCommAdapterFactory` (`factory.ts`) handles polling, sending,
   callback events, credential resolution, and contributes its MCP-tool IPC
@@ -93,6 +99,10 @@ Three perpendicular layers meeting at the bus:
 │       │   │   ├── adapter.ts # ClaudeAgentAdapter (v3 contract, currently unused)
 │       │   │   ├── bridge.ts  # ClaudeBridge + ClaudeBridgeFactory (v4 IPC handler)
 │       │   │   └── wake.ts    # ClaudeWakeRegistry, writeClaudeWakeTrigger/Response
+│       │   ├── agent/codex/
+│       │   │   ├── adapter.ts # CodexAgentAdapter capabilities + hook/query mapping
+│       │   │   ├── app-server.ts # Codex app-server turn/start + turn/steer client
+│       │   │   └── bridge.ts  # CodexBridge + CodexBridgeFactory (v4 IPC handler)
 │       │   └── comm/telegram/
 │       │       ├── adapter.ts # TelegramCommAdapter
 │       │       └── factory.ts # TelegramCommAdapterFactory + MCP IPC surface

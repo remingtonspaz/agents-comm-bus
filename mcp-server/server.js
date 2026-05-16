@@ -15,12 +15,34 @@ function log(message) {
   console.error(`[telegram-mcp] ${message}`);
 }
 
+function agentInUse() {
+  if (process.env.AGENTS_COMM_BUS_AGENT) return process.env.AGENTS_COMM_BUS_AGENT;
+  if (
+    process.env.CODEX_APP_SERVER_URL ||
+    process.env.CODEX_SESSION_ID ||
+    process.env.CODEX_THREAD_ID ||
+    process.env.CODEX_PLUGIN_ROOT
+  ) {
+    return "codex";
+  }
+  return "claude";
+}
+
+function sessionInUse() {
+  return process.env.AGENTS_COMM_BUS_SESSION_ID ??
+    process.env.CLAUDE_SESSION_ID ??
+    process.env.CODEX_SESSION_ID ??
+    process.env.CODEX_THREAD_ID ??
+    "mcp";
+}
+
 async function daemonRequest(method, params = {}) {
+  const agent = agentInUse();
   const ensured = await ensureDaemon({
     clientVersion: DAEMON_VERSION,
     metadata: {
       shimName: "telegram-mcp-server",
-      agent: process.env.AGENTS_COMM_BUS_AGENT ?? "claude",
+      agent,
       project: process.cwd(),
     },
   });
@@ -29,13 +51,13 @@ async function daemonRequest(method, params = {}) {
     clientVersion: DAEMON_VERSION,
     metadata: {
       shimName: "telegram-mcp-server",
-      agent: process.env.AGENTS_COMM_BUS_AGENT ?? "claude",
+      agent,
       project: process.cwd(),
     },
   });
   try {
     return await connection.request(method, {
-      session: process.env.AGENTS_COMM_BUS_SESSION_ID ?? process.env.CLAUDE_SESSION_ID ?? "mcp",
+      session: sessionInUse(),
       ...params,
     });
   } finally {

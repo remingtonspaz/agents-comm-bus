@@ -30,7 +30,7 @@ export class TelegramCommAdapter implements CommAdapter {
   private readonly allowedUserIds: Set<string>;
   private readonly sentByKey = new Map<string, SendResult>();
   private inboundHandler: ((msg: Message) => Promise<void>) | null = null;
-  private callbackHandler: ((event: CallbackEvent) => Promise<void>) | null = null;
+  private readonly callbackHandlers: Array<(event: CallbackEvent) => Promise<void>> = [];
   private stateHandler: ((state: CommConnectionState) => void) | null = null;
   private connectionState: CommConnectionState | null = null;
   private bot: TelegramBot | null;
@@ -77,7 +77,7 @@ export class TelegramCommAdapter implements CommAdapter {
   }
 
   onCallback(handler: (event: CallbackEvent) => Promise<void>): void {
-    this.callbackHandler = handler;
+    this.callbackHandlers.push(handler);
   }
 
   async answerCallback(
@@ -169,19 +169,22 @@ export class TelegramCommAdapter implements CommAdapter {
   }
 
   private async handleTelegramCallback(raw: TelegramBot.CallbackQuery): Promise<void> {
-    if (!this.callbackHandler) return;
+    if (this.callbackHandlers.length === 0) return;
     const fromId = String(raw.from.id);
     if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(fromId)) {
       return;
     }
     if (!raw.data || !raw.message) return;
-    await this.callbackHandler({
+    const event: CallbackEvent = {
       callback_id: raw.id,
       data: raw.data,
       from_id: fromId,
       chat_native_id: String(raw.message.chat.id),
       message_native_id: String(raw.message.message_id),
-    });
+    };
+    for (const handler of this.callbackHandlers) {
+      await handler(event);
+    }
   }
 
   private async handleTelegramMessage(raw: TelegramBot.Message): Promise<void> {

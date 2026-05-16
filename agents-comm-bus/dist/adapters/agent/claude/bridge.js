@@ -37,6 +37,8 @@ export class ClaudeBridge {
     attach(comms) {
         this.options.bus.setResolveSink({
             onResolved: async (query, decision) => {
+                if (query.agent !== this.agentId)
+                    return;
                 const payload = wakePayloadFromDecision(decision);
                 if (!payload)
                     return;
@@ -52,6 +54,8 @@ export class ClaudeBridge {
         }
     }
     async onInboundConversation(conversation) {
+        if (conversation.agent !== this.agentId)
+            return;
         try {
             await this.wake.wakeConversation(conversation);
         }
@@ -199,6 +203,10 @@ export class ClaudeBridge {
                     text: "Unrecognized button payload",
                 });
             }
+            return;
+        }
+        const openQuery = await this.options.storage.getOpenQueryById(parsed.queryId);
+        if (!openQuery || openQuery.agent !== this.agentId) {
             return;
         }
         const chat = {

@@ -17,11 +17,11 @@ async function withStorage<T>(test: (dbPath: string) => Promise<T>): Promise<T> 
   }
 }
 
-function session(id: string, project = "project-a"): Session {
+function session(id: string, project = "project-a", agent = "claude" as AgentId): Session {
   return {
     schema_version: 1,
     session_id: id as SessionId,
-    agent: "claude" as AgentId,
+    agent,
     project,
     created_at: 1,
     lease_holder_connection_id: null,
@@ -70,6 +70,38 @@ describe("same-project Claude session lease collision", () => {
       try {
         await storage.upsertSession(session("session-1", "project-a"));
         await storage.upsertSession(session("session-2", "project-b"));
+
+        assert.equal(await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10), true);
+        assert.equal(await storage.acquireSessionLease("session-2" as SessionId, "conn-2", 11), true);
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+});
+
+describe("same-project Codex session lease collision", () => {
+  it("refuses a second same-agent same-project live session lease", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      try {
+        await storage.upsertSession(session("session-1", "project-a", "codex" as AgentId));
+        await storage.upsertSession(session("session-2", "project-a", "codex" as AgentId));
+
+        assert.equal(await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10), true);
+        assert.equal(await storage.acquireSessionLease("session-2" as SessionId, "conn-2", 11), false);
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  it("allows a concurrent lease for the same project when the agent differs", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      try {
+        await storage.upsertSession(session("session-1", "project-a", "claude" as AgentId));
+        await storage.upsertSession(session("session-2", "project-a", "codex" as AgentId));
 
         assert.equal(await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10), true);
         assert.equal(await storage.acquireSessionLease("session-2" as SessionId, "conn-2", 11), true);

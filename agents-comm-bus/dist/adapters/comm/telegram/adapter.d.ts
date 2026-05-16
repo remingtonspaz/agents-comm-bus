@@ -14,7 +14,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private readonly allowedUserIds;
     private readonly sentByKey;
     private inboundHandler;
-    private callbackHandler;
+    private readonly callbackHandlers;
     private stateHandler;
     private connectionState;
     private bot;

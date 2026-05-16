@@ -16,11 +16,12 @@ import { pathToFileURL } from "node:url";
 import { runDaemon } from "./daemon.js";
 import { TelegramCommAdapterFactory } from "./adapters/comm/telegram/factory.js";
 import { ClaudeBridgeFactory } from "./adapters/agent/claude/bridge.js";
+import { CodexBridgeFactory } from "./adapters/agent/codex/bridge.js";
 
 export async function startConfiguredDaemon(): Promise<void> {
   await runDaemon({
     commAdapterFactories: [new TelegramCommAdapterFactory()],
-    agentBridgeFactories: [new ClaudeBridgeFactory()],
+    agentBridgeFactories: [new ClaudeBridgeFactory(), new CodexBridgeFactory()],
   });
 }
 

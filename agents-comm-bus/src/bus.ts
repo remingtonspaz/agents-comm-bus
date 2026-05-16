@@ -76,7 +76,7 @@ export class MessageBus {
   private readonly seen = new RecentSeenCache();
   private readonly now: () => number;
   private dispatchSink: DispatchSink | null = null;
-  private resolveSink: ResolveSink | null = null;
+  private readonly resolveSinks: ResolveSink[] = [];
 
   constructor(private readonly options: MessageBusOptions) {
     this.now = options.now ?? Date.now;
@@ -104,7 +104,7 @@ export class MessageBus {
   }
 
   setResolveSink(sink: ResolveSink): void {
-    this.resolveSink = sink;
+    this.resolveSinks.push(sink);
   }
 
   async start(): Promise<void> {
@@ -316,23 +316,7 @@ export class MessageBus {
         session: record.session,
         detail: { query_id: queryId, decision: decision.decision },
       });
-      if (this.resolveSink) {
-        try {
-          await this.resolveSink.onResolved(record, decision);
-        } catch (error) {
-          await this.options.audit.append({
-            timestamp: this.now(),
-            kind: "outbound_failed",
-            agent: record.agent,
-            session: record.session,
-            detail: {
-              query_id: queryId,
-              reason: "resolve_sink_failed",
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
-        }
-      }
+      await this.notifyResolveSinks(record, decision, queryId);
     }
     return resolved;
   }
@@ -379,23 +363,7 @@ export class MessageBus {
       session: open.session,
       detail: { query_id: input.queryId, decision: decision.decision, via: "callback" },
     });
-    if (this.resolveSink) {
-      try {
-        await this.resolveSink.onResolved(open, decision);
-      } catch (error) {
-        await this.options.audit.append({
-          timestamp: this.now(),
-          kind: "outbound_failed",
-          agent: open.agent,
-          session: open.session,
-          detail: {
-            query_id: input.queryId,
-            reason: "resolve_sink_failed",
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      }
-    }
+    await this.notifyResolveSinks(open, decision, input.queryId);
     return { kind: "resolved", decision, query: open };
   }
 
@@ -507,6 +475,30 @@ export class MessageBus {
       return created;
     }
     return conversation;
+  }
+
+  private async notifyResolveSinks(
+    record: QueryRecord,
+    decision: ResolvedDecision,
+    queryId: QueryId,
+  ): Promise<void> {
+    for (const sink of this.resolveSinks) {
+      try {
+        await sink.onResolved(record, decision);
+      } catch (error) {
+        await this.options.audit.append({
+          timestamp: this.now(),
+          kind: "outbound_failed",
+          agent: record.agent,
+          session: record.session,
+          detail: {
+            query_id: queryId,
+            reason: "resolve_sink_failed",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
   }
 }
 

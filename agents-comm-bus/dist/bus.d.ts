@@ -49,7 +49,7 @@ export declare class MessageBus {
     private readonly seen;
     private readonly now;
     private dispatchSink;
-    private resolveSink;
+    private readonly resolveSinks;
     constructor(options: MessageBusOptions);
     registerComm(comm: CommAdapter): void;
     setDispatchSink(sink: DispatchSink): void;
@@ -75,6 +75,7 @@ export declare class MessageBus {
     private upsertConversation;
     private targetFromSession;
     private findConversationForTarget;
+    private notifyResolveSinks;
 }
 export declare function conversationIdForPk(pk: {
     project: string;
