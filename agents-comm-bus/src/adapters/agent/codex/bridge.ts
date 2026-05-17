@@ -261,7 +261,20 @@ export class CodexBridge implements AgentBridge {
 
   async drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]> {
     const session = typeof params.session === "string" ? params.session as SessionId : undefined;
-    const drained = this.options.pendingInbound.splice(0);
+    // The pending-inbound queue is daemon-wide and shared with other
+    // bridges (e.g. ClaudeBridge). Drain only entries whose conversation
+    // is tagged for this agent; otherwise a draining bridge sweeps the
+    // queue and starves its siblings. Entries without an agent label are
+    // included for back-compat.
+    const drained: PendingInboundEntry[] = [];
+    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
+      const entry = this.options.pendingInbound[i];
+      const agent = entry.conversation?.agent;
+      if (agent === undefined || agent === this.agentId) {
+        drained.unshift(entry);
+        this.options.pendingInbound.splice(i, 1);
+      }
+    }
     if (session && drained.length > 0) {
       await this.options.storage.setSessionMostRecentInbound(
         session,

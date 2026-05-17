@@ -146,12 +146,24 @@ export class ClaudeBridge implements AgentBridge {
   }
 
   /**
-   * Drain entries from the pending-inbound queue. Used by both
-   * `claude_drain_inbound` (which also updates the session's most-recent
-   * inbound) and the Telegram MCP shim's `telegram_check_messages`.
+   * Drain pending-inbound entries addressed to this bridge's agent
+   * (`conversation.agent === "claude"`). The queue is daemon-wide and
+   * shared across bridges, so each agent must filter to its own
+   * conversations — otherwise the first bridge to drain sweeps the queue
+   * and starves the others. Entries for other agents (or unlabelled
+   * entries, which are kept for back-compat) are left in place.
    */
   drainPendingInbound(): PendingInboundEntry[] {
-    return this.options.pendingInbound.splice(0);
+    const drained: PendingInboundEntry[] = [];
+    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
+      const entry = this.options.pendingInbound[i];
+      const agent = entry.conversation?.agent;
+      if (agent === undefined || agent === this.agentId) {
+        drained.unshift(entry);
+        this.options.pendingInbound.splice(i, 1);
+      }
+    }
+    return drained;
   }
 
   async registerSession(
