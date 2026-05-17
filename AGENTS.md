@@ -419,6 +419,47 @@ Get-Process -Id (Get-Content "$wake\watcher.pid") -ErrorAction SilentlyContinue
 node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(require('os').homedir()+'/.agents-comm-bus/agents-comm-bus.db');console.log(db.prepare('SELECT * FROM queries WHERE query_id = ?').get('q_...'))"
 ```
 
+## Team scratchpad
+
+`docs/Command Center.html` is a single-file sticky-note canvas used as
+a team scratchpad — open it in a browser. Double-click empty space to
+add a note; drag to reposition; pick a color from the toolbar before
+creating (yellow = general, pink = warning/blocker, blue = open
+question, sage = status/done by convention).
+
+**The file is intentionally not tracked in git** (it's large and
+contains a self-bundling HTML payload). If `docs/Command Center.html`
+doesn't exist in your checkout, **ignore the rest of this section** —
+the canvas isn't part of your clone. Ask the canvas's owner for a copy
+if you want one.
+
+**Persistence caveat.** Notes are saved to the visitor's browser
+`localStorage` under the key `brainstorm-scratch-notes-v1` — they do
+**not** sync across browsers, devices, or contributors. Each visitor's
+board is private to their browser profile.
+
+**To share a finding with the team.** Add a sticky note locally, then
+edit `docs/Command Center.html` and add (or edit) an entry in the
+`SEED_NOTES` array near the top of the embedded script. New visitors
+get the SEED_NOTES on first load (gated by a `*-seeded-v1` localStorage
+flag so existing users aren't disturbed). Bump the seed-flag suffix
+(`-v2`, `-v3`) when you want existing visitors to see a refreshed seed
+batch — they'll get the new notes appended (or replacing, depending on
+the loader logic) without losing notes they already wrote.
+
+**If you've used the canvas before and don't see new seeds**, that's
+expected — `load()` returns your existing `localStorage` notes verbatim
+before checking the seed flag. To pick up a fresh seed batch, clear
+`brainstorm-scratch-notes-v1` (and `*-seeded-v1`) from your browser's
+storage panel and reload.
+
+**Convention for SEED_NOTES entries.** End the `text` with `— <handle>,
+<YYYY-MM-DD>` so future readers know who wrote it and when. Keep notes
+short and actionable; longer prose belongs in `docs/architecture/` or
+this file. Prefer pink for blockers / regression warnings, blue for
+unresolved design questions, yellow for general findings, sage for
+status updates.
+
 ## Historical notes (preserve)
 
 These findings predate the universal-overhaul refactor but remain technically
