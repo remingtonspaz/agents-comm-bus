@@ -280,7 +280,7 @@ function Stop-TrackedAppServer {
         $appServerUrl = [string]$state.appServerUrl
     }
     if (Test-AppServerProcess -ProcessId $appServerPid -Url $appServerUrl) {
-        Stop-Process -Id $appServerPid -Force -ErrorAction SilentlyContinue
+        Stop-CodexTree -ProcessId $appServerPid
         $stopped.appServerPid = $appServerPid
     }
 
@@ -844,5 +844,14 @@ if ($Exec) {
         $codexArgs += @("resume", $ThreadId)
     }
     $codexArgs += @("--remote", $appServerUrl)
-    & $CodexCommand @codexArgs
+    $codexExitCode = 0
+    try {
+        & $CodexCommand @codexArgs
+        if ($null -ne $LASTEXITCODE) {
+            $codexExitCode = [int]$LASTEXITCODE
+        }
+    } finally {
+        Stop-TrackedAppServer -SessionId $sessionId | Out-Null
+    }
+    exit $codexExitCode
 }

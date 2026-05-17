@@ -9,6 +9,7 @@ export interface CodexBridgeOptions {
     pendingInbound: PendingInboundEntry[];
     defaultAppServerUrl?: string;
     queryPollTimeoutMs?: number;
+    appServerCleanupDelayMs?: number;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;
@@ -55,6 +56,9 @@ export declare class CodexBridge implements AgentBridge {
     private waitForResolution;
     private trackSession;
     private untrackSession;
+    private releaseSessionLease;
+    private scheduleManagedAppServerCleanup;
+    private cleanupManagedAppServerIfLeaseIsIdle;
     private chatRefForConversation;
     private pendingInboundForConversation;
     private removePendingInbound;

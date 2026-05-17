@@ -253,7 +253,8 @@ async function startPersistentCodexRegistration() {
       cwd: process.cwd(),
       app_server_url: appServerUrl,
       source: "mcp-server",
-      persist_after_disconnect: true,
+      replace_existing_lease: true,
+      manage_app_server_lifecycle: true,
     });
     if (!registered?.ok) {
       connection.close();

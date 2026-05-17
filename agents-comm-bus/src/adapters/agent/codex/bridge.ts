@@ -27,6 +27,7 @@ import {
   codexDecisionFromResolution,
   codexHookDecision,
 } from "./adapter.js";
+import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
 
 export interface CodexBridgeOptions {
   storage: Storage;
@@ -34,6 +35,7 @@ export interface CodexBridgeOptions {
   pendingInbound: PendingInboundEntry[];
   defaultAppServerUrl?: string;
   queryPollTimeoutMs?: number;
+  appServerCleanupDelayMs?: number;
 }
 
 export interface RegisterCodexSessionResult {
@@ -60,6 +62,7 @@ export interface CodexBootstrapStatusResult {
 
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_QUERY_POLL_TIMEOUT_MS = 9 * 60 * 1000;
+const DEFAULT_APP_SERVER_CLEANUP_DELAY_MS = 3_000;
 
 const CODEX_IPC_METHODS = new Set<string>([
   "codex_bootstrap_status",
@@ -203,10 +206,13 @@ export class CodexBridge implements AgentBridge {
       most_recent_inbound_conversation_id: null,
       status: "active",
     });
+    const replaceExistingLease =
+      params.replace_existing_lease === true ||
+      params.persist_after_disconnect === true;
     const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
     if (!acquired) {
       const existing = await this.options.storage.getSession(session);
-      if (existing?.lease_holder_connection_id && params.persist_after_disconnect === true) {
+      if (existing?.lease_holder_connection_id && replaceExistingLease) {
         await this.options.storage.releaseSessionLease(
           session,
           existing.lease_holder_connection_id,
@@ -235,12 +241,18 @@ export class CodexBridge implements AgentBridge {
     this.trackSession(project, session);
 
     const persistAfterDisconnect = params.persist_after_disconnect === true;
+    const manageAppServerLifecycle =
+      params.manage_app_server_lifecycle === true ||
+      params.source === "mcp-server";
     const release = () => {
       if (persistAfterDisconnect) return;
-      this.untrackSession(project, session);
-      void this.adapter.disconnect(session);
-      void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
-      control.close();
+      void this.releaseSessionLease({
+        session,
+        project,
+        connectionId,
+        manageAppServerLifecycle,
+        control,
+      });
     };
     socket?.once("close", release);
 
@@ -421,6 +433,50 @@ export class CodexBridge implements AgentBridge {
     if (!sessions) return;
     sessions.delete(session);
     if (sessions.size === 0) this.sessionsByProject.delete(project);
+  }
+
+  private async releaseSessionLease(input: {
+    session: SessionId;
+    project: string;
+    connectionId: string;
+    manageAppServerLifecycle: boolean;
+    control: BridgeControlChannel;
+  }): Promise<void> {
+    try {
+      this.untrackSession(input.project, input.session);
+      await this.adapter.disconnect(input.session);
+      await this.options.storage.releaseSessionLease(input.session, input.connectionId, Date.now());
+      input.control.close();
+      if (input.manageAppServerLifecycle) {
+        this.scheduleManagedAppServerCleanup(input.session);
+      }
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to release Codex session ${input.session}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  private scheduleManagedAppServerCleanup(session: SessionId): void {
+    const delay = this.options.appServerCleanupDelayMs ?? DEFAULT_APP_SERVER_CLEANUP_DELAY_MS;
+    const timer = setTimeout(() => {
+      void this.cleanupManagedAppServerIfLeaseIsIdle(session);
+    }, delay);
+    timer.unref?.();
+  }
+
+  private async cleanupManagedAppServerIfLeaseIsIdle(session: SessionId): Promise<void> {
+    try {
+      const record = await this.options.storage.getSession(session);
+      if (record?.lease_holder_connection_id) return;
+      await cleanupManagedCodexAppServer(session);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to cleanup Codex app-server for ${session}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private async chatRefForConversation(conversation: Conversation): Promise<ChatRef | undefined> {

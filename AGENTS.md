@@ -308,6 +308,13 @@ version-compatible handshake before deciding whether to reuse or respawn.
   must pass the detected Codex thread id to the bootstrapper with `-ThreadId`;
   relying on inherited env alone can relaunch Codex on a fresh comm-bus session
   instead of the existing thread.
+- **Codex app-server lifecycle is MCP-owned.** The MCP shim registers the
+  Codex session with `manage_app_server_lifecycle=true` and
+  `replace_existing_lease=true`. When that lease closes and remains idle after
+  a short grace delay, `CodexBridge` stops the bootstrapper-tracked app-server
+  PID and terminal PID, but only after command-line verification against the
+  recorded `appServerUrl` / wrapper path. Short-lived hook registrations must
+  not own app-server cleanup.
 
 ## Anti-patterns (don't do these)
 

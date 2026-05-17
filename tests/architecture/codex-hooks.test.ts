@@ -80,6 +80,8 @@ test("shared MCP shim can infer Codex metadata from Codex env", async () => {
   assert.match(shim, /CODEX_APP_SERVER_URL/);
   assert.match(shim, /CODEX_SESSION_ID/);
   assert.match(shim, /CODEX_THREAD_ID/);
+  assert.match(shim, /replace_existing_lease/);
+  assert.match(shim, /manage_app_server_lifecycle/);
 });
 
 test("Codex plugin manifest describes daemon-backed runtime", async () => {
