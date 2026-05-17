@@ -33,13 +33,42 @@ test("Codex PermissionRequest opens daemon query without pending-permission file
   assert.doesNotMatch(hook, /\.codex-telegram/);
 });
 
+test("Codex SessionStart schedules bootstrap restart through daemon status", async () => {
+  const hook = await readRepoFile("hooks/codex/session-start.js");
+
+  assert.match(hook, /ensureDaemon/);
+  assert.match(hook, /codex_bootstrap_status/);
+  assert.match(hook, /AGENTS_COMM_BUS_SESSION_ID/);
+  assert.match(hook, /app_server_reachable/);
+  assert.match(hook, /canReachAppServer/);
+  assert.match(hook, /codexThreadId/);
+  assert.match(hook, /const threadId = codexThreadId\(hookInput\)/);
+  assert.match(hook, /bootstrap-codex-session\.ps1/);
+  assert.match(hook, /RestartCurrent/);
+  assert.match(hook, /SameTerminal/);
+  assert.match(hook, /args\.push\('-ThreadId', String\(threadId\)\)/);
+  assert.match(hook, /RESTART_GUARD_MS/);
+  assert.doesNotMatch(hook, /\.codex-telegram/);
+});
+
+test("Codex bridge exposes bootstrap status IPC for SessionStart", async () => {
+  const bridge = await readRepoFile("agents-comm-bus/src/adapters/agent/codex/bridge.ts");
+
+  assert.match(bridge, /codex_bootstrap_status/);
+  assert.match(bridge, /bootstrapStatus/);
+  assert.match(bridge, /listAccountRegistrations/);
+  assert.match(bridge, /managed_session_id/);
+  assert.match(bridge, /app_server_reachable/);
+  assert.match(bridge, /bootstrap_required/);
+});
+
 test("Codex installer uses shared MCP shim without --agent split", async () => {
   const installer = await readRepoFile("install-codex.js");
 
   assert.match(installer, /mcp-server/);
   assert.match(installer, /dist/);
-  assert.match(installer, /AGENTS_COMM_BUS_AGENT/);
-  assert.match(installer, /CODEX_APP_SERVER_URL/);
+  assert.match(installer, /SessionStart/);
+  assert.match(installer, /session-start\.js/);
   assert.doesNotMatch(installer, /--agent=codex/);
   assert.doesNotMatch(installer, /\.codex-telegram/);
 });

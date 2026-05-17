@@ -21,6 +21,14 @@ export interface CodexOpenQueryResult {
     hookJson: unknown;
     nativeHookJson: unknown;
 }
+export interface CodexBootstrapStatusResult {
+    ok: true;
+    has_account_registration: boolean;
+    registration_count: number;
+    managed_app_server_present: boolean;
+    bootstrap_required: boolean;
+    reason: string;
+}
 export declare class CodexBridge implements AgentBridge {
     private readonly options;
     readonly agentId: AgentId;
@@ -36,6 +44,7 @@ export declare class CodexBridge implements AgentBridge {
             once(event: "close", handler: () => void): void;
         };
     }): Promise<unknown>;
+    bootstrapStatus(params: Record<string, unknown>): Promise<CodexBootstrapStatusResult>;
     registerSession(params: Record<string, unknown>, socket?: {
         once(event: "close", handler: () => void): void;
     }): Promise<RegisterCodexSessionResult>;

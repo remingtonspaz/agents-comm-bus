@@ -4,6 +4,7 @@ import { CodexAgentAdapter, codexDecisionFromResolution, codexHookDecision, } fr
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_QUERY_POLL_TIMEOUT_MS = 9 * 60 * 1000;
 const CODEX_IPC_METHODS = new Set([
+    "codex_bootstrap_status",
     "codex_register_session",
     "codex_drain_inbound",
     "codex_open_query",
@@ -62,6 +63,8 @@ export class CodexBridge {
     }
     async handleIpcMethod(method, params, ctx) {
         switch (method) {
+            case "codex_bootstrap_status":
+                return this.bootstrapStatus(params);
             case "codex_register_session":
                 return this.registerSession(params, ctx.socket);
             case "codex_drain_inbound":
@@ -73,6 +76,34 @@ export class CodexBridge {
             default:
                 throw new Error(`CodexBridge does not handle IPC method: ${method}`);
         }
+    }
+    async bootstrapStatus(params) {
+        const project = requiredString(params.project, "project");
+        const registrations = await this.options.storage.listAccountRegistrations({
+            project,
+            agent: this.agentId,
+        });
+        const hasAppServerUrl = typeof params.app_server_url === "string" &&
+            params.app_server_url.trim().length > 0;
+        const hasManagedSession = typeof params.managed_session_id === "string" &&
+            params.managed_session_id.trim().length > 0;
+        const managedAppServerPresent = hasAppServerUrl &&
+            hasManagedSession &&
+            params.app_server_reachable === true;
+        const hasAccountRegistration = registrations.length > 0;
+        const bootstrapRequired = hasAccountRegistration && !managedAppServerPresent;
+        return {
+            ok: true,
+            has_account_registration: hasAccountRegistration,
+            registration_count: registrations.length,
+            managed_app_server_present: managedAppServerPresent,
+            bootstrap_required: bootstrapRequired,
+            reason: !hasAccountRegistration
+                ? "no codex comm account registration for project"
+                : managedAppServerPresent
+                    ? "codex session already has a reachable managed app-server url"
+                    : "codex comm account registration exists but no managed app-server url is present",
+        };
     }
     async registerSession(params, socket) {
         const session = requiredString(params.session, "session");

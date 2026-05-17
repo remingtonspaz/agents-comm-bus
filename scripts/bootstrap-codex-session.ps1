@@ -436,6 +436,7 @@ function Get-ProcessInfo {
 
 function Find-CurrentCodexProcess {
     $current = Get-ProcessInfo -ProcessId $PID
+    $candidate = $null
     while ($null -ne $current -and [int]$current.ParentProcessId -gt 0) {
         $parent = Get-ProcessInfo -ProcessId ([int]$current.ParentProcessId)
         if ($null -eq $parent) {
@@ -445,18 +446,19 @@ function Find-CurrentCodexProcess {
         $name = [string]$parent.Name
         $commandLine = [string]$parent.CommandLine
         if ($name -match "(?i)^codex(\.exe)?$" -or $commandLine -match "(?i)\bcodex(\.exe|\.js|\.cmd|\.ps1)?\b") {
-            return $parent
+            $candidate = $parent
         }
 
         $current = $parent
     }
-    return $null
+    return $candidate
 }
 
 function Find-TerminalForProcess {
     param([int]$ProcessId)
 
     $current = Get-ProcessInfo -ProcessId $ProcessId
+    $fallback = $null
     while ($null -ne $current -and [int]$current.ParentProcessId -gt 0) {
         $parent = Get-ProcessInfo -ProcessId ([int]$current.ParentProcessId)
         if ($null -eq $parent) {
@@ -465,12 +467,18 @@ function Find-TerminalForProcess {
 
         $name = [string]$parent.Name
         if ($name -match "(?i)^(cmd|powershell|pwsh|bash|sh|zsh|fish|mintty|wezterm-gui|WindowsTerminal)\.exe$") {
-            return $parent
+            if ($null -eq $fallback) {
+                $fallback = $parent
+            }
+            $process = Get-Process -Id ([int]$parent.ProcessId) -ErrorAction SilentlyContinue
+            if ($null -ne $process -and $process.MainWindowHandle -ne 0) {
+                return $parent
+            }
         }
 
         $current = $parent
     }
-    return $null
+    return $fallback
 }
 
 function Resolve-HostShell {

@@ -100,6 +100,12 @@ args = ["D:\\Documents\\claude-code-telegram-universal-overhaul\\mcp-server\\dis
 [features]
 hooks = true
 
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "node D:\\Documents\\claude-code-telegram-universal-overhaul\\hooks\\codex\\session-start.js"
+
 [[hooks.UserPromptSubmit]]
 
 [[hooks.UserPromptSubmit.hooks]]
@@ -116,6 +122,11 @@ command = "node D:\\Documents\\claude-code-telegram-universal-overhaul\\hooks\\c
 
 Expected:
 
+- `SessionStart` calls `codex_bootstrap_status`. If the project has a Codex
+  comm registration but Codex was not launched with both `CODEX_APP_SERVER_URL`
+  and `AGENTS_COMM_BUS_SESSION_ID`, or the app-server URL is stale/unreachable,
+  it schedules `bootstrap-codex-session.ps1 -RestartCurrent -SameTerminal -Exec`
+  with a short restart-loop guard.
 - `UserPromptSubmit` calls `codex_register_session`, then
   `codex_drain_inbound`.
 - `PermissionRequest` calls `codex_register_session`, then blocks on
@@ -168,6 +179,12 @@ That schedules a hidden restart baton, stops the discovered Codex process, then
 types a tiny relay script into the original terminal. The relay starts a fresh
 app-server, resumes the thread when `CODEX_THREAD_ID` is known, and runs Codex
 with the matching remote URL.
+
+When the restart is triggered by the Codex `SessionStart` hook, the hook passes
+the detected thread id to the bootstrapper explicitly. The relay should contain
+`$paramsForBootstrapper.ThreadId = '<thread id>'`; otherwise the app-server
+session id falls back to project+URL and the restarted session can miss the
+existing conversation.
 
 To inspect what would happen without killing the current session:
 

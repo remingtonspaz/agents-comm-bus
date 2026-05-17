@@ -25,6 +25,7 @@ const configPath = path.join(codexHome, 'config.toml');
 const projectCodexDir = path.join(projectDir, '.codex');
 const projectConfigPath = path.join(projectCodexDir, 'config.toml');
 const serverPath = path.resolve(__dirname, 'mcp-server', 'dist', 'server.js');
+const sessionStartHookPath = path.resolve(__dirname, 'hooks', 'codex', 'session-start.js');
 const userPromptHookPath = path.resolve(__dirname, 'hooks', 'codex', 'user-prompt-submit.js');
 const permissionHookPath = path.resolve(__dirname, 'hooks', 'codex', 'permission-request.js');
 if (!fs.existsSync(serverPath)) {
@@ -32,7 +33,7 @@ if (!fs.existsSync(serverPath)) {
   console.error('hint:  cd mcp-server && npm install && npm run build');
   process.exit(1);
 }
-for (const hookPath of [userPromptHookPath, permissionHookPath]) {
+for (const hookPath of [sessionStartHookPath, userPromptHookPath, permissionHookPath]) {
   if (!fs.existsSync(hookPath)) {
     console.error(`error: Codex hook not found at ${hookPath}`);
     process.exit(1);
@@ -56,6 +57,12 @@ function formatBlock({ command, args }) {
 function hooksBlock() {
   return [
     '# BEGIN agents-comm-bus codex hooks',
+    '[[hooks.SessionStart]]',
+    '',
+    '[[hooks.SessionStart.hooks]]',
+    'type = "command"',
+    `command = ${JSON.stringify(`node ${sessionStartHookPath}`)}`,
+    '',
     '[[hooks.UserPromptSubmit]]',
     '',
     '[[hooks.UserPromptSubmit.hooks]]',
@@ -202,6 +209,7 @@ function installProjectHooks() {
   }
   writeFileEnsured(projectConfigPath, next);
   console.log(`installed Codex hooks in ${projectConfigPath}`);
+  console.log(`  SessionStart = ${sessionStartHookPath}`);
   console.log(`  UserPromptSubmit = ${userPromptHookPath}`);
   console.log(`  PermissionRequest = ${permissionHookPath}`);
   return true;

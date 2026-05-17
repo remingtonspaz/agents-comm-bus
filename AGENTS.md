@@ -302,8 +302,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
 - **Codex `SessionStart` is first-prompt repair, not true process startup.**
   `hooks/codex/session-start.js` only schedules a same-terminal bootstrap
   restart when daemon IPC reports that this project has a Codex comm account
-  registration and the current process lacks `CODEX_APP_SERVER_URL`. It has a
-  short restart-loop guard under `~/.agents-comm-bus/codex-bootstrapper/`.
+  registration and the current process lacks a reachable managed app-server
+  (`CODEX_APP_SERVER_URL` + `AGENTS_COMM_BUS_SESSION_ID`). It has a short
+  restart-loop guard under `~/.agents-comm-bus/codex-bootstrapper/`. The hook
+  must pass the detected Codex thread id to the bootstrapper with `-ThreadId`;
+  relying on inherited env alone can relaunch Codex on a fresh comm-bus session
+  instead of the existing thread.
 
 ## Anti-patterns (don't do these)
 
