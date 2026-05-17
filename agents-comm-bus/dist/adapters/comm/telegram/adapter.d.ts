@@ -1,5 +1,5 @@
 import TelegramBot from "node-telegram-bot-api";
-import type { AccountId, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
+import type { AccountId, BlobStore, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
 export interface TelegramCommAdapterOptions {
     botToken: string;
     /**
@@ -11,6 +11,8 @@ export interface TelegramCommAdapterOptions {
     polling?: boolean;
     bot?: TelegramBot;
     now?: () => number;
+    attachmentBlobStore?: BlobStore;
+    fetch?: typeof fetch;
 }
 export declare class TelegramCommAdapter implements CommAdapter {
     private readonly options;
@@ -25,6 +27,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private connectionState;
     private bot;
     private botUserId;
+    private readonly fetchImpl;
     constructor(options: TelegramCommAdapterOptions);
     start(): Promise<void>;
     stop(): Promise<void>;
@@ -47,6 +50,8 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private handleTelegramCallback;
     private handleTelegramMessage;
     private requireBot;
+    private normalizeAttachments;
+    private retrieveAttachment;
     private emitState;
 }
 export declare function probeTelegramIdentity(botToken: string): Promise<{

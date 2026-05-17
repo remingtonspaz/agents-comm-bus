@@ -44,6 +44,8 @@ export async function runDaemon(options) {
         factories: options.commAdapterFactories,
         storage,
         env,
+        blobs,
+        stateRoot: paths.root,
     });
     const bus = new MessageBus({
         project: process.cwd(),
@@ -120,13 +122,19 @@ async function loadCommAdapters(input) {
                     `for project ${registration.project} (could not resolve credentials_ref=${registration.credentials_ref})`);
                 continue;
             }
-            comms.push(factory.create(resolved.credentials, registration.bot_user_id));
+            comms.push(factory.create(resolved.credentials, registration.bot_user_id, {
+                blobs: input.blobs,
+                stateRoot: input.stateRoot,
+            }));
             attachedBotIds.add(registration.bot_user_id);
         }
         if (registrations.length === 0 && factory.fallbackFromEnv) {
             const fallback = await factory.fallbackFromEnv(input.env);
             if (fallback) {
-                comms.push(factory.create(fallback.credentials, fallback.accountId));
+                comms.push(factory.create(fallback.credentials, fallback.accountId, {
+                    blobs: input.blobs,
+                    stateRoot: input.stateRoot,
+                }));
             }
         }
     }

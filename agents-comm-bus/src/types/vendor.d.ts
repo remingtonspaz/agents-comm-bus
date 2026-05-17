@@ -105,6 +105,7 @@ declare module "node-telegram-bot-api" {
   class TelegramBot {
     constructor(token: string, options?: { polling?: boolean });
     getMe(): Promise<TelegramBot.User>;
+    getFileLink(fileId: string): Promise<string>;
     on(event: "message", handler: (message: TelegramBot.Message) => void): void;
     on(event: "polling_error", handler: (error: Error) => void): void;
     on(event: "callback_query", handler: (query: TelegramBot.CallbackQuery) => void): void;

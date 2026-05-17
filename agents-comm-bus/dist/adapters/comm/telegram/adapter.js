@@ -12,12 +12,14 @@ export class TelegramCommAdapter {
     connectionState = null;
     bot;
     botUserId = null;
+    fetchImpl;
     constructor(options) {
         this.options = options;
         this.accountId = options.accountId;
         this.now = options.now ?? Date.now;
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
         this.bot = options.bot ?? null;
+        this.fetchImpl = options.fetch ?? fetch;
     }
     async start() {
         this.emitState("connecting");
@@ -142,7 +144,7 @@ export class TelegramCommAdapter {
         if (!botUserId)
             throw new Error("Telegram adapter has no bot identity");
         const text = raw.text ?? raw.caption;
-        const attachments = normalizeAttachments(raw);
+        const attachments = await this.normalizeAttachments(raw);
         if (!text && attachments.length === 0)
             return;
         await this.inboundHandler({
@@ -176,6 +178,49 @@ export class TelegramCommAdapter {
             throw new Error("Telegram adapter is not started");
         return this.bot;
     }
+    async normalizeAttachments(raw) {
+        const attachments = normalizeTelegramAttachments(raw);
+        if (attachments.length === 0 || !this.options.attachmentBlobStore) {
+            return attachments;
+        }
+        return Promise.all(attachments.map((attachment) => this.retrieveAttachment(attachment)));
+    }
+    async retrieveAttachment(attachment) {
+        const bot = this.requireBot();
+        const fileId = attachmentFileId(attachment);
+        if (!fileId)
+            return attachment;
+        try {
+            const url = await bot.getFileLink(fileId);
+            const response = await this.fetchImpl(url);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const content = new Uint8Array(await response.arrayBuffer());
+            const ref = await this.options.attachmentBlobStore.put(content, attachment.mime);
+            return {
+                ...attachment,
+                size: attachment.size > 0 ? attachment.size : ref.size,
+                blob_hash: ref.hash,
+                local_path: this.options.attachmentBlobStore.pathFor(ref),
+                platform_metadata: {
+                    ...attachment.platform_metadata,
+                    file_id: fileId,
+                    retrieved_at: this.now(),
+                },
+            };
+        }
+        catch (error) {
+            return {
+                ...attachment,
+                platform_metadata: {
+                    ...attachment.platform_metadata,
+                    file_id: fileId,
+                    retrieval_error: error instanceof Error ? error.message : String(error),
+                },
+            };
+        }
+    }
     emitState(state) {
         if (this.connectionState === state)
             return;
@@ -208,7 +253,7 @@ function telegramSendOptions(target, payload) {
     }
     return options;
 }
-function normalizeAttachments(raw) {
+function normalizeTelegramAttachments(raw) {
     if (!raw.photo && !raw.document)
         return [];
     if (raw.document) {
@@ -228,5 +273,9 @@ function normalizeAttachments(raw) {
             size: photo.file_size ?? 0,
             platform_metadata: { file_id: photo.file_id },
         }];
+}
+function attachmentFileId(attachment) {
+    const fileId = attachment.platform_metadata?.file_id;
+    return typeof fileId === "string" && fileId.length > 0 ? fileId : null;
 }
 //# sourceMappingURL=adapter.js.map

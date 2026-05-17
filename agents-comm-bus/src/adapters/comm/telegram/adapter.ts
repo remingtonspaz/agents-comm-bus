@@ -3,6 +3,7 @@ import TelegramBot from "node-telegram-bot-api";
 import type {
   AccountId,
   Attachment,
+  BlobStore,
   CallbackEvent,
   ChatRef,
   CommConnectionState,
@@ -26,6 +27,8 @@ export interface TelegramCommAdapterOptions {
   polling?: boolean;
   bot?: TelegramBot;
   now?: () => number;
+  attachmentBlobStore?: BlobStore;
+  fetch?: typeof fetch;
 }
 
 export class TelegramCommAdapter implements CommAdapter {
@@ -41,12 +44,14 @@ export class TelegramCommAdapter implements CommAdapter {
   private connectionState: CommConnectionState | null = null;
   private bot: TelegramBot | null;
   private botUserId: string | null = null;
+  private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: TelegramCommAdapterOptions) {
     this.accountId = options.accountId;
     this.now = options.now ?? Date.now;
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
     this.bot = options.bot ?? null;
+    this.fetchImpl = options.fetch ?? fetch;
   }
 
   async start(): Promise<void> {
@@ -204,7 +209,7 @@ export class TelegramCommAdapter implements CommAdapter {
     if (!botUserId) throw new Error("Telegram adapter has no bot identity");
 
     const text = raw.text ?? raw.caption;
-    const attachments = normalizeAttachments(raw);
+    const attachments = await this.normalizeAttachments(raw);
     if (!text && attachments.length === 0) return;
 
     await this.inboundHandler({
@@ -237,6 +242,49 @@ export class TelegramCommAdapter implements CommAdapter {
   private requireBot(): TelegramBot {
     if (!this.bot) throw new Error("Telegram adapter is not started");
     return this.bot;
+  }
+
+  private async normalizeAttachments(raw: TelegramBot.Message): Promise<Attachment[]> {
+    const attachments = normalizeTelegramAttachments(raw);
+    if (attachments.length === 0 || !this.options.attachmentBlobStore) {
+      return attachments;
+    }
+    return Promise.all(attachments.map((attachment) => this.retrieveAttachment(attachment)));
+  }
+
+  private async retrieveAttachment(attachment: Attachment): Promise<Attachment> {
+    const bot = this.requireBot();
+    const fileId = attachmentFileId(attachment);
+    if (!fileId) return attachment;
+    try {
+      const url = await bot.getFileLink(fileId);
+      const response = await this.fetchImpl(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const content = new Uint8Array(await response.arrayBuffer());
+      const ref = await this.options.attachmentBlobStore!.put(content, attachment.mime);
+      return {
+        ...attachment,
+        size: attachment.size > 0 ? attachment.size : ref.size,
+        blob_hash: ref.hash,
+        local_path: this.options.attachmentBlobStore!.pathFor(ref),
+        platform_metadata: {
+          ...attachment.platform_metadata,
+          file_id: fileId,
+          retrieved_at: this.now(),
+        },
+      };
+    } catch (error) {
+      return {
+        ...attachment,
+        platform_metadata: {
+          ...attachment.platform_metadata,
+          file_id: fileId,
+          retrieval_error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
   }
 
   private emitState(state: CommConnectionState): void {
@@ -277,7 +325,7 @@ function telegramSendOptions(target: ChatRef, payload: OutboundPayload): Telegra
   return options;
 }
 
-function normalizeAttachments(raw: TelegramBot.Message): Attachment[] {
+function normalizeTelegramAttachments(raw: TelegramBot.Message): Attachment[] {
   if (!raw.photo && !raw.document) return [];
   if (raw.document) {
     return [{
@@ -295,4 +343,9 @@ function normalizeAttachments(raw: TelegramBot.Message): Attachment[] {
     size: photo.file_size ?? 0,
     platform_metadata: { file_id: photo.file_id },
   }];
+}
+
+function attachmentFileId(attachment: Attachment): string | null {
+  const fileId = attachment.platform_metadata?.file_id;
+  return typeof fileId === "string" && fileId.length > 0 ? fileId : null;
 }

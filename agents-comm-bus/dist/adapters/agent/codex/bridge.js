@@ -354,7 +354,7 @@ function formatInboundMessagesForTurn(entries) {
         if (message.text)
             textParts.push(message.text);
         for (const attachment of message.attachments ?? []) {
-            textParts.push(`[Attachment: ${attachment.local_path ?? attachment.filename ?? attachment.blob_hash ?? "attachment"}]`);
+            textParts.push(formatAttachmentForCodex(attachment));
         }
         const text = textParts.join(" ").trim() || "[no text]";
         const envelope = [
@@ -374,6 +374,16 @@ function formatInboundMessagesForTurn(entries) {
         ...lines,
         "[End Daemon Inbound Messages]",
     ].join("\n");
+}
+function formatAttachmentForCodex(attachment) {
+    const fields = [
+        attachment.local_path ? `path=${JSON.stringify(attachment.local_path)}` : null,
+        attachment.filename ? `filename=${JSON.stringify(attachment.filename)}` : null,
+        attachment.mime ? `mime=${JSON.stringify(attachment.mime)}` : null,
+        typeof attachment.size === "number" ? `size=${attachment.size}` : null,
+        attachment.blob_hash ? `blob_hash=${attachment.blob_hash}` : null,
+    ].filter(Boolean);
+    return `[Attachment: ${fields.join(" ") || "attachment"}]`;
 }
 function inlineKeyboardForQuery(queryId) {
     return [

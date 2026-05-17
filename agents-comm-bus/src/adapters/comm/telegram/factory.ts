@@ -24,6 +24,7 @@ import type {
 import type { MessageBus } from "../../../bus.js";
 import type {
   CommAdapterFactory,
+  CommAdapterCreateContext,
   CommAdapterFactoryEnv,
   CommIpcDeps,
 } from "../../../runtime/comm-factory.js";
@@ -101,7 +102,11 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
     };
   }
 
-  create(credentials: Record<string, unknown>, accountId: AccountId): CommAdapter {
+  create(
+    credentials: Record<string, unknown>,
+    accountId: AccountId,
+    context?: CommAdapterCreateContext,
+  ): CommAdapter {
     const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
     if (!botToken) {
       throw new Error("TelegramCommAdapterFactory.create: credentials.botToken is required");
@@ -109,7 +114,12 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
     const allowed = Array.isArray(credentials.allowedUserIds)
       ? (credentials.allowedUserIds as string[]).map(String)
       : [];
-    return new TelegramCommAdapter({ botToken, accountId, allowedUserIds: allowed });
+    return new TelegramCommAdapter({
+      botToken,
+      accountId,
+      allowedUserIds: allowed,
+      attachmentBlobStore: context?.blobs,
+    });
   }
 
   ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler> {

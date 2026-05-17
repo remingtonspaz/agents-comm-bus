@@ -93,6 +93,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     factories: options.commAdapterFactories,
     storage,
     env,
+    blobs,
+    stateRoot: paths.root,
   });
 
   const bus = new MessageBus({
@@ -168,6 +170,8 @@ async function loadCommAdapters(input: {
   factories: CommAdapterFactory[];
   storage: Awaited<ReturnType<typeof openSqliteStorage>>;
   env: NodeJS.ProcessEnv;
+  blobs: ContentAddressedBlobStore;
+  stateRoot: string;
 }): Promise<CommAdapter[]> {
   const comms: CommAdapter[] = [];
   const attachedBotIds = new Set<string>();
@@ -186,14 +190,20 @@ async function loadCommAdapters(input: {
         );
         continue;
       }
-      comms.push(factory.create(resolved.credentials, registration.bot_user_id as AccountId));
+      comms.push(factory.create(resolved.credentials, registration.bot_user_id as AccountId, {
+        blobs: input.blobs,
+        stateRoot: input.stateRoot,
+      }));
       attachedBotIds.add(registration.bot_user_id);
     }
 
     if (registrations.length === 0 && factory.fallbackFromEnv) {
       const fallback = await factory.fallbackFromEnv(input.env);
       if (fallback) {
-        comms.push(factory.create(fallback.credentials, fallback.accountId));
+        comms.push(factory.create(fallback.credentials, fallback.accountId, {
+          blobs: input.blobs,
+          stateRoot: input.stateRoot,
+        }));
       }
     }
   }

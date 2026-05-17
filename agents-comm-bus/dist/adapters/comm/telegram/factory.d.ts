@@ -1,5 +1,5 @@
 import type { AccountId, AccountRegistration, CommAdapter, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
-import type { CommAdapterFactory, CommAdapterFactoryEnv, CommIpcDeps } from "../../../runtime/comm-factory.js";
+import type { CommAdapterFactory, CommAdapterCreateContext, CommAdapterFactoryEnv, CommIpcDeps } from "../../../runtime/comm-factory.js";
 import type { IpcMethodHandler } from "../../../runtime/ipc-method.js";
 export interface TelegramCredentials {
     botToken: string;
@@ -14,7 +14,7 @@ export declare class TelegramCommAdapterFactory implements CommAdapterFactory {
         credentials: Record<string, unknown>;
         accountId: AccountId;
     } | undefined>;
-    create(credentials: Record<string, unknown>, accountId: AccountId): CommAdapter;
+    create(credentials: Record<string, unknown>, accountId: AccountId, context?: CommAdapterCreateContext): CommAdapter;
     ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }
 //# sourceMappingURL=factory.d.ts.map

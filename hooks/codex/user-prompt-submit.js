@@ -51,10 +51,20 @@ function messageText(message) {
   const parts = [];
   if (message?.text) parts.push(String(message.text));
   for (const attachment of message?.attachments || []) {
-    const label = attachment.local_path || attachment.filename || attachment.blob_hash || 'attachment';
-    parts.push(`[Attachment: ${label}]`);
+    parts.push(formatAttachment(attachment));
   }
   return parts.join(' ').trim();
+}
+
+function formatAttachment(attachment) {
+  const fields = [
+    attachment.local_path ? `path=${JSON.stringify(attachment.local_path)}` : null,
+    attachment.filename ? `filename=${JSON.stringify(attachment.filename)}` : null,
+    attachment.mime ? `mime=${JSON.stringify(attachment.mime)}` : null,
+    typeof attachment.size === 'number' ? `size=${attachment.size}` : null,
+    attachment.blob_hash ? `blob_hash=${attachment.blob_hash}` : null,
+  ].filter(Boolean);
+  return `[Attachment: ${fields.join(' ') || 'attachment'}]`;
 }
 
 function formatTimestamp(value) {

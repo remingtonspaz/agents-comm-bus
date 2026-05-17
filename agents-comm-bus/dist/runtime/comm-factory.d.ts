@@ -1,4 +1,4 @@
-import type { AccountId, AccountRegistration, CommAdapter, CommId } from "../../../agents-comm-bus-core/dist/index.js";
+import type { AccountId, AccountRegistration, BlobStore, CommAdapter, CommId } from "../../../agents-comm-bus-core/dist/index.js";
 import type { MessageBus } from "../bus.js";
 import type { Storage } from "../../../agents-comm-bus-core/dist/index.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
@@ -37,13 +37,17 @@ export interface CommAdapterFactory {
      * keys its adapter map by `(commId, accountId)` so a daemon can host
      * multiple bots of the same comm type concurrently.
      */
-    create(credentials: Record<string, unknown>, accountId: AccountId): CommAdapter;
+    create(credentials: Record<string, unknown>, accountId: AccountId, context?: CommAdapterCreateContext): CommAdapter;
     /**
      * Optional MCP-tool / IPC method surface this comm contributes. The map's
      * keys are IPC method names (e.g. `"telegram_send"`); values are handlers
      * with a closure over the runtime deps the comm needs.
      */
     ipcMethods?(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
+}
+export interface CommAdapterCreateContext {
+    blobs: BlobStore;
+    stateRoot: string;
 }
 export interface CommIpcDeps {
     bus: MessageBus;

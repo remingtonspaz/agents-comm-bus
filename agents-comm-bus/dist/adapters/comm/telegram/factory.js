@@ -68,7 +68,7 @@ export class TelegramCommAdapterFactory {
             accountId: identity.bot_user_id,
         };
     }
-    create(credentials, accountId) {
+    create(credentials, accountId, context) {
         const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
         if (!botToken) {
             throw new Error("TelegramCommAdapterFactory.create: credentials.botToken is required");
@@ -76,7 +76,12 @@ export class TelegramCommAdapterFactory {
         const allowed = Array.isArray(credentials.allowedUserIds)
             ? credentials.allowedUserIds.map(String)
             : [];
-        return new TelegramCommAdapter({ botToken, accountId, allowedUserIds: allowed });
+        return new TelegramCommAdapter({
+            botToken,
+            accountId,
+            allowedUserIds: allowed,
+            attachmentBlobStore: context?.blobs,
+        });
     }
     ipcMethods(deps) {
         return new Map([
