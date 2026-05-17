@@ -48,6 +48,7 @@ export declare class ClaudeBridge implements AgentBridge {
     readonly agentId: AgentId;
     readonly ipcMethods: ReadonlySet<string>;
     private readonly wake;
+    private ownedAccountsCache;
     constructor(options: ClaudeBridgeOptions);
     /**
      * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
@@ -63,14 +64,24 @@ export declare class ClaudeBridge implements AgentBridge {
         };
     }): Promise<unknown>;
     /**
-     * Drain pending-inbound entries addressed to this bridge's agent
-     * (`conversation.agent === "claude"`). The queue is daemon-wide and
-     * shared across bridges, so each agent must filter to its own
-     * conversations — otherwise the first bridge to drain sweeps the queue
-     * and starves the others. Entries for other agents (or unlabelled
-     * entries, which are kept for back-compat) are left in place.
+     * Drain pending-inbound entries whose source `(comm, account)` belongs to
+     * a Claude registration. The queue is daemon-wide and shared across
+     * bridges, so each agent must filter to its own accounts — otherwise the
+     * first bridge to drain sweeps the queue and starves the others. We
+     * filter on `message.chat.account` (the bot_user_id) rather than the
+     * derived `conversation.agent` so the check is rooted in the source
+     * record contract: `(comm, bot_user_id)` uniquely identifies a
+     * `(project, agent)` registration per the daemon design.
      */
-    drainPendingInbound(): PendingInboundEntry[];
+    drainPendingInbound(): Promise<PendingInboundEntry[]>;
+    /**
+     * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. The
+     * daemon's account registrations only change via the CLI, which requires
+     * a daemon restart to take effect — so caching once per process is safe.
+     * Future-proofing for runtime registration would re-fetch on miss; left
+     * as a follow-up.
+     */
+    private ownedAccountKeys;
     registerSession(params: Record<string, unknown>, socket?: {
         once(event: "close", handler: () => void): void;
     }): Promise<RegisterSessionResult>;

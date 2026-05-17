@@ -37,6 +37,7 @@ export declare class CodexBridge implements AgentBridge {
     private readonly adapter;
     private readonly waiters;
     private readonly sessionsByProject;
+    private ownedAccountsCache;
     constructor(options: CodexBridgeOptions);
     attach(comms: CommAdapter[]): void;
     onInboundConversation(conversation: Conversation): Promise<void>;
@@ -61,6 +62,11 @@ export declare class CodexBridge implements AgentBridge {
     private cleanupManagedAppServerIfLeaseIsIdle;
     private chatRefForConversation;
     private pendingInboundForConversation;
+    /**
+     * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See
+     * the matching comment in `ClaudeBridge` for the caching contract.
+     */
+    private ownedAccountKeys;
     private removePendingInbound;
 }
 export declare class CodexBridgeFactory implements AgentBridgeFactory {
