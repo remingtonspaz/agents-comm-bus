@@ -445,18 +445,7 @@ Ask the canvas's owner for the HTML if you want a copy.
   affects visitors whose localStorage is empty at that moment).
 
 **Sharing notes across contributors is out of scope for now.** The
-sidecar is per-machine; there is no automated git-backed sync. If you
-want notes others should see, dump them into the relevant
-`docs/architecture/*.md`, into this file, or post them directly in
-chat / a PR comment.
-
-**Authoring convention (for self-documented notes).** End with
-`— <handle>, <YYYY-MM-DD>` so future-you knows who wrote what and
-when. Pink for blockers / regression warnings, blue for unresolved
-design questions, yellow for general findings, sage for status / done.
-A toolbar **export → clipboard** button copies the current notes as a
-paste-ready `window.SEED_NOTES = [...]` block — useful for backing up
-or rebuilding the sidecar on another machine.
+sidecar is per-machine; there is no automated git-backed sync.
 
 ## Historical notes (preserve)
 
