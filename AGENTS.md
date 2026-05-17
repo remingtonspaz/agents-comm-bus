@@ -24,6 +24,9 @@ Codex + Telegram is now also confirmed end-to-end on Windows:
 - Outbound Codex -> Telegram via MCP `telegram_send`: WORKING
 - Codex permission prompts routed to Telegram inline buttons: WORKING
 - Telegram button selection resolves back to the Codex session: WORKING
+- Codex first-prompt `SessionStart` repair hook detects registered comm
+  accounts without `CODEX_APP_SERVER_URL` and schedules the same-terminal
+  bootstrapper: WORKING in local restart testing
 - Mid-turn inbound uses `turn/steer` first, with `turn/start` fallback:
   WORKING in the tested Codex app-server version
 - Claude and Codex can share `account_label=main` without sharing live comm
@@ -37,7 +40,10 @@ Open follow-ups (none blocking):
 - `ClaudeWakeRegistry` is in-memory only; daemon restart loses wake-dir
   mappings until the next `claude_register_session` IPC call.
 - `SessionStart` hook is unreliable on Windows (known Claude Code harness
-  issue) — first prompt of a new Claude session is a manual "seed" prompt.
+  issue, tracked upstream as
+  [anthropics/claude-code#21468](https://github.com/anthropics/claude-code/issues/21468),
+  still open + `stale` as of 2026-05-17) — first prompt of a new Claude
+  session is a manual "seed" prompt.
 
 ## Architecture
 
@@ -293,6 +299,11 @@ version-compatible handshake before deciding whether to reuse or respawn.
   only point at `mcp-server/dist/server.js`. Session-specific app-server URL,
   thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1`
   and runtime discovery in `mcp-server/server.js`.
+- **Codex `SessionStart` is first-prompt repair, not true process startup.**
+  `hooks/codex/session-start.js` only schedules a same-terminal bootstrap
+  restart when daemon IPC reports that this project has a Codex comm account
+  registration and the current process lacks `CODEX_APP_SERVER_URL`. It has a
+  short restart-loop guard under `~/.agents-comm-bus/codex-bootstrapper/`.
 
 ## Anti-patterns (don't do these)
 
@@ -523,9 +534,12 @@ the `main` branch.
 ### Hook contract on Windows (session 4)
 
 - **`SessionStart` hook is unreliable** in Claude Code on Windows (known
-  harness issue). Workaround: also call `ensureClaudeWakeWatcher` from
-  `UserPromptSubmit` (and now also `PermissionRequest`) so the watcher
-  spawns at first prompt even if `SessionStart` never fires.
+  harness issue tracked upstream as
+  [anthropics/claude-code#21468](https://github.com/anthropics/claude-code/issues/21468),
+  with related #55427 / #23576). Workaround: also call
+  `ensureClaudeWakeWatcher` from `UserPromptSubmit` (and now also
+  `PermissionRequest`) so the watcher spawns at first prompt even if
+  `SessionStart` never fires.
 - **Node `spawn(detached:true)` on Windows often dies immediately**, especially
   when launching `powershell.exe -File`. Use `Start-Process -PassThru |
   Select-Object -ExpandProperty Id` via `execSync` to get the real PID of a
