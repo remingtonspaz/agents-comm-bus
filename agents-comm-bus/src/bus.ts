@@ -407,14 +407,25 @@ export class MessageBus {
     );
     if (byBot) return byBot;
 
-    const byLabel = (await this.options.storage.listAccountRegistrations({
+    // Label fallback: try this daemon's project first; if nothing matches,
+    // widen to any project on the box. The daemon is per-user, not
+    // per-project, and `bus.options.project = process.cwd()` is just the
+    // hint of the project that spawned the daemon — the same comm/label
+    // can legitimately resolve to a registration whose project differs
+    // from the daemon's cwd (e.g. when the daemon was started manually,
+    // or when a hook spawned it from a subdirectory).
+    const byLabelHere = (await this.options.storage.listAccountRegistrations({
       project: this.options.project,
       comm: chat.comm,
     })).find((registration) => registration.account_label === String(chat.account));
-    if (!byLabel) {
-      throw new Error(`no account registration for ${chat.comm}/${chat.account}`);
-    }
-    return byLabel;
+    if (byLabelHere) return byLabelHere;
+
+    const byLabelAny = (await this.options.storage.listAccountRegistrations({
+      comm: chat.comm,
+    })).find((registration) => registration.account_label === String(chat.account));
+    if (byLabelAny) return byLabelAny;
+
+    throw new Error(`no account registration for ${chat.comm}/${chat.account}`);
   }
 
   private async upsertConversation(
