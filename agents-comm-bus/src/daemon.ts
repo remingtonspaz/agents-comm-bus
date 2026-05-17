@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 
 import {
+  type AccountId,
   type CommAdapter,
   type CommId,
 } from "../../agents-comm-bus-core/dist/index.js";
@@ -185,14 +186,14 @@ async function loadCommAdapters(input: {
         );
         continue;
       }
-      comms.push(factory.create(resolved.credentials));
+      comms.push(factory.create(resolved.credentials, registration.bot_user_id as AccountId));
       attachedBotIds.add(registration.bot_user_id);
     }
 
     if (registrations.length === 0 && factory.fallbackFromEnv) {
-      const fallback = factory.fallbackFromEnv(input.env);
+      const fallback = await factory.fallbackFromEnv(input.env);
       if (fallback) {
-        comms.push(factory.create(fallback.credentials));
+        comms.push(factory.create(fallback.credentials, fallback.accountId));
       }
     }
   }

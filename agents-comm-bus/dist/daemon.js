@@ -120,13 +120,13 @@ async function loadCommAdapters(input) {
                     `for project ${registration.project} (could not resolve credentials_ref=${registration.credentials_ref})`);
                 continue;
             }
-            comms.push(factory.create(resolved.credentials));
+            comms.push(factory.create(resolved.credentials, registration.bot_user_id));
             attachedBotIds.add(registration.bot_user_id);
         }
         if (registrations.length === 0 && factory.fallbackFromEnv) {
-            const fallback = factory.fallbackFromEnv(input.env);
+            const fallback = await factory.fallbackFromEnv(input.env);
             if (fallback) {
-                comms.push(factory.create(fallback.credentials));
+                comms.push(factory.create(fallback.credentials, fallback.accountId));
             }
         }
     }

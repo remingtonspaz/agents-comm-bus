@@ -72,7 +72,14 @@ export interface SendRequest {
 }
 
 export class MessageBus {
-  private readonly comms = new Map<CommId, CommAdapter>();
+  /**
+   * Adapter map keyed by `${commId}:${accountId}` so multiple bots can share
+   * `comm.id` (e.g. one Telegram adapter per agent, each bound to a different
+   * `bot_user_id`). `bus.send` resolves `target.account` to a bot_user_id via
+   * `registrationFor` before lookup, so callers can pass either the
+   * `account_label` (e.g. `"main"`) or the bot id directly.
+   */
+  private readonly comms = new Map<string, CommAdapter>();
   private readonly seen = new RecentSeenCache();
   private readonly now: () => number;
   private dispatchSink: DispatchSink | null = null;
@@ -86,7 +93,15 @@ export class MessageBus {
   }
 
   registerComm(comm: CommAdapter): void {
-    this.comms.set(comm.id, comm);
+    const key = adapterKey(comm.id, comm.accountId);
+    const existing = this.comms.get(key);
+    if (existing && existing !== comm) {
+      throw new Error(
+        `agents-comm-bus: a comm adapter is already registered for ${key}; ` +
+          `each (commId, accountId) pair must be unique`,
+      );
+    }
+    this.comms.set(key, comm);
     comm.onInbound(async (message) => {
       await this.receiveInbound(message);
     });
@@ -94,7 +109,7 @@ export class MessageBus {
       void this.options.audit.append({
         timestamp: this.now(),
         kind: state === "disconnected" ? "outbound_failed" : "inbound_received",
-        detail: { comm: comm.id, connection_state: state },
+        detail: { comm: comm.id, account: comm.accountId, connection_state: state },
       });
     });
   }
@@ -186,8 +201,15 @@ export class MessageBus {
     if (target.comm !== request.comm) {
       throw new Error(`target comm ${target.comm} does not match requested comm ${request.comm}`);
     }
-    const comm = this.comms.get(request.comm);
-    if (!comm) throw new Error(`comm adapter not registered: ${request.comm}`);
+    // target.account may carry either the bot_user_id directly OR the
+    // account_label (e.g. "main"). registrationFor normalizes both.
+    const registration = await this.registrationFor(target);
+    const comm = this.comms.get(adapterKey(target.comm, registration.bot_user_id as AccountId));
+    if (!comm) {
+      throw new Error(
+        `comm adapter not registered: ${target.comm}/${registration.bot_user_id}`,
+      );
+    }
 
     const sent = await comm.send(
       target,
@@ -615,4 +637,8 @@ function decisionFromCallbackValue(
     decided_in_chat: chat,
     decided_at: now,
   };
+}
+
+function adapterKey(commId: CommId, accountId: AccountId): string {
+  return `${commId}:${accountId}`;
 }

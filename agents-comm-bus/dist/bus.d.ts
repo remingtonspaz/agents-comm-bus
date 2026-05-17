@@ -45,6 +45,13 @@ export interface SendRequest {
 }
 export declare class MessageBus {
     private readonly options;
+    /**
+     * Adapter map keyed by `${commId}:${accountId}` so multiple bots can share
+     * `comm.id` (e.g. one Telegram adapter per agent, each bound to a different
+     * `bot_user_id`). `bus.send` resolves `target.account` to a bot_user_id via
+     * `registrationFor` before lookup, so callers can pass either the
+     * `account_label` (e.g. `"main"`) or the bot id directly.
+     */
     private readonly comms;
     private readonly seen;
     private readonly now;

@@ -1,4 +1,4 @@
-import type { AccountRegistration, CommAdapter, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
+import type { AccountId, AccountRegistration, CommAdapter, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
 import type { CommAdapterFactory, CommAdapterFactoryEnv, CommIpcDeps } from "../../../runtime/comm-factory.js";
 import type { IpcMethodHandler } from "../../../runtime/ipc-method.js";
 export interface TelegramCredentials {
@@ -10,10 +10,11 @@ export declare class TelegramCommAdapterFactory implements CommAdapterFactory {
     resolveCredentials(registration: AccountRegistration, env: CommAdapterFactoryEnv): Promise<{
         credentials: Record<string, unknown>;
     } | undefined>;
-    fallbackFromEnv(env: CommAdapterFactoryEnv): {
+    fallbackFromEnv(env: CommAdapterFactoryEnv): Promise<{
         credentials: Record<string, unknown>;
-    } | undefined;
-    create(credentials: Record<string, unknown>): CommAdapter;
+        accountId: AccountId;
+    } | undefined>;
+    create(credentials: Record<string, unknown>, accountId: AccountId): CommAdapter;
     ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }
 //# sourceMappingURL=factory.d.ts.map

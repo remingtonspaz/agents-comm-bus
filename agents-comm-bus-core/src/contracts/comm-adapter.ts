@@ -1,5 +1,5 @@
 import type { Message } from "../messages.js";
-import type { Attachment, ChatRef, CommId, MessageId } from "../types.js";
+import type { AccountId, Attachment, ChatRef, CommId, MessageId } from "../types.js";
 
 export type CommConnectionState =
   | "connecting"
@@ -65,6 +65,13 @@ export type FailureClassification = "permanent" | "transient" | "rate_limited";
 
 export interface CommAdapter {
   readonly id: CommId;
+  /**
+   * Comm-native account id this adapter is bound to (e.g. Telegram
+   * `bot_user_id`). Multiple adapters can share `id` as long as their
+   * `accountId` differs; the bus keys its adapter map by `(id, accountId)`
+   * so one daemon can host one bot per agent without collision.
+   */
+  readonly accountId: AccountId;
 
   /** Start polling/streaming inbound traffic. */
   start(): Promise<void>;

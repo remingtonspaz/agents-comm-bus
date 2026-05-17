@@ -1,7 +1,12 @@
 import TelegramBot from "node-telegram-bot-api";
-import type { CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
+import type { AccountId, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../../../../agents-comm-bus-core/dist/index.js";
 export interface TelegramCommAdapterOptions {
     botToken: string;
+    /**
+     * Telegram `bot_user_id` this adapter is bound to. Used by `MessageBus`
+     * to key its adapter map so multiple bots can share `comm.id="telegram"`.
+     */
+    accountId: AccountId;
     allowedUserIds?: readonly string[];
     polling?: boolean;
     bot?: TelegramBot;
@@ -10,6 +15,7 @@ export interface TelegramCommAdapterOptions {
 export declare class TelegramCommAdapter implements CommAdapter {
     private readonly options;
     readonly id: CommId;
+    readonly accountId: AccountId;
     private readonly now;
     private readonly allowedUserIds;
     private readonly sentByKey;

@@ -11,7 +11,7 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { TelegramCommAdapter } from "./adapter.js";
+import { TelegramCommAdapter, probeTelegramIdentity } from "./adapter.js";
 const TELEGRAM_COMM_ID = "telegram";
 export class TelegramCommAdapterFactory {
     commId = TELEGRAM_COMM_ID;
@@ -49,18 +49,26 @@ export class TelegramCommAdapterFactory {
         }
         return undefined;
     }
-    fallbackFromEnv(env) {
+    async fallbackFromEnv(env) {
         const token = env.TELEGRAM_BOT_TOKEN;
         if (!token)
             return undefined;
+        let identity;
+        try {
+            identity = await probeTelegramIdentity(token);
+        }
+        catch {
+            return undefined;
+        }
         return {
             credentials: {
                 botToken: token,
                 allowedUserIds: normalizeCsv(env.TELEGRAM_USER_ID),
             },
+            accountId: identity.bot_user_id,
         };
     }
-    create(credentials) {
+    create(credentials, accountId) {
         const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
         if (!botToken) {
             throw new Error("TelegramCommAdapterFactory.create: credentials.botToken is required");
@@ -68,7 +76,7 @@ export class TelegramCommAdapterFactory {
         const allowed = Array.isArray(credentials.allowedUserIds)
             ? credentials.allowedUserIds.map(String)
             : [];
-        return new TelegramCommAdapter({ botToken, allowedUserIds: allowed });
+        return new TelegramCommAdapter({ botToken, accountId, allowedUserIds: allowed });
     }
     ipcMethods(deps) {
         return new Map([

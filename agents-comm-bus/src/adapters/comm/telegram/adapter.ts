@@ -17,6 +17,11 @@ import type {
 
 export interface TelegramCommAdapterOptions {
   botToken: string;
+  /**
+   * Telegram `bot_user_id` this adapter is bound to. Used by `MessageBus`
+   * to key its adapter map so multiple bots can share `comm.id="telegram"`.
+   */
+  accountId: AccountId;
   allowedUserIds?: readonly string[];
   polling?: boolean;
   bot?: TelegramBot;
@@ -25,6 +30,7 @@ export interface TelegramCommAdapterOptions {
 
 export class TelegramCommAdapter implements CommAdapter {
   readonly id = "telegram" as CommId;
+  readonly accountId: AccountId;
 
   private readonly now: () => number;
   private readonly allowedUserIds: Set<string>;
@@ -37,6 +43,7 @@ export class TelegramCommAdapter implements CommAdapter {
   private botUserId: string | null = null;
 
   constructor(private readonly options: TelegramCommAdapterOptions) {
+    this.accountId = options.accountId;
     this.now = options.now ?? Date.now;
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
     this.bot = options.bot ?? null;

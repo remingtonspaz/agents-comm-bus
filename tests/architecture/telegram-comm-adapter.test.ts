@@ -7,7 +7,7 @@ import type { CommConnectionState } from "../../agents-comm-bus-core/src/index.j
 
 describe("TelegramCommAdapter failure classification", () => {
   it("classifies 403 blocked/kicked paths as permanent", () => {
-    const adapter = new TelegramCommAdapter({ botToken: "test", polling: false });
+    const adapter = new TelegramCommAdapter({ botToken: "test", accountId: "100" as any, polling: false });
 
     assert.equal(
       adapter.classifyFailure({ response: { statusCode: 403 }, message: "Forbidden" }),
@@ -17,7 +17,7 @@ describe("TelegramCommAdapter failure classification", () => {
   });
 
   it("classifies rate limits separately from transient failures", () => {
-    const adapter = new TelegramCommAdapter({ botToken: "test", polling: false });
+    const adapter = new TelegramCommAdapter({ botToken: "test", accountId: "100" as any, polling: false });
 
     assert.equal(
       adapter.classifyFailure({ response: { statusCode: 429 }, message: "Too Many Requests" }),
@@ -30,6 +30,7 @@ describe("TelegramCommAdapter failure classification", () => {
     const bot = new FakeTelegramBot();
     const adapter = new TelegramCommAdapter({
       botToken: "test",
+      accountId: "100" as any,
       bot: bot as unknown as TelegramBot,
       allowedUserIds: ["42"],
     });

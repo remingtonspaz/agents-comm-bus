@@ -2,6 +2,7 @@ import TelegramBot from "node-telegram-bot-api";
 export class TelegramCommAdapter {
     options;
     id = "telegram";
+    accountId;
     now;
     allowedUserIds;
     sentByKey = new Map();
@@ -13,6 +14,7 @@ export class TelegramCommAdapter {
     botUserId = null;
     constructor(options) {
         this.options = options;
+        this.accountId = options.accountId;
         this.now = options.now ?? Date.now;
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
         this.bot = options.bot ?? null;

@@ -13,6 +13,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
+  AccountId,
   AccountRegistration,
   ChatRef,
   CommAdapter,
@@ -27,7 +28,7 @@ import type {
   CommIpcDeps,
 } from "../../../runtime/comm-factory.js";
 import type { IpcMethodHandler } from "../../../runtime/ipc-method.js";
-import { TelegramCommAdapter } from "./adapter.js";
+import { TelegramCommAdapter, probeTelegramIdentity } from "./adapter.js";
 
 const TELEGRAM_COMM_ID = "telegram" as CommId;
 
@@ -80,18 +81,27 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
     return undefined;
   }
 
-  fallbackFromEnv(env: CommAdapterFactoryEnv): { credentials: Record<string, unknown> } | undefined {
+  async fallbackFromEnv(
+    env: CommAdapterFactoryEnv,
+  ): Promise<{ credentials: Record<string, unknown>; accountId: AccountId } | undefined> {
     const token = env.TELEGRAM_BOT_TOKEN;
     if (!token) return undefined;
+    let identity;
+    try {
+      identity = await probeTelegramIdentity(token);
+    } catch {
+      return undefined;
+    }
     return {
       credentials: {
         botToken: token,
         allowedUserIds: normalizeCsv(env.TELEGRAM_USER_ID),
       },
+      accountId: identity.bot_user_id as AccountId,
     };
   }
 
-  create(credentials: Record<string, unknown>): CommAdapter {
+  create(credentials: Record<string, unknown>, accountId: AccountId): CommAdapter {
     const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
     if (!botToken) {
       throw new Error("TelegramCommAdapterFactory.create: credentials.botToken is required");
@@ -99,7 +109,7 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
     const allowed = Array.isArray(credentials.allowedUserIds)
       ? (credentials.allowedUserIds as string[]).map(String)
       : [];
-    return new TelegramCommAdapter({ botToken, allowedUserIds: allowed });
+    return new TelegramCommAdapter({ botToken, accountId, allowedUserIds: allowed });
   }
 
   ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler> {

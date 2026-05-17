@@ -1,4 +1,5 @@
 import type {
+  AccountId,
   AccountRegistration,
   CommAdapter,
   CommId,
@@ -33,15 +34,21 @@ export interface CommAdapterFactory {
 
   /**
    * Optional environment-only fallback used when no `account_registrations`
-   * row is available (e.g. fresh dev install before `account-add`). Returning
-   * `undefined` means "no fallback available."
+   * row is available (e.g. fresh dev install before `account-add`). The
+   * factory is responsible for resolving the comm-native account id (e.g.
+   * via Telegram's `getMe`) so the bus can key its adapter map by it.
    */
   fallbackFromEnv?(
     env: CommAdapterFactoryEnv,
-  ): { credentials: Record<string, unknown> } | undefined;
+  ): Promise<{ credentials: Record<string, unknown>; accountId: AccountId } | undefined>;
 
-  /** Construct an adapter instance from resolved credentials. */
-  create(credentials: Record<string, unknown>): CommAdapter;
+  /**
+   * Construct an adapter instance. `accountId` is the comm-native account id
+   * (e.g. Telegram `bot_user_id`) that this adapter is bound to. The bus
+   * keys its adapter map by `(commId, accountId)` so a daemon can host
+   * multiple bots of the same comm type concurrently.
+   */
+  create(credentials: Record<string, unknown>, accountId: AccountId): CommAdapter;
 
   /**
    * Optional MCP-tool / IPC method surface this comm contributes. The map's
