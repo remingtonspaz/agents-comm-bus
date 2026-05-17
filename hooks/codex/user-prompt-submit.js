@@ -15,6 +15,9 @@ import { connectIpc } from '../../agents-comm-bus/dist/ipc/client.js';
 const CLIENT_VERSION = 'codex-hook-phase3';
 
 function stableSessionId(hookInput) {
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
+    return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  }
   const raw =
     hookInput?.session_id ||
     hookInput?.sessionId ||

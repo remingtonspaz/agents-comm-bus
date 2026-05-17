@@ -347,9 +347,6 @@ export class SqliteStorage implements Storage {
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
-          lease_holder_connection_id = excluded.lease_holder_connection_id,
-          lease_acquired_at = excluded.lease_acquired_at,
-          lease_released_at = excluded.lease_released_at,
           status = excluded.status
       `)
       .run(

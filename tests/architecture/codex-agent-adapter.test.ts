@@ -70,6 +70,27 @@ describe("CodexAgentAdapter", () => {
     assert.equal(adapter.drainQueuedInbound(session).length, 1);
   });
 
+  it("tries steering before falling back to a wake turn", async () => {
+    const fake = new FakeCodexClient({ steerOk: false });
+    const adapter = new CodexAgentAdapter({
+      appServerClientFactory: () => fake,
+      wakePlaceholder: ".",
+    });
+    const control = new RecordingControlChannel();
+    const session = "session-1" as SessionId;
+    await adapter.connect(session, control);
+
+    const result = await adapter.wakeOrSteer(session, { text: "new Telegram guidance" });
+
+    assert.deepEqual(result, { ok: true, threadId: "thread-1", method: "turn/start" });
+    assert.equal(control.sent.at(-2)?.type, "turn.steer");
+    assert.equal(control.sent.at(-1)?.type, "turn.wake");
+    assert.deepEqual(fake.calls, [
+      ["turn/steer", "new Telegram guidance"],
+      ["turn/start", "."],
+    ]);
+  });
+
   it("opens only approval queries for Codex permission hooks", async () => {
     const adapter = fixedAdapter();
     const control = new RecordingControlChannel();
@@ -183,6 +204,8 @@ function chat(): ChatRef {
 class FakeCodexClient {
   readonly calls: Array<[string, string]> = [];
 
+  constructor(private readonly options: { steerOk?: boolean } = {}) {}
+
   async call(): Promise<unknown> {
     return {};
   }
@@ -208,6 +231,9 @@ class FakeCodexClient {
 
   async steerMostRecentThread(text: string): Promise<any> {
     await this.steerTurn("thread-1", text);
+    if (this.options.steerOk === false) {
+      return { ok: false, reason: "steerTurn-failed", error: "no active turn", threadId: "thread-1" };
+    }
     return { ok: true, threadId: "thread-1", method: "turn/steer" };
   }
 }

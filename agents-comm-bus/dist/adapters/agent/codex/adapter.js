@@ -99,6 +99,28 @@ export class CodexAgentAdapter {
         });
         throwIfTurnFailed(result);
     }
+    async wakeOrSteer(session, payload) {
+        const client = this.clientFor(session);
+        const steerResult = await client.steerMostRecentThread(steerText(payload));
+        await this.sessions.get(session)?.controlChannel.send({
+            type: "turn.steer",
+            agent: this.id,
+            session,
+            result: steerResult,
+        });
+        if (steerResult.ok)
+            return steerResult;
+        const wakeResult = await client.wakeMostRecentThread(this.wakePlaceholder);
+        await this.sessions.get(session)?.controlChannel.send({
+            type: "turn.wake",
+            agent: this.id,
+            session,
+            result: wakeResult,
+            fallback_from: steerResult,
+        });
+        throwIfTurnFailed(wakeResult);
+        return wakeResult;
+    }
     async steer(session, payload) {
         const text = steerText(payload);
         const result = await this.clientFor(session).steerMostRecentThread(text);

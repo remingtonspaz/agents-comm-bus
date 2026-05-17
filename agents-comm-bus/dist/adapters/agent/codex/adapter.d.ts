@@ -1,5 +1,5 @@
 import type { AgentAdapter, AgentCapabilities, AgentId, ControlChannel, Message, Query, QueryChannel, QueryId, ResolvedDecision, SessionId } from "../../../../../agents-comm-bus-core/dist/index.js";
-import { type CodexAppServerClient } from "./app-server.js";
+import { type CodexAppServerClient, type CodexTurnResult } from "./app-server.js";
 export interface CodexHookPayload {
     hook_event_name?: string;
     session_id?: string;
@@ -51,6 +51,7 @@ export declare class CodexAgentAdapter implements AgentAdapter {
     deliverInbound(session: SessionId, message: Message): Promise<void>;
     openQuery(session: SessionId, query: Query, queryChannel: QueryChannel): Promise<void>;
     wake(session: SessionId): Promise<void>;
+    wakeOrSteer(session: SessionId, payload: unknown): Promise<CodexTurnResult>;
     steer(session: SessionId, payload: unknown): Promise<void>;
     interrupt(_session: SessionId): Promise<void>;
     drainQueuedInbound(session: SessionId): Message[];

@@ -470,7 +470,21 @@ export class MessageBus {
     }
     const conversation = await this.options.storage.getConversation(conversationId);
     if (!conversation) throw new Error(`conversation not found: ${conversationId}`);
-    return chatRefFromConversation(conversation);
+    const registration = (await this.options.storage.listAccountRegistrations({
+      project: conversation.project,
+      comm: conversation.comm,
+      agent: conversation.agent,
+    })).find((candidate) => candidate.account_label === conversation.account_label);
+    if (!registration) {
+      throw new Error(
+        `no account registration for session ${session} conversation ${conversationId} ` +
+          `(${conversation.agent}/${conversation.comm}/${conversation.account_label})`,
+      );
+    }
+    return {
+      ...chatRefFromConversation(conversation),
+      account: registration.bot_user_id as ChatRef["account"],
+    };
   }
 
   private async findConversationForTarget(target: ChatRef): Promise<Conversation> {

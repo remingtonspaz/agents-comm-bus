@@ -124,7 +124,17 @@ async function targetFromParams(storage, params) {
     if (params.chat_id == null) {
         throw new Error("omitted Telegram target requires a session most-recent-inbound conversation");
     }
-    const registration = (await storage.listAccountRegistrations({ comm: TELEGRAM_COMM_ID }))[0];
+    const session = typeof params.session === "string"
+        ? await storage.getSession(params.session)
+        : null;
+    const scoped = session
+        ? await storage.listAccountRegistrations({
+            project: session.project,
+            comm: TELEGRAM_COMM_ID,
+            agent: session.agent,
+        })
+        : [];
+    const registration = scoped[0] ?? (await storage.listAccountRegistrations({ comm: TELEGRAM_COMM_ID }))[0];
     if (!registration) {
         throw new Error("no Telegram account registration exists; run agents-comm-bus account-add first");
     }

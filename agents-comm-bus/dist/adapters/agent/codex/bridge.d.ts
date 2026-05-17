@@ -46,6 +46,9 @@ export declare class CodexBridge implements AgentBridge {
     private waitForResolution;
     private trackSession;
     private untrackSession;
+    private chatRefForConversation;
+    private pendingInboundForConversation;
+    private removePendingInbound;
 }
 export declare class CodexBridgeFactory implements AgentBridgeFactory {
     readonly agentId: AgentId;

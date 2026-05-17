@@ -6,6 +6,7 @@ node_modules/
 .claude/telegram.json
 
 # Local Codex settings
+.codex/config.toml
 .codex/telegram.json
 
 # Local MCP override for in-tree development

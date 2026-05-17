@@ -74,6 +74,7 @@ export declare class ClaudeBridge implements AgentBridge {
     drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]>;
     openQuery(params: Record<string, unknown>): Promise<OpenQueryResult>;
     private handleCommCallback;
+    private chatRefForConversation;
 }
 export declare class ClaudeBridgeFactory implements AgentBridgeFactory {
     readonly agentId: AgentId;

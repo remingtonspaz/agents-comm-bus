@@ -167,7 +167,17 @@ async function targetFromParams(
   if (params.chat_id == null) {
     throw new Error("omitted Telegram target requires a session most-recent-inbound conversation");
   }
-  const registration = (
+  const session = typeof params.session === "string"
+    ? await storage.getSession(params.session as SessionId)
+    : null;
+  const scoped = session
+    ? await storage.listAccountRegistrations({
+        project: session.project,
+        comm: TELEGRAM_COMM_ID,
+        agent: session.agent,
+      })
+    : [];
+  const registration = scoped[0] ?? (
     await storage.listAccountRegistrations({ comm: TELEGRAM_COMM_ID })
   )[0];
   if (!registration) {

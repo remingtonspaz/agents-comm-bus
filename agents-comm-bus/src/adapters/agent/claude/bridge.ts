@@ -227,14 +227,7 @@ export class ClaudeBridge implements AgentBridge {
     const conversation = sessionRecord?.most_recent_inbound_conversation_id
       ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id)
       : null;
-    const originChat = conversation
-      ? ({
-          comm: conversation.comm,
-          account: conversation.account_label as ChatRef["account"],
-          chat_native_id: conversation.chat_native_id,
-          thread_native_id: conversation.thread_native_id ?? undefined,
-        } satisfies ChatRef)
-      : undefined;
+    const originChat = conversation ? await this.chatRefForConversation(conversation) : undefined;
     const options = Array.isArray(params.options)
       ? params.options.map(String)
       : Array.isArray(queryInput.options)
@@ -371,6 +364,21 @@ export class ClaudeBridge implements AgentBridge {
         });
         return;
     }
+  }
+
+  private async chatRefForConversation(conversation: Conversation): Promise<ChatRef | undefined> {
+    const registration = (await this.options.storage.listAccountRegistrations({
+      project: conversation.project,
+      comm: conversation.comm,
+      agent: conversation.agent,
+    })).find((candidate) => candidate.account_label === conversation.account_label);
+    if (!registration) return undefined;
+    return {
+      comm: conversation.comm,
+      account: registration.bot_user_id as ChatRef["account"],
+      chat_native_id: conversation.chat_native_id,
+      thread_native_id: conversation.thread_native_id ?? undefined,
+    };
   }
 }
 

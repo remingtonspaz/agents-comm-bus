@@ -16,6 +16,9 @@ const CLIENT_VERSION = 'codex-hook-phase3';
 const DEFAULT_TTL_SECONDS = 9 * 60;
 
 function stableSessionId(hookInput) {
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
+    return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  }
   const raw =
     hookInput?.session_id ||
     hookInput?.sessionId ||

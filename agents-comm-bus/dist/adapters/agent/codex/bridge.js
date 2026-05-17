@@ -46,8 +46,14 @@ export class CodexBridge {
         if (!session) {
             return;
         }
+        const pendingForSession = this.pendingInboundForConversation(conversation);
+        const mostRecentConversationId = pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
+        await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
         try {
-            await this.adapter.wake(session);
+            const result = await this.adapter.wakeOrSteer(session, formatInboundMessagesForTurn(pendingForSession));
+            if (result.ok && result.method === "turn/steer") {
+                this.removePendingInbound(pendingForSession);
+            }
         }
         catch (error) {
             console.error(`agents-comm-bus: failed to wake Codex for ${conversation.conversation_id}: ` +
@@ -89,7 +95,24 @@ export class CodexBridge {
         });
         const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
         if (!acquired) {
-            return { ok: false, reason: "same-project codex session lease already held" };
+            const existing = await this.options.storage.getSession(session);
+            if (existing?.lease_holder_connection_id && params.persist_after_disconnect === true) {
+                await this.options.storage.releaseSessionLease(session, existing.lease_holder_connection_id, now);
+                const reacquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
+                if (!reacquired) {
+                    return { ok: false, reason: "same-project codex session lease already held" };
+                }
+            }
+            else if (existing?.lease_holder_connection_id) {
+                return {
+                    ok: true,
+                    reason: "codex session lease already held; registration refreshed",
+                    capabilities: this.adapter.capabilities,
+                };
+            }
+            else {
+                return { ok: false, reason: "same-project codex session lease already held" };
+            }
         }
         const control = new BridgeControlChannel();
         await this.adapter.connect(session, control);
@@ -97,7 +120,10 @@ export class CodexBridge {
             this.adapter.setAppServerUrl(session, params.app_server_url);
         }
         this.trackSession(project, session);
+        const persistAfterDisconnect = params.persist_after_disconnect === true;
         const release = () => {
+            if (persistAfterDisconnect)
+                return;
             this.untrackSession(project, session);
             void this.adapter.disconnect(session);
             void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
@@ -123,14 +149,7 @@ export class CodexBridge {
         const conversation = sessionRecord?.most_recent_inbound_conversation_id
             ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id)
             : null;
-        const originChat = conversation
-            ? {
-                comm: conversation.comm,
-                account: conversation.account_label,
-                chat_native_id: conversation.chat_native_id,
-                thread_native_id: conversation.thread_native_id ?? undefined,
-            }
-            : undefined;
+        const originChat = conversation ? await this.chatRefForConversation(conversation) : undefined;
         if (!originChat) {
             const hookResponse = codexHookDecision("deny", `No recent inbound Telegram conversation is associated with Codex session ${session}.`);
             return {
@@ -262,6 +281,68 @@ export class CodexBridge {
         if (sessions.size === 0)
             this.sessionsByProject.delete(project);
     }
+    async chatRefForConversation(conversation) {
+        const registration = (await this.options.storage.listAccountRegistrations({
+            project: conversation.project,
+            comm: conversation.comm,
+            agent: conversation.agent,
+        })).find((candidate) => candidate.account_label === conversation.account_label);
+        if (!registration)
+            return undefined;
+        return {
+            comm: conversation.comm,
+            account: registration.bot_user_id,
+            chat_native_id: conversation.chat_native_id,
+            thread_native_id: conversation.thread_native_id ?? undefined,
+        };
+    }
+    pendingInboundForConversation(conversation) {
+        return this.options.pendingInbound.filter((entry) => entry.conversation.agent === this.agentId &&
+            entry.conversation.project === conversation.project);
+    }
+    removePendingInbound(entries) {
+        if (entries.length === 0)
+            return;
+        const messageIds = new Set(entries.map((entry) => entry.message.message_id));
+        for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
+            if (messageIds.has(this.options.pendingInbound[i].message.message_id)) {
+                this.options.pendingInbound.splice(i, 1);
+            }
+        }
+    }
+}
+function formatInboundMessagesForTurn(entries) {
+    if (entries.length === 0) {
+        return "Check for pending daemon-delivered Telegram messages and handle them if present.";
+    }
+    const lines = entries.map((entry) => {
+        const message = entry.message;
+        const conversation = entry.conversation;
+        const sender = message.sender.display_name ?? message.sender.id ?? "unknown sender";
+        const textParts = [];
+        if (message.text)
+            textParts.push(message.text);
+        for (const attachment of message.attachments ?? []) {
+            textParts.push(`[Attachment: ${attachment.local_path ?? attachment.filename ?? attachment.blob_hash ?? "attachment"}]`);
+        }
+        const text = textParts.join(" ").trim() || "[no text]";
+        const envelope = [
+            `comm=${conversation.comm}`,
+            `account=${conversation.account_label}`,
+            `chat_native_id=${conversation.chat_native_id}`,
+            conversation.thread_native_id ? `thread_native_id=${conversation.thread_native_id}` : null,
+            `conversation_id=${conversation.conversation_id}`,
+            message.platform_message_id ? `platform_message_id=${message.platform_message_id}` : null,
+            `message_id=${message.message_id}`,
+        ].filter(Boolean).join(" ");
+        return `[${new Date(message.received_at).toISOString()}] ${sender} (${envelope}): ${text}`;
+    });
+    return [
+        "Process these daemon-delivered Telegram messages as user input. If a reply is requested, use the Telegram MCP tool.",
+        "[Daemon Inbound Messages]",
+        ...lines,
+        "[End Daemon Inbound Messages]",
+    ].join("\n");
 }
 function inlineKeyboardForQuery(queryId) {
     return [
