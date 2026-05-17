@@ -137,15 +137,27 @@ export class MessageBus {
 
   async receiveInbound(message: Message): Promise<Conversation> {
     assertHasOrigin(message);
-    if (this.seen.seen(message.message_id, this.now())) {
+    // Scope the seen-key by (comm, account) so the same platform message
+    // reaching two different adapters of the same comm (e.g. one Telegram
+    // group with two bots, each polled by its own TelegramCommAdapter)
+    // counts as two separate inbound events. Without this scoping, the
+    // dedupe drops one bot's delivery as "recently seen" and only the
+    // first-to-arrive adapter ever sees the message.
+    const seenKey = `${message.chat.comm}:${message.chat.account}:${message.message_id}`;
+    if (this.seen.seen(seenKey, this.now())) {
       await this.options.audit.append({
         timestamp: this.now(),
         kind: "loop_prevention_drop",
-        detail: { message_id: message.message_id, reason: "recently_seen" },
+        detail: {
+          message_id: message.message_id,
+          comm: message.chat.comm,
+          account: message.chat.account,
+          reason: "recently_seen",
+        },
       });
-      throw new Error(`duplicate inbound message: ${message.message_id}`);
+      throw new Error(`duplicate inbound message: ${seenKey}`);
     }
-    this.seen.record(message.message_id, this.now());
+    this.seen.record(seenKey, this.now());
 
     if (!isForeignBotAllowed(message.sender)) {
       await this.options.audit.append({

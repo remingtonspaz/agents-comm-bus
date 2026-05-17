@@ -44,24 +44,32 @@ export function shouldDropForHopLimit(message: Message): boolean {
 }
 
 /**
- * Recently-seen dedupe cache. Tracks message IDs with a TTL so duplicate
- * deliveries within the window are recognized and dropped.
+ * Recently-seen dedupe cache. Tracks opaque string keys with a TTL so
+ * duplicate deliveries within the window are recognized and dropped.
+ *
+ * Callers should choose a key that disambiguates the deliveries they want
+ * to dedup. Plain `message_id` is wrong for multi-adapter setups where the
+ * same platform message reaches more than one of the host's adapters (e.g.
+ * the same Telegram group message polled by two bots both attached to the
+ * daemon) — those are distinct logical inbounds and each adapter's
+ * delivery should land separately. Scope the key by adapter / account in
+ * those cases, e.g. `${comm}:${accountId}:${message_id}`.
  */
 export class RecentSeenCache {
-  private readonly seenMap = new Map<MessageId, number>();
+  private readonly seenMap = new Map<string, number>();
 
   constructor(private readonly ttlMs: number = 60_000) {}
 
-  /** True if the messageId is currently tracked. Also evicts expired entries. */
-  seen(messageId: MessageId, now: number): boolean {
+  /** True if the key is currently tracked. Also evicts expired entries. */
+  seen(key: string, now: number): boolean {
     this.evict(now);
-    return this.seenMap.has(messageId);
+    return this.seenMap.has(key);
   }
 
-  /** Record a message ID at time `now`. Also evicts expired entries. */
-  record(messageId: MessageId, now: number): void {
+  /** Record a key at time `now`. Also evicts expired entries. */
+  record(key: string, now: number): void {
     this.evict(now);
-    this.seenMap.set(messageId, now);
+    this.seenMap.set(key, now);
   }
 
   private evict(now: number): void {
