@@ -262,6 +262,16 @@ version-compatible handshake before deciding whether to reuse or respawn.
   never close themselves. `daemon.openClaudeQuery` calls
   `supersedeOpenQueriesForSession` before each `bus.openQuery` to keep the
   partial unique index `idx_queries_one_open_per_session` from deadlocking.
+- **Multi-bot support via `(commId, accountId)` keying.** `MessageBus.comms`
+  is `Map<string, CommAdapter>` keyed by `${commId}:${accountId}` so a
+  single daemon can host one bot per agent (Claude bot + Codex bot, both
+  with `comm.id="telegram"`) without collision. Every `CommAdapter` is
+  required to expose `readonly accountId` (e.g. Telegram `bot_user_id`)
+  and `CommAdapterFactory.create(credentials, accountId)` takes it from
+  the registration. `bus.send` resolves `target.account` (which may be
+  either the `account_label` like `"main"` or the bot id directly) to a
+  `bot_user_id` via the tolerant `registrationFor` lookup before keying
+  the map.
 
 ## Anti-patterns (don't do these)
 
@@ -301,6 +311,31 @@ version-compatible handshake before deciding whether to reuse or respawn.
 - **Don't add comm-specific fields to `OutboundPayload`** — keep it generic
   (`format`, `inline_keyboard`, `attachments`). Adapters that don't support
   a field ignore it.
+- **Don't key `MessageBus.comms` by `comm.id` alone.** A daemon legitimately
+  hosts multiple adapters with the same `comm.id` (e.g. one Telegram bot
+  per agent). The map key must be `(commId, accountId)`. The first version
+  of the multi-agent setup keyed by `commId` only, and the second adapter
+  silently overwrote the first — its bot's polling never started, messages
+  sat unread on Telegram, and the surviving adapter 409'd against whichever
+  external process was already polling its bot. See commit `db8b4fd`.
+- **Don't forget to rebundle `mcp-server` after changing
+  `bootstrap/ensure-daemon.ts`.** `mcp-server/dist/server.js` is an esbuild
+  bundle that *inlines* `defaultSpawnDaemon`. The bundle stays stale until
+  `npm run build` in `mcp-server/` rebakes it. If the bundle still spawns
+  the old entry path, a cold start where the MCP server is the first to
+  call `ensureDaemon()` will launch the wrong file (or a library-only
+  daemon with no `main()`). In a lab with an always-running daemon this
+  hides because the bundle's discovery probe finds the live daemon and
+  skips the spawn. See commit `438f48b`.
+- **Don't over-constrain account lookups by `bus.options.project`.** The
+  daemon is per-user; `bus.options.project = process.cwd()` is just a
+  hint, not a hard scope. `registrationFor`'s label-fallback first tries
+  the daemon's cwd-project but then widens to all projects when nothing
+  matches — otherwise manually-started daemons (cwd ≠ project) or
+  daemons spawned from a subdirectory fail to resolve common labels like
+  `"main"` and silently break outbound from `openClaudeQuery`. The
+  bot-id path (`getAccountByBot`) is already project-independent. See
+  commit `081b550`.
 
 ## State paths
 
@@ -477,6 +512,51 @@ follow-up commits.
   emitted on every `polling_error` but never reset to `"connected"` on
   recovery. The state flag is informational; polling continues to work.
 
+### Day-2 regression-fix findings (2026-05-17)
+
+Discovered while implementing the Codex bridge alongside Claude, with
+both registered under `comm="telegram"` with their own bots.
+
+- **`mcp-server` bundle must be rebuilt after editing
+  `bootstrap/ensure-daemon.ts`.** esbuild inlines the spawn target into
+  the bundle. The fix for the daemon-vs-serve.js entry-point change
+  (commit `96b40ad`) updated `ensure-daemon.ts` and the live `agents-comm-bus`
+  dist, but `mcp-server/dist/server.js` carried the stale spawn line
+  until a separate `npm run build` in `mcp-server/`. Symptom: hooks
+  worked (they import the live `ensure-daemon.js`); a cold start where
+  the MCP server is the first to call `ensureDaemon()` would have
+  spawned the wrong path. Caught by Codex in code review; fixed in
+  commit `438f48b`.
+- **`MessageBus.comms` map collision on `comm.id`.** Two
+  `account_registrations` rows with `comm="telegram"` (Claude bot
+  `8950482517` + Codex bot `8988792099`) both produced `TelegramCommAdapter`
+  instances with `comm.id="telegram"`. The bus's `Map<CommId, CommAdapter>`
+  let the second adapter overwrite the first. Whichever bot lost the
+  race sat orphaned (constructed but never started, inbound handler
+  wired to nothing). The surviving adapter then 409'd against whichever
+  external process was already polling its bot (e.g. the Codex MCP
+  server polling Codex's bot directly). Fixed by adding
+  `accountId: AccountId` to `CommAdapter`, threading it through
+  `CommAdapterFactory.create`, and keying the bus map by
+  `(commId, accountId)`. See commit `db8b4fd`. Codex correctly diagnosed
+  this from the map structure alone before the polling 409 was traced.
+- **`registrationFor` was over-constrained by `bus.options.project`.**
+  Once `bus.send` started calling `registrationFor(target)` to resolve
+  `target.account` → `bot_user_id`, manually-started daemons (whose cwd
+  ≠ project) silently broke outbound from `openClaudeQuery`: the
+  label-fallback lookup filtered by `bus.options.project = process.cwd()`,
+  found nothing, and threw `no account registration for telegram/main`.
+  Fix: widen the label fallback to all projects after the cwd-scoped
+  lookup misses. Daemon is per-user, not per-project; cwd is just a
+  hint. See commit `081b550`.
+- **Adapter polling errors are silent by default.** When the daemon's
+  Telegram adapter went `connected → degraded` repeatedly with no
+  visible cause, the actual `polling_error` text (`ETELEGRAM: 409
+  Conflict`) was being swallowed. The fix was diagnostic: temporarily
+  log the error payload in the adapter's `polling_error` handler.
+  Worth keeping a debug-mode toggle for this; otherwise future
+  poll-failure bugs reduce to "stuck in degraded for unknown reason."
+
 ## Session history (sessions 1–5 + universal-overhaul)
 
 | Session | Date | Topic |
@@ -487,3 +567,4 @@ follow-up commits.
 | 4 | 2026-01-13 | Watcher auto-spawn fixes (Node spawn unreliable on Windows; `SessionStart` hook bug workaround). |
 | 5 | 2026-02-14 | PostMessage WM_CHAR adopted; `AskUserQuestion` numbered-option selection. |
 | Universal overhaul | 2026-05-15 → 2026-05-16 | Daemon + adapter architecture per issue #7; inline-keyboard buttons; daemon adapter-agnostic via composition root. See `docs/architecture/2026-05-15-claude-telegram-e2e-test-report.md`. |
+| Multi-agent shakedown | 2026-05-17 | Codex bridge added alongside Claude; multi-adapter regression fixes (mcp-server rebundle, `(commId, accountId)` map keying, project-independent label fallback). |
