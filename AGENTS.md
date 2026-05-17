@@ -18,11 +18,18 @@ End-to-end working on Windows + Telegram with Claude Code as the agent:
 - Button-tap resolution via Telegram `callback_query`: WORKING
 - HTML-formatted prompts (parity with the original plugin): WORKING
 
-Open follow-ups (none blocking):
+Codex + Telegram is now also confirmed end-to-end on Windows:
 
-- Codex is daemon-backed with `CodexBridge` plus Codex hooks/install metadata,
-  but the Codex + Telegram combination still needs the same human E2E pass
-  Claude already completed.
+- Inbound Telegram -> Codex wake/resume via Codex app-server: WORKING
+- Outbound Codex -> Telegram via MCP `telegram_send`: WORKING
+- Codex permission prompts routed to Telegram inline buttons: WORKING
+- Telegram button selection resolves back to the Codex session: WORKING
+- Mid-turn inbound uses `turn/steer` first, with `turn/start` fallback:
+  WORKING in the tested Codex app-server version
+- Claude and Codex can share `account_label=main` without sharing live comm
+  adapters or conversation ids: WORKING
+
+Open follow-ups (none blocking):
 
 - `💬 Other` → freetext path is wired but its observable behavior depends on
   how Claude Code's local `AskUserQuestion` UI handles typed freetext while
@@ -272,6 +279,20 @@ version-compatible handshake before deciding whether to reuse or respawn.
   either the `account_label` like `"main"` or the bot id directly) to a
   `bot_user_id` via the tolerant `registrationFor` lookup before keying
   the map.
+- **Conversation identity includes `agent`.** `conversation_id` and the
+  SQLite conversations primary key include `project + agent + comm +
+  account_label + chat_native_id + thread_native_id`. Claude and Codex may
+  both use `account_label="main"` for the same Telegram chat; they must still
+  get separate transcript files and query-resolution windows.
+- **Codex wake is steer-first.** Telegram inbound for Codex calls
+  `turn/steer` with the actual daemon-delivered message context, then falls
+  back to `turn/start` only if steering fails. A successful steer removes the
+  delivered messages from `pendingInbound` so a later `UserPromptSubmit` does
+  not inject duplicates.
+- **Path-only Codex MCP config is intentional.** Global Codex config should
+  only point at `mcp-server/dist/server.js`. Session-specific app-server URL,
+  thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1`
+  and runtime discovery in `mcp-server/server.js`.
 
 ## Anti-patterns (don't do these)
 
@@ -318,6 +339,10 @@ version-compatible handshake before deciding whether to reuse or respawn.
   silently overwrote the first — its bot's polling never started, messages
   sat unread on Telegram, and the surviving adapter 409'd against whichever
   external process was already polling its bot. See commit `db8b4fd`.
+- **Don't key conversations by `(project, comm, account_label, chat)` alone.**
+  Claude and Codex can both register Telegram as `account_label="main"` for
+  the same chat. Omitting `agent` mixes transcripts and can let plain-text
+  query replies resolve against the wrong agent. See commit `ef0c96e`.
 - **Don't forget to rebundle `mcp-server` after changing
   `bootstrap/ensure-daemon.ts`.** `mcp-server/dist/server.js` is an esbuild
   bundle that *inlines* `defaultSpawnDaemon`. The bundle stays stale until
@@ -336,6 +361,14 @@ version-compatible handshake before deciding whether to reuse or respawn.
   `"main"` and silently break outbound from `openClaudeQuery`. The
   bot-id path (`getAccountByBot`) is already project-independent. See
   commit `081b550`.
+- **Don't use account labels when sending session-derived targets.** When a
+  session has a recent conversation, resolve it back to the concrete
+  `(project, agent, comm, account_label)` registration and send with
+  `bot_user_id`. Labels like `"main"` are only human aliases and are
+  ambiguous across agents. See commit `cbc4a43`.
+- **Don't wake Codex with `turn/start` unconditionally.** If Codex is already
+  busy after a tool call, another `turn/start` can leave the session in a long
+  `"working..."` state. Use the steer-first path and keep the fallback.
 
 ## State paths
 
@@ -369,6 +402,7 @@ and the hook side in `hooks/claude/wake-support.js`.
 | `.claude-plugin/plugin.json` | Plugin metadata + canonical MCP server block for marketplace install |
 | `.claude/telegram.json` (gitignored) | Per-project `{ botToken, userId }` — read by `TelegramCommAdapterFactory.resolveCredentials` as a fallback when the registration's `env:VARNAME` ref is unset |
 | `.claude/settings.local.json` (gitignored) | Hook command paths + permission allow/deny rules |
+| `.codex/config.toml` (gitignored) | Project-local Codex hook config written by `install-codex.js`; global `~/.codex/config.toml` should keep only the path-only MCP server entry. |
 
 For a fresh dev clone:
 
@@ -398,6 +432,8 @@ node agents-comm-bus\dist\cli\index.js account-add `
 | `AskUserQuestion` instantly selects option 1 | The `y` + Enter from a prior permission approval is leaking into the question UI. Make sure the permission hook auto-approves `AskUserQuestion` with `{decision:{behavior:"allow"}}` so no `y`+Enter precedes the question. |
 | Daemon respawns endlessly | Spawn-lock race; check `~/.agents-comm-bus/spawn-lock*`. Manually remove if stale. |
 | Telegram returns `409 Conflict: terminated by other getUpdates` | Two daemons polling the same bot. Kill one. |
+| Codex inbound triggers long `working...` | Check that the live daemon has the steer-first Codex bridge. Rebuild `agents-comm-bus`, restart the daemon, and relaunch Codex via `scripts/bootstrap-codex-session.ps1`. |
+| Codex sends through the Claude bot | Check `account_registrations` and conversation identity. Session-derived sends and query prompts must resolve to the concrete Codex `bot_user_id`, not label `main`. |
 
 ### Useful debug commands
 
@@ -585,6 +621,31 @@ both registered under `comm="telegram"` with their own bots.
   Worth keeping a debug-mode toggle for this; otherwise future
   poll-failure bugs reduce to "stuck in degraded for unknown reason."
 
+### Codex + Telegram E2E findings (2026-05-17)
+
+See `docs/architecture/2026-05-17-codex-telegram-e2e-test-report.md`.
+High-signal findings:
+
+- `scripts/bootstrap-codex-session.ps1` is the supported local launcher for
+  a Codex session with a companion app-server. It finds a free `4500-4600`
+  port, starts the app-server in a separate PowerShell window, and can resume
+  a thread with `-ThreadId ... -Exec`.
+- The global Codex MCP entry should be path-only. `mcp-server/server.js`
+  discovers Codex runtime context and performs persistent
+  `codex_register_session` with `persist_after_disconnect`.
+- `upsertSession` must not clobber lease columns either. Hook registrations
+  are short-lived; the persistent MCP registration owns the useful app-server
+  mapping.
+- Codex inbound must use `turn/steer` first. Live testing showed unconditional
+  `turn/start` after an outbound tool call can leave Codex stuck in
+  `"working..."`.
+- Session-derived outbound and query prompts must send via concrete
+  `bot_user_id`. `account_label="main"` is ambiguous when Claude and Codex
+  both use Telegram.
+- Conversation identity includes `agent` as of storage migration v2. Without
+  it, Claude and Codex shared transcript/query windows for the same Telegram
+  chat when both registrations used `account_label=main`.
+
 ## Session history (sessions 1–5 + universal-overhaul)
 
 | Session | Date | Topic |
@@ -596,3 +657,4 @@ both registered under `comm="telegram"` with their own bots.
 | 5 | 2026-02-14 | PostMessage WM_CHAR adopted; `AskUserQuestion` numbered-option selection. |
 | Universal overhaul | 2026-05-15 → 2026-05-16 | Daemon + adapter architecture per issue #7; inline-keyboard buttons; daemon adapter-agnostic via composition root. See `docs/architecture/2026-05-15-claude-telegram-e2e-test-report.md`. |
 | Multi-agent shakedown | 2026-05-17 | Codex bridge added alongside Claude; multi-adapter regression fixes (mcp-server rebundle, `(commId, accountId)` map keying, project-independent label fallback). |
+| Codex E2E shakedown | 2026-05-17 | Codex + Telegram live E2E confirmed; bootstrapper, steer-first wake, bot-id routing, and agent-scoped conversation identity. See `docs/architecture/2026-05-17-codex-telegram-e2e-test-report.md`. |
