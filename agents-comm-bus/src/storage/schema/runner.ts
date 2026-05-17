@@ -54,6 +54,18 @@ export const initialMigration: Migration = {
   },
 };
 
+export const conversationAgentIdentityMigration: Migration = {
+  version: 2,
+  description: "include agent in conversation identity",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
+    await ctx.exec(sql);
+  },
+};
+
 export async function runStorageMigrations(db: SqliteLike): Promise<void> {
-  await new SqliteMigrationRunner(db).apply([initialMigration]);
+  await new SqliteMigrationRunner(db).apply([
+    initialMigration,
+    conversationAgentIdentityMigration,
+  ]);
 }

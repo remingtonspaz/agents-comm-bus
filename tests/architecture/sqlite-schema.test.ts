@@ -5,8 +5,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { openSqliteStorage } from "../../agents-comm-bus/src/storage/sqlite.js";
-import type { AccountRegistration, QueryRecord, Session } from "../../agents-comm-bus-core/src/records/index.js";
-import type { AccountId, AgentId, CommId, QueryId, SessionId } from "../../agents-comm-bus-core/src/types.js";
+import type { AccountRegistration, Conversation, QueryRecord, Session } from "../../agents-comm-bus-core/src/records/index.js";
+import type { AccountId, AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../agents-comm-bus-core/src/types.js";
 
 async function withStorage<T>(test: (dbPath: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "acb-sqlite-"));
@@ -67,6 +67,24 @@ function query(overrides: Partial<QueryRecord> = {}): QueryRecord {
   };
 }
 
+function conversation(overrides: Partial<Conversation> = {}): Conversation {
+  return {
+    schema_version: 1,
+    project: "project-a",
+    comm: "telegram" as CommId,
+    account_label: "main",
+    chat_native_id: "chat-1",
+    thread_native_id: null,
+    conversation_id: "conversation-1" as ConversationId,
+    agent: "claude" as AgentId,
+    last_inbound_at: null,
+    last_outbound_at: null,
+    last_message_id: null,
+    created_at: 1,
+    ...overrides,
+  };
+}
+
 describe("SQLite storage schema", () => {
   it("enforces one account registration per (comm, bot_user_id)", async () => {
     await withStorage(async (dbPath) => {
@@ -116,6 +134,40 @@ describe("SQLite storage schema", () => {
 
       await storage.insertQuery(query({ query_id: "query-2" as QueryId }));
       assert.equal((await storage.getOpenQueryForSession("session-1" as SessionId))?.query_id, "query-2");
+
+      await storage.close();
+    });
+  });
+
+  it("keeps conversations distinct by agent when account labels match", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertConversation(conversation());
+      await storage.upsertConversation(conversation({
+        conversation_id: "conversation-2" as ConversationId,
+        agent: "codex" as AgentId,
+        last_message_id: "telegram:2" as MessageId,
+      }));
+
+      const claude = await storage.findConversation({
+        project: "project-a",
+        agent: "claude" as AgentId,
+        comm: "telegram" as CommId,
+        account_label: "main",
+        chat_native_id: "chat-1",
+        thread_native_id: null,
+      });
+      const codex = await storage.findConversation({
+        project: "project-a",
+        agent: "codex" as AgentId,
+        comm: "telegram" as CommId,
+        account_label: "main",
+        chat_native_id: "chat-1",
+        thread_native_id: null,
+      });
+
+      assert.equal(claude?.conversation_id, "conversation-1");
+      assert.equal(codex?.conversation_id, "conversation-2");
 
       await storage.close();
     });

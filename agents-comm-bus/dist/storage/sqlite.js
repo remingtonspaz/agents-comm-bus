@@ -78,9 +78,8 @@ export class SqliteStorage {
           thread_native_id, conversation_id, agent, last_inbound_at,
           last_outbound_at, last_message_id, created_at, metadata_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
+        ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
           conversation_id = excluded.conversation_id,
-          agent = excluded.agent,
           last_inbound_at = excluded.last_inbound_at,
           last_outbound_at = excluded.last_outbound_at,
           last_message_id = excluded.last_message_id,
@@ -99,10 +98,10 @@ export class SqliteStorage {
         const row = this.db
             .prepare(`
         SELECT * FROM conversations
-        WHERE project = ? AND comm = ? AND account_label = ?
+        WHERE project = ? AND agent = ? AND comm = ? AND account_label = ?
           AND chat_native_id = ? AND thread_native_id = ?
       `)
-            .get(pk.project, pk.comm, pk.account_label, pk.chat_native_id, dbThreadId(pk.thread_native_id));
+            .get(pk.project, pk.agent, pk.comm, pk.account_label, pk.chat_native_id, dbThreadId(pk.thread_native_id));
         return row ? this.conversationFromRow(row) : null;
     }
     async listConversations(filter = {}) {
@@ -220,9 +219,6 @@ export class SqliteStorage {
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
-          lease_holder_connection_id = excluded.lease_holder_connection_id,
-          lease_acquired_at = excluded.lease_acquired_at,
-          lease_released_at = excluded.lease_released_at,
           status = excluded.status
       `)
             .run(rec.schema_version, rec.session_id, rec.agent, rec.project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.most_recent_inbound_conversation_id, rec.status);

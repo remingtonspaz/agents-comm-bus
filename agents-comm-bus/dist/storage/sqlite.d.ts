@@ -21,6 +21,7 @@ export declare class SqliteStorage implements Storage {
     getConversation(id: ConversationId): Promise<Conversation | null>;
     findConversation(pk: {
         project: string;
+        agent: AgentId;
         comm: CommId;
         account_label: string;
         chat_native_id: string;

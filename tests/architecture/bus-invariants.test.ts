@@ -147,6 +147,57 @@ describe("MessageBus phase 1 invariants", () => {
 
     assert.deepEqual(order, ["transcript", "dispatch"]);
   });
+
+  it("keeps same-label Claude and Codex conversations distinct", async () => {
+    const codexAccount = "67890" as AccountId;
+    const storage = new MemoryStorage([
+      {
+        schema_version: SCHEMA_VERSION_ACCOUNT,
+        project: "/repo",
+        comm: TELEGRAM,
+        agent: CLAUDE,
+        account_label: "main",
+        bot_user_id: String(ACCOUNT),
+        credentials_ref: "env:CLAUDE_TELEGRAM_BOT_TOKEN",
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        schema_version: SCHEMA_VERSION_ACCOUNT,
+        project: "/repo",
+        comm: TELEGRAM,
+        agent: CODEX,
+        account_label: "main",
+        bot_user_id: String(codexAccount),
+        credentials_ref: "env:CODEX_TELEGRAM_BOT_TOKEN",
+        created_at: 2,
+        updated_at: 2,
+      },
+    ]);
+    const bus = new MessageBus({
+      project: "/repo",
+      storage,
+      transcripts: new MemoryTranscriptStore(),
+      audit: new MemoryAuditStore(),
+      now: () => 2000,
+    });
+
+    const claudeConversation = await bus.receiveInbound(makeMessage());
+    const codexConversation = await bus.receiveInbound(makeMessage({
+      message_id: "telegram:2" as MessageId,
+      chat: {
+        comm: TELEGRAM,
+        account: codexAccount,
+        chat_native_id: "chat-1",
+      },
+      platform_message_id: "2",
+    }));
+
+    assert.equal(claudeConversation.agent, CLAUDE);
+    assert.equal(codexConversation.agent, CODEX);
+    assert.notEqual(claudeConversation.conversation_id, codexConversation.conversation_id);
+    assert.equal(storage.conversations.size, 2);
+  });
 });
 
 class MemoryTranscriptStore {
@@ -208,6 +259,7 @@ class MemoryStorage implements Storage {
 
   async findConversation(pk: {
     project: string;
+    agent: AgentId;
     comm: CommId;
     account_label: string;
     chat_native_id: string;
@@ -215,6 +267,7 @@ class MemoryStorage implements Storage {
   }): Promise<Conversation | null> {
     return [...this.conversations.values()].find((c) =>
       c.project === pk.project &&
+      c.agent === pk.agent &&
       c.comm === pk.comm &&
       c.account_label === pk.account_label &&
       c.chat_native_id === pk.chat_native_id &&

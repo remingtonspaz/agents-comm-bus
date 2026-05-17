@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   last_message_id TEXT,
   created_at INTEGER NOT NULL,
   metadata_json TEXT,
-  PRIMARY KEY (project, comm, account_label, chat_native_id, thread_native_id),
+  PRIMARY KEY (project, agent, comm, account_label, chat_native_id, thread_native_id),
   CHECK (metadata_json IS NULL OR json_valid(metadata_json))
 );
 

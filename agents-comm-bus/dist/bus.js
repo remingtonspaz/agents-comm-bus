@@ -146,6 +146,7 @@ export class MessageBus {
                 const registration = await this.registrationFor(query.origin_chat);
                 const conversation = await this.options.storage.findConversation({
                     project: registration.project,
+                    agent: registration.agent,
                     comm: query.origin_chat.comm,
                     account_label: registration.account_label,
                     chat_native_id: query.origin_chat.chat_native_id,
@@ -309,6 +310,7 @@ export class MessageBus {
             thread_native_id: message.chat.thread_native_id ?? null,
             conversation_id: conversationIdForPk({
                 project: registration.project,
+                agent: registration.agent,
                 comm: registration.comm,
                 account_label: registration.account_label,
                 chat_native_id: message.chat.chat_native_id,
@@ -336,12 +338,25 @@ export class MessageBus {
         const conversation = await this.options.storage.getConversation(conversationId);
         if (!conversation)
             throw new Error(`conversation not found: ${conversationId}`);
-        return chatRefFromConversation(conversation);
+        const registration = (await this.options.storage.listAccountRegistrations({
+            project: conversation.project,
+            comm: conversation.comm,
+            agent: conversation.agent,
+        })).find((candidate) => candidate.account_label === conversation.account_label);
+        if (!registration) {
+            throw new Error(`no account registration for session ${session} conversation ${conversationId} ` +
+                `(${conversation.agent}/${conversation.comm}/${conversation.account_label})`);
+        }
+        return {
+            ...chatRefFromConversation(conversation),
+            account: registration.bot_user_id,
+        };
     }
     async findConversationForTarget(target) {
         const registration = await this.registrationFor(target);
         const conversation = await this.options.storage.findConversation({
             project: registration.project,
+            agent: registration.agent,
             comm: target.comm,
             account_label: registration.account_label,
             chat_native_id: target.chat_native_id,
@@ -357,6 +372,7 @@ export class MessageBus {
                 thread_native_id: target.thread_native_id ?? null,
                 conversation_id: conversationIdForPk({
                     project: registration.project,
+                    agent: registration.agent,
                     comm: registration.comm,
                     account_label: registration.account_label,
                     chat_native_id: target.chat_native_id,
@@ -398,6 +414,7 @@ export class MessageBus {
 export function conversationIdForPk(pk) {
     const raw = JSON.stringify([
         pk.project,
+        pk.agent,
         pk.comm,
         pk.account_label,
         pk.chat_native_id,

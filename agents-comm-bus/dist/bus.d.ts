@@ -1,4 +1,4 @@
-import type { AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "../../agents-comm-bus-core/dist/index.js";
+import type { AgentId, AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "../../agents-comm-bus-core/dist/index.js";
 export interface MessageBusOptions {
     project: string;
     storage: Storage;
@@ -86,6 +86,7 @@ export declare class MessageBus {
 }
 export declare function conversationIdForPk(pk: {
     project: string;
+    agent: AgentId;
     comm: CommId;
     account_label: string;
     chat_native_id: string;

@@ -130,9 +130,8 @@ export class SqliteStorage implements Storage {
           thread_native_id, conversation_id, agent, last_inbound_at,
           last_outbound_at, last_message_id, created_at, metadata_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
+        ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
           conversation_id = excluded.conversation_id,
-          agent = excluded.agent,
           last_inbound_at = excluded.last_inbound_at,
           last_outbound_at = excluded.last_outbound_at,
           last_message_id = excluded.last_message_id,
@@ -165,6 +164,7 @@ export class SqliteStorage implements Storage {
 
   async findConversation(pk: {
     project: string;
+    agent: AgentId;
     comm: CommId;
     account_label: string;
     chat_native_id: string;
@@ -173,11 +173,12 @@ export class SqliteStorage implements Storage {
     const row = this.db
       .prepare(`
         SELECT * FROM conversations
-        WHERE project = ? AND comm = ? AND account_label = ?
+        WHERE project = ? AND agent = ? AND comm = ? AND account_label = ?
           AND chat_native_id = ? AND thread_native_id = ?
       `)
       .get(
         pk.project,
+        pk.agent,
         pk.comm,
         pk.account_label,
         pk.chat_native_id,

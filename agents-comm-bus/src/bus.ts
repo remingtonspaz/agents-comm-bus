@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import type {
   AccountId,
   AccountRegistration,
+  AgentId,
   AuditStore,
   BlobStore,
   CallbackEvent,
@@ -248,6 +249,7 @@ export class MessageBus {
         const registration = await this.registrationFor(query.origin_chat);
         const conversation = await this.options.storage.findConversation({
           project: registration.project,
+          agent: registration.agent,
           comm: query.origin_chat.comm,
           account_label: registration.account_label,
           chat_native_id: query.origin_chat.chat_native_id,
@@ -441,6 +443,7 @@ export class MessageBus {
       thread_native_id: message.chat.thread_native_id ?? null,
       conversation_id: conversationIdForPk({
         project: registration.project,
+        agent: registration.agent,
         comm: registration.comm,
         account_label: registration.account_label,
         chat_native_id: message.chat.chat_native_id,
@@ -491,6 +494,7 @@ export class MessageBus {
     const registration = await this.registrationFor(target);
     const conversation = await this.options.storage.findConversation({
       project: registration.project,
+      agent: registration.agent,
       comm: target.comm,
       account_label: registration.account_label,
       chat_native_id: target.chat_native_id,
@@ -506,6 +510,7 @@ export class MessageBus {
         thread_native_id: target.thread_native_id ?? null,
         conversation_id: conversationIdForPk({
           project: registration.project,
+          agent: registration.agent,
           comm: registration.comm,
           account_label: registration.account_label,
           chat_native_id: target.chat_native_id,
@@ -551,6 +556,7 @@ export class MessageBus {
 
 export function conversationIdForPk(pk: {
   project: string;
+  agent: AgentId;
   comm: CommId;
   account_label: string;
   chat_native_id: string;
@@ -558,6 +564,7 @@ export function conversationIdForPk(pk: {
 }): ConversationId {
   const raw = JSON.stringify([
     pk.project,
+    pk.agent,
     pk.comm,
     pk.account_label,
     pk.chat_native_id,
