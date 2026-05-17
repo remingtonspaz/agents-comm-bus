@@ -22,6 +22,7 @@ export class ClaudeBridge {
     agentId = "claude";
     ipcMethods = CLAUDE_IPC_METHODS;
     wake = new ClaudeWakeRegistry();
+    ownedAccountsCache = null;
     constructor(options) {
         this.options = options;
         // pendingInboundMax preserved as an option for symmetry but the daemon
@@ -77,24 +78,42 @@ export class ClaudeBridge {
         }
     }
     /**
-     * Drain pending-inbound entries addressed to this bridge's agent
-     * (`conversation.agent === "claude"`). The queue is daemon-wide and
-     * shared across bridges, so each agent must filter to its own
-     * conversations — otherwise the first bridge to drain sweeps the queue
-     * and starves the others. Entries for other agents (or unlabelled
-     * entries, which are kept for back-compat) are left in place.
+     * Drain pending-inbound entries whose source `(comm, account)` belongs to
+     * a Claude registration. The queue is daemon-wide and shared across
+     * bridges, so each agent must filter to its own accounts — otherwise the
+     * first bridge to drain sweeps the queue and starves the others. We
+     * filter on `message.chat.account` (the bot_user_id) rather than the
+     * derived `conversation.agent` so the check is rooted in the source
+     * record contract: `(comm, bot_user_id)` uniquely identifies a
+     * `(project, agent)` registration per the daemon design.
      */
-    drainPendingInbound() {
+    async drainPendingInbound() {
+        const owned = await this.ownedAccountKeys();
         const drained = [];
         for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
             const entry = this.options.pendingInbound[i];
-            const agent = entry.conversation?.agent;
-            if (agent === undefined || agent === this.agentId) {
+            if (owned.has(accountKey(entry))) {
                 drained.unshift(entry);
                 this.options.pendingInbound.splice(i, 1);
             }
         }
         return drained;
+    }
+    /**
+     * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. The
+     * daemon's account registrations only change via the CLI, which requires
+     * a daemon restart to take effect — so caching once per process is safe.
+     * Future-proofing for runtime registration would re-fetch on miss; left
+     * as a follow-up.
+     */
+    async ownedAccountKeys() {
+        if (this.ownedAccountsCache)
+            return this.ownedAccountsCache;
+        const registrations = await this.options.storage.listAccountRegistrations({
+            agent: this.agentId,
+        });
+        this.ownedAccountsCache = new Set(registrations.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+        return this.ownedAccountsCache;
     }
     async registerSession(params, socket) {
         const session = requiredString(params.session, "session");
@@ -132,7 +151,7 @@ export class ClaudeBridge {
     }
     async drainInbound(params) {
         const session = typeof params.session === "string" ? params.session : undefined;
-        const drained = this.drainPendingInbound();
+        const drained = await this.drainPendingInbound();
         if (session && drained.length > 0) {
             await this.options.storage.setSessionMostRecentInbound(session, drained[drained.length - 1].conversation.conversation_id);
         }
@@ -294,6 +313,9 @@ export class ClaudeBridge {
             thread_native_id: conversation.thread_native_id ?? undefined,
         };
     }
+}
+function accountKey(entry) {
+    return `${entry.message.chat.comm}:${entry.message.chat.account}`;
 }
 function inlineKeyboardForQuery(queryId, kind, options) {
     if (kind === "approval") {

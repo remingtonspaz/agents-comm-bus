@@ -79,6 +79,7 @@ export class CodexBridge implements AgentBridge {
   private readonly adapter: CodexAgentAdapter;
   private readonly waiters = new Map<QueryId, (decision: ResolvedDecision) => void>();
   private readonly sessionsByProject = new Map<string, Set<SessionId>>();
+  private ownedAccountsCache: Set<string> | null = null;
 
   constructor(private readonly options: CodexBridgeOptions) {
     this.adapter = new CodexAgentAdapter({
@@ -110,7 +111,7 @@ export class CodexBridge implements AgentBridge {
     if (!session) {
       return;
     }
-    const pendingForSession = this.pendingInboundForConversation(conversation);
+    const pendingForSession = await this.pendingInboundForConversation(conversation);
     const mostRecentConversationId =
       pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
     await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
@@ -262,15 +263,16 @@ export class CodexBridge implements AgentBridge {
   async drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]> {
     const session = typeof params.session === "string" ? params.session as SessionId : undefined;
     // The pending-inbound queue is daemon-wide and shared with other
-    // bridges (e.g. ClaudeBridge). Drain only entries whose conversation
-    // is tagged for this agent; otherwise a draining bridge sweeps the
-    // queue and starves its siblings. Entries without an agent label are
-    // included for back-compat.
+    // bridges (e.g. ClaudeBridge). Drain only entries whose source
+    // `(comm, account)` belongs to a Codex registration; otherwise a
+    // draining bridge sweeps the queue and starves its siblings. We use
+    // `message.chat.account` (the bot_user_id, the source-of-truth field)
+    // rather than the derived `conversation.agent`.
+    const owned = await this.ownedAccountKeys();
     const drained: PendingInboundEntry[] = [];
     for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
       const entry = this.options.pendingInbound[i];
-      const agent = entry.conversation?.agent;
-      if (agent === undefined || agent === this.agentId) {
+      if (owned.has(accountKey(entry))) {
         drained.unshift(entry);
         this.options.pendingInbound.splice(i, 1);
       }
@@ -507,11 +509,29 @@ export class CodexBridge implements AgentBridge {
     };
   }
 
-  private pendingInboundForConversation(conversation: Conversation): PendingInboundEntry[] {
+  private async pendingInboundForConversation(
+    conversation: Conversation,
+  ): Promise<PendingInboundEntry[]> {
+    const owned = await this.ownedAccountKeys();
     return this.options.pendingInbound.filter((entry) =>
-      entry.conversation.agent === this.agentId &&
+      owned.has(accountKey(entry)) &&
       entry.conversation.project === conversation.project,
     );
+  }
+
+  /**
+   * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See
+   * the matching comment in `ClaudeBridge` for the caching contract.
+   */
+  private async ownedAccountKeys(): Promise<Set<string>> {
+    if (this.ownedAccountsCache) return this.ownedAccountsCache;
+    const registrations = await this.options.storage.listAccountRegistrations({
+      agent: this.agentId,
+    });
+    this.ownedAccountsCache = new Set(
+      registrations.map((reg) => `${reg.comm}:${reg.bot_user_id}`),
+    );
+    return this.ownedAccountsCache;
   }
 
   private removePendingInbound(entries: PendingInboundEntry[]): void {
@@ -523,6 +543,10 @@ export class CodexBridge implements AgentBridge {
       }
     }
   }
+}
+
+function accountKey(entry: PendingInboundEntry): string {
+  return `${entry.message.chat.comm}:${entry.message.chat.account}`;
 }
 
 function formatInboundMessagesForTurn(entries: PendingInboundEntry[]): string {
