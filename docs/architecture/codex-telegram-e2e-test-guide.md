@@ -158,6 +158,28 @@ To allocate a known port or replace an old Codex process:
 .\scripts\bootstrap-codex-session.ps1 -Port 4501 -KillPid 12345 -Exec
 ```
 
+To restart the current Codex session in the same terminal window:
+
+```powershell
+.\scripts\bootstrap-codex-session.ps1 -RestartCurrent -SameTerminal -Exec
+```
+
+That schedules a hidden restart baton, stops the discovered Codex process, then
+types a tiny relay script into the original terminal. The relay starts a fresh
+app-server, resumes the thread when `CODEX_THREAD_ID` is known, and runs Codex
+with the matching remote URL.
+
+To inspect what would happen without killing the current session:
+
+```powershell
+.\scripts\bootstrap-codex-session.ps1 -RestartCurrent -SameTerminal -PlanOnly -Json
+```
+
+The bootstrapper persists app-server metadata under
+`~/.agents-comm-bus/codex-bootstrapper/sessions/` and uses
+`-StopPreviousAppServer` during same-terminal restart relays so repeated
+bootstrap runs can replace their own previously launched companion app-server.
+
 In Codex:
 
 - Check `/mcp` or run `codex mcp list` in a separate shell.
