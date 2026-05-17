@@ -2,8 +2,7 @@
 node_modules/
 
 # Local Claude settings
-.claude/settings.local.json
-.claude/telegram.json
+.claude/*
 
 # Local Codex settings
 .codex/config.toml
