@@ -48,14 +48,41 @@ async function openDaemonConnection(metadata) {
   });
 }
 
-function messageText(message) {
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatAttachmentLine(attachment) {
   const parts = [];
-  if (message?.text) parts.push(String(message.text));
-  for (const attachment of message?.attachments || []) {
-    const label = attachment.local_path || attachment.filename || attachment.blob_hash || 'attachment';
-    parts.push(`[Attachment: ${label}]`);
+  const mime = attachment.mime && attachment.mime !== 'application/octet-stream' ? attachment.mime : null;
+  if (mime) parts.push(mime);
+  if (attachment.filename) parts.push(attachment.filename);
+  const size = formatBytes(attachment.size);
+  if (size) parts.push(size);
+  const header = parts.length > 0 ? parts.join(' · ') : 'attachment';
+
+  const meta = attachment.platform_metadata || {};
+  if (meta.retrieval_error) {
+    return `  📎 ${header} — retrieval failed: ${meta.retrieval_error}`;
   }
-  return parts.join(' ').trim();
+  if (attachment.local_path) {
+    return `  📎 ${header} → ${attachment.local_path} (use the Read tool to view)`;
+  }
+  if (attachment.blob_hash) {
+    return `  📎 ${header} → blob ${attachment.blob_hash}`;
+  }
+  if (meta.file_id) {
+    return `  📎 ${header} → telegram file_id ${meta.file_id} (not downloaded)`;
+  }
+  return `  📎 ${header} (no local copy)`;
+}
+
+function messageText(message) {
+  const text = message?.text ? String(message.text).trim() : '';
+  return text || '(no text)';
 }
 
 function formatTimestamp(value) {
@@ -71,7 +98,7 @@ function normalizeInboundItem(item) {
 }
 
 function formatInboundMessages(items) {
-  const lines = items.map((item) => {
+  const blocks = items.map((item) => {
     const { message, conversation, chat } = normalizeInboundItem(item);
     const sender = message?.sender || {};
     const senderName = sender.display_name || sender.id || 'unknown sender';
@@ -88,10 +115,12 @@ function formatInboundMessages(items) {
       .filter(([, value]) => value !== undefined && value !== null && value !== '')
       .map(([key, value]) => `${key}=${value}`)
       .join(' ');
-    return `[${formatTimestamp(message?.received_at)}] ${senderName} (${envelopeText}): ${messageText(message)}`;
+    const header = `[${formatTimestamp(message?.received_at)}] ${senderName} (${envelopeText}): ${messageText(message)}`;
+    const attachmentLines = (message?.attachments || []).map(formatAttachmentLine);
+    return [header, ...attachmentLines].join('\n');
   });
 
-  return `[Daemon Inbound Messages]\n${lines.join('\n')}\n[End Daemon Inbound Messages]`;
+  return `[Daemon Inbound Messages]\n${blocks.join('\n')}\n[End Daemon Inbound Messages]`;
 }
 
 async function main() {
