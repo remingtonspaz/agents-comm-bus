@@ -419,59 +419,44 @@ Get-Process -Id (Get-Content "$wake\watcher.pid") -ErrorAction SilentlyContinue
 node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(require('os').homedir()+'/.agents-comm-bus/agents-comm-bus.db');console.log(db.prepare('SELECT * FROM queries WHERE query_id = ?').get('q_...'))"
 ```
 
-## Team scratchpad
+## Team scratchpad (local-only)
 
 `docs/Command Center.html` is a single-file sticky-note canvas used as
-a team scratchpad. Open it in a browser. Double-click empty space to
-add a note; drag to reposition; pick a color from the toolbar before
-creating (yellow = general, pink = warning/blocker, blue = open
-question, sage = status/done by convention).
+a private scratchpad. Open it in a browser. Double-click empty space
+to add a note; drag to reposition; pick a color from the toolbar
+before creating.
 
-**File layout (two files).**
-- `docs/Command Center.html` — the canvas. **Not tracked in git** (it's
-  large and self-bundling). If you don't have it in your checkout,
-  ignore this section — the canvas isn't part of your clone, ask its
-  owner for a copy.
-- `docs/command-center-notes.js` — the canonical team-shared seed.
-  Tracked in git. Tiny. Contains `window.SEED_VERSION` and
-  `window.SEED_NOTES = [...]`. The canvas loads it via
-  `<script src="command-center-notes.js">` before its main script.
+**Both files are gitignored** (`docs/Command Center.html` and
+`docs/command-center-notes.js`). If your checkout doesn't have them,
+ignore this section — the canvas isn't part of the repo distribution.
+Ask the canvas's owner for the HTML if you want a copy.
 
-**Persistence model.**
+**Persistence model (per-machine).**
 - The canvas writes every edit to the visitor's browser `localStorage`
-  (key `brainstorm-scratch-notes-v1`). That's your private working copy.
-- On first load (no localStorage entry yet) the canvas seeds from
-  `window.SEED_NOTES`. The seed is gated by a `…-seeded-<SEED_VERSION>`
-  flag so re-opens don't keep clobbering your in-progress edits.
-- Bumping `SEED_VERSION` in `command-center-notes.js` (`"v1"` →
-  `"v2"`) invalidates everyone's seed flag — on the next reload, if
-  their `localStorage` is empty (or they clear it), they get the new
-  seed; otherwise their notes persist untouched.
+  (key `brainstorm-scratch-notes-v1`). That's the working copy.
+- On first load (no localStorage entry) the canvas seeds from
+  `window.SEED_NOTES`, which is set by an optional sidecar
+  `docs/command-center-notes.js` loaded via
+  `<script src="command-center-notes.js">`. If the sidecar is absent,
+  the canvas opens to an empty board — no error.
+- Seeding is gated by a `…-seeded-<SEED_VERSION>` flag so re-opens
+  don't clobber in-progress edits. Bump `SEED_VERSION` in the sidecar
+  to invalidate the flag and force a fresh seed on next reload (only
+  affects visitors whose localStorage is empty at that moment).
 
-**To publish a snapshot to the team (any contributor or agent).**
-1. Open the canvas in a browser; edit notes.
-2. Click **export → clipboard** in the scratchpad toolbar. The button
-   copies a paste-ready `window.SEED_NOTES = [...]` block.
-3. Paste over the `SEED_NOTES` array in
-   `docs/command-center-notes.js`. (Agents: just edit the file
-   directly without the round-trip; the format is plain JSON.)
-4. Bump `window.SEED_VERSION` in the same file (`"v1"` → `"v2"`) if
-   you want existing visitors to re-seed on their next reload.
-5. `git commit + push`. The next `git pull` + page reload propagates.
+**Sharing notes across contributors is out of scope for now.** The
+sidecar is per-machine; there is no automated git-backed sync. If you
+want notes others should see, dump them into the relevant
+`docs/architecture/*.md`, into this file, or post them directly in
+chat / a PR comment.
 
-**If you've used the canvas before and don't see fresh seeds**, that's
-expected — `load()` returns your existing localStorage verbatim before
-considering the seed. To pick up a refreshed batch, either bump
-`SEED_VERSION` (forces everyone to re-seed when their localStorage
-becomes empty) or clear `brainstorm-scratch-notes-v1` (and the
-matching `…-seeded-*` flag) from your browser's storage panel and
-reload.
-
-**Convention for note text.** End with `— <handle>, <YYYY-MM-DD>` so
-future readers know who wrote it and when. Keep notes short and
-actionable; longer prose belongs in `docs/architecture/` or this file.
-Pink for blockers / regression warnings, blue for unresolved design
-questions, yellow for general findings, sage for status / done.
+**Authoring convention (for self-documented notes).** End with
+`— <handle>, <YYYY-MM-DD>` so future-you knows who wrote what and
+when. Pink for blockers / regression warnings, blue for unresolved
+design questions, yellow for general findings, sage for status / done.
+A toolbar **export → clipboard** button copies the current notes as a
+paste-ready `window.SEED_NOTES = [...]` block — useful for backing up
+or rebuilding the sidecar on another machine.
 
 ## Historical notes (preserve)
 

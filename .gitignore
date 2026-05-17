@@ -12,6 +12,10 @@ node_modules/
 # (canonical config lives in .claude-plugin/plugin.json under mcpServers)
 .mcp.json
 
+# Local team scratchpad: the canvas + its seed sidecar are local-only
+docs/Command Center.html
+docs/command-center-notes.js
+
 # Queue files
 queue.json
 
