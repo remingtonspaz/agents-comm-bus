@@ -35,12 +35,21 @@ export class CodexBridge {
             },
         });
         for (const comm of comms) {
-            if (typeof comm.onCallback === "function") {
-                comm.onCallback(async (event) => {
-                    await this.handleCommCallback(comm, event);
-                });
-            }
+            this.attachComm(comm);
         }
+    }
+    attachComm(comm) {
+        if (typeof comm.onCallback === "function") {
+            comm.onCallback(async (event) => {
+                await this.handleCommCallback(comm, event);
+            });
+        }
+    }
+    detachComm(_commId, _accountId) {
+        // CodexBridge keeps no per-adapter state.
+    }
+    invalidateRegistrationCaches() {
+        this.ownedAccountsCache = null;
     }
     async onInboundConversation(conversation) {
         if (conversation.agent !== this.agentId)

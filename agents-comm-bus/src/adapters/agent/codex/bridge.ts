@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 
 import {
   SCHEMA_VERSION_SESSION,
+  type AccountId,
   type AgentId,
   type CallbackEvent,
   type ChatRef,
   type CommAdapter,
+  type CommId,
   type Conversation,
   type InlineKeyboardButton,
   type Query,
@@ -96,12 +98,24 @@ export class CodexBridge implements AgentBridge {
     });
 
     for (const comm of comms) {
-      if (typeof comm.onCallback === "function") {
-        comm.onCallback(async (event) => {
-          await this.handleCommCallback(comm, event);
-        });
-      }
+      this.attachComm(comm);
     }
+  }
+
+  attachComm(comm: CommAdapter): void {
+    if (typeof comm.onCallback === "function") {
+      comm.onCallback(async (event) => {
+        await this.handleCommCallback(comm, event);
+      });
+    }
+  }
+
+  detachComm(_commId: CommId, _accountId: AccountId): void {
+    // CodexBridge keeps no per-adapter state.
+  }
+
+  invalidateRegistrationCaches(): void {
+    this.ownedAccountsCache = null;
   }
 
   async onInboundConversation(conversation: Conversation): Promise<void> {

@@ -3,6 +3,7 @@ import { accountAdd } from "./account-add.js";
 import { accountList } from "./account-list.js";
 import { accountRemove } from "./account-remove.js";
 import { parseMigrateArgs, runMigration } from "./migrate.js";
+import { reloadDaemonRegistrations } from "./reload-helper.js";
 async function main() {
     const [command, ...rest] = process.argv.slice(2);
     const args = parseArgs(rest);
@@ -16,7 +17,8 @@ async function main() {
                 botToken: args.botToken ?? args["bot-token"],
                 credentialsRef: args.credentialsRef ?? args["credentials-ref"],
             });
-            console.log(JSON.stringify(redact(rec), null, 2));
+            const reload = await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ...redact(rec), reload }, null, 2));
             return;
         }
         case "account-list": {
@@ -35,7 +37,8 @@ async function main() {
                 comm: args.comm,
                 accountLabel: required(args.accountLabel ?? args["account-label"], "--account-label"),
             });
-            console.log(JSON.stringify({ ok: true }, null, 2));
+            const reload = await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ok: true, reload }, null, 2));
             return;
         }
         case "migrate": {

@@ -1,0 +1,61 @@
+import { readFile } from "node:fs/promises";
+
+import { DAEMON_VERSION } from "../config.js";
+import { connectIpc } from "../ipc/client.js";
+import { resolveStatePaths } from "../paths.js";
+
+export interface ReloadResult {
+  attempted: boolean;
+  ok?: boolean;
+  reason?: string;
+  summary?: unknown;
+}
+
+/**
+ * Best-effort hot-reload trigger for the CLI's account-add / account-remove
+ * commands. Reads the daemon's discovery files and, if a daemon is alive,
+ * fires `reload_registrations` over a one-shot WS connection. If no daemon
+ * is running (or the port file is stale), returns `{ attempted: false }`
+ * so the caller can print "the change takes effect on next daemon spawn"
+ * instead of throwing.
+ */
+export async function reloadDaemonRegistrations(options: {
+  timeoutMs?: number;
+} = {}): Promise<ReloadResult> {
+  const paths = resolveStatePaths();
+  const port = await readPortFile(paths.portFile);
+  if (port === undefined) {
+    return { attempted: false, reason: "no daemon port file" };
+  }
+
+  const timeoutMs = options.timeoutMs ?? 2_000;
+  let connection: Awaited<ReturnType<typeof connectIpc>> | null = null;
+  try {
+    connection = await connectIpc({
+      port,
+      clientVersion: DAEMON_VERSION,
+      timeoutMs,
+      metadata: { shimName: "agents-comm-bus/cli" },
+    });
+    const summary = await connection.request("reload_registrations");
+    return { attempted: true, ok: true, summary };
+  } catch (error) {
+    return {
+      attempted: true,
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    connection?.close();
+  }
+}
+
+async function readPortFile(portFile: string): Promise<number | undefined> {
+  try {
+    const raw = (await readFile(portFile, "utf8")).trim();
+    const port = Number(raw);
+    return Number.isInteger(port) && port > 0 && port < 65_536 ? port : undefined;
+  } catch {
+    return undefined;
+  }
+}

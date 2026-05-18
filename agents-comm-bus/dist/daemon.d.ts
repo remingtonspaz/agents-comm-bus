@@ -1,3 +1,4 @@
+import { type AccountId, type CommId } from "../../agents-comm-bus-core/dist/index.js";
 import type { AgentBridgeFactory } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 export type { AgentBridge, AgentBridgeFactory, AgentBridgeContext, } from "./runtime/agent-bridge.js";
@@ -43,4 +44,20 @@ export interface RunDaemonOptions {
  *      (which starts the comm pollers).
  */
 export declare function runDaemon(options: RunDaemonOptions): Promise<void>;
+export interface ReloadSummary {
+    ok: true;
+    added: Array<{
+        comm: CommId;
+        account_id: AccountId;
+    }>;
+    removed: Array<{
+        comm: CommId;
+        account_id: AccountId;
+    }>;
+    skipped: Array<{
+        comm: CommId;
+        account_id?: string;
+        reason: string;
+    }>;
+}
 //# sourceMappingURL=daemon.d.ts.map

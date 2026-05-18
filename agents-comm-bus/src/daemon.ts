@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 
 import {
   type AccountId,
+  type AccountRegistration,
   type CommAdapter,
   type CommId,
 } from "../../agents-comm-bus-core/dist/index.js";
@@ -150,10 +151,27 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     }
   }
 
+  const reloadRegistrations = (): Promise<ReloadSummary> =>
+    reloadAdapters({
+      factories: options.commAdapterFactories,
+      bridges,
+      bus,
+      storage,
+      env,
+      blobs,
+      stateRoot: paths.root,
+    });
+
   const server = await startIpcServer({
     metadata: { stateRoot: paths.root },
     onRequest: async (request, socket) =>
-      dispatchIpc(request, { bus, ipcMethods, bridgesByMethod, socket }),
+      dispatchIpc(request, {
+        bus,
+        ipcMethods,
+        bridgesByMethod,
+        socket,
+        reloadRegistrations,
+      }),
   });
   try {
     await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
@@ -182,18 +200,15 @@ async function loadCommAdapters(input: {
     });
     for (const registration of registrations) {
       if (attachedBotIds.has(registration.bot_user_id)) continue;
-      const resolved = await factory.resolveCredentials(registration, input.env);
-      if (!resolved) {
-        console.error(
-          `agents-comm-bus: skipping ${factory.commId} account ${registration.account_label} ` +
-            `for project ${registration.project} (could not resolve credentials_ref=${registration.credentials_ref})`,
-        );
-        continue;
-      }
-      comms.push(factory.create(resolved.credentials, registration.bot_user_id as AccountId, {
+      const adapter = await createAdapterFromRegistration({
+        factory,
+        registration,
+        env: input.env,
         blobs: input.blobs,
         stateRoot: input.stateRoot,
-      }));
+      });
+      if (!adapter) continue;
+      comms.push(adapter);
       attachedBotIds.add(registration.bot_user_id);
     }
 
@@ -211,6 +226,154 @@ async function loadCommAdapters(input: {
   return comms;
 }
 
+async function createAdapterFromRegistration(input: {
+  factory: CommAdapterFactory;
+  registration: AccountRegistration;
+  env: NodeJS.ProcessEnv;
+  blobs: ContentAddressedBlobStore;
+  stateRoot: string;
+}): Promise<CommAdapter | null> {
+  const resolved = await input.factory.resolveCredentials(input.registration, input.env);
+  if (!resolved) {
+    console.error(
+      `agents-comm-bus: skipping ${input.factory.commId} account ${input.registration.account_label} ` +
+        `for project ${input.registration.project} (could not resolve credentials_ref=${input.registration.credentials_ref})`,
+    );
+    return null;
+  }
+  return input.factory.create(resolved.credentials, input.registration.bot_user_id as AccountId, {
+    blobs: input.blobs,
+    stateRoot: input.stateRoot,
+  });
+}
+
+export interface ReloadSummary {
+  ok: true;
+  added: Array<{ comm: CommId; account_id: AccountId }>;
+  removed: Array<{ comm: CommId; account_id: AccountId }>;
+  skipped: Array<{ comm: CommId; account_id?: string; reason: string }>;
+}
+
+/**
+ * Reconcile the live comm-adapter set with `account_registrations`. Called
+ * from the `reload_registrations` IPC method after the CLI writes (or
+ * deletes) a row. Diff is by `(commId, bot_user_id)`: rows that exist in
+ * storage but not in the bus are constructed + started + attached to
+ * bridges; adapters that exist in the bus but not in storage are detached
+ * + stopped. Bridge registration caches are wiped at the end so the next
+ * inbound drain sees the new ownership set.
+ *
+ * The reload is best-effort: a credential resolution failure or adapter
+ * start failure surfaces in the `skipped` list and does not abort the
+ * other diffs. Adapter `stop()` failures on remove are logged but do not
+ * leave the bus in an inconsistent state — the adapter has already been
+ * detached from the map.
+ */
+async function reloadAdapters(input: {
+  factories: CommAdapterFactory[];
+  bridges: AgentBridge[];
+  bus: MessageBus;
+  storage: Awaited<ReturnType<typeof openSqliteStorage>>;
+  env: NodeJS.ProcessEnv;
+  blobs: ContentAddressedBlobStore;
+  stateRoot: string;
+}): Promise<ReloadSummary> {
+  const added: ReloadSummary["added"] = [];
+  const removed: ReloadSummary["removed"] = [];
+  const skipped: ReloadSummary["skipped"] = [];
+
+  type DesiredEntry = { factory: CommAdapterFactory; registration: AccountRegistration };
+  const desired = new Map<string, DesiredEntry>();
+  for (const factory of input.factories) {
+    const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
+    for (const reg of regs) {
+      const key = adapterMapKey(factory.commId, reg.bot_user_id as AccountId);
+      if (!desired.has(key)) desired.set(key, { factory, registration: reg });
+    }
+  }
+
+  const current = new Map<string, { commId: CommId; accountId: AccountId }>();
+  for (const entry of input.bus.listComms()) {
+    current.set(adapterMapKey(entry.commId, entry.accountId), entry);
+  }
+
+  for (const [key, entry] of desired) {
+    if (current.has(key)) continue;
+    const adapter = await createAdapterFromRegistration({
+      factory: entry.factory,
+      registration: entry.registration,
+      env: input.env,
+      blobs: input.blobs,
+      stateRoot: input.stateRoot,
+    });
+    if (!adapter) {
+      skipped.push({
+        comm: entry.registration.comm,
+        account_id: entry.registration.bot_user_id,
+        reason: `could not resolve credentials_ref=${entry.registration.credentials_ref}`,
+      });
+      continue;
+    }
+    try {
+      input.bus.registerComm(adapter);
+      for (const bridge of input.bridges) {
+        bridge.attachComm?.(adapter);
+      }
+      await adapter.start();
+      added.push({
+        comm: entry.registration.comm,
+        account_id: entry.registration.bot_user_id as AccountId,
+      });
+    } catch (error) {
+      input.bus.unregisterComm(
+        entry.registration.comm,
+        entry.registration.bot_user_id as AccountId,
+      );
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(
+        `agents-comm-bus: failed to start ${entry.registration.comm}/${entry.registration.bot_user_id} ` +
+          `on reload: ${reason}`,
+      );
+      skipped.push({
+        comm: entry.registration.comm,
+        account_id: entry.registration.bot_user_id,
+        reason: `failed to start adapter: ${reason}`,
+      });
+    }
+  }
+
+  for (const [key, entry] of current) {
+    if (desired.has(key)) continue;
+    const adapter = input.bus.unregisterComm(entry.commId, entry.accountId);
+    for (const bridge of input.bridges) {
+      bridge.detachComm?.(entry.commId, entry.accountId);
+    }
+    if (adapter) {
+      try {
+        await adapter.stop();
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to stop ${entry.commId}/${entry.accountId} on reload: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    removed.push({ comm: entry.commId, account_id: entry.accountId });
+  }
+
+  if (added.length > 0 || removed.length > 0) {
+    for (const bridge of input.bridges) {
+      bridge.invalidateRegistrationCaches?.();
+    }
+  }
+
+  return { ok: true, added, removed, skipped };
+}
+
+function adapterMapKey(commId: CommId, accountId: AccountId | string): string {
+  return `${commId}:${accountId}`;
+}
+
 async function dispatchIpc(
   request: IpcRequest,
   context: {
@@ -218,6 +381,7 @@ async function dispatchIpc(
     ipcMethods: Map<string, IpcMethodHandler>;
     bridgesByMethod: Map<string, AgentBridge>;
     socket?: { once(event: "close", handler: () => void): void };
+    reloadRegistrations: () => Promise<ReloadSummary>;
   },
 ): Promise<unknown> {
   const params = (request.params ?? {}) as Record<string, unknown>;
@@ -227,6 +391,10 @@ async function dispatchIpc(
       comm: params.comm as CommId | undefined,
       limit: typeof params.limit === "number" ? params.limit : 25,
     });
+  }
+
+  if (request.method === "reload_registrations") {
+    return context.reloadRegistrations();
   }
 
   const bridge = context.bridgesByMethod.get(request.method);

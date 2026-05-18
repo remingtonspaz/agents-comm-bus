@@ -115,6 +115,29 @@ export class MessageBus {
     });
   }
 
+  /**
+   * Detach a comm adapter from the bus map. Does NOT call `comm.stop()` —
+   * callers (typically the daemon's reload path) are responsible for the
+   * lifecycle so they can sequence stop + detach in the order they want.
+   * Returns the removed adapter so the caller can stop it, or null if no
+   * adapter was registered for that `(commId, accountId)`.
+   */
+  unregisterComm(commId: CommId, accountId: AccountId): CommAdapter | null {
+    const key = adapterKey(commId, accountId);
+    const adapter = this.comms.get(key);
+    if (!adapter) return null;
+    this.comms.delete(key);
+    return adapter;
+  }
+
+  /** List the `(commId, accountId)` pairs currently attached to the bus. */
+  listComms(): Array<{ commId: CommId; accountId: AccountId }> {
+    return Array.from(this.comms.values()).map((comm) => ({
+      commId: comm.id,
+      accountId: comm.accountId,
+    }));
+  }
+
   setDispatchSink(sink: DispatchSink): void {
     this.dispatchSink = sink;
   }

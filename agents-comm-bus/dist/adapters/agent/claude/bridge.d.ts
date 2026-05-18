@@ -8,7 +8,7 @@
  * `attach` to the bus + the running comm adapters; everything Claude-specific
  * stays inside this module.
  */
-import { type AgentId, type CommAdapter, type Conversation, type QueryId, type Storage } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "../../../../../agents-comm-bus-core/dist/index.js";
 import type { MessageBus } from "../../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory } from "../../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../../runtime/pending-inbound.js";
@@ -57,6 +57,9 @@ export declare class ClaudeBridge implements AgentBridge {
      * wake response) and the inline-keyboard callback handler.
      */
     attach(comms: CommAdapter[]): void;
+    attachComm(comm: CommAdapter): void;
+    detachComm(_commId: CommId, _accountId: AccountId): void;
+    invalidateRegistrationCaches(): void;
     onInboundConversation(conversation: Conversation): Promise<void>;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {

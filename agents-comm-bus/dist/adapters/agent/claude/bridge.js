@@ -47,12 +47,22 @@ export class ClaudeBridge {
             },
         });
         for (const comm of comms) {
-            if (typeof comm.onCallback === "function") {
-                comm.onCallback(async (event) => {
-                    await this.handleCommCallback(comm, event);
-                });
-            }
+            this.attachComm(comm);
         }
+    }
+    attachComm(comm) {
+        if (typeof comm.onCallback === "function") {
+            comm.onCallback(async (event) => {
+                await this.handleCommCallback(comm, event);
+            });
+        }
+    }
+    detachComm(_commId, _accountId) {
+        // ClaudeBridge keeps no per-adapter state beyond the onCallback handler,
+        // which is owned by the adapter and discarded when the adapter stops.
+    }
+    invalidateRegistrationCaches() {
+        this.ownedAccountsCache = null;
     }
     async onInboundConversation(conversation) {
         if (conversation.agent !== this.agentId)

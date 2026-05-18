@@ -1,4 +1,4 @@
-import type { AgentId, AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "../../agents-comm-bus-core/dist/index.js";
+import type { AccountId, AgentId, AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "../../agents-comm-bus-core/dist/index.js";
 export interface MessageBusOptions {
     project: string;
     storage: Storage;
@@ -59,6 +59,19 @@ export declare class MessageBus {
     private readonly resolveSinks;
     constructor(options: MessageBusOptions);
     registerComm(comm: CommAdapter): void;
+    /**
+     * Detach a comm adapter from the bus map. Does NOT call `comm.stop()` —
+     * callers (typically the daemon's reload path) are responsible for the
+     * lifecycle so they can sequence stop + detach in the order they want.
+     * Returns the removed adapter so the caller can stop it, or null if no
+     * adapter was registered for that `(commId, accountId)`.
+     */
+    unregisterComm(commId: CommId, accountId: AccountId): CommAdapter | null;
+    /** List the `(commId, accountId)` pairs currently attached to the bus. */
+    listComms(): Array<{
+        commId: CommId;
+        accountId: AccountId;
+    }>;
     setDispatchSink(sink: DispatchSink): void;
     setResolveSink(sink: ResolveSink): void;
     start(): Promise<void>;
