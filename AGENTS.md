@@ -308,6 +308,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
   must pass the detected Codex thread id to the bootstrapper with `-ThreadId`;
   relying on inherited env alone can relaunch Codex on a fresh comm-bus session
   instead of the existing thread.
+- **Codex `PermissionRequest` hooks disable auto-mode classification.**
+  Unlike Claude, enabling a Codex `PermissionRequest` hook currently disables
+  Codex's auto-mode classifier. The current workaround for the most seamless
+  Codex experience is to manually disable the `PermissionRequest` hook and
+  rely on local Codex permission handling rather than comm-bus-routed
+  permission prompts.
 - **Codex app-server lifecycle is MCP-owned.** The MCP shim registers the
   Codex session with `manage_app_server_lifecycle=true` and
   `replace_existing_lease=true`. When that lease closes and remains idle after
