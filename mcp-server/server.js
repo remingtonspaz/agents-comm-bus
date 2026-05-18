@@ -13,6 +13,7 @@ import {
 
 import { ensureDaemon } from "../agents-comm-bus/dist/bootstrap/ensure-daemon.js";
 import { connectIpc } from "../agents-comm-bus/dist/ipc/client.js";
+import { PersistentIpcClient } from "../agents-comm-bus/dist/ipc/persistent-client.js";
 import { DAEMON_VERSION } from "../agents-comm-bus/dist/config.js";
 
 function log(message) {
@@ -235,35 +236,39 @@ async function startPersistentCodexRegistration() {
     project: process.cwd(),
     session,
   };
+  const registerParams = {
+    agent: "codex",
+    session,
+    project: process.cwd(),
+    cwd: process.cwd(),
+    app_server_url: appServerUrl,
+    source: "mcp-server",
+    replace_existing_lease: true,
+    manage_app_server_lifecycle: true,
+  };
+
+  const client = new PersistentIpcClient({
+    clientVersion: DAEMON_VERSION,
+    metadata,
+    spawnDaemon: spawnDaemonFromMcpShim,
+    log: (msg) => log(`ipc: ${msg}`),
+    onDisconnected: (reason) => log(`ipc disconnected: ${reason}`),
+    onReconnected: () => log("ipc reconnected; replaying Codex registration"),
+    onError: (error) => log(`ipc error: ${error.message}`),
+  });
+
   try {
-    const ensured = await ensureDaemon({
-      clientVersion: DAEMON_VERSION,
-      metadata,
-      spawnDaemon: spawnDaemonFromMcpShim,
-    });
-    const connection = await connectIpc({
-      port: ensured.port,
-      clientVersion: DAEMON_VERSION,
-      metadata,
-    });
-    const registered = await connection.request("codex_register_session", {
-      agent: "codex",
-      session,
-      project: process.cwd(),
-      cwd: process.cwd(),
-      app_server_url: appServerUrl,
-      source: "mcp-server",
-      replace_existing_lease: true,
-      manage_app_server_lifecycle: true,
-    });
+    await client.start();
+    const registered = await client.registerReplay("codex_register_session", registerParams);
     if (!registered?.ok) {
-      connection.close();
+      client.close();
       log(`Codex session registration skipped: ${registered?.reason ?? "unknown failure"}`);
       return;
     }
-    persistentRegistration = connection;
+    persistentRegistration = client;
     log(`Codex session registered: session=${session} app_server_url=${appServerUrl}`);
   } catch (error) {
+    client.close();
     log(`Codex session registration failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

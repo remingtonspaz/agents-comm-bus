@@ -2,6 +2,11 @@ declare module "ws" {
   export type RawData = Buffer | ArrayBuffer | Buffer[];
 
   export class WebSocket {
+    static readonly CONNECTING: 0;
+    static readonly OPEN: 1;
+    static readonly CLOSING: 2;
+    static readonly CLOSED: 3;
+    readonly readyState: 0 | 1 | 2 | 3;
     constructor(url: string);
     send(data: string): void;
     close(code?: number, reason?: string): void;
@@ -10,8 +15,11 @@ declare module "ws" {
     once(event: "error", handler: (error: Error) => void): void;
     once(event: "close", handler: () => void): void;
     on(event: "message", handler: (data: RawData) => void): void;
+    on(event: "close", handler: () => void): void;
+    on(event: "error", handler: (error: Error) => void): void;
     on(event: string, handler: (...args: unknown[]) => void): void;
     off(event: "message", handler: (data: RawData) => void): void;
+    removeAllListeners(event?: string): void;
   }
 
   export default WebSocket;
