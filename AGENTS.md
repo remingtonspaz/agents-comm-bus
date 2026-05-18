@@ -170,6 +170,15 @@ npm install
 npm run build
 ```
 
+**Optional: install the CLI on PATH.** From the `agents-comm-bus` folder
+after building, `npm link` exposes three bin commands globally:
+`agents-comm` (short alias), `agents-comm-bus` (long alias), and
+`agents-comm-bus-daemon` (the daemon serve entry, normally spawned via
+hooks). After linking, you can run `agents-comm account-list` from any
+directory instead of `node agents-comm-bus\dist\cli\index.js account-list`.
+On Windows the wrappers land as `.cmd` files under `%APPDATA%\npm\`; on
+macOS/Linux they're shebang scripts in the npm global bin dir.
+
 Tests (only the bootstrap-race + IPC-versioning suites run by default; others
 are exercised via build typecheck):
 
@@ -437,6 +446,9 @@ For a fresh dev clone:
 ```powershell
 cp .mcp.json.template .mcp.json
 # Edit .mcp.json: set absolute paths and credentials
+# If you ran `npm link` in agents-comm-bus/, use:
+#   agents-comm account-add ...
+# Otherwise:
 node agents-comm-bus\dist\cli\index.js account-add `
   --project "<absolute project path>" `
   --agent claude `
