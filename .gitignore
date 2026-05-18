@@ -34,3 +34,5 @@ npm-debug.log*
 *.swp
 *.swo
 .env
+
+tests/automated_e2e/
