@@ -312,11 +312,71 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
+const DEFAULT_COMM = "telegram";
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
+      name: "comm_send_message",
+      description: "Send a text message via the agents-comm-bus daemon. Supply `comm` to pick the platform (defaults to 'telegram'). Target via the nested `target` object or the flat `chat_id`/`message_thread_id` fields (the flat form is preserved for Telegram backcompat).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          comm: { type: "string", description: "Comm to route through (e.g. 'telegram', 'matrix'). Defaults to 'telegram'." },
+          message: { type: "string", description: "The message text to send" },
+          target: {
+            type: "object",
+            description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
+            properties: {
+              chat_native_id: { type: ["string", "number"] },
+              thread_native_id: { type: ["string", "number"] },
+              account: { type: ["string", "number"] },
+            },
+          },
+          chat_id: { type: ["string", "number"], description: "Backcompat flat target (Telegram chat id)" },
+          message_thread_id: { type: ["string", "number"], description: "Backcompat flat target (Telegram forum/topic thread id)" },
+        },
+        required: ["message"],
+      },
+    },
+    {
+      name: "comm_send_attachment",
+      description: "Send a file/image attachment via the agents-comm-bus daemon. Same `comm`/`target` semantics as `comm_send_message`. The adapter handles platform-specific upload mechanics (e.g. Matrix media repo upload is encapsulated).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          comm: { type: "string", description: "Comm to route through. Defaults to 'telegram'." },
+          path: { type: "string", description: "Absolute path to the file/image" },
+          caption: { type: "string", description: "Optional caption (Telegram caption / Matrix body / Discord content)" },
+          target: {
+            type: "object",
+            description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
+            properties: {
+              chat_native_id: { type: ["string", "number"] },
+              thread_native_id: { type: ["string", "number"] },
+              account: { type: ["string", "number"] },
+            },
+          },
+          chat_id: { type: ["string", "number"], description: "Backcompat flat target (Telegram chat id)" },
+          message_thread_id: { type: ["string", "number"], description: "Backcompat flat target (Telegram forum/topic thread id)" },
+        },
+        required: ["path"],
+      },
+    },
+    {
+      name: "comm_check_messages",
+      description: "Drain pending inbound messages from the agents-comm-bus daemon, optionally filtered by `comm`.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          comm: { type: "string", description: "Optional comm filter ('telegram', 'matrix', ...)" },
+        },
+        required: [],
+      },
+    },
+    {
       name: "telegram_send",
-      description: "Send a text message via the agents-comm-bus Telegram daemon. Supply chat_id to target explicitly; omitted target uses the session's most recent inbound conversation or returns an error.",
+      description: "[alias for comm_send_message] Send a text message via Telegram. Kept for backcompat with long-running agent sessions whose conversation context references this name literally.",
       inputSchema: {
         type: "object",
         properties: {
@@ -329,7 +389,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "telegram_send_image",
-      description: "Send an image or file via the agents-comm-bus Telegram daemon.",
+      description: "[alias for comm_send_attachment] Send an image/file via Telegram.",
       inputSchema: {
         type: "object",
         properties: {
@@ -343,7 +403,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "telegram_check_messages",
-      description: "Drain pending inbound Telegram messages from the agents-comm-bus daemon.",
+      description: "[alias for comm_check_messages with comm='telegram'] Drain pending inbound Telegram messages.",
       inputSchema: { type: "object", properties: {}, required: [] },
     },
     {
@@ -365,23 +425,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
   try {
-    if (name === "telegram_send") {
-      if (!args.message) return toolError("Error: message is required");
-      const result = await daemonRequest("telegram_send", args);
-      return toolText(`Message sent via agents-comm-bus (${result.message_id})`);
+    if (name === "comm_send_message" || name === "telegram_send") {
+      return await handleSendMessage(args, name === "telegram_send" ? "telegram" : (args.comm ?? DEFAULT_COMM));
     }
 
-    if (name === "telegram_send_image") {
-      if (!args.path) return toolError("Error: path is required");
-      if (!existsSync(args.path)) return toolError(`Error: File not found: ${args.path}`);
-      const result = await daemonRequest("telegram_send_image", args);
-      return toolText(`Image sent via agents-comm-bus (${result.message_id})`);
+    if (name === "comm_send_attachment" || name === "telegram_send_image") {
+      return await handleSendAttachment(args, name === "telegram_send_image" ? "telegram" : (args.comm ?? DEFAULT_COMM));
     }
 
-    if (name === "telegram_check_messages") {
-      const messages = await daemonRequest("telegram_check_messages", args);
-      if (!messages.length) return toolText("No pending messages from Telegram");
-      return toolText(formatMessages(messages));
+    if (name === "comm_check_messages" || name === "telegram_check_messages") {
+      return await handleCheckMessages(args, name === "telegram_check_messages" ? "telegram" : args.comm);
     }
 
     if (name === "list_conversations") {
@@ -395,6 +448,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return toolError(error instanceof Error ? error.message : String(error));
   }
 });
+
+async function handleSendMessage(args, comm) {
+  if (!args.message) return toolError("Error: message is required");
+  const params = { message: args.message, ...flattenTarget(args) };
+  const result = await daemonRequest(`${comm}_send`, params);
+  return toolText(`Message sent via agents-comm-bus (${result.message_id})`);
+}
+
+async function handleSendAttachment(args, comm) {
+  if (!args.path) return toolError("Error: path is required");
+  if (!existsSync(args.path)) return toolError(`Error: File not found: ${args.path}`);
+  const params = {
+    path: args.path,
+    caption: args.caption,
+    ...flattenTarget(args),
+  };
+  const result = await daemonRequest(`${comm}_send_image`, params);
+  return toolText(`Attachment sent via agents-comm-bus (${result.message_id})`);
+}
+
+async function handleCheckMessages(args, commFilter) {
+  // Today there's only Telegram; once Matrix etc. land, this can fan-out
+  // across all registered comms or use a generic daemon IPC. For now,
+  // route through telegram_check_messages (which drains the shared
+  // pending-inbound queue) and filter the response client-side.
+  const messages = await daemonRequest("telegram_check_messages", args);
+  const filtered = commFilter
+    ? messages.filter((m) => m?.message?.chat?.comm === commFilter)
+    : messages;
+  if (!filtered.length) {
+    return toolText(`No pending messages${commFilter ? ` from ${commFilter}` : ""}`);
+  }
+  return toolText(formatMessages(filtered));
+}
+
+function flattenTarget(args) {
+  const out = {};
+  if (args.target && typeof args.target === "object") {
+    if (args.target.chat_native_id != null) out.chat_id = args.target.chat_native_id;
+    if (args.target.thread_native_id != null) out.message_thread_id = args.target.thread_native_id;
+  }
+  if (args.chat_id != null) out.chat_id = args.chat_id;
+  if (args.message_thread_id != null) out.message_thread_id = args.message_thread_id;
+  return out;
+}
 
 function toolText(text) {
   return { content: [{ type: "text", text }] };
