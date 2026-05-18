@@ -409,6 +409,32 @@ export class SqliteStorage implements Storage {
     return row ? this.sessionFromRow(row) : null;
   }
 
+  async listSessions(filter: {
+    project?: string;
+    agent?: AgentId;
+    status?: Session["status"];
+  } = {}): Promise<Session[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filter.project !== undefined) {
+      where.push("project = ?");
+      params.push(filter.project);
+    }
+    if (filter.agent !== undefined) {
+      where.push("agent = ?");
+      params.push(filter.agent);
+    }
+    if (filter.status !== undefined) {
+      where.push("status = ?");
+      params.push(filter.status);
+    }
+    const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions ${whereClause} ORDER BY created_at DESC`)
+      .all(...params);
+    return (rows as unknown[]).map((row) => this.sessionFromRow(row));
+  }
+
   async setSessionMostRecentInbound(
     session: SessionId,
     conversation_id: ConversationId,

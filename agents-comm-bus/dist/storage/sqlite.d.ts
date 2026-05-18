@@ -47,6 +47,11 @@ export declare class SqliteStorage implements Storage {
     acquireSessionLease(session: SessionId, connection_id: string, at: number): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;
     getSession(session: SessionId): Promise<Session | null>;
+    listSessions(filter?: {
+        project?: string;
+        agent?: AgentId;
+        status?: Session["status"];
+    }): Promise<Session[]>;
     setSessionMostRecentInbound(session: SessionId, conversation_id: ConversationId): Promise<void>;
     close(): Promise<void>;
     private accountFromRow;

@@ -352,5 +352,18 @@ class MemoryStorage implements Storage {
     return this.sessions.get(session) ?? null;
   }
 
+  async listSessions(filter: {
+    project?: string;
+    agent?: AgentId;
+    status?: Session["status"];
+  } = {}): Promise<Session[]> {
+    return Array.from(this.sessions.values()).filter((s) => {
+      if (filter.project !== undefined && s.project !== filter.project) return false;
+      if (filter.agent !== undefined && s.agent !== filter.agent) return false;
+      if (filter.status !== undefined && s.status !== filter.status) return false;
+      return true;
+    });
+  }
+
   async close(): Promise<void> {}
 }

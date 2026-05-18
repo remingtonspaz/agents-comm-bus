@@ -2,7 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentId, Conversation, SessionId } from "../../../../../agents-comm-bus-core/dist/index.js";
+import type {
+  AgentId,
+  Conversation,
+  SessionId,
+  Storage,
+} from "../../../../../agents-comm-bus-core/dist/index.js";
 
 export interface ClaudeWakeRegistration {
   session: SessionId;
@@ -64,8 +69,22 @@ export async function writeClaudeWakeResponse(
 
 export class ClaudeWakeRegistry {
   private readonly registrations = new Map<SessionId, ClaudeWakeRegistration>();
+  private storage: Storage | null = null;
 
   constructor(private readonly now: () => number = Date.now) {}
+
+  /**
+   * Inject the daemon's storage so wake lookups can fall back to the
+   * persisted `sessions` table when the in-memory map is empty (e.g. after
+   * a daemon restart, before the agent's MCP shim / hooks have re-issued
+   * `claude_register_session`). The Claude wake_dir is deterministic from
+   * project, so no extra schema column is needed — the session row's
+   * `project` is enough to reconstruct the dir via
+   * `claudeWakeDirForProject`.
+   */
+  setStorage(storage: Storage): void {
+    this.storage = storage;
+  }
 
   register(input: {
     session: SessionId;
@@ -102,7 +121,9 @@ export class ClaudeWakeRegistry {
     session: SessionId,
     payload: ClaudeWakeResponsePayload,
   ): Promise<boolean> {
-    const registration = this.registrations.get(session);
+    const registration =
+      this.registrations.get(session) ??
+      (await this.hydrateRegistrationForSession(session));
     if (!registration) return false;
     await writeClaudeWakeResponse(registration.wakeDir, payload);
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
@@ -111,9 +132,45 @@ export class ClaudeWakeRegistry {
 
   async wakeConversation(conversation: Conversation): Promise<boolean> {
     if (conversation.agent !== ("claude" as AgentId)) return false;
-    const registration = this.latestForProject(conversation.project);
+    const registration =
+      this.latestForProject(conversation.project) ??
+      (await this.hydrateLatestForProject(conversation.project));
     if (!registration) return false;
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
     return true;
+  }
+
+  /**
+   * On a miss in `wakeConversation`, look up the most recent Claude session
+   * for this project from storage and seed the in-memory map. The wake_dir
+   * is deterministic from project, so reconstruction is lossless even
+   * across daemon restarts.
+   */
+  private async hydrateLatestForProject(
+    project: string,
+  ): Promise<ClaudeWakeRegistration | undefined> {
+    if (!this.storage) return undefined;
+    const resolved = path.resolve(project);
+    const sessions = await this.storage.listSessions({
+      project: resolved,
+      agent: "claude" as AgentId,
+    });
+    if (sessions.length === 0) return undefined;
+    const latest = sessions[0]; // listSessions orders by created_at DESC.
+    return this.register({ session: latest.session_id, project: resolved });
+  }
+
+  /**
+   * On a miss in `writeResponseForSession`, look up the specific session
+   * row in storage and reconstruct its wake registration so we can write
+   * the wake response after a daemon restart.
+   */
+  private async hydrateRegistrationForSession(
+    session: SessionId,
+  ): Promise<ClaudeWakeRegistration | undefined> {
+    if (!this.storage) return undefined;
+    const record = await this.storage.getSession(session);
+    if (!record || record.agent !== ("claude" as AgentId)) return undefined;
+    return this.register({ session, project: record.project });
   }
 }

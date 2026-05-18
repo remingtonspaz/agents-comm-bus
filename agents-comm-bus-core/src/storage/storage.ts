@@ -118,6 +118,18 @@ export interface Storage {
     conversation_id: ConversationId,
   ): Promise<void>;
   getSession(session: SessionId): Promise<Session | null>;
+  /**
+   * List sessions matching optional filters. Used for hot-restart hydration
+   * of in-memory adapter state (e.g. ClaudeBridge's wake registry rebuilds
+   * its project → session map from this on demand, so the first inbound
+   * after a daemon restart can wake the right agent without waiting for
+   * the agent to re-register).
+   */
+  listSessions(filter?: {
+    project?: string;
+    agent?: AgentId;
+    status?: Session["status"];
+  }): Promise<Session[]>;
 
   // lifecycle
   close(): Promise<void>;

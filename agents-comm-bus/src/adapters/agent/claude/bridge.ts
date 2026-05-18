@@ -92,6 +92,7 @@ export class ClaudeBridge implements AgentBridge {
     // pendingInboundMax preserved as an option for symmetry but the daemon
     // now caps the shared queue itself; this class only drains it.
     void options.pendingInboundMax;
+    this.wake.setStorage(options.storage);
   }
 
   /**

@@ -28,6 +28,7 @@ export class ClaudeBridge {
         // pendingInboundMax preserved as an option for symmetry but the daemon
         // now caps the shared queue itself; this class only drains it.
         void options.pendingInboundMax;
+        this.wake.setStorage(options.storage);
     }
     /**
      * Wire Claude-specific behaviors into the bus + per-comm callbacks. The

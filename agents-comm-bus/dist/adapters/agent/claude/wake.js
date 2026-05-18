@@ -25,8 +25,21 @@ export async function writeClaudeWakeResponse(wakeDir, payload) {
 export class ClaudeWakeRegistry {
     now;
     registrations = new Map();
+    storage = null;
     constructor(now = Date.now) {
         this.now = now;
+    }
+    /**
+     * Inject the daemon's storage so wake lookups can fall back to the
+     * persisted `sessions` table when the in-memory map is empty (e.g. after
+     * a daemon restart, before the agent's MCP shim / hooks have re-issued
+     * `claude_register_session`). The Claude wake_dir is deterministic from
+     * project, so no extra schema column is needed — the session row's
+     * `project` is enough to reconstruct the dir via
+     * `claudeWakeDirForProject`.
+     */
+    setStorage(storage) {
+        this.storage = storage;
     }
     register(input) {
         const registration = {
@@ -54,7 +67,8 @@ export class ClaudeWakeRegistry {
         return this.registrations.get(session);
     }
     async writeResponseForSession(session, payload) {
-        const registration = this.registrations.get(session);
+        const registration = this.registrations.get(session) ??
+            (await this.hydrateRegistrationForSession(session));
         if (!registration)
             return false;
         await writeClaudeWakeResponse(registration.wakeDir, payload);
@@ -64,11 +78,44 @@ export class ClaudeWakeRegistry {
     async wakeConversation(conversation) {
         if (conversation.agent !== "claude")
             return false;
-        const registration = this.latestForProject(conversation.project);
+        const registration = this.latestForProject(conversation.project) ??
+            (await this.hydrateLatestForProject(conversation.project));
         if (!registration)
             return false;
         await writeClaudeWakeTrigger(registration.wakeDir, this.now);
         return true;
+    }
+    /**
+     * On a miss in `wakeConversation`, look up the most recent Claude session
+     * for this project from storage and seed the in-memory map. The wake_dir
+     * is deterministic from project, so reconstruction is lossless even
+     * across daemon restarts.
+     */
+    async hydrateLatestForProject(project) {
+        if (!this.storage)
+            return undefined;
+        const resolved = path.resolve(project);
+        const sessions = await this.storage.listSessions({
+            project: resolved,
+            agent: "claude",
+        });
+        if (sessions.length === 0)
+            return undefined;
+        const latest = sessions[0]; // listSessions orders by created_at DESC.
+        return this.register({ session: latest.session_id, project: resolved });
+    }
+    /**
+     * On a miss in `writeResponseForSession`, look up the specific session
+     * row in storage and reconstruct its wake registration so we can write
+     * the wake response after a daemon restart.
+     */
+    async hydrateRegistrationForSession(session) {
+        if (!this.storage)
+            return undefined;
+        const record = await this.storage.getSession(session);
+        if (!record || record.agent !== "claude")
+            return undefined;
+        return this.register({ session, project: record.project });
     }
 }
 //# sourceMappingURL=wake.js.map
