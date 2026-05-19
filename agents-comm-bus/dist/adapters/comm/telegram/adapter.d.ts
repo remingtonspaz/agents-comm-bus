@@ -18,6 +18,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private readonly options;
     readonly id: CommId;
     readonly accountId: AccountId;
+    readonly allowedSenderIds: readonly string[];
     private readonly now;
     private readonly allowedUserIds;
     private readonly sentByKey;

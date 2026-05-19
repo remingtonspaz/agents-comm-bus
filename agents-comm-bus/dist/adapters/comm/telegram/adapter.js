@@ -3,6 +3,7 @@ export class TelegramCommAdapter {
     options;
     id = "telegram";
     accountId;
+    allowedSenderIds;
     now;
     allowedUserIds;
     sentByKey = new Map();
@@ -18,6 +19,7 @@ export class TelegramCommAdapter {
         this.accountId = options.accountId;
         this.now = options.now ?? Date.now;
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
+        this.allowedSenderIds = Array.from(this.allowedUserIds);
         this.bot = options.bot ?? null;
         this.fetchImpl = options.fetch ?? fetch;
     }

@@ -73,6 +73,16 @@ export interface CommAdapter {
    */
   readonly accountId: AccountId;
 
+  /**
+   * Optional: sender ids the adapter has been configured to accept. Used by
+   * the bus's foreign-bot gate as a "pass" list — a foreign bot whose id is
+   * in this list bypasses the default-deny. Returning `undefined` (or
+   * omitting the field) means the bus falls back to its global foreign-bot
+   * policy. Adapters that don't have a per-instance allowlist concept can
+   * leave this unset.
+   */
+  readonly allowedSenderIds?: readonly string[];
+
   /** Start polling/streaming inbound traffic. */
   start(): Promise<void>;
   /** Stop and release platform connections. */

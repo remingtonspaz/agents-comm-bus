@@ -101,7 +101,12 @@ export class MessageBus {
             throw new Error(`duplicate inbound message: ${seenKey}`);
         }
         this.seen.record(seenKey, this.now());
-        if (!isForeignBotAllowed(message.sender)) {
+        const receivingAdapter = this.comms.get(adapterKey(message.chat.comm, message.chat.account));
+        const foreignBotPolicy = {
+            allowForeignBots: false,
+            allowedBotIds: receivingAdapter?.allowedSenderIds,
+        };
+        if (!isForeignBotAllowed(message.sender, foreignBotPolicy)) {
             await this.options.audit.append({
                 timestamp: this.now(),
                 kind: "loop_prevention_drop",

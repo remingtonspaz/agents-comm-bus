@@ -34,6 +34,7 @@ export interface TelegramCommAdapterOptions {
 export class TelegramCommAdapter implements CommAdapter {
   readonly id = "telegram" as CommId;
   readonly accountId: AccountId;
+  readonly allowedSenderIds: readonly string[];
 
   private readonly now: () => number;
   private readonly allowedUserIds: Set<string>;
@@ -50,6 +51,7 @@ export class TelegramCommAdapter implements CommAdapter {
     this.accountId = options.accountId;
     this.now = options.now ?? Date.now;
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
+    this.allowedSenderIds = Array.from(this.allowedUserIds);
     this.bot = options.bot ?? null;
     this.fetchImpl = options.fetch ?? fetch;
   }
