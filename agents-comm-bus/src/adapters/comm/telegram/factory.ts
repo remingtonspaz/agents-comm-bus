@@ -205,32 +205,45 @@ function normalizeCsv(value: string | undefined): string[] {
   return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-function mergeAllowed(fromEnv: string[], fromFile: string | undefined): string[] {
-  if (!fromFile) return fromEnv;
-  return fromEnv.includes(fromFile) ? fromEnv : [...fromEnv, fromFile];
+function mergeAllowed(fromEnv: string[], fromFile: string[] | undefined): string[] {
+  if (!fromFile || fromFile.length === 0) return fromEnv;
+  const out = [...fromEnv];
+  for (const id of fromFile) {
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
 }
 
 async function readProjectTelegramConfig(
   project: string,
-): Promise<{ botToken?: string; userId?: string } | undefined> {
+): Promise<{ botToken?: string; userId?: string[] } | undefined> {
   return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
 }
 
 async function readJsonTelegramConfig(
   filePath: string,
-): Promise<{ botToken?: string; userId?: string } | undefined> {
+): Promise<{ botToken?: string; userId?: string[] } | undefined> {
   try {
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw) as { botToken?: unknown; userId?: unknown };
     const botToken = typeof parsed.botToken === "string" ? parsed.botToken : undefined;
-    const userId = typeof parsed.userId === "string"
-      ? parsed.userId
-      : typeof parsed.userId === "number"
-        ? String(parsed.userId)
-        : undefined;
-    if (!botToken && !userId) return undefined;
-    return { botToken, userId };
+    const userId = normalizeUserIdField(parsed.userId);
+    if (!botToken && userId.length === 0) return undefined;
+    return { botToken, userId: userId.length > 0 ? userId : undefined };
   } catch {
     return undefined;
   }
+}
+
+function normalizeUserIdField(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((v) => (typeof v === "string" || typeof v === "number" ? String(v) : ""))
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (typeof raw === "string") return [raw.trim()].filter(Boolean);
+  if (typeof raw === "number") return [String(raw)];
+  return [];
 }
