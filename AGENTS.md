@@ -380,6 +380,19 @@ version-compatible handshake before deciding whether to reuse or respawn.
   Claude and Codex can both register Telegram as `account_label="main"` for
   the same chat. Omitting `agent` mixes transcripts and can let plain-text
   query replies resolve against the wrong agent. See commit `ef0c96e`.
+- **Don't remove `pendingInbound` entries by `message_id` alone in a bridge.**
+  The shared queue can hold two entries with the same `message_id` when the
+  same platform message reaches two bots (e.g. one Telegram group chat with
+  both a Claude bot and a Codex bot — each adapter pushes its own entry,
+  distinguished only by `chat.account`). Scoping a remove by message_id
+  alone wipes the sibling entry, so the *other* agent's drain hook
+  subsequently finds an empty queue and never injects the inbound into the
+  prompt. Symptom from the user's perspective: "wake fires but no inbound
+  appears." Remove by the composite key `(message_id, chat.comm, chat.account)`
+  — same shape `accountKey` already uses for filter paths. The Claude side
+  doesn't hit this because `ClaudeBridge.drainPendingInbound` removes by
+  index inside an `accountKey`-filtered loop; only the Codex side's
+  post-steer cleanup carried the bug.
 - **Don't forget to rebundle `mcp-server` after changing
   `bootstrap/ensure-daemon.ts`.** `mcp-server/dist/server.js` is an esbuild
   bundle that *inlines* `defaultSpawnDaemon`. The bundle stays stale until

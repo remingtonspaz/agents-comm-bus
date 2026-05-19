@@ -415,9 +415,17 @@ export class CodexBridge {
     removePendingInbound(entries) {
         if (entries.length === 0)
             return;
-        const messageIds = new Set(entries.map((entry) => entry.message.message_id));
+        // Scope the removal by (message_id, chat.comm, chat.account) so we
+        // only remove Codex-owned entries. The same Telegram message can
+        // appear in pendingInbound twice when multiple bots in the same
+        // chat each receive the update — entries share message_id but
+        // differ by chat.account. Filtering on message_id alone wipes the
+        // sibling entry that belongs to another agent (e.g. Claude), so
+        // its drain hook then sees an empty queue and never injects the
+        // inbound into the prompt.
+        const targetKeys = new Set(entries.map((entry) => entryKey(entry)));
         for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-            if (messageIds.has(this.options.pendingInbound[i].message.message_id)) {
+            if (targetKeys.has(entryKey(this.options.pendingInbound[i]))) {
                 this.options.pendingInbound.splice(i, 1);
             }
         }
@@ -425,6 +433,9 @@ export class CodexBridge {
 }
 function accountKey(entry) {
     return `${entry.message.chat.comm}:${entry.message.chat.account}`;
+}
+function entryKey(entry) {
+    return `${entry.message.message_id}::${accountKey(entry)}`;
 }
 function formatInboundMessagesForTurn(entries) {
     if (entries.length === 0) {
