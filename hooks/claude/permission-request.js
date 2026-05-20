@@ -13,6 +13,7 @@ import { ensureDaemon } from '../../agents-comm-bus/dist/bootstrap/ensure-daemon
 import { connectIpc } from '../../agents-comm-bus/dist/ipc/client.js';
 import {
   ensureClaudeWakeWatcher,
+  findCmdAncestor,
   resolveClaudeWakeDir,
   resolveProjectPath,
 } from './wake-support.js';
@@ -217,6 +218,10 @@ async function main() {
     session,
   };
 
+  // Discover persistent claude.exe PID for session ownership tracking.
+  const cmdInfo = findCmdAncestor();
+  const claudePid = cmdInfo?.claudePid;
+
   let ipc;
   try {
     ipc = await openDaemonConnection(metadata);
@@ -228,6 +233,8 @@ async function main() {
       wake_dir: wakeDir,
       hook: 'PermissionRequest',
       claude: hookInput,
+      owner_process_pid: claudePid,
+      owner_process_label: 'claude',
     });
     const result = await ipc.request('claude_open_query', {
       agent: 'claude',

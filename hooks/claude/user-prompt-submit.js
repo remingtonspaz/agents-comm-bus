@@ -13,6 +13,7 @@ import { ensureDaemon } from '../../agents-comm-bus/dist/bootstrap/ensure-daemon
 import { connectIpc } from '../../agents-comm-bus/dist/ipc/client.js';
 import {
   ensureClaudeWakeWatcher,
+  findCmdAncestor,
   resolveClaudeWakeDir,
   resolveProjectPath,
 } from './wake-support.js';
@@ -133,6 +134,12 @@ async function main() {
     wakeDir,
     log: (message) => process.stderr.write(`[claude-user-prompt-submit] ${message}\n`),
   });
+  // Discover the persistent claude.exe PID via the same process-tree walk the
+  // watcher uses. This becomes the session's `owner_process_pid` so the
+  // daemon can release the lease (or report ownership) when claude.exe dies
+  // — analogous to Codex's MCP-shim-provided pid.
+  const cmdInfo = findCmdAncestor();
+  const claudePid = cmdInfo?.claudePid;
   const metadata = {
     shimName: 'hooks/claude/user-prompt-submit.js',
     agent: 'claude',
@@ -152,6 +159,8 @@ async function main() {
       wake_dir: wakeDir,
       hook: 'UserPromptSubmit',
       claude: hookInput,
+      owner_process_pid: claudePid,
+      owner_process_label: 'claude',
     });
     const result = await ipc.request('claude_drain_inbound', {
       agent: 'claude',
