@@ -63,9 +63,19 @@ export const conversationAgentIdentityMigration: Migration = {
   },
 };
 
+export const allowlistMigration: Migration = {
+  version: 3,
+  description: "add allowlist_global and allowlist_per_bot tables",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "003_allowlist.sql"), "utf8");
+    await ctx.exec(sql);
+  },
+};
+
 export async function runStorageMigrations(db: SqliteLike): Promise<void> {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
     conversationAgentIdentityMigration,
+    allowlistMigration,
   ]);
 }

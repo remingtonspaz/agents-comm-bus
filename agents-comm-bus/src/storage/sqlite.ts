@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import type { ResolvedDecision } from "../../../agents-comm-bus-core/dist/queries.js";
 import type {
   AccountRegistration,
+  AllowlistGlobalEntry,
+  AllowlistPerBotEntry,
   Conversation,
   QueryRecord,
   Session,
@@ -448,8 +450,115 @@ export class SqliteStorage implements Storage {
       .run(conversation_id, session);
   }
 
+  async addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void> {
+    this.db
+      .prepare(`
+        INSERT INTO allowlist_global (comm, sender_id, added_at, added_by, note)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(comm, sender_id) DO NOTHING
+      `)
+      .run(rec.comm, rec.sender_id, rec.added_at, rec.added_by ?? null, rec.note ?? null);
+  }
+
+  async removeAllowlistGlobal(comm: CommId, sender_id: string): Promise<void> {
+    this.db
+      .prepare("DELETE FROM allowlist_global WHERE comm = ? AND sender_id = ?")
+      .run(comm, sender_id);
+  }
+
+  async listAllowlistGlobal(
+    filter: { comm?: CommId } = {},
+  ): Promise<AllowlistGlobalEntry[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.comm !== undefined) {
+      clauses.push("comm = ?");
+      params.push(filter.comm);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(`SELECT * FROM allowlist_global ${where} ORDER BY comm, sender_id`)
+      .all(...params) as unknown[];
+    return rows.map((row) => this.allowlistGlobalFromRow(row));
+  }
+
+  async addAllowlistPerBot(rec: AllowlistPerBotEntry): Promise<void> {
+    this.db
+      .prepare(`
+        INSERT INTO allowlist_per_bot
+          (comm, bot_user_id, sender_id, added_at, added_by, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(comm, bot_user_id, sender_id) DO NOTHING
+      `)
+      .run(
+        rec.comm,
+        rec.bot_user_id,
+        rec.sender_id,
+        rec.added_at,
+        rec.added_by ?? null,
+        rec.note ?? null,
+      );
+  }
+
+  async removeAllowlistPerBot(
+    comm: CommId,
+    bot_user_id: string,
+    sender_id: string,
+  ): Promise<void> {
+    this.db
+      .prepare(
+        "DELETE FROM allowlist_per_bot WHERE comm = ? AND bot_user_id = ? AND sender_id = ?",
+      )
+      .run(comm, bot_user_id, sender_id);
+  }
+
+  async listAllowlistPerBot(
+    filter: { comm?: CommId; bot_user_id?: string } = {},
+  ): Promise<AllowlistPerBotEntry[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.comm !== undefined) {
+      clauses.push("comm = ?");
+      params.push(filter.comm);
+    }
+    if (filter.bot_user_id !== undefined) {
+      clauses.push("bot_user_id = ?");
+      params.push(filter.bot_user_id);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM allowlist_per_bot ${where} ORDER BY comm, bot_user_id, sender_id`,
+      )
+      .all(...params) as unknown[];
+    return rows.map((row) => this.allowlistPerBotFromRow(row));
+  }
+
   async close(): Promise<void> {
     this.db.close();
+  }
+
+  private allowlistGlobalFromRow(row: unknown): AllowlistGlobalEntry {
+    const r = row as Record<string, unknown>;
+    return {
+      comm: r.comm as CommId,
+      sender_id: r.sender_id as string,
+      added_at: r.added_at as number,
+      added_by: (r.added_by as string | null) ?? undefined,
+      note: (r.note as string | null) ?? undefined,
+    };
+  }
+
+  private allowlistPerBotFromRow(row: unknown): AllowlistPerBotEntry {
+    const r = row as Record<string, unknown>;
+    return {
+      comm: r.comm as CommId,
+      bot_user_id: r.bot_user_id as string,
+      sender_id: r.sender_id as string,
+      added_at: r.added_at as number,
+      added_by: (r.added_by as string | null) ?? undefined,
+      note: (r.note as string | null) ?? undefined,
+    };
   }
 
   private accountFromRow(row: unknown): AccountRegistration {

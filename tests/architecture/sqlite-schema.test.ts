@@ -173,3 +173,156 @@ describe("SQLite storage schema", () => {
     });
   });
 });
+
+describe("allowlist storage (migration v3)", () => {
+  const TELEGRAM = "telegram" as CommId;
+
+  it("inserts and lists global allowlist rows; PK collisions are idempotent", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.addAllowlistGlobal({
+        comm: TELEGRAM,
+        sender_id: "8296218244",
+        added_at: 1,
+        added_by: "cli",
+        note: "human operator",
+      });
+      // PK collision must not throw and must not add a duplicate.
+      await storage.addAllowlistGlobal({
+        comm: TELEGRAM,
+        sender_id: "8296218244",
+        added_at: 999,
+        added_by: "cli",
+      });
+      await storage.addAllowlistGlobal({
+        comm: TELEGRAM,
+        sender_id: "8950482517",
+        added_at: 2,
+      });
+
+      const rows = await storage.listAllowlistGlobal({ comm: TELEGRAM });
+      assert.equal(rows.length, 2);
+      assert.deepEqual(
+        rows.map((r) => r.sender_id).sort(),
+        ["8296218244", "8950482517"],
+      );
+
+      await storage.close();
+    });
+  });
+
+  it("removes a global allowlist row by (comm, sender_id)", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.addAllowlistGlobal({
+        comm: TELEGRAM,
+        sender_id: "8296218244",
+        added_at: 1,
+      });
+      await storage.removeAllowlistGlobal(TELEGRAM, "8296218244");
+      const rows = await storage.listAllowlistGlobal({ comm: TELEGRAM });
+      assert.equal(rows.length, 0);
+      // Removing a non-existent row is a no-op (no throw).
+      await storage.removeAllowlistGlobal(TELEGRAM, "8296218244");
+      await storage.close();
+    });
+  });
+
+  it("keeps per-bot allowlist rows distinct by bot_user_id even when sender_id collides", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517", // Claude bot
+        sender_id: "8988792099",   // Codex bot
+        added_at: 1,
+      });
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8988792099", // Codex bot
+        sender_id: "8988792099",   // Codex bot reaching itself — distinct row
+        added_at: 2,
+      });
+      // PK collision on the FIRST row is idempotent.
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+        sender_id: "8988792099",
+        added_at: 99,
+        note: "would-be replacement",
+      });
+
+      const claudeRows = await storage.listAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+      });
+      const codexRows = await storage.listAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8988792099",
+      });
+      assert.equal(claudeRows.length, 1);
+      assert.equal(codexRows.length, 1);
+      // PK collision did not overwrite the original `added_at`.
+      assert.equal(claudeRows[0].added_at, 1);
+      assert.equal(claudeRows[0].note, undefined);
+
+      await storage.close();
+    });
+  });
+
+  it("removes a per-bot row by (comm, bot_user_id, sender_id) without disturbing siblings", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+        sender_id: "S1",
+        added_at: 1,
+      });
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+        sender_id: "S2",
+        added_at: 2,
+      });
+      await storage.removeAllowlistPerBot(TELEGRAM, "8950482517", "S1");
+      const rows = await storage.listAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+      });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].sender_id, "S2");
+      await storage.close();
+    });
+  });
+
+  it("lists per-bot rows scoped by comm and optional bot_user_id", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+        sender_id: "S1",
+        added_at: 1,
+      });
+      await storage.addAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8988792099",
+        sender_id: "S2",
+        added_at: 2,
+      });
+
+      const allTelegram = await storage.listAllowlistPerBot({ comm: TELEGRAM });
+      assert.equal(allTelegram.length, 2);
+
+      const claudeOnly = await storage.listAllowlistPerBot({
+        comm: TELEGRAM,
+        bot_user_id: "8950482517",
+      });
+      assert.equal(claudeOnly.length, 1);
+      assert.equal(claudeOnly[0].sender_id, "S1");
+
+      await storage.close();
+    });
+  });
+});

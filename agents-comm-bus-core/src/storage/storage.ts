@@ -14,6 +14,8 @@ import type {
 import type { ResolvedDecision } from "../queries.js";
 import type {
   AccountRegistration,
+  AllowlistGlobalEntry,
+  AllowlistPerBotEntry,
   Conversation,
   QueryRecord,
   Session,
@@ -130,6 +132,32 @@ export interface Storage {
     agent?: AgentId;
     status?: Session["status"];
   }): Promise<Session[]>;
+
+  // allowlist
+  /**
+   * Insert (or no-op on PK collision) an allowlist row that applies across
+   * every adapter of `rec.comm`. Idempotent on the (comm, sender_id) PK.
+   */
+  addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void>;
+  /** Remove a row. No-op when no matching row exists. */
+  removeAllowlistGlobal(comm: CommId, sender_id: string): Promise<void>;
+  listAllowlistGlobal(filter?: { comm?: CommId }): Promise<AllowlistGlobalEntry[]>;
+
+  /**
+   * Insert (or no-op on PK collision) an allowlist row scoped to a single
+   * receiving bot. Idempotent on the (comm, bot_user_id, sender_id) PK.
+   */
+  addAllowlistPerBot(rec: AllowlistPerBotEntry): Promise<void>;
+  /** Remove a row. No-op when no matching row exists. */
+  removeAllowlistPerBot(
+    comm: CommId,
+    bot_user_id: string,
+    sender_id: string,
+  ): Promise<void>;
+  listAllowlistPerBot(filter?: {
+    comm?: CommId;
+    bot_user_id?: string;
+  }): Promise<AllowlistPerBotEntry[]>;
 
   // lifecycle
   close(): Promise<void>;

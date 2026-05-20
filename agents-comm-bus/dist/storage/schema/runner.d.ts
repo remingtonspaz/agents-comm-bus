@@ -16,5 +16,6 @@ export declare class SqliteMigrationRunner implements MigrationRunner {
 }
 export declare const initialMigration: Migration;
 export declare const conversationAgentIdentityMigration: Migration;
+export declare const allowlistMigration: Migration;
 export declare function runStorageMigrations(db: SqliteLike): Promise<void>;
 //# sourceMappingURL=runner.d.ts.map

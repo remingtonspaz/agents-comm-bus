@@ -289,8 +289,88 @@ export class SqliteStorage {
       `)
             .run(conversation_id, session);
     }
+    async addAllowlistGlobal(rec) {
+        this.db
+            .prepare(`
+        INSERT INTO allowlist_global (comm, sender_id, added_at, added_by, note)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(comm, sender_id) DO NOTHING
+      `)
+            .run(rec.comm, rec.sender_id, rec.added_at, rec.added_by ?? null, rec.note ?? null);
+    }
+    async removeAllowlistGlobal(comm, sender_id) {
+        this.db
+            .prepare("DELETE FROM allowlist_global WHERE comm = ? AND sender_id = ?")
+            .run(comm, sender_id);
+    }
+    async listAllowlistGlobal(filter = {}) {
+        const clauses = [];
+        const params = [];
+        if (filter.comm !== undefined) {
+            clauses.push("comm = ?");
+            params.push(filter.comm);
+        }
+        const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+        const rows = this.db
+            .prepare(`SELECT * FROM allowlist_global ${where} ORDER BY comm, sender_id`)
+            .all(...params);
+        return rows.map((row) => this.allowlistGlobalFromRow(row));
+    }
+    async addAllowlistPerBot(rec) {
+        this.db
+            .prepare(`
+        INSERT INTO allowlist_per_bot
+          (comm, bot_user_id, sender_id, added_at, added_by, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(comm, bot_user_id, sender_id) DO NOTHING
+      `)
+            .run(rec.comm, rec.bot_user_id, rec.sender_id, rec.added_at, rec.added_by ?? null, rec.note ?? null);
+    }
+    async removeAllowlistPerBot(comm, bot_user_id, sender_id) {
+        this.db
+            .prepare("DELETE FROM allowlist_per_bot WHERE comm = ? AND bot_user_id = ? AND sender_id = ?")
+            .run(comm, bot_user_id, sender_id);
+    }
+    async listAllowlistPerBot(filter = {}) {
+        const clauses = [];
+        const params = [];
+        if (filter.comm !== undefined) {
+            clauses.push("comm = ?");
+            params.push(filter.comm);
+        }
+        if (filter.bot_user_id !== undefined) {
+            clauses.push("bot_user_id = ?");
+            params.push(filter.bot_user_id);
+        }
+        const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+        const rows = this.db
+            .prepare(`SELECT * FROM allowlist_per_bot ${where} ORDER BY comm, bot_user_id, sender_id`)
+            .all(...params);
+        return rows.map((row) => this.allowlistPerBotFromRow(row));
+    }
     async close() {
         this.db.close();
+    }
+    allowlistGlobalFromRow(row) {
+        const r = row;
+        return {
+            comm: r.comm,
+            sender_id: r.sender_id,
+            added_at: r.added_at,
+            added_by: r.added_by ?? undefined,
+            note: r.note ?? undefined,
+        };
+    }
+    allowlistPerBotFromRow(row) {
+        const r = row;
+        return {
+            comm: r.comm,
+            bot_user_id: r.bot_user_id,
+            sender_id: r.sender_id,
+            added_at: r.added_at,
+            added_by: r.added_by ?? undefined,
+            note: r.note ?? undefined,
+        };
     }
     accountFromRow(row) {
         const r = row;

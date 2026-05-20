@@ -1,5 +1,5 @@
 import type { ResolvedDecision } from "../../../agents-comm-bus-core/dist/queries.js";
-import type { AccountRegistration, Conversation, QueryRecord, Session } from "../../../agents-comm-bus-core/dist/records/index.js";
+import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "../../../agents-comm-bus-core/dist/records/index.js";
 import type { Storage } from "../../../agents-comm-bus-core/dist/storage/storage.js";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../../agents-comm-bus-core/dist/types.js";
 import { type SqliteLike } from "./schema/runner.js";
@@ -53,7 +53,20 @@ export declare class SqliteStorage implements Storage {
         status?: Session["status"];
     }): Promise<Session[]>;
     setSessionMostRecentInbound(session: SessionId, conversation_id: ConversationId): Promise<void>;
+    addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void>;
+    removeAllowlistGlobal(comm: CommId, sender_id: string): Promise<void>;
+    listAllowlistGlobal(filter?: {
+        comm?: CommId;
+    }): Promise<AllowlistGlobalEntry[]>;
+    addAllowlistPerBot(rec: AllowlistPerBotEntry): Promise<void>;
+    removeAllowlistPerBot(comm: CommId, bot_user_id: string, sender_id: string): Promise<void>;
+    listAllowlistPerBot(filter?: {
+        comm?: CommId;
+        bot_user_id?: string;
+    }): Promise<AllowlistPerBotEntry[]>;
     close(): Promise<void>;
+    private allowlistGlobalFromRow;
+    private allowlistPerBotFromRow;
     private accountFromRow;
     private conversationFromRow;
     private queryFromRow;
