@@ -137,6 +137,7 @@ async function loadCommAdapters(input) {
                 env: input.env,
                 blobs: input.blobs,
                 stateRoot: input.stateRoot,
+                storage: input.storage,
             });
             if (!adapter)
                 continue;
@@ -156,7 +157,9 @@ async function loadCommAdapters(input) {
     return comms;
 }
 async function createAdapterFromRegistration(input) {
-    const resolved = await input.factory.resolveCredentials(input.registration, input.env);
+    const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
+        storage: input.storage,
+    });
     if (!resolved) {
         console.error(`agents-comm-bus: skipping ${input.factory.commId} account ${input.registration.account_label} ` +
             `for project ${input.registration.project} (could not resolve credentials_ref=${input.registration.credentials_ref})`);
@@ -208,6 +211,7 @@ async function reloadAdapters(input) {
             env: input.env,
             blobs: input.blobs,
             stateRoot: input.stateRoot,
+            storage: input.storage,
         });
         if (!adapter) {
             skipped.push({

@@ -5,6 +5,7 @@ import {
   type AccountRegistration,
   type CommAdapter,
   type CommId,
+  type Storage,
 } from "../../agents-comm-bus-core/dist/index.js";
 import { DAEMON_VERSION } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
@@ -206,6 +207,7 @@ async function loadCommAdapters(input: {
         env: input.env,
         blobs: input.blobs,
         stateRoot: input.stateRoot,
+        storage: input.storage,
       });
       if (!adapter) continue;
       comms.push(adapter);
@@ -232,8 +234,11 @@ async function createAdapterFromRegistration(input: {
   env: NodeJS.ProcessEnv;
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
+  storage?: Storage;
 }): Promise<CommAdapter | null> {
-  const resolved = await input.factory.resolveCredentials(input.registration, input.env);
+  const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
+    storage: input.storage,
+  });
   if (!resolved) {
     console.error(
       `agents-comm-bus: skipping ${input.factory.commId} account ${input.registration.account_label} ` +
@@ -305,6 +310,7 @@ async function reloadAdapters(input: {
       env: input.env,
       blobs: input.blobs,
       stateRoot: input.stateRoot,
+      storage: input.storage,
     });
     if (!adapter) {
       skipped.push({

@@ -27,10 +27,15 @@ export interface CommAdapterFactory {
    * Resolve credentials from a stored `account_registrations` row. Returns
    * `undefined` if the registration can't be resolved (e.g. env var missing,
    * file unreadable) — the daemon will log and skip the row.
+   *
+   * The optional `context.storage` lets the factory query DB-backed
+   * configuration (e.g. allowlist tables) at attach/reload time. Factories
+   * that don't need storage should ignore the parameter.
    */
   resolveCredentials(
     registration: AccountRegistration,
     env: CommAdapterFactoryEnv,
+    context?: ResolveCredentialsContext,
   ): Promise<{ credentials: Record<string, unknown> } | undefined>;
 
   /**
@@ -66,6 +71,10 @@ export interface CommAdapterFactory {
 export interface CommAdapterCreateContext {
   blobs: BlobStore;
   stateRoot: string;
+}
+
+export interface ResolveCredentialsContext {
+  storage?: Storage;
 }
 
 export interface CommIpcDeps {

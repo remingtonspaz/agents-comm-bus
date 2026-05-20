@@ -27,6 +27,7 @@ import type {
   CommAdapterCreateContext,
   CommAdapterFactoryEnv,
   CommIpcDeps,
+  ResolveCredentialsContext,
 } from "../../../runtime/comm-factory.js";
 import type { IpcMethodHandler } from "../../../runtime/ipc-method.js";
 import { TelegramCommAdapter, probeTelegramIdentity } from "./adapter.js";
@@ -44,22 +45,29 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
   async resolveCredentials(
     registration: AccountRegistration,
     env: CommAdapterFactoryEnv,
+    context?: ResolveCredentialsContext,
   ): Promise<{ credentials: Record<string, unknown> } | undefined> {
     const ref = registration.credentials_ref ?? "";
     const envAllowed = normalizeCsv(env.TELEGRAM_USER_ID);
+    const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
 
     if (ref.startsWith("env:")) {
       const name = ref.slice("env:".length);
       const fromEnv = name ? env[name] : undefined;
       if (fromEnv) {
-        return { credentials: { botToken: fromEnv, allowedUserIds: envAllowed } };
+        return {
+          credentials: {
+            botToken: fromEnv,
+            allowedUserIds: mergeAllowed(envAllowed, undefined, dbAllowed),
+          },
+        };
       }
       const fromFile = await readProjectTelegramConfig(registration.project);
       if (fromFile?.botToken) {
         return {
           credentials: {
             botToken: fromFile.botToken,
-            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId),
+            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
           },
         };
       }
@@ -72,7 +80,7 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
         return {
           credentials: {
             botToken: fromFile.botToken,
-            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId),
+            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
           },
         };
       }
@@ -205,11 +213,37 @@ function normalizeCsv(value: string | undefined): string[] {
   return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
-function mergeAllowed(fromEnv: string[], fromFile: string[] | undefined): string[] {
-  if (!fromFile || fromFile.length === 0) return fromEnv;
+function mergeAllowed(
+  fromEnv: string[],
+  fromFile: string[] | undefined,
+  fromDb: string[] | undefined = undefined,
+): string[] {
   const out = [...fromEnv];
-  for (const id of fromFile) {
-    if (!out.includes(id)) out.push(id);
+  const sources: Array<string[] | undefined> = [fromFile, fromDb];
+  for (const source of sources) {
+    if (!source) continue;
+    for (const id of source) {
+      if (!out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
+
+async function readAllowlistFromDb(
+  context: ResolveCredentialsContext | undefined,
+  bot_user_id: string,
+): Promise<string[]> {
+  if (!context?.storage) return [];
+  const [globals, perBot] = await Promise.all([
+    context.storage.listAllowlistGlobal({ comm: TELEGRAM_COMM_ID }),
+    context.storage.listAllowlistPerBot({ comm: TELEGRAM_COMM_ID, bot_user_id }),
+  ]);
+  const out: string[] = [];
+  for (const row of globals) {
+    if (!out.includes(row.sender_id)) out.push(row.sender_id);
+  }
+  for (const row of perBot) {
+    if (!out.includes(row.sender_id)) out.push(row.sender_id);
   }
   return out;
 }
