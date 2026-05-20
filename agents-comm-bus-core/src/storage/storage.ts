@@ -21,6 +21,11 @@ import type {
   Session,
 } from "../records/index.js";
 
+export interface SessionLeaseOwner {
+  process_pid: number | null;
+  process_label?: string | null;
+}
+
 export interface Storage {
   // account_registrations
   putAccountRegistration(rec: AccountRegistration): Promise<void>;
@@ -109,6 +114,7 @@ export interface Storage {
     session: SessionId,
     connection_id: string,
     at: number,
+    owner?: SessionLeaseOwner,
   ): Promise<boolean>;
   releaseSessionLease(
     session: SessionId,

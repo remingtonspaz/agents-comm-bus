@@ -72,10 +72,20 @@ export const allowlistMigration: Migration = {
   },
 };
 
+export const sessionOwnerProcessMigration: Migration = {
+  version: 4,
+  description: "track owning agent process for session leases",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "004_session_owner_process.sql"), "utf8");
+    await ctx.exec(sql);
+  },
+};
+
 export async function runStorageMigrations(db: SqliteLike): Promise<void> {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
     conversationAgentIdentityMigration,
     allowlistMigration,
+    sessionOwnerProcessMigration,
   ]);
 }

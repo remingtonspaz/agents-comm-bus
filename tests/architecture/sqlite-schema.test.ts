@@ -42,6 +42,9 @@ function session(overrides: Partial<Session> = {}): Session {
     lease_holder_connection_id: null,
     lease_acquired_at: null,
     lease_released_at: null,
+    lease_owner_process_pid: null,
+    lease_owner_process_label: null,
+    lease_owner_process_registered_at: null,
     most_recent_inbound_conversation_id: null,
     status: "active",
     ...overrides,
@@ -168,6 +171,34 @@ describe("SQLite storage schema", () => {
 
       assert.equal(claude?.conversation_id, "conversation-1");
       assert.equal(codex?.conversation_id, "conversation-2");
+
+      await storage.close();
+    });
+  });
+
+  it("records and clears lease owner process metadata", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertSession(session());
+
+      assert.equal(
+        await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10, {
+          process_pid: 12345,
+          process_label: "codex",
+        }),
+        true,
+      );
+      const acquired = await storage.getSession("session-1" as SessionId);
+      assert.equal(acquired?.lease_owner_process_pid, 12345);
+      assert.equal(acquired?.lease_owner_process_label, "codex");
+      assert.equal(acquired?.lease_owner_process_registered_at, 10);
+
+      await storage.releaseSessionLease("session-1" as SessionId, "conn-1", 20);
+      const released = await storage.getSession("session-1" as SessionId);
+      assert.equal(released?.lease_holder_connection_id, null);
+      assert.equal(released?.lease_owner_process_pid, null);
+      assert.equal(released?.lease_owner_process_label, null);
+      assert.equal(released?.lease_owner_process_registered_at, null);
 
       await storage.close();
     });

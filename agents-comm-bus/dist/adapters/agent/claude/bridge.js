@@ -147,10 +147,13 @@ export class ClaudeBridge {
             lease_holder_connection_id: null,
             lease_acquired_at: null,
             lease_released_at: null,
+            lease_owner_process_pid: null,
+            lease_owner_process_label: null,
+            lease_owner_process_registered_at: null,
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
-        const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
+        const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, sessionLeaseOwnerFromParams(params));
         if (!acquired) {
             return { ok: false, reason: "same-project claude session lease already held" };
         }
@@ -425,6 +428,23 @@ function recordOrEmpty(value) {
     return value && typeof value === "object" && !Array.isArray(value)
         ? value
         : {};
+}
+function sessionLeaseOwnerFromParams(params) {
+    const pid = numberParam(params.owner_process_pid);
+    if (!pid)
+        return undefined;
+    return {
+        process_pid: pid,
+        process_label: typeof params.owner_process_label === "string"
+            ? params.owner_process_label
+            : "claude",
+    };
+}
+function numberParam(value) {
+    if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+        return null;
+    }
+    return value;
 }
 export class ClaudeBridgeFactory {
     agentId = "claude";

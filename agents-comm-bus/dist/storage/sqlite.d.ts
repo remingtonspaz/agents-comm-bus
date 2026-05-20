@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "../../../agents-comm-bus-core/dist/queries.js";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "../../../agents-comm-bus-core/dist/records/index.js";
-import type { Storage } from "../../../agents-comm-bus-core/dist/storage/storage.js";
+import type { SessionLeaseOwner, Storage } from "../../../agents-comm-bus-core/dist/storage/storage.js";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../../agents-comm-bus-core/dist/types.js";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -44,7 +44,7 @@ export declare class SqliteStorage implements Storage {
     updateQueryKind(query_id: QueryId, kind: "approval" | "choice" | "freetext"): Promise<boolean>;
     supersedeOpenQueriesForSession(session_id: SessionId, now: number): Promise<number>;
     upsertSession(rec: Session): Promise<void>;
-    acquireSessionLease(session: SessionId, connection_id: string, at: number): Promise<boolean>;
+    acquireSessionLease(session: SessionId, connection_id: string, at: number, owner?: SessionLeaseOwner): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;
     getSession(session: SessionId): Promise<Session | null>;
     listSessions(filter?: {

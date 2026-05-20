@@ -18,6 +18,9 @@ function session(): Session {
     lease_holder_connection_id: null,
     lease_acquired_at: null,
     lease_released_at: null,
+    lease_owner_process_pid: null,
+    lease_owner_process_label: null,
+    lease_owner_process_registered_at: null,
     most_recent_inbound_conversation_id: null,
     status: "active",
   };

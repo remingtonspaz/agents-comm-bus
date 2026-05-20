@@ -28595,6 +28595,66 @@ function getWindowsProcessInfo(pid) {
     return null;
   }
 }
+function discoverCodexOwnerProcess(appServerUrl) {
+  const explicit = positiveInteger(process.env.AGENTS_COMM_BUS_OWNER_PID);
+  if (explicit) {
+    return { pid: explicit, label: process.env.AGENTS_COMM_BUS_OWNER_LABEL ?? "codex" };
+  }
+  const remoteOwner = discoverCodexRemoteOwnerProcess(appServerUrl);
+  if (remoteOwner) return remoteOwner;
+  return { pid: process.ppid, label: "codex-parent" };
+}
+function discoverCodexRemoteOwnerProcess(appServerUrl) {
+  if (!appServerUrl) return null;
+  if (process.platform === "win32") {
+    try {
+      const remote = powerShellSingleQuoted(appServerUrl);
+      const script = [
+        `$remote = ${remote}`,
+        "$p = Get-CimInstance Win32_Process | Where-Object {",
+        "  $_.CommandLine -and",
+        "  $_.CommandLine.Contains($remote) -and",
+        "  $_.CommandLine -match '(?i)\\bresume\\b' -and",
+        "  $_.CommandLine -notmatch '(?i)\\bapp-server\\b'",
+        "} | Sort-Object @{ Expression = { if ($_.Name -ieq 'codex.exe') { 0 } else { 1 } } }, ProcessId | Select-Object -First 1 ProcessId,Name",
+        "if ($null -ne $p) { $p | ConvertTo-Json -Compress }"
+      ].join("; ");
+      const output = execFileSync("powershell.exe", ["-NoProfile", "-Command", script], {
+        encoding: "utf8",
+        timeout: 1500,
+        windowsHide: true
+      }).trim();
+      if (!output) return null;
+      const info = JSON.parse(output);
+      const pid = positiveInteger(info.ProcessId);
+      return pid ? { pid, label: "codex-remote-client" } : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const output = execFileSync("ps", ["-eo", "pid=,comm=,args="], {
+      encoding: "utf8",
+      timeout: 1500
+    });
+    const lines = output.split(/\r?\n/).filter(
+      (line) => line.includes(appServerUrl) && /\bresume\b/i.test(line) && !/\bapp-server\b/i.test(line)
+    );
+    if (lines.length === 0) return null;
+    const codexLine = lines.find((line) => /\bcodex\b/i.test(line)) ?? lines[0];
+    const pid = positiveInteger(codexLine.trim().split(/\s+/, 1)[0]);
+    return pid ? { pid, label: "codex-remote-client" } : null;
+  } catch {
+    return null;
+  }
+}
+function positiveInteger(value) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+function powerShellSingleQuoted(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
 async function discoverMostRecentThreadId(appServerUrl) {
   try {
     const result = await callCodexAppServer(appServerUrl, "thread/loaded/list", {}, { timeoutMs: 2500 });
@@ -28723,12 +28783,15 @@ async function startPersistentCodexRegistration() {
     project: process.cwd(),
     session
   };
+  const ownerProcess = discoverCodexOwnerProcess(appServerUrl);
   const registerParams = {
     agent: "codex",
     session,
     project: process.cwd(),
     cwd: process.cwd(),
     app_server_url: appServerUrl,
+    owner_process_pid: ownerProcess.pid,
+    owner_process_label: ownerProcess.label,
     source: "mcp-server",
     replace_existing_lease: true,
     manage_app_server_lifecycle: true

@@ -38,6 +38,8 @@ export interface CodexBridgeOptions {
   defaultAppServerUrl?: string;
   queryPollTimeoutMs?: number;
   appServerCleanupDelayMs?: number;
+  sessionOwnerCheckIntervalMs?: number;
+  isProcessAlive?: (pid: number) => boolean;
 }
 
 export interface RegisterCodexSessionResult {
@@ -62,9 +64,19 @@ export interface CodexBootstrapStatusResult {
   reason: string;
 }
 
+interface CodexSessionLease {
+  session: SessionId;
+  project: string;
+  connectionId: string;
+  manageAppServerLifecycle: boolean;
+  control: BridgeControlChannel;
+  released: boolean;
+}
+
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_QUERY_POLL_TIMEOUT_MS = 9 * 60 * 1000;
 const DEFAULT_APP_SERVER_CLEANUP_DELAY_MS = 3_000;
+const DEFAULT_SESSION_OWNER_CHECK_INTERVAL_MS = 10_000;
 
 const CODEX_IPC_METHODS = new Set<string>([
   "codex_bootstrap_status",
@@ -81,7 +93,9 @@ export class CodexBridge implements AgentBridge {
   private readonly adapter: CodexAgentAdapter;
   private readonly waiters = new Map<QueryId, (decision: ResolvedDecision) => void>();
   private readonly sessionsByProject = new Map<string, Set<SessionId>>();
+  private readonly activeLeases = new Map<SessionId, CodexSessionLease>();
   private ownedAccountsCache: Set<string> | null = null;
+  private ownerCheckTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly options: CodexBridgeOptions) {
     this.adapter = new CodexAgentAdapter({
@@ -218,13 +232,22 @@ export class CodexBridge implements AgentBridge {
       lease_holder_connection_id: null,
       lease_acquired_at: null,
       lease_released_at: null,
+      lease_owner_process_pid: null,
+      lease_owner_process_label: null,
+      lease_owner_process_registered_at: null,
       most_recent_inbound_conversation_id: null,
       status: "active",
     });
     const replaceExistingLease =
       params.replace_existing_lease === true ||
       params.persist_after_disconnect === true;
-    const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
+    const leaseOwner = sessionLeaseOwnerFromParams(params, "codex");
+    const acquired = await this.options.storage.acquireSessionLease(
+      session,
+      connectionId,
+      now,
+      leaseOwner,
+    );
     if (!acquired) {
       const existing = await this.options.storage.getSession(session);
       if (existing?.lease_holder_connection_id && replaceExistingLease) {
@@ -233,7 +256,12 @@ export class CodexBridge implements AgentBridge {
           existing.lease_holder_connection_id,
           now,
         );
-        const reacquired = await this.options.storage.acquireSessionLease(session, connectionId, now);
+        const reacquired = await this.options.storage.acquireSessionLease(
+          session,
+          connectionId,
+          now,
+          leaseOwner,
+        );
         if (!reacquired) {
           return { ok: false, reason: "same-project codex session lease already held" };
         }
@@ -259,15 +287,19 @@ export class CodexBridge implements AgentBridge {
     const manageAppServerLifecycle =
       params.manage_app_server_lifecycle === true ||
       params.source === "mcp-server";
+    const lease: CodexSessionLease = {
+      session,
+      project,
+      connectionId,
+      manageAppServerLifecycle,
+      control,
+      released: false,
+    };
+    this.activeLeases.set(session, lease);
+    this.ensureOwnerCheckTimer();
     const release = () => {
       if (persistAfterDisconnect) return;
-      void this.releaseSessionLease({
-        session,
-        project,
-        connectionId,
-        manageAppServerLifecycle,
-        control,
-      });
+      void this.releaseSessionLease(lease);
     };
     socket?.once("close", release);
 
@@ -464,26 +496,55 @@ export class CodexBridge implements AgentBridge {
     if (sessions.size === 0) this.sessionsByProject.delete(project);
   }
 
-  private async releaseSessionLease(input: {
-    session: SessionId;
-    project: string;
-    connectionId: string;
-    manageAppServerLifecycle: boolean;
-    control: BridgeControlChannel;
-  }): Promise<void> {
+  private async releaseSessionLease(input: CodexSessionLease): Promise<void> {
+    if (input.released) return;
+    input.released = true;
     try {
       this.untrackSession(input.project, input.session);
+      const active = this.activeLeases.get(input.session);
+      if (active?.connectionId === input.connectionId) {
+        this.activeLeases.delete(input.session);
+      }
       await this.adapter.disconnect(input.session);
       await this.options.storage.releaseSessionLease(input.session, input.connectionId, Date.now());
       input.control.close();
       if (input.manageAppServerLifecycle) {
         this.scheduleManagedAppServerCleanup(input.session);
       }
+      this.stopOwnerCheckTimerIfIdle();
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to release Codex session ${input.session}: ` +
           `${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  private ensureOwnerCheckTimer(): void {
+    if (this.ownerCheckTimer || this.activeLeases.size === 0) return;
+    const interval =
+      this.options.sessionOwnerCheckIntervalMs ?? DEFAULT_SESSION_OWNER_CHECK_INTERVAL_MS;
+    this.ownerCheckTimer = setInterval(() => {
+      void this.releaseLeasesWithDeadOwners();
+    }, interval);
+    this.ownerCheckTimer.unref?.();
+  }
+
+  private stopOwnerCheckTimerIfIdle(): void {
+    if (!this.ownerCheckTimer || this.activeLeases.size > 0) return;
+    clearInterval(this.ownerCheckTimer);
+    this.ownerCheckTimer = null;
+  }
+
+  private async releaseLeasesWithDeadOwners(): Promise<void> {
+    for (const lease of [...this.activeLeases.values()]) {
+      const record = await this.options.storage.getSession(lease.session);
+      if (record?.lease_holder_connection_id !== lease.connectionId) continue;
+      const ownerPid = record.lease_owner_process_pid;
+      if (!ownerPid) continue;
+      const isAlive = this.options.isProcessAlive ?? isPidAlive;
+      if (isAlive(ownerPid)) continue;
+      await this.releaseSessionLease(lease);
     }
   }
 
@@ -672,6 +733,36 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function sessionLeaseOwnerFromParams(params: Record<string, unknown>, fallbackLabel: string): {
+  process_pid: number | null;
+  process_label?: string | null;
+} | undefined {
+  const pid = numberParam(params.owner_process_pid);
+  if (!pid) return undefined;
+  return {
+    process_pid: pid,
+    process_label: typeof params.owner_process_label === "string"
+      ? params.owner_process_label
+      : fallbackLabel,
+  };
+}
+
+function numberParam(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return null;
+  }
+  return value;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 class BridgeControlChannel {

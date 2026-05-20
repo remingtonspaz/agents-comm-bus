@@ -9,7 +9,10 @@ import type {
   QueryRecord,
   Session,
 } from "../../../agents-comm-bus-core/dist/records/index.js";
-import type { Storage } from "../../../agents-comm-bus-core/dist/storage/storage.js";
+import type {
+  SessionLeaseOwner,
+  Storage,
+} from "../../../agents-comm-bus-core/dist/storage/storage.js";
 import type {
   AgentId,
   CommId,
@@ -345,8 +348,10 @@ export class SqliteStorage implements Storage {
         INSERT INTO sessions (
           schema_version, session_id, agent, project, created_at,
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
+          lease_owner_process_pid, lease_owner_process_label,
+          lease_owner_process_registered_at,
           most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -361,6 +366,9 @@ export class SqliteStorage implements Storage {
         rec.lease_holder_connection_id,
         rec.lease_acquired_at,
         rec.lease_released_at,
+        rec.lease_owner_process_pid,
+        rec.lease_owner_process_label,
+        rec.lease_owner_process_registered_at,
         rec.most_recent_inbound_conversation_id,
         rec.status,
       );
@@ -370,6 +378,7 @@ export class SqliteStorage implements Storage {
     session: SessionId,
     connection_id: string,
     at: number,
+    owner?: SessionLeaseOwner,
   ): Promise<boolean> {
     try {
       const result = this.db
@@ -377,11 +386,22 @@ export class SqliteStorage implements Storage {
           UPDATE sessions
           SET lease_holder_connection_id = ?,
               lease_acquired_at = ?,
-              lease_released_at = NULL
+              lease_released_at = NULL,
+              lease_owner_process_pid = ?,
+              lease_owner_process_label = ?,
+              lease_owner_process_registered_at = ?
           WHERE session_id = ?
             AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
         `)
-        .run(connection_id, at, session, connection_id) as { changes?: number };
+        .run(
+          connection_id,
+          at,
+          owner?.process_pid ?? null,
+          owner?.process_label ?? null,
+          owner?.process_pid ? at : null,
+          session,
+          connection_id,
+        ) as { changes?: number };
       return result.changes === 1;
     } catch (error) {
       if (isConstraintError(error)) return false;
@@ -398,7 +418,10 @@ export class SqliteStorage implements Storage {
       .prepare(`
         UPDATE sessions
         SET lease_holder_connection_id = NULL,
-            lease_released_at = ?
+            lease_released_at = ?,
+            lease_owner_process_pid = NULL,
+            lease_owner_process_label = NULL,
+            lease_owner_process_registered_at = NULL
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `)
       .run(at, session, connection_id);
@@ -627,6 +650,10 @@ export class SqliteStorage implements Storage {
       lease_holder_connection_id: r.lease_holder_connection_id as string | null,
       lease_acquired_at: r.lease_acquired_at as number | null,
       lease_released_at: r.lease_released_at as number | null,
+      lease_owner_process_pid: r.lease_owner_process_pid as number | null,
+      lease_owner_process_label: r.lease_owner_process_label as string | null,
+      lease_owner_process_registered_at:
+        r.lease_owner_process_registered_at as number | null,
       most_recent_inbound_conversation_id:
         r.most_recent_inbound_conversation_id as ConversationId | null,
       status: r.status as Session["status"],

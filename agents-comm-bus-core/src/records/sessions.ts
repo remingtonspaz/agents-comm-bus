@@ -7,8 +7,9 @@ import { SCHEMA_VERSION_SESSION } from "../types.js";
  * The lease fields encode the connection-lifetime model (v4 non-negotiable
  * #6): a session is exclusively held by one daemon connection at a time.
  * On connection close, the daemon releases the lease (sets
- * `lease_released_at`, clears `lease_holder_connection_id`). The lifetime
- * of a connection is load-bearing for cleanup and recovery semantics.
+ * `lease_released_at`, clears `lease_holder_connection_id`). When an agent
+ * can identify its owning process, the owner PID fields provide a second
+ * liveness signal for stale-lease cleanup.
  */
 export interface Session {
   schema_version: typeof SCHEMA_VERSION_SESSION;
@@ -22,6 +23,9 @@ export interface Session {
   lease_holder_connection_id: string | null;
   lease_acquired_at: number | null;
   lease_released_at: number | null;
+  lease_owner_process_pid: number | null;
+  lease_owner_process_label: string | null;
+  lease_owner_process_registered_at: number | null;
 
   // Most recent inbound conversation linkage (used by routing / steering).
   most_recent_inbound_conversation_id: ConversationId | null;

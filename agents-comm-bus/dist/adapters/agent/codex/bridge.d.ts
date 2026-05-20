@@ -10,6 +10,8 @@ export interface CodexBridgeOptions {
     defaultAppServerUrl?: string;
     queryPollTimeoutMs?: number;
     appServerCleanupDelayMs?: number;
+    sessionOwnerCheckIntervalMs?: number;
+    isProcessAlive?: (pid: number) => boolean;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;
@@ -37,7 +39,9 @@ export declare class CodexBridge implements AgentBridge {
     private readonly adapter;
     private readonly waiters;
     private readonly sessionsByProject;
+    private readonly activeLeases;
     private ownedAccountsCache;
+    private ownerCheckTimer;
     constructor(options: CodexBridgeOptions);
     attach(comms: CommAdapter[]): void;
     attachComm(comm: CommAdapter): void;
@@ -61,6 +65,9 @@ export declare class CodexBridge implements AgentBridge {
     private trackSession;
     private untrackSession;
     private releaseSessionLease;
+    private ensureOwnerCheckTimer;
+    private stopOwnerCheckTimerIfIdle;
+    private releaseLeasesWithDeadOwners;
     private scheduleManagedAppServerCleanup;
     private cleanupManagedAppServerIfLeaseIsIdle;
     private chatRefForConversation;
