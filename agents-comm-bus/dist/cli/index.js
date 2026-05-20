@@ -2,6 +2,10 @@
 import { accountAdd } from "./account-add.js";
 import { accountList } from "./account-list.js";
 import { accountRemove } from "./account-remove.js";
+import { allowlistAdd } from "./allowlist-add.js";
+import { allowlistImportFromEnv, allowlistImportFromFiles, } from "./allowlist-import.js";
+import { allowlistList } from "./allowlist-list.js";
+import { allowlistRemove } from "./allowlist-remove.js";
 import { parseMigrateArgs, runMigration } from "./migrate.js";
 import { reloadDaemonRegistrations } from "./reload-helper.js";
 async function main() {
@@ -41,6 +45,10 @@ async function main() {
             console.log(JSON.stringify({ ok: true, reload }, null, 2));
             return;
         }
+        case "allowlist": {
+            await handleAllowlist(rest);
+            return;
+        }
         case "migrate": {
             const result = runMigration(parseMigrateArgs(rest));
             console.log(JSON.stringify(result, null, 2));
@@ -50,6 +58,80 @@ async function main() {
             printHelp();
             process.exit(command ? 1 : 0);
     }
+}
+async function handleAllowlist(rest) {
+    const [sub, ...subRest] = rest;
+    const args = parseArgs(subRest);
+    switch (sub) {
+        case "add": {
+            const scope = allowlistScopeFromArgs(args);
+            const out = await allowlistAdd({
+                comm: required(args.comm, "--comm"),
+                user: required(args.user, "--user"),
+                note: args.note,
+                scope,
+                botId: args.botId ?? args["bot-id"],
+                agent: args.agent,
+                project: args.project ?? (scope === "per-bot" && !(args.botId ?? args["bot-id"]) ? process.cwd() : undefined),
+                accountLabel: args.accountLabel ?? args["account-label"],
+            });
+            const reload = await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ...out, reload }, null, 2));
+            return;
+        }
+        case "remove": {
+            const scope = allowlistScopeFromArgs(args);
+            const out = await allowlistRemove({
+                comm: required(args.comm, "--comm"),
+                user: required(args.user, "--user"),
+                scope,
+                botId: args.botId ?? args["bot-id"],
+                agent: args.agent,
+                project: args.project ?? (scope === "per-bot" && !(args.botId ?? args["bot-id"]) ? process.cwd() : undefined),
+                accountLabel: args.accountLabel ?? args["account-label"],
+            });
+            const reload = await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ...out, reload }, null, 2));
+            return;
+        }
+        case "list": {
+            const scopeArg = args.scope;
+            if (scopeArg && scopeArg !== "global" && scopeArg !== "per-bot" && scopeArg !== "all") {
+                throw new Error("--scope must be one of: global | per-bot | all");
+            }
+            const out = await allowlistList({
+                comm: args.comm,
+                scope: scopeArg,
+                botId: args.botId ?? args["bot-id"],
+                agent: args.agent,
+                project: args.project ??
+                    (args.agent && !(args.botId ?? args["bot-id"]) ? process.cwd() : undefined),
+                accountLabel: args.accountLabel ?? args["account-label"],
+            });
+            console.log(JSON.stringify(out, null, 2));
+            return;
+        }
+        case "import-from-env": {
+            const out = await allowlistImportFromEnv({ comm: args.comm });
+            const reload = await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ...out, reload }, null, 2));
+            return;
+        }
+        case "import-from-files": {
+            const dryRun = args.dryRun !== undefined || args["dry-run"] !== undefined;
+            const out = await allowlistImportFromFiles({ comm: args.comm, dryRun });
+            const reload = dryRun ? { attempted: false, reason: "dry-run" } : await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ...out, reload }, null, 2));
+            return;
+        }
+        default:
+            printHelp();
+            throw new Error(`unknown allowlist subcommand: ${sub ?? "(none)"}`);
+    }
+}
+function allowlistScopeFromArgs(args) {
+    const hasPerBotSelector = Boolean(args.botId ?? args["bot-id"] ?? args.agent ?? args.project ?? args.accountLabel ?? args["account-label"]);
+    return hasPerBotSelector ? "per-bot" : "global";
 }
 function parseArgs(args) {
     const parsed = {};
@@ -73,12 +155,25 @@ function redact(row) {
     return { ...row, credentials_ref: row.credentials_ref ? "[redacted]" : row.credentials_ref };
 }
 function printHelp() {
-    console.error(`agents-comm-bus account commands
+    console.error(`agents-comm-bus CLI
 
-Usage:
+Account commands:
   agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove --project <path> --agent <agent> --account-label <label> [--comm telegram]
+
+Allowlist commands:
+  agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                            # global
+  agents-comm-bus allowlist add    --comm <c> --user <id> --bot-id <id>                             # per-bot (canonical)
+  agents-comm-bus allowlist add    --comm <c> --user <id> --agent <a> [--account-label <l>] [--project <p>]
+                                                                                                    # per-bot (resolved)
+  agents-comm-bus allowlist remove --comm <c> --user <id> [--bot-id <id> | --agent <a> [--project <p>]]
+  agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id> | --agent <a> ...]
+  agents-comm-bus allowlist import-from-env   [--comm telegram]
+  agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
+
+For per-bot scope without --bot-id, --project defaults to the current working directory.
+--account-label defaults to "main".
 `);
 }
 main().catch((error) => {
