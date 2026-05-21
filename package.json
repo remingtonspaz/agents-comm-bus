@@ -7,6 +7,9 @@
   "scripts": {
     "install-telegram": "node install.js",
     "status": "node install.js --status",
+    "generate:plugin-layout": "node scripts/generate-plugin-layout.mjs",
+    "validate:plugin-layout": "node scripts/validate-plugin-layout.mjs",
+    "test:plugin-layout": "node --test tests/architecture/plugin-artifact-layout.test.mjs",
     "build:plugins": "node scripts/build-plugin-artifacts.js --build-deps",
     "test:distribution": "node --test tests/distribution/*.test.js",
     "release:check": "node scripts/check-release-tag.js"
