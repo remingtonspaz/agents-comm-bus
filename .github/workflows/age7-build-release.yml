@@ -1,0 +1,42 @@
+name: age7-build-release
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - universal-overhaul
+  workflow_dispatch:
+
+jobs:
+  build-release-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install agents-comm-bus-core dependencies
+        run: npm ci
+        working-directory: agents-comm-bus-core
+
+      - name: Install agents-comm-bus dependencies
+        run: npm ci
+        working-directory: agents-comm-bus
+
+      - name: Install MCP server dependencies
+        run: npm ci
+        working-directory: mcp-server
+
+      - name: Build plugin artifact matrix
+        run: npm run build:plugins
+
+      - name: Validate generated distribution layout
+        run: npm run test:distribution

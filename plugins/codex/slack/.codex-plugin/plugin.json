@@ -1,0 +1,32 @@
+{
+  "name": "agents-comm-bus-slack",
+  "version": "2.0.0",
+  "description": "Slack scaffold for Codex through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "homepage": "https://github.com/remingtonspaz/claude-code-telegram",
+  "repository": "https://github.com/remingtonspaz/claude-code-telegram",
+  "license": "MIT",
+  "keywords": [
+    "slack",
+    "messaging",
+    "agents-comm-bus",
+    "scaffold"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Slack",
+    "shortDescription": "Slack release scaffold for Codex",
+    "longDescription": "Slack release scaffold for Codex. The plugin layout exists so CI, release tagging, and marketplace pointers can cover the full AGE-7 matrix while the runtime adapter is still pending.",
+    "developerName": "Satrio",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Explain the Slack scaffold status"
+    ]
+  }
+}

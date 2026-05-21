@@ -1,0 +1,16 @@
+{
+  "name": "agents-comm-bus-discord",
+  "version": "2.0.0",
+  "description": "Discord scaffold for Claude Code through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "discord": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/discord-scaffold-mcp-shim.js"
+      ]
+    }
+  }
+}

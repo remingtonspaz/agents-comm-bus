@@ -1,0 +1,16 @@
+{
+  "name": "agents-comm-bus-matrix",
+  "version": "2.0.0",
+  "description": "Matrix scaffold for Claude Code through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "matrix": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/matrix-scaffold-mcp-shim.js"
+      ]
+    }
+  }
+}

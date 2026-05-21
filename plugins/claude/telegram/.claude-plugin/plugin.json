@@ -1,0 +1,16 @@
+{
+  "name": "agents-comm-bus-telegram",
+  "version": "2.0.0",
+  "description": "Telegram messaging for Claude Code through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "telegram": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"
+      ]
+    }
+  }
+}

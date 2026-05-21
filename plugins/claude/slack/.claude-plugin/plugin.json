@@ -1,0 +1,16 @@
+{
+  "name": "agents-comm-bus-slack",
+  "version": "2.0.0",
+  "description": "Slack scaffold for Claude Code through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "slack": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/slack-scaffold-mcp-shim.js"
+      ]
+    }
+  }
+}

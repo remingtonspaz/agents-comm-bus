@@ -6,14 +6,25 @@
   "main": "mcp-server/server.js",
   "scripts": {
     "install-telegram": "node install.js",
-    "status": "node install.js --status"
+    "status": "node install.js --status",
+    "build:plugins": "node scripts/build-plugin-artifacts.js --build-deps",
+    "test:distribution": "node --test tests/distribution/*.test.js",
+    "release:check": "node scripts/check-release-tag.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
-    "ws": "^8.18.0",
-    "dotenv": "^16.4.5"
+    "ws": "^8.18.0"
   },
-  "keywords": ["telegram", "claude-code", "mcp", "automation"],
+  "devDependencies": {
+    "esbuild": "^0.25.5"
+  },
+  "keywords": [
+    "telegram",
+    "claude-code",
+    "mcp",
+    "automation"
+  ],
   "author": "Claude Code User",
   "license": "MIT"
 }

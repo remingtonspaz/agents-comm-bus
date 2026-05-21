@@ -1,0 +1,32 @@
+{
+  "name": "agents-comm-bus-telegram",
+  "version": "2.0.0",
+  "description": "Telegram messaging for Codex through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "homepage": "https://github.com/remingtonspaz/claude-code-telegram",
+  "repository": "https://github.com/remingtonspaz/claude-code-telegram",
+  "license": "MIT",
+  "keywords": [
+    "telegram",
+    "messaging",
+    "agents-comm-bus",
+    "remote-control"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Telegram",
+    "shortDescription": "Talk to Codex from Telegram",
+    "longDescription": "Telegram messaging for Codex. The plugin talks to the shared agents-comm-bus daemon and keeps communication ownership outside the agent harness.",
+    "developerName": "Satrio",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Send a status update to my Telegram"
+    ]
+  }
+}
