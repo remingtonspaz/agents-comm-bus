@@ -424,6 +424,91 @@ auto-detect existing `~/.claude-telegram/` directories and offer to
 import credentials? Probably yes for the migration window; cleanly
 removable after.
 
+## Dev mode (env-var overrides)
+
+The current `claude-code-telegram` codebase already supports a "dev
+mode" — a project-local `.mcp.json` overrides the user-scope plugin's
+MCP server registration so a developer can iterate on source without
+re-installing the plugin. The new install model preserves this and
+generalizes it to the daemon + adapters via three environment
+variables.
+
+### Goal
+
+Run daemon, MCP shim, hooks, and CommAdapters from a project's source
+tree instead of `~/.agents-comm-bus/{bin,adapters}/`, with separate
+state so the dev session doesn't pollute the production daemon's
+state.
+
+### Mechanism
+
+| Env var | Effect |
+|---|---|
+| `AGENTS_COMM_BUS_ROOT=<project>/.agents-comm-bus-dev/` | Overrides the state root. Own DB, own transcripts, own attachments, own `port` file. Doesn't pollute the production state at `~/.agents-comm-bus/`. |
+| `AGENTS_COMM_BUS_BIN=<project>/core/index.js` | Overrides the daemon entry point. Install hook skips the "copy bundle to shared location" step when set. Daemon runs from raw project source — no esbuild round-trip per iteration. |
+| `AGENTS_COMM_BUS_ADAPTERS_DIR=<project>/adapters/` | Overrides the adapter discovery directory. Daemon loads from project source rather than the shared `adapters/` dir. |
+
+Plus the existing pattern from today's codebase:
+
+- Project-local `.mcp.json` (gitignored) declares the MCP server with
+  an absolute path to `<project>/hosts/<agent>/<agent>-mcp-shim.js`.
+- Project-local `.claude/settings.local.json` (or Codex equivalent)
+  declares hooks pointing at `<project>/hosts/<agent>/<agent>-install-hook.js`.
+
+When the env vars are set, the install hook's only remaining job is
+"ensure the daemon is running" — it skips bundle copying entirely and
+launches the daemon from source. From the hook's perspective, dev
+mode is roughly an opaque branch in its bootstrap logic.
+
+### Concrete dev setup (sketch)
+
+In the dev project's `.mcp.json` (or equivalent), declare the MCP
+server with the env vars in `env`:
+
+```jsonc
+{
+  "mcpServers": {
+    "agents-comm-bus": {
+      "command": "node",
+      "args": ["<absolute-project-path>/hosts/claude/claude-mcp-shim.js"],
+      "env": {
+        "AGENTS_COMM_BUS_ROOT":         "<absolute-project-path>/.agents-comm-bus-dev/",
+        "AGENTS_COMM_BUS_BIN":          "<absolute-project-path>/core/index.js",
+        "AGENTS_COMM_BUS_ADAPTERS_DIR": "<absolute-project-path>/adapters/"
+      }
+    }
+  }
+}
+```
+
+Same env block goes on the hook entry in `.claude/settings.local.json`
+or analogous Codex config. A bootstrap script (`npm run dev`) can
+template these paths automatically against the dev's checkout
+location.
+
+### Coexistence with production daemon
+
+`AGENTS_COMM_BUS_ROOT` isolation makes dev and production safe to run
+side-by-side:
+
+- Dev session writes to `<project>/.agents-comm-bus-dev/`.
+- Production daemon runs at `~/.agents-comm-bus/`.
+- Two daemons, two state roots, two `port` files. The user-scope
+  plugin's hook (if any production session is also active) bootstraps
+  production normally; the dev session's hook bootstraps from the
+  dev env vars. They don't see each other.
+
+### Examples from the current state of the project
+
+- A developer or agent in the main `claude-code-telegram` project dir
+  using `.mcp.json` to point at the source MCP server, with env vars
+  pointing daemon + adapters at the project tree.
+- Worker agents in the `universal-overhaul` worktree iterating on the
+  v4 codebase — their `.mcp.json` + `.claude/settings.local.json`
+  point at the worktree's `hosts/<agent>/` and set
+  `AGENTS_COMM_BUS_ROOT` to a dev state dir scoped to that worktree,
+  so concurrent worker agents don't fight over shared state.
+
 ## Multi-agent on the same machine
 
 When both Claude Code and Codex have an `agents-comm-bus-<comm>` plugin

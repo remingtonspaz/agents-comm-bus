@@ -45,7 +45,10 @@ platform→core type mapping.
   matrix with PR-noise mitigations, install lifecycle, daemon version
   reconciliation, multi-agent coexistence, **duplicate-invocation
   safety** (bootstrap lockfile, session-key dedupe on WS handshake,
-  idempotent message delivery, stateless MCP shim design), and the
+  idempotent message delivery, stateless MCP shim design),
+  **dev-mode env-var overrides** (`AGENTS_COMM_BUS_ROOT` /
+  `AGENTS_COMM_BUS_BIN` / `AGENTS_COMM_BUS_ADAPTERS_DIR` for running
+  daemon + adapters from project source with isolated state), and the
   migration path for `claude-code-telegram` users.
 - [`dist-tree-plan.md`](./dist-tree-plan.md) — canonical directory
   sketch of the source monorepo (`agents-comm-bus/`) with built
