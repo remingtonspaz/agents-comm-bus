@@ -57,6 +57,7 @@ Use the root-level `npm run test:<group>` commands above when a phase matches a 
   - `tests/architecture/bootstrap-race.test.ts`
   - `tests/architecture/ipc-versioning.test.ts`
   - `tests/architecture/account-registration-cli.test.ts`
+  - `tests/architecture/daemon-build-assets.test.ts`
 - adapter / allowlist / drain behavior:
   - `tests/architecture/allowlist-factory.test.ts`
   - `tests/architecture/reload-allowlist-refresh.test.ts`
@@ -66,7 +67,6 @@ Use the root-level `npm run test:<group>` commands above when a phase matches a 
   - `tests/architecture/claude-hooks.test.ts`
   - `tests/architecture/codex-hooks.test.ts`
   - `tests/architecture/codex-app-server-lifecycle.test.ts`
-  - `tests/architecture/daemon-build-assets.test.ts`
 
 ---
 
@@ -84,6 +84,7 @@ Use the root-level `npm run test:<group>` commands above when a phase matches a 
 - [ ] Run current architecture tests:
   - [ ] `cd packages/core-contracts && npm test`
   - [ ] `cd agents-comm-bus && npm test`
+  - [ ] `npm run test:daemon`
   - [ ] `npm run test:hooks`
 - [ ] Save the exact failing/passing baseline in the PR body or execution notes.
 

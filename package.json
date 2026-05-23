@@ -13,7 +13,7 @@
     "install-telegram": "node install.js",
     "status": "node install.js --status",
     "pretest": "npm --workspace packages/core-contracts run build",
-    "test": "node --test --import tsx 'tests/architecture/*.test.ts'",
+    "test": "node --test --import tsx tests/architecture/*.test.ts",
     "pretest:core": "npm --workspace packages/core-contracts run build",
     "test:core": "node --test --import tsx tests/architecture/sqlite-schema.test.ts tests/architecture/bus-invariants.test.ts tests/architecture/query-resolution.test.ts",
     "pretest:bootstrap": "npm --workspace packages/core-contracts run build",
