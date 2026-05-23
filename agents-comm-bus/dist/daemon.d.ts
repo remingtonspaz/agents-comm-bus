@@ -1,5 +1,8 @@
 import { type AccountId, type CommId } from "../../agents-comm-bus-core/dist/index.js";
-import type { AgentBridgeFactory } from "./runtime/agent-bridge.js";
+import { MessageBus } from "./bus.js";
+import { openSqliteStorage } from "./storage/sqlite.js";
+import { ContentAddressedBlobStore } from "./storage/blobs.js";
+import type { AgentBridge, AgentBridgeFactory } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 export type { AgentBridge, AgentBridgeFactory, AgentBridgeContext, } from "./runtime/agent-bridge.js";
 export type { CommAdapterFactory, CommAdapterFactoryEnv, CommIpcDeps, } from "./runtime/comm-factory.js";
@@ -54,10 +57,44 @@ export interface ReloadSummary {
         comm: CommId;
         account_id: AccountId;
     }>;
+    /**
+     * Adapters whose registration is unchanged but whose runtime state was
+     * refreshed in-place (e.g. allowlist set diff). The adapter instance and
+     * its live polling are NOT recreated.
+     */
+    updated: Array<{
+        comm: CommId;
+        account_id: AccountId;
+        what: "allowlist";
+    }>;
     skipped: Array<{
         comm: CommId;
         account_id?: string;
         reason: string;
     }>;
 }
+/**
+ * Reconcile the live comm-adapter set with `account_registrations`. Called
+ * from the `reload_registrations` IPC method after the CLI writes (or
+ * deletes) a row. Diff is by `(commId, bot_user_id)`: rows that exist in
+ * storage but not in the bus are constructed + started + attached to
+ * bridges; adapters that exist in the bus but not in storage are detached
+ * + stopped. Bridge registration caches are wiped at the end so the next
+ * inbound drain sees the new ownership set.
+ *
+ * The reload is best-effort: a credential resolution failure or adapter
+ * start failure surfaces in the `skipped` list and does not abort the
+ * other diffs. Adapter `stop()` failures on remove are logged but do not
+ * leave the bus in an inconsistent state — the adapter has already been
+ * detached from the map.
+ */
+export declare function reloadAdapters(input: {
+    factories: CommAdapterFactory[];
+    bridges: AgentBridge[];
+    bus: MessageBus;
+    storage: Awaited<ReturnType<typeof openSqliteStorage>>;
+    env: NodeJS.ProcessEnv;
+    blobs: ContentAddressedBlobStore;
+    stateRoot: string;
+}): Promise<ReloadSummary>;
 //# sourceMappingURL=daemon.d.ts.map

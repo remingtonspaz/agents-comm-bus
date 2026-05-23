@@ -145,6 +145,10 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       }
     }
   }
+  // Generic, comm-agnostic drain of the shared pendingInbound queue. Used by
+  // the MCP shim's `comm_check_messages` tool so the shim doesn't have to
+  // know any per-comm IPC method names.
+  ipcMethods.set("drain_pending_inbound", async () => pendingInbound.splice(0));
   const bridgesByMethod = new Map<string, AgentBridge>();
   for (const bridge of bridges) {
     for (const method of bridge.ipcMethods) {
@@ -256,6 +260,12 @@ export interface ReloadSummary {
   ok: true;
   added: Array<{ comm: CommId; account_id: AccountId }>;
   removed: Array<{ comm: CommId; account_id: AccountId }>;
+  /**
+   * Adapters whose registration is unchanged but whose runtime state was
+   * refreshed in-place (e.g. allowlist set diff). The adapter instance and
+   * its live polling are NOT recreated.
+   */
+  updated: Array<{ comm: CommId; account_id: AccountId; what: "allowlist" }>;
   skipped: Array<{ comm: CommId; account_id?: string; reason: string }>;
 }
 
@@ -274,7 +284,7 @@ export interface ReloadSummary {
  * leave the bus in an inconsistent state — the adapter has already been
  * detached from the map.
  */
-async function reloadAdapters(input: {
+export async function reloadAdapters(input: {
   factories: CommAdapterFactory[];
   bridges: AgentBridge[];
   bus: MessageBus;
@@ -285,6 +295,7 @@ async function reloadAdapters(input: {
 }): Promise<ReloadSummary> {
   const added: ReloadSummary["added"] = [];
   const removed: ReloadSummary["removed"] = [];
+  const updated: ReloadSummary["updated"] = [];
   const skipped: ReloadSummary["skipped"] = [];
 
   type DesiredEntry = { factory: CommAdapterFactory; registration: AccountRegistration };
@@ -367,13 +378,54 @@ async function reloadAdapters(input: {
     removed.push({ comm: entry.commId, account_id: entry.accountId });
   }
 
+  // Third branch: registrations that exist in both `desired` and `current`.
+  // The (commId, accountId) is unchanged, so no attach/detach needed — but
+  // the source of the adapter's allowlist (env CSV ∪ .json file userId ∪ DB
+  // allowlist_global/per_bot) may have shifted. Re-resolve credentials and,
+  // if the resulting allowedUserIds differs from the live adapter's current
+  // set, refresh it in place via `updateAllowedSenderIds`. This is the path
+  // that lets `agents-comm allowlist add` take effect without restarting
+  // the daemon or recreating the adapter (which would interrupt polling).
+  for (const [key, entry] of desired) {
+    if (!current.has(key)) continue;
+    const liveAdapter = input.bus.getComm(
+      entry.registration.comm,
+      entry.registration.bot_user_id as AccountId,
+    );
+    if (!liveAdapter || !liveAdapter.updateAllowedSenderIds) continue;
+    const resolved = await entry.factory.resolveCredentials(entry.registration, input.env, {
+      storage: input.storage,
+    });
+    if (!resolved) continue;
+    const newIds = Array.isArray(resolved.credentials.allowedUserIds)
+      ? (resolved.credentials.allowedUserIds as string[]).map(String)
+      : [];
+    const oldIds = liveAdapter.allowedSenderIds ?? [];
+    if (sameStringSet(oldIds, newIds)) continue;
+    liveAdapter.updateAllowedSenderIds(newIds);
+    updated.push({
+      comm: entry.registration.comm,
+      account_id: entry.registration.bot_user_id as AccountId,
+      what: "allowlist",
+    });
+  }
+
   if (added.length > 0 || removed.length > 0) {
     for (const bridge of input.bridges) {
       bridge.invalidateRegistrationCaches?.();
     }
   }
 
-  return { ok: true, added, removed, skipped };
+  return { ok: true, added, removed, updated, skipped };
+}
+
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  for (const x of b) {
+    if (!set.has(x)) return false;
+  }
+  return true;
 }
 
 function adapterMapKey(commId: CommId, accountId: AccountId | string): string {

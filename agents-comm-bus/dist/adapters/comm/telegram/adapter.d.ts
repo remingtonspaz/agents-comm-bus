@@ -18,9 +18,8 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private readonly options;
     readonly id: CommId;
     readonly accountId: AccountId;
-    readonly allowedSenderIds: readonly string[];
     private readonly now;
-    private readonly allowedUserIds;
+    private allowedUserIds;
     private readonly sentByKey;
     private inboundHandler;
     private readonly callbackHandlers;
@@ -30,6 +29,19 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private botUserId;
     private readonly fetchImpl;
     constructor(options: TelegramCommAdapterOptions);
+    /**
+     * Derived view of the allowlist. Returns a snapshot array each access so
+     * callers (notably the bus's foreign-bot gate) always see the current Set
+     * state. The backing Set is replaceable via {@link updateAllowedSenderIds}.
+     */
+    get allowedSenderIds(): readonly string[];
+    /**
+     * Replace the in-memory allowlist with a new set of ids. Called by the
+     * daemon's reload path when DB-backed allowlist rows change for an
+     * already-attached adapter — avoids tearing down + recreating the adapter
+     * and its live polling connection.
+     */
+    updateAllowedSenderIds(ids: readonly string[]): void;
     start(): Promise<void>;
     stop(): Promise<void>;
     onInbound(handler: (msg: Message) => Promise<void>): void;

@@ -62,6 +62,14 @@ export class MessageBus {
             accountId: comm.accountId,
         }));
     }
+    /**
+     * Look up a currently-attached adapter by `(commId, accountId)`. Used by
+     * the daemon's reload path to refresh per-adapter state (e.g. allowlist
+     * updates) without tearing down and recreating the adapter.
+     */
+    getComm(commId, accountId) {
+        return this.comms.get(adapterKey(commId, accountId)) ?? null;
+    }
     setDispatchSink(sink) {
         this.dispatchSink = sink;
     }

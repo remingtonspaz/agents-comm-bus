@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsc && node scripts/copy-assets.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx \"../tests/architecture/bootstrap-race.test.ts\" \"../tests/architecture/ipc-versioning.test.ts\" \"../tests/architecture/sqlite-schema.test.ts\" \"../tests/architecture/allowlist-factory.test.ts\""
+    "test": "node --test --import tsx \"../tests/architecture/bootstrap-race.test.ts\" \"../tests/architecture/ipc-versioning.test.ts\" \"../tests/architecture/sqlite-schema.test.ts\" \"../tests/architecture/allowlist-factory.test.ts\" \"../tests/architecture/reload-allowlist-refresh.test.ts\""
   },
   "engines": { "node": ">=22" },
   "dependencies": {

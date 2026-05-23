@@ -80,8 +80,23 @@ export interface CommAdapter {
    * omitting the field) means the bus falls back to its global foreign-bot
    * policy. Adapters that don't have a per-instance allowlist concept can
    * leave this unset.
+   *
+   * Implementations that support runtime allowlist updates should back this
+   * value with mutable state and expose `updateAllowedSenderIds` so the
+   * daemon's reload path can refresh it without recreating the adapter.
    */
   readonly allowedSenderIds?: readonly string[];
+
+  /**
+   * Optional: replace the adapter's `allowedSenderIds` with a new set of
+   * ids at runtime. Called by the daemon's reload path when DB-backed
+   * allowlist rows change for an already-attached adapter. Implementations
+   * must update the same backing state the `allowedSenderIds` getter reads
+   * so the bus's foreign-bot gate immediately observes the new value.
+   *
+   * Adapters without an allowlist concept can leave this unset.
+   */
+  updateAllowedSenderIds?(ids: readonly string[]): void;
 
   /** Start polling/streaming inbound traffic. */
   start(): Promise<void>;

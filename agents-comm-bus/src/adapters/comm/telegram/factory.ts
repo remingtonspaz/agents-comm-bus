@@ -153,9 +153,10 @@ async function sendTelegram(
   params: Record<string, unknown>,
   image: boolean,
 ): Promise<{ message_id: string }> {
-  const target = params.chat_id == null
+  const chatNativeId = extractChatNativeId(params);
+  const target = chatNativeId === null
     ? undefined
-    : await targetFromParams(deps.storage, params);
+    : await targetFromParams(deps.storage, params, chatNativeId);
   const sent = await deps.bus.send({
     session: String(params.session ?? "mcp") as SessionId,
     comm: TELEGRAM_COMM_ID,
@@ -178,13 +179,38 @@ async function sendTelegram(
   return { message_id: sent };
 }
 
+/**
+ * Pull the chat identifier from either the generic nested `target.chat_native_id`
+ * shape (the form the comm-agnostic MCP shim sends) or the legacy flat `chat_id`
+ * shape (still accepted for callers that haven't migrated). Returns `null` when
+ * neither form is present — caller should fall back to the session's
+ * most-recent-inbound conversation.
+ */
+function extractChatNativeId(params: Record<string, unknown>): string | null {
+  if (params.chat_id != null) return String(params.chat_id);
+  const target = params.target;
+  if (target && typeof target === "object" && "chat_native_id" in target) {
+    const value = (target as Record<string, unknown>).chat_native_id;
+    if (value != null) return String(value);
+  }
+  return null;
+}
+
+function extractThreadNativeId(params: Record<string, unknown>): string | undefined {
+  if (params.message_thread_id != null) return String(params.message_thread_id);
+  const target = params.target;
+  if (target && typeof target === "object" && "thread_native_id" in target) {
+    const value = (target as Record<string, unknown>).thread_native_id;
+    if (value != null) return String(value);
+  }
+  return undefined;
+}
+
 async function targetFromParams(
   storage: CommIpcDeps["storage"],
   params: Record<string, unknown>,
+  chatNativeId: string,
 ): Promise<ChatRef> {
-  if (params.chat_id == null) {
-    throw new Error("omitted Telegram target requires a session most-recent-inbound conversation");
-  }
   const session = typeof params.session === "string"
     ? await storage.getSession(params.session as SessionId)
     : null;
@@ -204,8 +230,8 @@ async function targetFromParams(
   return {
     comm: TELEGRAM_COMM_ID,
     account: registration.bot_user_id as ChatRef["account"],
-    chat_native_id: String(params.chat_id),
-    thread_native_id: params.message_thread_id == null ? undefined : String(params.message_thread_id),
+    chat_native_id: chatNativeId,
+    thread_native_id: extractThreadNativeId(params),
   };
 }
 

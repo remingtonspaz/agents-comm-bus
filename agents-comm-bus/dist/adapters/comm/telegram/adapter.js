@@ -3,7 +3,6 @@ export class TelegramCommAdapter {
     options;
     id = "telegram";
     accountId;
-    allowedSenderIds;
     now;
     allowedUserIds;
     sentByKey = new Map();
@@ -19,9 +18,25 @@ export class TelegramCommAdapter {
         this.accountId = options.accountId;
         this.now = options.now ?? Date.now;
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
-        this.allowedSenderIds = Array.from(this.allowedUserIds);
         this.bot = options.bot ?? null;
         this.fetchImpl = options.fetch ?? fetch;
+    }
+    /**
+     * Derived view of the allowlist. Returns a snapshot array each access so
+     * callers (notably the bus's foreign-bot gate) always see the current Set
+     * state. The backing Set is replaceable via {@link updateAllowedSenderIds}.
+     */
+    get allowedSenderIds() {
+        return Array.from(this.allowedUserIds);
+    }
+    /**
+     * Replace the in-memory allowlist with a new set of ids. Called by the
+     * daemon's reload path when DB-backed allowlist rows change for an
+     * already-attached adapter — avoids tearing down + recreating the adapter
+     * and its live polling connection.
+     */
+    updateAllowedSenderIds(ids) {
+        this.allowedUserIds = new Set(ids);
     }
     async start() {
         this.emitState("connecting");
