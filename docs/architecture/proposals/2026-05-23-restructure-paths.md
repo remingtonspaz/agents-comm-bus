@@ -14,6 +14,7 @@
 - **`hosts/<agent>/`** contains the **installed edge** for that host: MCP shim, hooks, skills, manifest wiring, and other host-runtime glue.
 - **`hosts/common/`** is allowed for **shared host-side plumbing** used by multiple host entrypoints (for example shared MCP-shim code). It is still host-edge code, not daemon runtime.
 - **`adapters/<comm>/`** contains **comm/provider integrations**.
+- **Review/planning reference rule:** when referring to bridge entry files, use the full path (for example `core/bridges/claude/bridge.ts`), never bare `bridge.ts`.
 
 ---
 
