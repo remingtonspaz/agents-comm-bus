@@ -15,7 +15,7 @@ This skill enables bidirectional communication with Telegram.
 
 ## IMPORTANT: Always Forward to Telegram
 
-**You MUST use the `telegram_send` tool to forward your responses to Telegram.** The user monitors this session remotely via Telegram and needs to see what you're doing.
+**You MUST use the `comm_send_message` tool with `comm: "telegram"` to forward your responses to Telegram.** The user monitors this session remotely via Telegram and needs to see what you're doing.
 
 ### Communication Pattern
 1. **First**: Send an initial acknowledgment/plan when you receive a message
@@ -48,27 +48,31 @@ Look for the `telegram` server in the list. If it shows as connected, the integr
 
 Once the MCP server is running, you have access to these tools:
 
-### telegram_send
+### comm_send_message
 Send a text message to Telegram.
 ```
-Use the telegram_send tool with message: "Your message here"
+Use the comm_send_message tool with comm: "telegram", message: "Your message here"
 ```
 
-### telegram_send_image
+### comm_send_attachment
 Send an image file to Telegram.
 ```
-Use the telegram_send_image tool with path: "/absolute/path/to/image.png" and optional caption
+Use the comm_send_attachment tool with comm: "telegram", path: "/absolute/path/to/image.png" and optional caption
 ```
 
-### telegram_check_messages
+### comm_check_messages
 Manually check for pending messages (messages are also auto-injected on each prompt).
 ```
-Use the telegram_check_messages tool
+Use the comm_check_messages tool with comm: "telegram"
 ```
+
+When you need to target a specific Telegram chat or topic, use the nested
+`target` object shape: `{ chat_native_id, thread_native_id? }`. The shim no
+longer accepts flat `chat_id` / `message_thread_id` fields.
 
 ## How It Works
 
-1. **Outbound (Agent to Telegram)**: Call the `telegram_send` or `telegram_send_image` tools
+1. **Outbound (Agent to Telegram)**: Call the `comm_send_message` or `comm_send_attachment` tools with `comm: "telegram"`
 2. **Inbound (Telegram to Agent)**: Messages are automatically injected as context before each prompt via a UserPromptSubmit hook
 
 ## Installation

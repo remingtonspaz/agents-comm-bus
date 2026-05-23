@@ -169,7 +169,7 @@ async function showStatus() {
   console.log('  1. Register a Telegram account: node agents-comm-bus/dist/cli/index.js account-add --project <path> --agent claude --account-label main');
   console.log('  2. Restart Claude Code to load the MCP IPC shim');
   console.log('  3. Check /mcp to verify server is connected');
-  console.log('  4. Test list_conversations or telegram_send with an explicit chat_id\n');
+  console.log('  4. Test list_conversations or comm_send_message with an explicit nested target { chat_native_id, thread_native_id? }\n');
 }
 
 function installAndBuildPackage(label, dir, build = true) {
@@ -251,7 +251,7 @@ async function install() {
   console.log('     TELEGRAM_BOT_TOKEN=... node agents-comm-bus/dist/cli/index.js account-add --project "<project>" --agent claude --account-label main');
   console.log('  2. Restart Claude Code to load the MCP IPC shim');
   console.log('  3. Check /mcp to verify "telegram" server is connected');
-  console.log('  4. Use list_conversations or telegram_send with an explicit chat_id\n');
+  console.log('  4. Use list_conversations or comm_send_message with an explicit nested target { chat_native_id, thread_native_id? }\n');
 }
 
 function showHelp() {

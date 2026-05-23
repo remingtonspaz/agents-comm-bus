@@ -21,7 +21,7 @@ End-to-end working on Windows + Telegram with Claude Code as the agent:
 Codex + Telegram is now also confirmed end-to-end on Windows:
 
 - Inbound Telegram -> Codex wake/resume via Codex app-server: WORKING
-- Outbound Codex -> Telegram via MCP `telegram_send`: WORKING
+- Outbound Codex -> Telegram via MCP `comm_send_message` (`comm: "telegram"`): WORKING
 - Codex permission prompts routed to Telegram inline buttons: WORKING
 - Telegram button selection resolves back to the Codex session: WORKING
 - Codex first-prompt `SessionStart` repair hook detects registered comm
@@ -263,8 +263,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
   with the words "claude" or "telegram" is a smell.
 - **IPC method namespacing.** Bridges own `<agent>_*` methods (e.g.
   `claude_register_session`). Comm factories own `<comm>_*` methods (e.g.
-  `telegram_send`). Generic methods like `list_conversations` are intrinsic
-  to the daemon library.
+  `telegram_send` on the daemon IPC side). The MCP shim exposes generic
+  `comm_*` tools such as `comm_send_message`, `comm_send_attachment`, and
+  `comm_check_messages`; explicit targets flow through the nested
+  `target.{chat_native_id, thread_native_id?}` shape rather than flat
+  Telegram-specific fields. Generic methods like `list_conversations` are
+  intrinsic to the daemon library.
 - **Sinks for cross-cutting concerns.** `bus.setDispatchSink` (on each
   inbound) and `bus.setResolveSink` (on each query resolution) let the
   daemon route generic events to the agent bridge without bus.ts knowing

@@ -228,11 +228,13 @@ Expected:
 In Codex, ask:
 
 ```text
-Send "hello from Codex e2e test" to Telegram using telegram_send.
+Send "hello from Codex e2e test" to Telegram using comm_send_message with comm "telegram".
 ```
 
-If there is no recent inbound session target, pass an explicit `chat_id` or ask
-Codex to list conversations first:
+If there is no recent inbound session target, pass an explicit nested
+`target` object like `{ chat_native_id: "...", thread_native_id: "..." }` or
+ask Codex to list conversations first. The shim no longer accepts flat
+`chat_id` / `message_thread_id` fields:
 
 ```text
 List Telegram conversations using list_conversations.
@@ -366,7 +368,7 @@ Use this checklist when writing the test report:
 - MCP `telegram` visible in Codex:
 - Hooks enabled and firing:
 - Telegram inbound injected on prompt submit:
-- Codex outbound `telegram_send` delivered:
+- Codex outbound `comm_send_message` delivered:
 - Telegram inbound auto-wake via `turn/start`:
 - Permission query opened and sent to Telegram:
 - Permission resolved by button:

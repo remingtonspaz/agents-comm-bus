@@ -168,11 +168,13 @@ Expected:
 In Claude, use the MCP tool or ask:
 
 ```text
-Send "hello from Claude e2e test" to Telegram using telegram_send.
+Send "hello from Claude e2e test" to Telegram using comm_send_message with comm "telegram".
 ```
 
-If there is no recent inbound session target, pass an explicit `chat_id` or ask
-Claude to use one. You can find conversations with:
+If there is no recent inbound session target, pass an explicit nested
+`target` object like `{ chat_native_id: "...", thread_native_id: "..." }` or
+ask Claude to use one. The shim no longer accepts flat `chat_id` /
+`message_thread_id` fields. You can find conversations with:
 
 ```text
 List Telegram conversations using list_conversations.

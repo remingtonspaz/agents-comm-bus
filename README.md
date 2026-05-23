@@ -146,13 +146,16 @@ node install.js --status
 Or check `/mcp` in Claude Code to see if the telegram server is connected.
 
 The MCP tools are:
-- `telegram_send(message, chat_id?, message_thread_id?)`
-- `telegram_send_image(path, caption?, chat_id?, message_thread_id?)`
-- `telegram_check_messages()`
-- `list_conversations(comm?, limit?)`
+- `comm_send_message({ comm, message, target? })`
+- `comm_send_attachment({ comm, path, caption?, target? })`
+- `comm_check_messages({ comm? })`
+- `list_conversations({ comm?, limit? })`
 
-If `chat_id` is omitted, the daemon uses the session's most recent inbound
-conversation when available; otherwise it returns an explicit-target error.
+For Telegram, explicit targets must use the nested `target` object shape
+`{ chat_native_id, thread_native_id? }`. Omitting `target` lets the daemon use
+the session's most recent inbound conversation when available; otherwise it
+returns an explicit-target error. The shim no longer accepts flat
+`chat_id`/`message_thread_id` fields.
 
 ## Hooks Configuration
 
@@ -204,9 +207,9 @@ The hooks should be configured automatically if you place this plugin in your pr
 
 Claude can send messages to you using the MCP tools:
 
-- `telegram_send` - Send a text message
-- `telegram_send_image` - Send an image file
-- `telegram_check_messages` - Check for pending messages
+- `comm_send_message` - Send a text message
+- `comm_send_attachment` - Send an image or other file
+- `comm_check_messages` - Check for pending messages
 
 ### Receiving Messages
 
