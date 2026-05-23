@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx \"../../tests/architecture/*.test.ts\""
+    "test": "node --test --import tsx ../../tests/architecture/query-resolution.test.ts ../../tests/architecture/query-staleness.test.ts ../../tests/architecture/security-loop-prevention.test.ts ../../tests/architecture/session-lease.test.ts"
   },
   "engines": { "node": ">=22" },
   "devDependencies": {

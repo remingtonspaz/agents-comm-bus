@@ -35,7 +35,10 @@
 
 ### Package-local test commands currently defined
 - Shared package tests: `cd packages/core-contracts && npm test`
+  - Covers: `query-resolution`, `query-staleness`, `security-loop-prevention`, `session-lease` (core-contracts imports only).
+  - Does **not** cover daemon runtime, bridge, or adapter tests.
 - Daemon package tests: `cd agents-comm-bus && npm test`
+  - Covers: `bootstrap-race`, `ipc-versioning`, `sqlite-schema`, `allowlist-factory`, `reload-allowlist-refresh`, `drain-pending-inbound`.
 
 ### Root-level architecture test commands (run from repo root)
 - Full suite: `npm test`
@@ -47,13 +50,16 @@
 - Hooks: `npm run test:hooks`
 
 ### High-signal architecture tests worth running during migration
-Use the root-level `npm run test:<group>` commands above when a phase matches a script grouping. For ad-hoc combinations not covered by a script, use `node --test --import tsx ...` directly from repo root.
+Use the root-level `npm run test:<group>` commands above when a phase matches a script grouping. Use the package-local test commands when validating a package's ownership boundary. For ad-hoc combinations not covered by a script, use `node --test --import tsx ...` directly from repo root.
 
-- core package / boundary / storage semantics:
-  - `tests/architecture/sqlite-schema.test.ts`
-  - `tests/architecture/bus-invariants.test.ts`
+- core package / boundary / storage semantics (covered by `packages/core-contracts && npm test`):
   - `tests/architecture/query-resolution.test.ts`
-- daemon bootstrap / IPC / CLI:
+  - `tests/architecture/query-staleness.test.ts`
+  - `tests/architecture/security-loop-prevention.test.ts`
+  - `tests/architecture/session-lease.test.ts`
+- daemon runtime / storage impl (covered by `agents-comm-bus && npm test`):
+  - `tests/architecture/bus-invariants.test.ts`
+  - `tests/architecture/sqlite-schema.test.ts`
   - `tests/architecture/bootstrap-race.test.ts`
   - `tests/architecture/ipc-versioning.test.ts`
   - `tests/architecture/account-registration-cli.test.ts`
@@ -63,10 +69,11 @@ Use the root-level `npm run test:<group>` commands above when a phase matches a 
   - `tests/architecture/reload-allowlist-refresh.test.ts`
   - `tests/architecture/drain-pending-inbound.test.ts`
   - `tests/architecture/telegram-comm-adapter.test.ts`
-- host / shim / hook contracts:
+- host / bridge / hook contracts (**not** in core-contracts `npm test`):
   - `tests/architecture/claude-hooks.test.ts`
   - `tests/architecture/codex-hooks.test.ts`
   - `tests/architecture/codex-app-server-lifecycle.test.ts`
+  - `tests/architecture/codex-turn-control.test.ts`
 
 ---
 
