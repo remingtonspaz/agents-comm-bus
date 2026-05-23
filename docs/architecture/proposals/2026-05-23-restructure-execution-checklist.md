@@ -37,8 +37,17 @@
 - Shared package tests: `cd packages/core-contracts && npm test`
 - Daemon package tests: `cd agents-comm-bus && npm test`
 
+### Root-level architecture test commands (run from repo root)
+- Full suite: `npm test`
+- Core / boundary / storage: `npm run test:core`
+- Bootstrap / IPC / CLI: `npm run test:bootstrap`
+- Daemon lifecycle: `npm run test:daemon`
+- Adapter / allowlist / drain: `npm run test:adapter`
+- Bridge / host / shim: `npm run test:bridge`
+- Hooks: `npm run test:hooks`
+
 ### High-signal architecture tests worth running during migration
-Use these directly with `node --test --import tsx ...` when a phase touches their area.
+Use the root-level `npm run test:<group>` commands above when a phase matches a script grouping. For ad-hoc combinations not covered by a script, use `node --test --import tsx ...` directly from repo root.
 
 - core package / boundary / storage semantics:
   - `tests/architecture/sqlite-schema.test.ts`
@@ -48,6 +57,7 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
   - `tests/architecture/bootstrap-race.test.ts`
   - `tests/architecture/ipc-versioning.test.ts`
   - `tests/architecture/account-registration-cli.test.ts`
+  - `tests/architecture/daemon-build-assets.test.ts`
 - adapter / allowlist / drain behavior:
   - `tests/architecture/allowlist-factory.test.ts`
   - `tests/architecture/reload-allowlist-refresh.test.ts`
@@ -57,7 +67,6 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
   - `tests/architecture/claude-hooks.test.ts`
   - `tests/architecture/codex-hooks.test.ts`
   - `tests/architecture/codex-app-server-lifecycle.test.ts`
-  - `tests/architecture/daemon-build-assets.test.ts`
 
 ---
 
@@ -69,13 +78,14 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
 - [ ] Confirm working tree is clean.
 - [ ] Confirm branch tip includes the doc-settlement commits.
 - [ ] Run current package builds:
-  - [ ] `cd agents-comm-bus-core && npm run build`
+  - [ ] `cd packages/core-contracts && npm run build`
   - [ ] `cd agents-comm-bus && npm run build`
   - [ ] `cd mcp-server && npm run build`
 - [ ] Run current architecture tests:
-  - [ ] `cd agents-comm-bus-core && npm test`
+  - [ ] `cd packages/core-contracts && npm test`
   - [ ] `cd agents-comm-bus && npm test`
-  - [ ] `node --test --import tsx tests/architecture/claude-hooks.test.ts tests/architecture/codex-hooks.test.ts tests/architecture/daemon-build-assets.test.ts`
+  - [ ] `npm run test:daemon`
+  - [ ] `npm run test:hooks`
 - [ ] Save the exact failing/passing baseline in the PR body or execution notes.
 
 ### Commit
@@ -109,7 +119,7 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
 - [ ] `cd packages/core-contracts && npm test`
 - [ ] `cd agents-comm-bus && npm run build`
 - [ ] `cd agents-comm-bus && npm test`
-- [ ] `node --test --import tsx tests/architecture/bus-invariants.test.ts tests/architecture/sqlite-schema.test.ts tests/architecture/query-resolution.test.ts`
+- [ ] `npm run test:core`
 
 ### Commit shape
 - Suggested commit message: `Move agents-comm-bus-core to packages/core-contracts`
@@ -158,8 +168,8 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
 ### Verify before commit
 - [ ] `cd agents-comm-bus && npm run build`
 - [ ] `cd agents-comm-bus && npm test`
-- [ ] `node --test --import tsx tests/architecture/bootstrap-race.test.ts tests/architecture/ipc-versioning.test.ts tests/architecture/account-registration-cli.test.ts`
-- [ ] `node --test --import tsx tests/architecture/daemon-build-assets.test.ts tests/architecture/restart-survival.test.ts tests/architecture/session-lease.test.ts`
+- [ ] `npm run test:bootstrap`
+- [ ] `npm run test:daemon`
 
 ### Commit shape
 - Suggested commit message: `Rename daemon source tree to core-daemon`
@@ -188,7 +198,7 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
 ### Verify before commit
 - [ ] `cd agents-comm-bus && npm run build`
 - [ ] `cd agents-comm-bus && npm test`
-- [ ] `node --test --import tsx tests/architecture/allowlist-factory.test.ts tests/architecture/reload-allowlist-refresh.test.ts tests/architecture/drain-pending-inbound.test.ts tests/architecture/telegram-comm-adapter.test.ts`
+- [ ] `npm run test:adapter`
 
 ### Commit shape
 - Suggested commit message: `Move Telegram comm adapter to top-level adapters`
@@ -221,7 +231,7 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
 
 ### Verify before commit
 - [ ] `cd agents-comm-bus && npm run build`
-- [ ] `node --test --import tsx tests/architecture/claude-wake.test.ts tests/architecture/codex-agent-adapter.test.ts tests/architecture/codex-turn-control.test.ts tests/architecture/codex-app-server-lifecycle.test.ts`
+- [ ] `npm run test:bridge`
 - [ ] rerun daemon package test command: `cd agents-comm-bus && npm test`
 
 ### Commit shape
@@ -264,8 +274,7 @@ This is the first phase that is a **true refactor**, not only a move.
 
 ### Verify before commit
 - [ ] build the shim package or successor build target
-- [ ] `node --test --import tsx tests/architecture/claude-hooks.test.ts tests/architecture/codex-hooks.test.ts`
-- [ ] `node --test --import tsx tests/architecture/codex-hooks.test.ts tests/architecture/codex-app-server-lifecycle.test.ts`
+- [ ] `npm run test:hooks`
 - [ ] if there are shim-specific smoke scripts, run one Claude-path and one Codex-path smoke check against the daemon
 
 ### Commit shape
@@ -294,7 +303,7 @@ This is the first phase that is a **true refactor**, not only a move.
 - Prefer deletion over carrying forward root compatibility wrappers.
 
 ### Verify before commit
-- [ ] `node --test --import tsx tests/architecture/claude-hooks.test.ts tests/architecture/codex-hooks.test.ts tests/architecture/codex-app-server-lifecycle.test.ts`
+- [ ] `npm run test:hooks`
 - [ ] smoke-check any install/status command that prints hook paths
 
 ### Commit shape
@@ -347,7 +356,7 @@ This is the first phase that is a **true refactor**, not only a move.
 - [ ] `cd packages/core-contracts && npm run build && npm test`
 - [ ] `cd agents-comm-bus && npm run build && npm test`
 - [ ] `cd mcp-server && npm run build` or successor shim build command if that package has been absorbed/replaced
-- [ ] `node --test --import tsx tests/architecture/*.test.ts`
+- [ ] `npm test`
 
 ### Commit shape
 - Suggested commit message: `Clean up stale paths after restructure`
