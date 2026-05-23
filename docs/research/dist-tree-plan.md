@@ -1,13 +1,24 @@
 agents-comm-bus (repo root)/
 ├── core/                                       daemon source
+│   └── bridges/
+│       ├── claude/
+│       │   ├── bridge.ts                       daemon-side Claude bridge entry
+│       │   ├── wake.ts
+│       │   └── adapter.ts
+│       └── codex/
+│           ├── bridge.ts                       daemon-side Codex bridge entry
+│           ├── adapter.ts
+│           ├── app-server.ts
+│           └── app-server-lifecycle.ts
 ├── adapters/
 │   ├── telegram/                               CommAdapter source (agent-agnostic)
 │   ├── matrix/
 │   ├── discord/
 │   └── slack/
 ├── hosts/
-│   ├── claude/                                 AgentAdapter source (Claude host glue)
-│   └── codex/                                  AgentAdapter source (Codex host glue)
+│   ├── claude/                                 installed host edge (Claude shim + hooks + skills)
+│   ├── codex/                                  installed host edge (Codex shim + hooks + skills)
+│   └── common/                                 shared host-side plumbing
 └── plugins/                                    BUILT ARTIFACTS
     ├── claude/
     │   ├── telegram/
@@ -48,3 +59,8 @@ agents-comm-bus-codex (repo root)/
 └── .agents/
     └── plugins/
         └── marketplace.json                     (entries reference agents-comm-bus#<tag>:plugins/codex/<comm>)
+
+Notes:
+- `core/bridges/<agent>/` means daemon-side agent protocol handlers, not host/plugin glue.
+- `hosts/<agent>/` remains the installed edge for MCP shims, hooks, skills, and manifest wiring.
+- When referring to bridge entry files in docs/reviews/plans, use the full path (for example `core/bridges/claude/bridge.ts`), never bare `bridge.ts`.
