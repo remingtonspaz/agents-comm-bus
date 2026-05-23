@@ -11,7 +11,7 @@ import type {
   Message,
   QueryChannel,
   ResolvedDecision,
-} from "../../agents-comm-bus-core/src/index.js";
+} from "../../packages/core-contracts/src/index.js";
 import type {
   AccountId,
   AgentId,
@@ -19,7 +19,7 @@ import type {
   MessageId,
   QueryId,
   SessionId,
-} from "../../agents-comm-bus-core/src/types.js";
+} from "../../packages/core-contracts/src/types.js";
 
 describe("ClaudeAgentAdapter", () => {
   it("implements the agent contract shape and explicit Claude capabilities", async () => {

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { JsonlAuditStore } from "../../agents-comm-bus/src/storage/audit.js";
 import { ContentAddressedBlobStore } from "../../agents-comm-bus/src/storage/blobs.js";
 import { JsonlTranscriptStore } from "../../agents-comm-bus/src/storage/transcripts.js";
-import type { ConversationId, MessageId } from "../../agents-comm-bus-core/src/types.js";
+import type { ConversationId, MessageId } from "../../packages/core-contracts/src/types.js";
 
 async function withTempDir<T>(test: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "acb-jsonl-"));

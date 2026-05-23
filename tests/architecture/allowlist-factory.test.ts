@@ -10,8 +10,8 @@ import type {
   AccountRegistration,
   AgentId,
   CommId,
-} from "../../agents-comm-bus-core/src/index.js";
-import { SCHEMA_VERSION_ACCOUNT } from "../../agents-comm-bus-core/src/index.js";
+} from "../../packages/core-contracts/src/index.js";
+import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/index.js";
 
 const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;

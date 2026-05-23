@@ -9,7 +9,7 @@
  * stays inside this module.
  */
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_SESSION, } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { SCHEMA_VERSION_SESSION, } from "../../../../../packages/core-contracts/dist/index.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const CLAUDE_IPC_METHODS = new Set([

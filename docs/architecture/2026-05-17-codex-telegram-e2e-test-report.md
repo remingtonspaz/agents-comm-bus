@@ -246,7 +246,7 @@ ends; the bootstrapper only owns app-servers it launched and recorded.
 Builds:
 
 ```powershell
-cd agents-comm-bus-core
+cd packages/core-contracts
 npm run build
 
 cd ..\agents-comm-bus

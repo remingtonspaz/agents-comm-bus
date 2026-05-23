@@ -18,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const STATE_ROOT = path.join(os.homedir(), '.agents-comm-bus');
-const CORE_DIR = path.join(__dirname, 'agents-comm-bus-core');
+const CORE_DIR = path.join(__dirname, 'packages', 'core-contracts');
 const DAEMON_DIR = path.join(__dirname, 'agents-comm-bus');
 const MCP_SERVER_DIR = path.join(__dirname, 'mcp-server');
 const HOOKS_DIR = path.join(__dirname, 'hooks');
@@ -111,9 +111,9 @@ async function showStatus() {
   checkNodeVersion();
 
   if (checkPackageBuilt(CORE_DIR, 'dist/index.js')) {
-    log('agents-comm-bus-core built', 'success');
+    log('packages/core-contracts built', 'success');
   } else {
-    log('agents-comm-bus-core not built', 'warn');
+    log('packages/core-contracts not built', 'warn');
   }
 
   if (checkPackageBuilt(DAEMON_DIR, 'dist/daemon.js')) {
@@ -196,7 +196,7 @@ async function install() {
   }
 
   try {
-    installAndBuildPackage('agents-comm-bus-core', CORE_DIR);
+    installAndBuildPackage('packages/core-contracts', CORE_DIR);
     installAndBuildPackage('agents-comm-bus daemon', DAEMON_DIR);
     installAndBuildPackage('MCP IPC shim', MCP_SERVER_DIR);
   } catch (e) {

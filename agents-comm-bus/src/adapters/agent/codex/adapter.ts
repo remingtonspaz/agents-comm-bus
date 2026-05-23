@@ -12,8 +12,8 @@ import type {
   QueryKind,
   ResolvedDecision,
   SessionId,
-} from "../../../../../agents-comm-bus-core/dist/index.js";
-import { SCHEMA_VERSION_QUERY } from "../../../../../agents-comm-bus-core/dist/index.js";
+} from "../../../../../packages/core-contracts/dist/index.js";
+import { SCHEMA_VERSION_QUERY } from "../../../../../packages/core-contracts/dist/index.js";
 import {
   DEFAULT_CODEX_APP_SERVER_URL,
   WebSocketCodexAppServerClient,

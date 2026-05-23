@@ -6,7 +6,7 @@ import {
   type CommAdapter,
   type CommId,
   type Storage,
-} from "../../agents-comm-bus-core/dist/index.js";
+} from "../../packages/core-contracts/dist/index.js";
 import { DAEMON_VERSION } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
 import { startIpcServer } from "./ipc/server.js";

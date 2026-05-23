@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import {
   matchReplyToQuery,
   tryResolve,
-} from "../../agents-comm-bus-core/src/query-semantics.js";
-import type { Query, ResolvedDecision } from "../../agents-comm-bus-core/src/queries.js";
+} from "../../packages/core-contracts/src/query-semantics.js";
+import type { Query, ResolvedDecision } from "../../packages/core-contracts/src/queries.js";
 import type {
   AccountId,
   AgentId,
@@ -14,7 +14,7 @@ import type {
   MessageId,
   QueryId,
   SessionId,
-} from "../../agents-comm-bus-core/src/types.js";
+} from "../../packages/core-contracts/src/types.js";
 
 const QUERY_CHAT: ChatRef = {
   comm: "telegram" as CommId,

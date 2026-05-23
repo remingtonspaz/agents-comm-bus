@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_SESSION, } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { SCHEMA_VERSION_SESSION, } from "../../../../../packages/core-contracts/dist/index.js";
 import { CodexAgentAdapter, codexDecisionFromResolution, codexHookDecision, } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
 const DEFAULT_TTL_SECONDS = 3600;

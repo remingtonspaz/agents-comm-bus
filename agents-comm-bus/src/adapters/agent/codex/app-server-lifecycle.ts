@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { SessionId } from "../../../../../agents-comm-bus-core/dist/index.js";
+import type { SessionId } from "../../../../../packages/core-contracts/dist/index.js";
 
 export interface ManagedAppServerState {
   sessionId?: string;

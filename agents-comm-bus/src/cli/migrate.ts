@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 
-import type { SessionId } from "../../../agents-comm-bus-core/dist/types.js";
+import type { SessionId } from "../../../packages/core-contracts/dist/types.js";
 import { importLastChat } from "../migrations/import-last-chat.js";
 import { importPendingPermission } from "../migrations/import-pending-permission.js";
 import {

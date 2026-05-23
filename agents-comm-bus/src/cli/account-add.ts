@@ -3,7 +3,7 @@ import {
   type AccountRegistration,
   type AgentId,
   type CommId,
-} from "../../../agents-comm-bus-core/dist/index.js";
+} from "../../../packages/core-contracts/dist/index.js";
 import { probeTelegramIdentity } from "../adapters/comm/telegram/adapter.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";

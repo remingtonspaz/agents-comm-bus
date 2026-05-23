@@ -1,4 +1,4 @@
-import type { ConversationId } from "../../../agents-comm-bus-core/dist/types.js";
+import type { ConversationId } from "../../../packages/core-contracts/dist/types.js";
 import type { LegacyLastChat, LegacyStateFile } from "./legacy-readers.js";
 import { TRANSITION_CLEANUP_RELEASE, TRANSITION_ONLY_MARKER } from "./legacy-readers.js";
 export interface ImportedLastChatConversation {

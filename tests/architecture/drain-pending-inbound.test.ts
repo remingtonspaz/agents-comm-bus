@@ -7,7 +7,7 @@ import type {
   ConversationId,
   Message,
   MessageId,
-} from "../../agents-comm-bus-core/src/index.js";
+} from "../../packages/core-contracts/src/index.js";
 import type { PendingInboundEntry } from "../../agents-comm-bus/src/runtime/pending-inbound.js";
 import { drainPendingInbound } from "../../agents-comm-bus/src/daemon.js";
 

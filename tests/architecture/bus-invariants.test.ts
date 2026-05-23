@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   isCrossAgentAllowed,
   type SubscriptionRule,
-} from "../../agents-comm-bus-core/src/security.js";
+} from "../../packages/core-contracts/src/security.js";
 import type {
   AccountId,
   AccountRegistration,
@@ -23,11 +23,11 @@ import type {
   SessionId,
   Storage,
   TranscriptEntry,
-} from "../../agents-comm-bus-core/src/index.js";
+} from "../../packages/core-contracts/src/index.js";
 import {
   SCHEMA_VERSION_ACCOUNT,
   SCHEMA_VERSION_CONVERSATION,
-} from "../../agents-comm-bus-core/src/index.js";
+} from "../../packages/core-contracts/src/index.js";
 import { MessageBus } from "../../agents-comm-bus/src/bus.js";
 
 const CLAUDE = "claude" as AgentId;

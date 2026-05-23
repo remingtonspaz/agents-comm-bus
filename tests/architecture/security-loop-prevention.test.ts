@@ -11,14 +11,14 @@ import {
   isForeignBotAllowed,
   shouldDropForHopLimit,
   type SubscriptionRule,
-} from "../../agents-comm-bus-core/src/security.js";
-import type { Message } from "../../agents-comm-bus-core/src/messages.js";
+} from "../../packages/core-contracts/src/security.js";
+import type { Message } from "../../packages/core-contracts/src/messages.js";
 import type {
   AccountId,
   AgentId,
   CommId,
   MessageId,
-} from "../../agents-comm-bus-core/src/types.js";
+} from "../../packages/core-contracts/src/types.js";
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
   const base: Message = {
