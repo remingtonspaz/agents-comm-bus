@@ -1,4 +1,4 @@
-import { type AccountId, type CommId } from "../../packages/core-contracts/dist/index.js";
+import { type AccountId, type CommId } from "../packages/core-contracts/dist/index.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";

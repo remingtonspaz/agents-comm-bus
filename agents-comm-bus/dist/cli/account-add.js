@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION_ACCOUNT, } from "../../../packages/core-contracts/dist/index.js";
+import { SCHEMA_VERSION_ACCOUNT, } from "../../packages/core-contracts/dist/index.js";
 import { probeTelegramIdentity } from "../adapters/comm/telegram/adapter.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";

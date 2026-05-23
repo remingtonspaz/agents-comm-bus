@@ -8,8 +8,8 @@ import type {
   Message,
   MessageId,
 } from "../../packages/core-contracts/src/index.js";
-import type { PendingInboundEntry } from "../../agents-comm-bus/src/runtime/pending-inbound.js";
-import { drainPendingInbound } from "../../agents-comm-bus/src/daemon.js";
+import type { PendingInboundEntry } from "../../core-daemon/runtime/pending-inbound.js";
+import { drainPendingInbound } from "../../core-daemon/daemon.js";
 
 const TELEGRAM = "telegram" as CommId;
 const MATRIX = "matrix" as CommId;

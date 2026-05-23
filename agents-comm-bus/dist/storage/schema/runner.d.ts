@@ -1,4 +1,4 @@
-import type { Migration, MigrationRunner } from "../../../../packages/core-contracts/dist/storage/migrations.js";
+import type { Migration, MigrationRunner } from "../../../packages/core-contracts/dist/storage/migrations.js";
 export interface SqliteLike {
     exec(sql: string): void;
     prepare(sql: string): {

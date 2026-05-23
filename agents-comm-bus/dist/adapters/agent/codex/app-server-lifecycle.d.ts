@@ -1,4 +1,4 @@
-import type { SessionId } from "../../../../../packages/core-contracts/dist/index.js";
+import type { SessionId } from "../../../../packages/core-contracts/dist/index.js";
 export interface ManagedAppServerState {
     sessionId?: string;
     appServerUrl?: string;

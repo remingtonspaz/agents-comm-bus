@@ -9,7 +9,7 @@ import {
   legacySessionDirForProject,
   TRANSITION_CLEANUP_RELEASE,
   TRANSITION_ONLY_MARKER,
-} from "../../agents-comm-bus/src/migrations/legacy-readers.js";
+} from "../../core-daemon/migrations/legacy-readers.js";
 
 describe("transition legacy readers", () => {
   it("discovers project credentials and legacy state without exposing bot tokens", () => {

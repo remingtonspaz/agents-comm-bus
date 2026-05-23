@@ -2,7 +2,7 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocketServer } from "ws";
 
-import { WebSocketCodexAppServerClient } from "../../agents-comm-bus/src/adapters/agent/codex/app-server.js";
+import { WebSocketCodexAppServerClient } from "../../core-daemon/adapters/agent/codex/app-server.js";
 
 describe("Codex app-server turn control", () => {
   const seenMethods: string[] = [];

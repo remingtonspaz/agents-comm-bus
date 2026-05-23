@@ -135,7 +135,7 @@ Use the root-level `npm run test:<group>` commands above when a phase matches a 
 
 ## Phase 2 — rename daemon source tree to `core-daemon/`
 
-**Objective:** move the current daemon package source out of `agents-comm-bus/src/**` into the settled `core-daemon/**` tree without changing behavior.
+**Objective:** move the current daemon package source out of `core-daemon/**` into the settled `core-daemon/**` tree without changing behavior.
 
 ### Scope
 - move daemon source files to `core-daemon/**`
@@ -188,7 +188,7 @@ Use the root-level `npm run test:<group>` commands above when a phase matches a 
 **Objective:** separate comm-provider integrations from daemon-runtime source.
 
 ### Scope
-- move `agents-comm-bus/src/adapters/comm/telegram/**` -> `adapters/telegram/**`
+- move `core-daemon/adapters/comm/telegram/**` -> `adapters/telegram/**`
 - preserve import behavior from daemon composition root
 - keep adapter semantics unchanged
 
@@ -349,7 +349,7 @@ This is the first phase that is a **true refactor**, not only a move.
 ### Checklist
 - [ ] search for stale old-path references:
   - [ ] `agents-comm-bus-core/`
-  - [ ] `agents-comm-bus/src/`
+  - [ ] `core-daemon/`
   - [ ] `src/adapters/comm/telegram/`
   - [ ] `src/adapters/agent/claude/`
   - [ ] `src/adapters/agent/codex/`

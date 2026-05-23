@@ -32,10 +32,9 @@ open WebSockets, or touch SQLite.
 
 **What `npm test` does NOT cover:**
 
-- Tests that import from `agents-comm-bus/src/` (daemon runtime, bridges,
-  adapters, storage impl) — e.g. `bus-invariants.test.ts`,
-  `codex-turn-control.test.ts`, `sqlite-schema.test.ts`, `claude-wake.test.ts`,
-  `telegram-comm-adapter.test.ts`.
+- Tests that import from `core-daemon/` (daemon runtime, bridges,
+  adapters, storage impl) — e.g. `codex-turn-control.test.ts`,
+  `sqlite-schema.test.ts`, `claude-wake.test.ts`, `telegram-comm-adapter.test.ts`.
 - Bridge-specific behavior (Codex turn control, Claude wake registry, etc.).
 
 Run those via the daemon package (`cd agents-comm-bus && npm test`) or direct

@@ -37,7 +37,7 @@ Fix landed in commit `a57e1aa` (Satrio):
 
 The daemon attached a Telegram adapter only when
 `process.env.TELEGRAM_BOT_TOKEN` was set in **its own** environment at
-startup (`agents-comm-bus/src/daemon.ts:45`, pre-fix). It never read
+startup (`core-daemon/daemon.ts:45`, pre-fix). It never read
 account registrations from SQLite. The CLI's `account-add` was
 therefore decorative: it inserted a row that nothing ever consulted.
 
@@ -80,7 +80,7 @@ Fix landed in commit `8fd20ea`:
    - `SessionStart` unchanged.
 5. Diagnosed the missing inbound (issue 2) via daemon audit log and
    source read.
-6. Patched `agents-comm-bus/src/daemon.ts` (commit `8fd20ea`) and rebuilt.
+6. Patched `core-daemon/daemon.ts` (commit `8fd20ea`) and rebuilt.
 7. Stopped the running daemon (PID 64780), cleared
    `~/.agents-comm-bus/{port,daemon.pid}`, and started a fresh daemon.
    A duplicate daemon (PID 16044) auto-spawned in the same second from
@@ -194,7 +194,7 @@ experience.
 `docs/architecture/claude-wake-path.md` describes the contract: at
 step 5 of inbound delivery, the Claude adapter writes `trigger-enter`
 in the wake directory. In the current universal-overhaul build, that
-writer does not exist. `agents-comm-bus/src/adapters/agent/claude.ts`
+writer does not exist. `core-daemon/adapters/agent/claude.ts`
 and `bus.ts` contain zero references to `trigger-enter` or
 `claude-wake`. The only callers that touch those paths in the repo
 are `hooks/session-start.js` (spawns the watcher) and the watcher
@@ -300,7 +300,7 @@ worked fine (`changes: 1`). The real bug was that
 `most_recent_inbound_conversation_id = null`, clobbering whatever
 `setSessionMostRecentInbound` had just written. Fixed by removing
 the column from the `ON CONFLICT(session_id) DO UPDATE SET` clause
-in `agents-comm-bus/src/storage/sqlite.ts` so the value persists
+in `core-daemon/storage/sqlite.ts` so the value persists
 across re-registrations. Verified — session row now shows the
 correct conversation id.
 
@@ -315,7 +315,7 @@ messages from the daemon (`Test 1234` and `New test`). The drain
 returned the messages — they reached prompt context — but the
 companion column update did not stick.
 
-`agents-comm-bus/src/daemon.ts:184-200` does:
+`core-daemon/daemon.ts:184-200` does:
 
 ```ts
 async function drainClaudeInbound(...) {
@@ -366,7 +366,7 @@ prompt failed with this constraint. That is why the daemon's
 `queries` table only had 1 real entry across the whole session
 prior to the fix.
 
-Fixed in `agents-comm-bus/src/{daemon.ts, storage/sqlite.ts}`:
+Fixed in `core-daemon/{daemon.ts, storage/sqlite.ts}`:
 
 - New `SqliteSessionStorage.supersedeOpenQueriesForSession(session, now)`
   marks any open query for the session as `resolved_at = now,
@@ -388,13 +388,13 @@ reply routing for queries becomes a first-class flow.
 
 Code changes landed beyond the upstream commits:
 
-- **`agents-comm-bus/src/storage/sqlite.ts`** —
+- **`core-daemon/storage/sqlite.ts`** —
   1. Removed `most_recent_inbound_conversation_id` from
      `upsertSession`'s `ON CONFLICT DO UPDATE SET` clause so
      `claude_register_session` does not clobber the value
      `claude_drain_inbound` writes (LE-9).
   2. Added `supersedeOpenQueriesForSession` (LE-10).
-- **`agents-comm-bus/src/daemon.ts`** — `openClaudeQuery` now calls
+- **`core-daemon/daemon.ts`** — `openClaudeQuery` now calls
   `supersedeOpenQueriesForSession` immediately before `bus.openQuery`
   so each new permission/question query gets a clean slate (LE-10).
 - **`hooks/claude/wake-support.js`** — full rewrite of the watcher
@@ -437,10 +437,10 @@ Code changes landed beyond the upstream commits:
 
 ## Files of interest
 
-- `agents-comm-bus/src/daemon.ts` — credentials resolver + DB-driven
+- `core-daemon/daemon.ts` — credentials resolver + DB-driven
   adapter attachment (commit `8fd20ea`); now also calls
   `supersedeOpenQueriesForSession` before each `bus.openQuery`.
-- `agents-comm-bus/src/storage/sqlite.ts` — `upsertSession` no
+- `core-daemon/storage/sqlite.ts` — `upsertSession` no
   longer clobbers `most_recent_inbound_conversation_id`; adds
   `supersedeOpenQueriesForSession`.
 - `agents-comm-bus/scripts/copy-assets.js` + `package.json` build

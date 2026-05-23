@@ -1,4 +1,4 @@
-import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "../../../../../packages/core-contracts/dist/index.js";
+import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "../../../../packages/core-contracts/dist/index.js";
 import type { MessageBus } from "../../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory } from "../../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../../runtime/pending-inbound.js";

@@ -1,4 +1,4 @@
-import { type AccountRegistration } from "../../../packages/core-contracts/dist/index.js";
+import { type AccountRegistration } from "../../packages/core-contracts/dist/index.js";
 export interface AccountAddOptions {
     project: string;
     agent: string;

@@ -1,8 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { connectIpc } from "../../agents-comm-bus/src/ipc/client.js";
-import { startIpcServer } from "../../agents-comm-bus/src/ipc/server.js";
+import { connectIpc } from "../../core-daemon/ipc/client.js";
+import { startIpcServer } from "../../core-daemon/ipc/server.js";
 
 describe("agents-comm-bus IPC version handshake", () => {
   it("accepts compatible protocol versions and returns daemon diagnostics", async () => {

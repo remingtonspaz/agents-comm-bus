@@ -4,10 +4,10 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { ensureDaemon, writeDaemonDiscoveryFiles } from "../../agents-comm-bus/src/bootstrap/ensure-daemon.js";
-import { DAEMON_VERSION, IPC_PROTOCOL_VERSION } from "../../agents-comm-bus/src/config.js";
-import { resolveConversationPaths, resolveStatePaths } from "../../agents-comm-bus/src/paths.js";
-import type { DaemonHello } from "../../agents-comm-bus/src/ipc/protocol.js";
+import { ensureDaemon, writeDaemonDiscoveryFiles } from "../../core-daemon/bootstrap/ensure-daemon.js";
+import { DAEMON_VERSION, IPC_PROTOCOL_VERSION } from "../../core-daemon/config.js";
+import { resolveConversationPaths, resolveStatePaths } from "../../core-daemon/paths.js";
+import type { DaemonHello } from "../../core-daemon/ipc/protocol.js";
 
 function daemonHello(): DaemonHello {
   return {

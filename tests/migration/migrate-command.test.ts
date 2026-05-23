@@ -4,8 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { parseMigrateArgs, runMigration } from "../../agents-comm-bus/src/cli/migrate.js";
-import { legacySessionDirForProject } from "../../agents-comm-bus/src/migrations/legacy-readers.js";
+import { parseMigrateArgs, runMigration } from "../../core-daemon/cli/migrate.js";
+import { legacySessionDirForProject } from "../../core-daemon/migrations/legacy-readers.js";
 
 describe("migrate command behavior", () => {
   it("requires explicit credential confirmation but ingests state read-only", () => {

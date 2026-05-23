@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { JsonlAuditStore } from "../../agents-comm-bus/src/storage/audit.js";
-import { ContentAddressedBlobStore } from "../../agents-comm-bus/src/storage/blobs.js";
-import { JsonlTranscriptStore } from "../../agents-comm-bus/src/storage/transcripts.js";
+import { JsonlAuditStore } from "../../core-daemon/storage/audit.js";
+import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
+import { JsonlTranscriptStore } from "../../core-daemon/storage/transcripts.js";
 import type { ConversationId, MessageId } from "../../packages/core-contracts/src/types.js";
 
 async function withTempDir<T>(test: (dir: string) => Promise<T>): Promise<T> {

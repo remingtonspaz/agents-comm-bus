@@ -219,12 +219,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## Adding a new comm adapter
 
-1. Create `agents-comm-bus/src/adapters/comm/<name>/adapter.ts` implementing
+1. Create `core-daemon/adapters/comm/<name>/adapter.ts` implementing
    `CommAdapter` (from `packages/core-contracts/dist/contracts/comm-adapter.js`).
    At minimum: `start`, `stop`, `send`, `onInbound`, `onConnectionState`,
    `reportPressure`, `classifyFailure`. Optionally `onCallback`,
    `answerCallback`, `editMessage` if the platform supports inline buttons.
-2. Create `agents-comm-bus/src/adapters/comm/<name>/factory.ts` implementing
+2. Create `core-daemon/adapters/comm/<name>/factory.ts` implementing
    `CommAdapterFactory` (from `runtime/comm-factory.js`):
    - `commId` — the string written to `account_registrations.comm`.
    - `resolveCredentials(registration, env)` — read whatever `credentials_ref`
@@ -241,7 +241,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## Adding a new agent bridge
 
-1. Create `agents-comm-bus/src/adapters/agent/<name>/bridge.ts` implementing
+1. Create `core-daemon/adapters/agent/<name>/bridge.ts` implementing
    `AgentBridge` (from `runtime/agent-bridge.js`):
    - `agentId` — written to `sessions.agent` and `account_registrations.agent`.
    - `ipcMethods` — `ReadonlySet<string>` of method names this bridge owns.
@@ -444,7 +444,7 @@ All state under `~/.agents-comm-bus/` (per-user, never per-project):
 | `claude-wake/sessions/<key>/watcher.lock` | Spawn-race lock for the watcher |
 
 `<key>` is `<basename(project)>-<8-char-fnv1a-hash(project)>`. Computed by
-`claudeWakeDirForProject` in `agents-comm-bus/src/adapters/agent/claude/wake.ts`
+`claudeWakeDirForProject` in `core-daemon/adapters/agent/claude/wake.ts`
 and the hook side in `hooks/claude/wake-support.js`.
 
 ## Configuration files

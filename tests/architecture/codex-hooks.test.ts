@@ -52,7 +52,7 @@ test("Codex SessionStart schedules bootstrap restart through daemon status", asy
 });
 
 test("Codex bridge exposes bootstrap status IPC for SessionStart", async () => {
-  const bridge = await readRepoFile("agents-comm-bus/src/adapters/agent/codex/bridge.ts");
+  const bridge = await readRepoFile("core-daemon/adapters/agent/codex/bridge.ts");
 
   assert.match(bridge, /codex_bootstrap_status/);
   assert.match(bridge, /bootstrapStatus/);
