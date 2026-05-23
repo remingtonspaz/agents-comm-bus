@@ -5,8 +5,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { openSqliteStorage } from "../../agents-comm-bus/src/storage/sqlite.js";
-import type { QueryRecord, Session } from "../../agents-comm-bus-core/src/records/index.js";
-import type { AgentId, QueryId, SessionId } from "../../agents-comm-bus-core/src/types.js";
+import type { QueryRecord, Session } from "../../packages/core-contracts/src/records/index.js";
+import type { AgentId, QueryId, SessionId } from "../../packages/core-contracts/src/types.js";
 
 function session(): Session {
   return {

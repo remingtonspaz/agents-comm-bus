@@ -9,8 +9,8 @@ import {
   claudeWakeDirForProject,
   hashProjectKey,
 } from "../../agents-comm-bus/src/adapters/agent/claude/wake.js";
-import type { Conversation } from "../../agents-comm-bus-core/src/records/index.js";
-import type { AgentId, CommId, ConversationId, MessageId, SessionId } from "../../agents-comm-bus-core/src/types.js";
+import type { Conversation } from "../../packages/core-contracts/src/records/index.js";
+import type { AgentId, CommId, ConversationId, MessageId, SessionId } from "../../packages/core-contracts/src/types.js";
 
 describe("Claude wake path", () => {
   it("derives the same project wake key shape used by Claude hooks", () => {

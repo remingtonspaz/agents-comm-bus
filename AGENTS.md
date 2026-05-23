@@ -99,7 +99,7 @@ Three perpendicular layers meeting at the bus:
 
 ```
 .
-├── agents-comm-bus-core/      # Shared types + Storage interface (no impl).
+├── packages/core-contracts/   # Shared types + Storage interface (no impl).
 │   └── src/
 │       ├── contracts/         # CommAdapter, AgentAdapter, ToolRegistry
 │       ├── records/           # AccountRegistration, Conversation, Query, Session
@@ -154,8 +154,8 @@ Three perpendicular layers meeting at the bus:
 The repo is three node packages; each has its own build:
 
 ```powershell
-# agents-comm-bus-core (no dist tracked — gitignored)
-cd agents-comm-bus-core
+# packages/core-contracts (no dist tracked — gitignored)
+cd packages/core-contracts
 npm install
 npm run build
 
@@ -220,7 +220,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
 ## Adding a new comm adapter
 
 1. Create `agents-comm-bus/src/adapters/comm/<name>/adapter.ts` implementing
-   `CommAdapter` (from `agents-comm-bus-core/dist/contracts/comm-adapter.js`).
+   `CommAdapter` (from `packages/core-contracts/dist/contracts/comm-adapter.js`).
    At minimum: `start`, `stop`, `send`, `onInbound`, `onConnectionState`,
    `reportPressure`, `classifyFailure`. Optionally `onCallback`,
    `answerCallback`, `editMessage` if the platform supports inline buttons.

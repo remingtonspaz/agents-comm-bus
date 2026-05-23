@@ -1,4 +1,4 @@
-import type { AllowlistGlobalEntry, AllowlistPerBotEntry } from "../../../agents-comm-bus-core/dist/index.js";
+import type { AllowlistGlobalEntry, AllowlistPerBotEntry } from "../../../packages/core-contracts/dist/index.js";
 export type AllowlistScopeFilter = "global" | "per-bot" | "all";
 export interface AllowlistListOptions {
     comm?: string;

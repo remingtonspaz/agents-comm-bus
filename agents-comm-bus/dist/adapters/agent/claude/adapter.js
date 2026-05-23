@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_QUERY } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { SCHEMA_VERSION_QUERY } from "../../../../../packages/core-contracts/dist/index.js";
 export class ClaudeAgentAdapter {
     options;
     id = "claude";

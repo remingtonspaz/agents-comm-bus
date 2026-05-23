@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_QUERY } from "../../../../../agents-comm-bus-core/dist/index.js";
+import { SCHEMA_VERSION_QUERY } from "../../../../../packages/core-contracts/dist/index.js";
 import { DEFAULT_CODEX_APP_SERVER_URL, WebSocketCodexAppServerClient, } from "./app-server.js";
 export class CodexAgentAdapter {
     options;

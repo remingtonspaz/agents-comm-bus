@@ -1,4 +1,4 @@
-import type { AccountId, AgentId, AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "../../agents-comm-bus-core/dist/index.js";
+import type { AccountId, AgentId, AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "../../packages/core-contracts/dist/index.js";
 export interface MessageBusOptions {
     project: string;
     storage: Storage;

@@ -9,8 +9,8 @@ import type {
   AccountRegistration,
   AgentId,
   CommId,
-} from "../../agents-comm-bus-core/src/index.js";
-import { SCHEMA_VERSION_ACCOUNT } from "../../agents-comm-bus-core/src/types.js";
+} from "../../packages/core-contracts/src/index.js";
+import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/types.js";
 import { MessageBus } from "../../agents-comm-bus/src/bus.js";
 import { ContentAddressedBlobStore } from "../../agents-comm-bus/src/storage/blobs.js";
 import { JsonlAuditStore } from "../../agents-comm-bus/src/storage/audit.js";

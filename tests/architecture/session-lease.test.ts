@@ -1,15 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { clearOwnershipOnDisconnect } from "../../agents-comm-bus-core/src/query-semantics.js";
-import type { Query } from "../../agents-comm-bus-core/src/queries.js";
+import { clearOwnershipOnDisconnect } from "../../packages/core-contracts/src/query-semantics.js";
+import type { Query } from "../../packages/core-contracts/src/queries.js";
 import type {
   AccountId,
   AgentId,
   CommId,
   QueryId,
   SessionId,
-} from "../../agents-comm-bus-core/src/types.js";
+} from "../../packages/core-contracts/src/types.js";
 
 function makeQuery(id: string): Query {
   return {

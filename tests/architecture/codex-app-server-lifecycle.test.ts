@@ -9,7 +9,7 @@ import {
   managedCodexAppServerStatePath,
   type ProcessManager,
 } from "../../agents-comm-bus/src/adapters/agent/codex/app-server-lifecycle.js";
-import type { SessionId } from "../../agents-comm-bus-core/src/index.js";
+import type { SessionId } from "../../packages/core-contracts/src/index.js";
 
 describe("Codex managed app-server lifecycle", () => {
   it("stops only the app-server and terminal recorded for the session", async () => {

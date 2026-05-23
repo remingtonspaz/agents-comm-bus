@@ -14,7 +14,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "types": ["node"],
-    "typeRoots": ["../agents-comm-bus-core/node_modules/@types", "./src/types"]
+    "typeRoots": ["../packages/core-contracts/node_modules/@types", "./src/types"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"]

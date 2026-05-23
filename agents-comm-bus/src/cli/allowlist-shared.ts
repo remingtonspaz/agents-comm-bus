@@ -3,7 +3,7 @@ import type {
   AgentId,
   CommId,
   Storage,
-} from "../../../agents-comm-bus-core/dist/index.js";
+} from "../../../packages/core-contracts/dist/index.js";
 
 export interface PerBotSelector {
   comm: CommId;

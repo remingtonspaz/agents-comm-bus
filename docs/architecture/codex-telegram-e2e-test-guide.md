@@ -29,7 +29,7 @@ Adjust paths if your checkout lives elsewhere.
 ```powershell
 cd D:\Documents\claude-code-telegram-universal-overhaul
 
-cd agents-comm-bus-core
+cd packages/core-contracts
 npm install
 npm run build
 

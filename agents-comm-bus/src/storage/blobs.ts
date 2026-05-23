@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import type {
   BlobRef,
   BlobStore,
-} from "../../../agents-comm-bus-core/dist/storage/blob-store.js";
+} from "../../../packages/core-contracts/dist/storage/blob-store.js";
 
 export class ContentAddressedBlobStore implements BlobStore {
   constructor(private readonly root: string) {}

@@ -6,8 +6,8 @@ import { createInterface } from "node:readline/promises";
 import type {
   TranscriptEntry,
   TranscriptStore,
-} from "../../../agents-comm-bus-core/dist/storage/transcript-store.js";
-import type { ConversationId } from "../../../agents-comm-bus-core/dist/types.js";
+} from "../../../packages/core-contracts/dist/storage/transcript-store.js";
+import type { ConversationId } from "../../../packages/core-contracts/dist/types.js";
 
 import { appendJsonLine } from "./jsonl.js";
 

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { CommId } from "../../../agents-comm-bus-core/dist/index.js";
+import type { CommId } from "../../../packages/core-contracts/dist/index.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 
