@@ -34,6 +34,13 @@ export class TelegramCommAdapter {
      * daemon's reload path when DB-backed allowlist rows change for an
      * already-attached adapter — avoids tearing down + recreating the adapter
      * and its live polling connection.
+     *
+     * Concurrency note: the daemon (and Node's event loop) is single-threaded
+     * today, so there's no torn-read concern — an inbound handler dispatch
+     * that started before this assignment continues to read the OLD Set; the
+     * next dispatch reads the NEW Set. If reload-during-receiveInbound ever
+     * becomes truly concurrent (e.g. via worker threads), the contract
+     * should become "atomic snapshot replace" rather than mid-flight mutation.
      */
     updateAllowedSenderIds(ids) {
         this.allowedUserIds = new Set(ids);

@@ -184,6 +184,123 @@ describe("reload-path allowlist refresh", () => {
     }
   });
 
+  it("treats allowlist sets as unordered (no phantom update on reorder)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-reload-order-"));
+    try {
+      const storage = await openSqliteStorage(join(dir, "storage.db"));
+      const transcripts = new JsonlTranscriptStore(dir);
+      const audit = new JsonlAuditStore(dir);
+      const blobs = new ContentAddressedBlobStore(dir);
+      const bus = new MessageBus({
+        project: dir,
+        storage,
+        transcripts,
+        audit,
+        blobs,
+        comms: [],
+      });
+
+      await storage.putAccountRegistration(registration(dir));
+
+      const factory = new TelegramCommAdapterFactory();
+      const envInitial = { TEST_TOKEN: "fake-token", TELEGRAM_USER_ID: "A,B" };
+      const resolved = await factory.resolveCredentials(
+        registration(dir),
+        envInitial,
+        { storage },
+      );
+      const adapter = factory.create(resolved!.credentials, BOT_ID as AccountId, {
+        blobs,
+        stateRoot: dir,
+      });
+      bus.registerComm(adapter);
+      assert.deepEqual([...(adapter.allowedSenderIds ?? [])].sort(), ["A", "B"]);
+
+      // Same set, different CSV order — the reload-path diff must be
+      // order-independent so this does NOT trigger a phantom update.
+      const envReordered = { TEST_TOKEN: "fake-token", TELEGRAM_USER_ID: "B,A" };
+      const summary = await reloadAdapters({
+        factories: [factory],
+        bridges: [],
+        bus,
+        storage,
+        env: envReordered as unknown as NodeJS.ProcessEnv,
+        blobs,
+        stateRoot: dir,
+      });
+
+      assert.equal(summary.updated.length, 0, "reorder must not count as a change");
+      assert.equal(summary.added.length, 0);
+      assert.equal(summary.removed.length, 0);
+
+      await storage.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces resolveCredentials failure on reload as a skipped entry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-reload-failresolve-"));
+    try {
+      const storage = await openSqliteStorage(join(dir, "storage.db"));
+      const transcripts = new JsonlTranscriptStore(dir);
+      const audit = new JsonlAuditStore(dir);
+      const blobs = new ContentAddressedBlobStore(dir);
+      const bus = new MessageBus({
+        project: dir,
+        storage,
+        transcripts,
+        audit,
+        blobs,
+        comms: [],
+      });
+
+      await storage.putAccountRegistration(registration(dir));
+
+      const factory = new TelegramCommAdapterFactory();
+      const envInitial = { TEST_TOKEN: "fake-token" };
+      const resolved = await factory.resolveCredentials(
+        registration(dir),
+        envInitial,
+        { storage },
+      );
+      const adapter = factory.create(resolved!.credentials, BOT_ID as AccountId, {
+        blobs,
+        stateRoot: dir,
+      });
+      bus.registerComm(adapter);
+
+      // Reload with env missing the token — resolveCredentials returns
+      // undefined (env path can't find the token, no file fallback exists
+      // at the test's temp project path). The unchanged branch must
+      // surface this as a skipped entry, not silently continue.
+      const summary = await reloadAdapters({
+        factories: [factory],
+        bridges: [],
+        bus,
+        storage,
+        env: {} as NodeJS.ProcessEnv,
+        blobs,
+        stateRoot: dir,
+      });
+
+      assert.equal(summary.skipped.length, 1, "credential failure must be surfaced");
+      assert.match(
+        summary.skipped[0].reason,
+        /could not re-resolve credentials_ref/,
+      );
+      assert.equal(summary.skipped[0].account_id, BOT_ID);
+      // Live adapter should be untouched; the reload doesn't destroy state
+      // when re-resolution fails.
+      const live = bus.getComm(TELEGRAM, BOT_ID as AccountId);
+      assert.equal(live, adapter);
+
+      await storage.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("updates allowedSenderIds when per-bot rows are added", async () => {
     const dir = await mkdtemp(join(tmpdir(), "acb-reload-perbot-"));
     try {

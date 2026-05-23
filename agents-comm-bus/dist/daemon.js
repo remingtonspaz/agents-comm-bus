@@ -284,8 +284,20 @@ export async function reloadAdapters(input) {
         const resolved = await entry.factory.resolveCredentials(entry.registration, input.env, {
             storage: input.storage,
         });
-        if (!resolved)
+        if (!resolved) {
+            // Symmetric with the attach branch: surface credential resolution
+            // failures so a credentials_ref that broke between attach time and
+            // reload time doesn't disappear silently. The live adapter keeps
+            // running on its prior allowlist (no destructive action), but the
+            // reload IPC caller learns that this registration's runtime state
+            // is now stale.
+            skipped.push({
+                comm: entry.registration.comm,
+                account_id: entry.registration.bot_user_id,
+                reason: `could not re-resolve credentials_ref=${entry.registration.credentials_ref}`,
+            });
             continue;
+        }
         const newIds = Array.isArray(resolved.credentials.allowedUserIds)
             ? resolved.credentials.allowedUserIds.map(String)
             : [];
