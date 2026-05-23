@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { CodexBridge } from "../../core-daemon/adapters/agent/codex/bridge.js";
+import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import type { SessionId } from "../../packages/core-contracts/src/types.js";
 

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   ClaudeAgentAdapter,
   claudeDecisionFromResolution,
-} from "../../core-daemon/adapters/agent/claude/adapter.js";
+} from "../../core-daemon/bridges/claude/adapter.js";
 import type {
   ChatRef,
   ControlChannel,

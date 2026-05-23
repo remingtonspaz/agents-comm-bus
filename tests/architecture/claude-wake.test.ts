@@ -8,7 +8,7 @@ import {
   ClaudeWakeRegistry,
   claudeWakeDirForProject,
   hashProjectKey,
-} from "../../core-daemon/adapters/agent/claude/wake.js";
+} from "../../core-daemon/bridges/claude/wake.js";
 import type { Conversation } from "../../packages/core-contracts/src/records/index.js";
 import type { AgentId, CommId, ConversationId, MessageId, SessionId } from "../../packages/core-contracts/src/types.js";
 
