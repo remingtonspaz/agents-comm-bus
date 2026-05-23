@@ -145,7 +145,7 @@ directory sketch this section follows.
 
 | Repo | Role |
 |---|---|
-| `agents-comm-bus` | Source monorepo with source dirs **and** built artifacts. Sources: `core/` (daemon runtime, including daemon-side agent bridges under `core/bridges/<agent>/`), `adapters/<comm>/` (CommAdapter), `hosts/<agent>/` (installed host edge: MCP shim + hooks + skills + manifest wiring). Built artifacts: `claude/<comm>/`, `codex/<comm>/` — one subdir per `(agent, comm)` pair, ready for marketplace consumption via git-subdir. **No marketplace manifest at any path** in this repo. |
+| `agents-comm-bus` | Source monorepo with source dirs **and** built artifacts. Sources: `core-daemon/` (daemon runtime, including daemon-side agent bridges under `core-daemon/bridges/<agent>/`), `packages/core-contracts/` (shared contracts/types/records/storage interfaces package), `adapters/<comm>/` (CommAdapter), `hosts/<agent>/` (installed host edge: MCP shim + hooks + skills + manifest wiring). Built artifacts: `claude/<comm>/`, `codex/<comm>/` — one subdir per `(agent, comm)` pair, ready for marketplace consumption via git-subdir. **No marketplace manifest at any path** in this repo. |
 | `agents-comm-bus-claude` | Distribution endpoint for Claude Code. Contains only `.claude-plugin/marketplace.json` referencing `agents-comm-bus#<tag>:claude/<comm>` per plugin. |
 | `agents-comm-bus-codex` | Distribution endpoint for Codex. Contains only `.agents/plugins/marketplace.json` referencing `agents-comm-bus#<tag>:codex/<comm>` per plugin. |
 
@@ -157,10 +157,12 @@ source" from "this is what gets shipped":
 
 ```
 agents-comm-bus/                       (single monorepo)
-├── core/                              daemon source
+├── core-daemon/                       daemon source
 │   └── bridges/
 │       ├── claude/                    daemon-side Claude bridge module
 │       └── codex/                     daemon-side Codex bridge module
+├── packages/
+│   └── core-contracts/                shared contracts/types/records/storage interfaces package
 ├── adapters/
 │   ├── telegram/                      CommAdapter source (agent-agnostic)
 │   ├── matrix/
@@ -209,7 +211,7 @@ the plugin root.
 
 ### Bridge vs host boundary
 
-- `core/bridges/<agent>/` contains **daemon-side agent protocol handlers**.
+- `core-daemon/bridges/<agent>/` contains **daemon-side agent protocol handlers**.
   These modules run inside the daemon process, depend on daemon runtime
   contracts (`MessageBus`, storage, pending inbound queue, IPC dispatch),
   and are wired by the daemon composition root.
@@ -219,8 +221,8 @@ the plugin root.
 - `hosts/common/` is allowed for **shared host-side plumbing** used by
   multiple host entrypoints. It is still host-edge code, not daemon runtime.
 
-`core/` here means **daemon runtime**, not "agent-agnostic kernel." Agent-
-specific code belongs in `core/bridges/` when it runs inside the daemon.
+`core-daemon/` here means **daemon runtime**, not "agent-agnostic kernel." Agent-
+specific code belongs in `core-daemon/bridges/` when it runs inside the daemon.
 
 ### Marketplace repo shape (thin pointers)
 

@@ -1,23 +1,23 @@
 # Decision #2 — shared core package: keep separate vs fold
 
-**Status:** proposal / source-of-truth artifact for decision #2
+**Status:** decided — keep separate package boundary
 **Date:** 2026-05-23
 **Scope:** final home for the current `agents-comm-bus-core/**` package during the restructure
 
 ## Recommendation snapshot
 
-### Default recommendation
-**Keep the package boundary and move `agents-comm-bus-core/` to `packages/core/`.**
+### Chosen direction
+**Keep the package boundary and move `agents-comm-bus-core/` to `packages/core-contracts/`, while renaming the daemon runtime tree to `core-daemon/`.**
 
 Why this is the safest default:
 - preserves the current Node package boundary and `exports` surface
 - preserves the one-way dependency guard (`daemon runtime -> shared contracts`, not vice versa)
-- avoids overloading `core/` with two meanings
+- avoids the daemon-vs-shared naming collision by using `core-daemon/` and `packages/core-contracts/`
 - minimizes migration risk and import churn
 - keeps future standalone publishability available if Level 3 modularization ever becomes relevant
 
 ### Acceptable alternative
-**Fold the package into the main daemon tree under `core/domain/`, but only if the same PR also ships an architecture test guarding the boundary.**
+**Fold the package into the daemon runtime tree under `core-daemon/domain/`, but only if the same PR also ships an architecture test guarding the boundary.**
 
 Rule:
 - **No guard, no fold.**
@@ -25,8 +25,8 @@ Rule:
 ### Naming conclusion
 - **Do not use `core/invariants/`.** The contents are broader than invariants.
 - Preferred names:
-  - if kept separate: `packages/core/`
-  - if folded: `core/domain/`
+  - if kept separate: `packages/core-contracts/` with daemon runtime at `core-daemon/`
+  - if folded: `core-daemon/domain/`
 
 ---
 
@@ -64,7 +64,7 @@ So this decision is **not** just a folder rename. It is also a packaging and dep
 
 ```text
 packages/
-└── core/
+└── core-contracts/
     ├── package.json
     ├── tsconfig.json
     ├── src/
@@ -85,7 +85,7 @@ packages/
 
 ```text
 agents-comm-bus/
-├── core/                         daemon runtime
+├── core-daemon/                  daemon runtime
 │   ├── daemon.ts
 │   ├── bus.ts
 │   ├── serve.ts
@@ -96,7 +96,7 @@ agents-comm-bus/
 │   ├── storage/
 │   └── migrations/
 ├── packages/
-│   └── core/                     shared contracts/types/domain package
+│   └── core-contracts/           shared contracts/types/domain package
 ├── adapters/
 │   └── <comm>/
 ├── hosts/
@@ -123,8 +123,8 @@ This keeps the source intent clearest, but may require updating the package name
 Lowest tooling surprise during transition:
 
 ```ts
-import type { Storage } from "../packages/core/dist/storage/storage.js";
-import { SCHEMA_VERSION_QUERY } from "../packages/core/dist/index.js";
+import type { Storage } from "../packages/core-contracts/dist/storage/storage.js";
+import { SCHEMA_VERSION_QUERY } from "../packages/core-contracts/dist/index.js";
 ```
 
 This is mechanically straightforward but less elegant. It still preserves the package boundary on disk/build.
@@ -134,13 +134,12 @@ This is mechanically straightforward but less elegant. It still preserves the pa
 - preserves hard package boundary
 - preserves explicit `exports`
 - preserves future standalone-publish option
-- keeps `core/` meaning clean: **daemon runtime only**
+- keeps `core-daemon/` unambiguously meaning **daemon runtime only**
 - lowest conceptual risk during restructure
 
 ### Cons
 
 - still two TS build units unless later consolidated under project references/workspaces
-- some repo participants may find `packages/core/` slightly more ceremonious than a fold
 
 ### Recommended when
 
@@ -156,7 +155,7 @@ Choose this path if the priority is:
 ### Proposed location
 
 ```text
-core/
+core-daemon/
 ├── domain/
 │   ├── index.ts
 │   ├── types.ts
@@ -178,9 +177,9 @@ core/
 └── serve.ts
 ```
 
-### Why `core/domain/`
+### Why `core-daemon/domain/`
 
-`core/domain/` is a better fit than `core/invariants/` because the folded package contains:
+`core-daemon/domain/` is a better fit than `core/invariants/` because the folded package contains:
 - record schemas
 - message/query shapes
 - storage interfaces
@@ -188,7 +187,7 @@ core/
 - capability declarations
 - shared type aliases
 
-Those are broader than invariants, and `domain/` avoids collision/confusion with daemon implementation folders like `core/storage/`.
+Those are broader than invariants, and `domain/` avoids collision/confusion with daemon implementation folders like `core-daemon/storage/`.
 
 ### Import shape after fold
 
@@ -208,12 +207,12 @@ import { ... } from "../../agents-comm-bus-core/src/index.js";
 to:
 
 ```ts
-import { ... } from "../../core/domain/index.js";
+import { ... } from "../../core-daemon/domain/index.js";
 ```
 
 ### Mechanical migration required
 
-- move `agents-comm-bus-core/src/**` -> `core/domain/**`
+- move `agents-comm-bus-core/src/**` -> `core-daemon/domain/**`
 - remove `agents-comm-bus-core/package.json`
 - remove `agents-comm-bus-core/tsconfig.json`
 - update all source imports from `agents-comm-bus-core/dist/...`
@@ -248,18 +247,18 @@ Restore, via tests, the one-way dependency rule currently enforced by the separa
 
 ### Boundary rule
 
-Files under `core/domain/**` **must not import from**:
-- `core/daemon.*`
-- `core/bus.*`
-- `core/serve.*`
-- `core/bridges/**`
-- daemon implementation folders under `core/runtime/**`, `core/ipc/**`, `core/bootstrap/**`, `core/storage/**`, `core/migrations/**`, `core/cli/**`
+Files under `core-daemon/domain/**` **must not import from**:
+- `core-daemon/daemon.*`
+- `core-daemon/bus.*`
+- `core-daemon/serve.*`
+- `core-daemon/bridges/**`
+- daemon implementation folders under `core-daemon/runtime/**`, `core-daemon/ipc/**`, `core-daemon/bootstrap/**`, `core-daemon/storage/**`, `core-daemon/migrations/**`, `core-daemon/cli/**`
 - `adapters/**`
 - `hosts/**`
 - `plugins/**`
 
-`core/domain/**` may import only from:
-- sibling files inside `core/domain/**`
+`core-daemon/domain/**` may import only from:
+- sibling files inside `core-daemon/domain/**`
 - Node built-ins
 - explicitly approved external libs if needed for pure shared semantics
 
@@ -274,10 +273,10 @@ tests/architecture/domain-boundary.test.ts
 ### Test behavior
 
 The test should:
-1. walk every `.ts` file under `core/domain/**`
+1. walk every `.ts` file under `core-daemon/domain/**`
 2. parse import specifiers with a lightweight regex or TS parser
 3. resolve relative imports to normalized repo-relative paths
-4. fail if any resolved import escapes `core/domain/**` into forbidden zones
+4. fail if any resolved import escapes `core-daemon/domain/**` into forbidden zones
 5. allow Node built-ins and approved package imports
 
 ### Pseudocode sketch
@@ -290,7 +289,7 @@ import { searchFiles, readFileLike } from "./helpers";
 
 describe("core/domain boundary", () => {
   it("does not import daemon runtime or host/adapter code", async () => {
-    const files = listTsFiles("core/domain");
+    const files = listTsFiles("core-daemon/domain");
 
     for (const file of files) {
       const imports = extractImportSpecifiers(file);
@@ -298,7 +297,7 @@ describe("core/domain boundary", () => {
         if (isNodeBuiltin(specifier) || isApprovedExternal(specifier)) continue;
         const resolved = resolveRelativeRepoPath(file, specifier);
         assert.ok(
-          resolved.startsWith("core/domain/"),
+          resolved.startsWith("core-daemon/domain/"),
           `${file} imports forbidden path ${resolved}`,
         );
       }
@@ -332,13 +331,13 @@ So `invariants/` would underspecify the layer and invite future confusion.
 
 ## Decision matrix
 
-### Pick **Option A — keep separate as `packages/core/`** if you want:
+### Pick **Option A — keep separate as `packages/core-contracts/` + `core-daemon/`** if you want:
 - lowest migration risk
 - preserved package-boundary enforcement
 - preserved future publishability
 - cleaner semantic separation between daemon runtime and shared contract layer
 
-### Pick **Option B — fold into `core/domain/`** if you want:
+### Pick **Option B — fold into `core-daemon/domain/`** if you want:
 - simpler build pipeline
 - fewer packages
 - a single source tree
@@ -348,7 +347,7 @@ So `invariants/` would underspecify the layer and invite future confusion.
 
 ## Recommended call
 
-**Recommend Option A: keep separate and move to `packages/core/`.**
+**Chosen Option A: keep separate and move to `packages/core-contracts/`, with daemon runtime at `core-daemon/`.**
 
 Reason:
 - it preserves the strongest architectural boundary at the lowest operational risk
