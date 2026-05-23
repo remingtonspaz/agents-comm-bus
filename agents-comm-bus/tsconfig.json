@@ -8,14 +8,14 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "../core-daemon",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "types": ["node"],
-    "typeRoots": ["../packages/core-contracts/node_modules/@types", "./src/types"]
+    "typeRoots": ["../node_modules/@types", "../packages/core-contracts/node_modules/@types", "../core-daemon/types"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["../core-daemon/**/*.ts"],
   "exclude": ["dist", "node_modules"]
 }

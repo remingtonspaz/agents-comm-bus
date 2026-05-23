@@ -79,13 +79,13 @@ Open follow-ups (none blocking):
 
 Three perpendicular layers meeting at the bus:
 
-- **Agent side** — `ClaudeBridge` (in `adapters/agent/claude/bridge.ts`)
+- **Agent side** — `ClaudeBridge` (in `core-daemon/bridges/claude/bridge.ts`)
   handles Claude's IPC methods, owns the inline-keyboard label choices
   specific to Claude's permission/question UX, writes wake responses to the
   watcher's filesystem dropbox. `CodexBridge`
-  (`adapters/agent/codex/bridge.ts`) handles Codex IPC methods, app-server
+  (`core-daemon/bridges/codex/bridge.ts`) handles Codex IPC methods, app-server
   wake/steer capability dispatch, and blocking permission-query resolution.
-  Future Gemini / etc. bridges live as siblings under `adapters/agent/`.
+  Future Gemini / etc. bridges live as siblings under `core-daemon/bridges/`.
 - **Comm side** — `TelegramCommAdapter` (in `adapters/comm/telegram/adapter.ts`)
   plus `TelegramCommAdapterFactory` (`factory.ts`) handles polling, sending,
   callback events, credential resolution, and contributes its MCP-tool IPC
@@ -105,34 +105,35 @@ Three perpendicular layers meeting at the bus:
 │       ├── records/           # AccountRegistration, Conversation, Query, Session
 │       ├── storage/           # Storage interface, MigrationRunner
 │       └── ...
-├── agents-comm-bus/           # The daemon + storage impl + adapters.
-│   └── src/
-│       ├── adapters/
-│       │   ├── agent/claude/
-│       │   │   ├── adapter.ts # ClaudeAgentAdapter (v3 contract, currently unused)
-│       │   │   ├── bridge.ts  # ClaudeBridge + ClaudeBridgeFactory (v4 IPC handler)
-│       │   │   └── wake.ts    # ClaudeWakeRegistry, writeClaudeWakeTrigger/Response
-│       │   ├── agent/codex/
-│       │   │   ├── adapter.ts # CodexAgentAdapter capabilities + hook/query mapping
-│       │   │   ├── app-server.ts # Codex app-server turn/start + turn/steer client
-│       │   │   └── bridge.ts  # CodexBridge + CodexBridgeFactory (v4 IPC handler)
-│       │   └── comm/telegram/
-│       │       ├── adapter.ts # TelegramCommAdapter
-│       │       └── factory.ts # TelegramCommAdapterFactory + MCP IPC surface
-│       ├── bootstrap/         # ensure-daemon, spawn-lock, handshake
-│       ├── cli/               # account-add, account-list, account-remove CLI
-│       ├── ipc/               # WebSocket protocol + server + client
-│       ├── runtime/           # Generic contracts the daemon dispatches against:
-│       │   ├── agent-bridge.ts
-│       │   ├── comm-factory.ts
-│       │   ├── ipc-method.ts
-│       │   └── pending-inbound.ts
-│       ├── storage/           # SqliteSessionStorage + JSONL transcripts/audit
-│       ├── bus.ts             # MessageBus + DispatchSink + ResolveSink
-│       ├── config.ts          # DAEMON_VERSION, IPC_PROTOCOL_VERSION
-│       ├── daemon.ts          # runDaemon(options) library — NO adapter imports
-│       └── serve.ts           # Composition root — wires factories into runDaemon
-├── mcp-server/                # esbuild-bundled MCP shim exposing telegram_* tools
+├── core-daemon/               # Daemon source (compiled into agents-comm-bus/dist/).
+│   ├── adapters/comm/telegram/
+│   │   ├── adapter.ts         # TelegramCommAdapter
+│   │   └── factory.ts         # TelegramCommAdapterFactory + MCP IPC surface
+│   ├── bridges/
+│   │   ├── claude/
+│   │   │   ├── adapter.ts     # ClaudeAgentAdapter (v3 contract, currently unused)
+│   │   │   ├── bridge.ts      # ClaudeBridge + ClaudeBridgeFactory (v4 IPC handler)
+│   │   │   └── wake.ts        # ClaudeWakeRegistry, writeClaudeWakeTrigger/Response
+│   │   └── codex/
+│   │       ├── adapter.ts     # CodexAgentAdapter capabilities + hook/query mapping
+│   │       ├── app-server.ts  # Codex app-server turn/start + turn/steer client
+│   │       ├── app-server-lifecycle.ts # Codex app-server stop/kill logic
+│   │       └── bridge.ts      # CodexBridge + CodexBridgeFactory (v4 IPC handler)
+│   ├── bootstrap/             # ensure-daemon, spawn-lock, handshake
+│   ├── cli/                   # account-add, account-list, account-remove CLI
+│   ├── ipc/                   # WebSocket protocol + server + client
+│   ├── runtime/               # Generic contracts the daemon dispatches against:
+│   │   ├── agent-bridge.ts
+│   │   ├── comm-factory.ts
+│   │   ├── ipc-method.ts
+│   │   └── pending-inbound.ts
+│   ├── storage/               # SqliteSessionStorage + JSONL transcripts/audit
+│   ├── bus.ts                 # MessageBus + DispatchSink + ResolveSink
+│   ├── config.ts              # DAEMON_VERSION, IPC_PROTOCOL_VERSION
+│   ├── daemon.ts              # runDaemon(options) library — NO adapter imports
+│   └── serve.ts               # Composition root — wires factories into runDaemon
+├── agents-comm-bus/           # Daemon npm package (dist tracked, built from core-daemon/).
+├── mcp-server/                # esbuild-bundled MCP shim exposing comm_* tools
 │   ├── server.js
 │   └── dist/server.js         # bundled, gitignored
 ├── hooks/
@@ -219,12 +220,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## Adding a new comm adapter
 
-1. Create `agents-comm-bus/src/adapters/comm/<name>/adapter.ts` implementing
+1. Create `core-daemon/adapters/comm/<name>/adapter.ts` implementing
    `CommAdapter` (from `packages/core-contracts/dist/contracts/comm-adapter.js`).
    At minimum: `start`, `stop`, `send`, `onInbound`, `onConnectionState`,
    `reportPressure`, `classifyFailure`. Optionally `onCallback`,
    `answerCallback`, `editMessage` if the platform supports inline buttons.
-2. Create `agents-comm-bus/src/adapters/comm/<name>/factory.ts` implementing
+2. Create `core-daemon/adapters/comm/<name>/factory.ts` implementing
    `CommAdapterFactory` (from `runtime/comm-factory.js`):
    - `commId` — the string written to `account_registrations.comm`.
    - `resolveCredentials(registration, env)` — read whatever `credentials_ref`
@@ -241,7 +242,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## Adding a new agent bridge
 
-1. Create `agents-comm-bus/src/adapters/agent/<name>/bridge.ts` implementing
+1. Create `core-daemon/bridges/<name>/bridge.ts` implementing
    `AgentBridge` (from `runtime/agent-bridge.js`):
    - `agentId` — written to `sessions.agent` and `account_registrations.agent`.
    - `ipcMethods` — `ReadonlySet<string>` of method names this bridge owns.
@@ -444,7 +445,7 @@ All state under `~/.agents-comm-bus/` (per-user, never per-project):
 | `claude-wake/sessions/<key>/watcher.lock` | Spawn-race lock for the watcher |
 
 `<key>` is `<basename(project)>-<8-char-fnv1a-hash(project)>`. Computed by
-`claudeWakeDirForProject` in `agents-comm-bus/src/adapters/agent/claude/wake.ts`
+`claudeWakeDirForProject` in `core-daemon/bridges/claude/wake.ts`
 and the hook side in `hooks/claude/wake-support.js`.
 
 ## Configuration files

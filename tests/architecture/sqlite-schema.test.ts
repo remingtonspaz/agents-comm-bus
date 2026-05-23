@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { openSqliteStorage } from "../../agents-comm-bus/src/storage/sqlite.js";
+import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import type { AccountRegistration, Conversation, QueryRecord, Session } from "../../packages/core-contracts/src/records/index.js";
 import type { AccountId, AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../packages/core-contracts/src/types.js";
 

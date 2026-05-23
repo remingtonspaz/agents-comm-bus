@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { openSqliteStorage } from "../../agents-comm-bus/src/storage/sqlite.js";
-import { TelegramCommAdapterFactory } from "../../agents-comm-bus/src/adapters/comm/telegram/factory.js";
+import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
+import { TelegramCommAdapterFactory } from "../../core-daemon/adapters/comm/telegram/factory.js";
 import type {
   AccountRegistration,
   AgentId,

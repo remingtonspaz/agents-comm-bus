@@ -11,13 +11,13 @@ import type {
   CommId,
 } from "../../packages/core-contracts/src/index.js";
 import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/types.js";
-import { MessageBus } from "../../agents-comm-bus/src/bus.js";
-import { ContentAddressedBlobStore } from "../../agents-comm-bus/src/storage/blobs.js";
-import { JsonlAuditStore } from "../../agents-comm-bus/src/storage/audit.js";
-import { JsonlTranscriptStore } from "../../agents-comm-bus/src/storage/transcripts.js";
-import { openSqliteStorage } from "../../agents-comm-bus/src/storage/sqlite.js";
-import { TelegramCommAdapterFactory } from "../../agents-comm-bus/src/adapters/comm/telegram/factory.js";
-import { reloadAdapters } from "../../agents-comm-bus/src/daemon.js";
+import { MessageBus } from "../../core-daemon/bus.js";
+import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
+import { JsonlAuditStore } from "../../core-daemon/storage/audit.js";
+import { JsonlTranscriptStore } from "../../core-daemon/storage/transcripts.js";
+import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
+import { TelegramCommAdapterFactory } from "../../core-daemon/adapters/comm/telegram/factory.js";
+import { reloadAdapters } from "../../core-daemon/daemon.js";
 
 const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;

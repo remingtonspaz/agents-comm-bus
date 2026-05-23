@@ -132,14 +132,14 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### New top-level packages / directories
 - `agents-comm-bus-core/`
 - `agents-comm-bus/`
-- `agents-comm-bus/src/adapters/agent/`
-- `agents-comm-bus/src/adapters/comm/`
-- `agents-comm-bus/src/bootstrap/`
-- `agents-comm-bus/src/ipc/`
-- `agents-comm-bus/src/storage/`
-- `agents-comm-bus/src/queries/`
-- `agents-comm-bus/src/migrations/`
-- `agents-comm-bus/src/cli/`
+- `core-daemon/adapters/agent/`
+- `core-daemon/adapters/comm/`
+- `core-daemon/bootstrap/`
+- `core-daemon/ipc/`
+- `core-daemon/storage/`
+- `core-daemon/queries/`
+- `core-daemon/migrations/`
+- `core-daemon/cli/`
 - `docs/architecture/`
 - `tests/architecture/`
 - `tests/migration/`
@@ -343,9 +343,9 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 
 **Files:**
 - Create: `agents-comm-bus/package.json`
-- Create: `agents-comm-bus/src/daemon.ts`
-- Create: `agents-comm-bus/src/paths.ts`
-- Create: `agents-comm-bus/src/config.ts`
+- Create: `core-daemon/daemon.ts`
+- Create: `core-daemon/paths.ts`
+- Create: `core-daemon/config.ts`
 
 **Steps:**
 1. Define the daemon entrypoint.
@@ -367,9 +367,9 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.2 — Implement `ensureDaemon()` bootstrap protocol
 
 **Files:**
-- Create: `agents-comm-bus/src/bootstrap/ensure-daemon.ts`
-- Create: `agents-comm-bus/src/bootstrap/spawn-lock.ts`
-- Create: `agents-comm-bus/src/bootstrap/handshake.ts`
+- Create: `core-daemon/bootstrap/ensure-daemon.ts`
+- Create: `core-daemon/bootstrap/spawn-lock.ts`
+- Create: `core-daemon/bootstrap/handshake.ts`
 - Create: `tests/architecture/bootstrap-race.test.ts`
 
 **Steps:**
@@ -387,9 +387,9 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.3 — Implement WebSocket IPC and protocol/version handshake
 
 **Files:**
-- Create: `agents-comm-bus/src/ipc/server.ts`
-- Create: `agents-comm-bus/src/ipc/client.ts`
-- Create: `agents-comm-bus/src/ipc/protocol.ts`
+- Create: `core-daemon/ipc/server.ts`
+- Create: `core-daemon/ipc/client.ts`
+- Create: `core-daemon/ipc/protocol.ts`
 - Create: `tests/architecture/ipc-versioning.test.ts`
 
 **Handshake must include:**
@@ -405,9 +405,9 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.4 — Implement SQLite schema and migrations
 
 **Files:**
-- Create: `agents-comm-bus/src/storage/sqlite.ts`
-- Create: `agents-comm-bus/src/storage/schema/001_initial.sql`
-- Create: `agents-comm-bus/src/storage/schema/runner.ts`
+- Create: `core-daemon/storage/sqlite.ts`
+- Create: `core-daemon/storage/schema/001_initial.sql`
+- Create: `core-daemon/storage/schema/runner.ts`
 - Create: `tests/architecture/sqlite-schema.test.ts`
 
 **Tables / constraints to land in the initial schema:**
@@ -427,9 +427,9 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.5 — Implement transcript, audit, and attachment stores
 
 **Files:**
-- Create: `agents-comm-bus/src/storage/transcripts.ts`
-- Create: `agents-comm-bus/src/storage/audit.ts`
-- Create: `agents-comm-bus/src/storage/blobs.ts`
+- Create: `core-daemon/storage/transcripts.ts`
+- Create: `core-daemon/storage/audit.ts`
+- Create: `core-daemon/storage/blobs.ts`
 - Create: `tests/architecture/jsonl-and-blobs.test.ts`
 
 **Steps:**
@@ -445,7 +445,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.6 — Implement `MessageBus`
 
 **Files:**
-- Create: `agents-comm-bus/src/bus.ts`
+- Create: `core-daemon/bus.ts`
 - Create: `tests/architecture/bus-invariants.test.ts`
 
 **Responsibilities:**
@@ -466,7 +466,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.7 — Implement `TelegramCommAdapter` for V1
 
 **Files:**
-- Create: `agents-comm-bus/src/adapters/comm/telegram.ts`
+- Create: `core-daemon/adapters/comm/telegram.ts`
 - Create: `tests/architecture/telegram-comm-adapter.test.ts`
 
 **V1 scope:**
@@ -485,10 +485,10 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.8 — Add registration CLI for v4’s explicit model
 
 **Files:**
-- Create: `agents-comm-bus/src/cli/account-add.ts`
-- Create: `agents-comm-bus/src/cli/account-list.ts`
-- Create: `agents-comm-bus/src/cli/account-remove.ts`
-- Create: `agents-comm-bus/src/cli/index.ts`
+- Create: `core-daemon/cli/account-add.ts`
+- Create: `core-daemon/cli/account-list.ts`
+- Create: `core-daemon/cli/account-remove.ts`
+- Create: `core-daemon/cli/index.ts`
 - Create: `tests/architecture/account-registration-cli.test.ts`
 
 **Steps:**
@@ -544,9 +544,9 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 1.11 — Add transition migration readers
 
 **Files:**
-- Create: `agents-comm-bus/src/migrations/legacy-readers.ts`
-- Create: `agents-comm-bus/src/migrations/import-last-chat.ts`
-- Create: `agents-comm-bus/src/migrations/import-pending-permission.ts`
+- Create: `core-daemon/migrations/legacy-readers.ts`
+- Create: `core-daemon/migrations/import-last-chat.ts`
+- Create: `core-daemon/migrations/import-pending-permission.ts`
 - Create: `tests/migration/transition-readers.test.ts`
 
 **Legacy inputs to support:**
@@ -578,7 +578,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 2.1 — Create `ClaudeAgentAdapter`
 
 **Files:**
-- Create: `agents-comm-bus/src/adapters/agent/claude.ts`
+- Create: `core-daemon/adapters/agent/claude.ts`
 - Create: `tests/architecture/claude-agent-adapter.test.ts`
 
 **Steps:**
@@ -611,7 +611,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 
 **Files:**
 - Modify: `hooks/claude/user-prompt-submit.js`
-- Modify: `agents-comm-bus/src/adapters/agent/claude.ts`
+- Modify: `core-daemon/adapters/agent/claude.ts`
 
 **Steps:**
 1. Remove direct queue-file reads.
@@ -626,7 +626,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 
 **Files:**
 - Modify: `hooks/claude/permission-request.js`
-- Modify: `agents-comm-bus/src/adapters/agent/claude.ts`
+- Modify: `core-daemon/adapters/agent/claude.ts`
 - Create: `tests/architecture/claude-query-roundtrip.test.ts`
 
 **Steps:**
@@ -667,7 +667,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 3.1 — Create `CodexAgentAdapter`
 
 **Files:**
-- Create: `agents-comm-bus/src/adapters/agent/codex/adapter.ts`
+- Create: `core-daemon/adapters/agent/codex/adapter.ts`
 - Create: `tests/architecture/codex-agent-adapter.test.ts`
 
 **Steps:**
@@ -697,7 +697,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 
 **Files:**
 - Modify: `mcp-server/codex-app-server.js`
-- Modify: `agents-comm-bus/src/adapters/agent/codex.ts`
+- Modify: `core-daemon/adapters/agent/codex.ts`
 - Create: `tests/architecture/codex-turn-control.test.ts`
 
 **Steps:**
@@ -733,8 +733,8 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 4.1 — Extend Telegram comm support for multiple registered accounts
 
 **Files:**
-- Modify: `agents-comm-bus/src/adapters/comm/telegram.ts`
-- Modify: `agents-comm-bus/src/storage/sqlite.ts`
+- Modify: `core-daemon/adapters/comm/telegram.ts`
+- Modify: `core-daemon/storage/sqlite.ts`
 - Create: `tests/architecture/multi-account-telegram.test.ts`
 
 **Steps:**
@@ -748,7 +748,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 4.2 — Implement `MatrixCommAdapter`
 
 **Files:**
-- Create: `agents-comm-bus/src/adapters/comm/matrix.ts`
+- Create: `core-daemon/adapters/comm/matrix.ts`
 - Create: `tests/architecture/matrix-comm-adapter.test.ts`
 
 **Steps:**
@@ -761,7 +761,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 4.3 — Add transcript subscription policy layer
 
 **Files:**
-- Create: `agents-comm-bus/src/subscriptions.ts`
+- Create: `core-daemon/subscriptions.ts`
 - Create: `tests/architecture/subscription-policy.test.ts`
 
 **Steps:**
@@ -786,8 +786,8 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 5.1 — Add CLI for service installation
 
 **Files:**
-- Create: `agents-comm-bus/src/cli/install-service.ts`
-- Create: `agents-comm-bus/src/cli/uninstall-service.ts`
+- Create: `core-daemon/cli/install-service.ts`
+- Create: `core-daemon/cli/uninstall-service.ts`
 - Create: `tests/architecture/service-cli.test.ts`
 
 ### Task 5.2 — Add platform-specific service wrappers
@@ -831,7 +831,7 @@ This is not a late cleanup task. It must move in parallel with phases 1–3.
 ### Migration Task M2 — Add a daemon-guided migration command
 
 **Files:**
-- Create: `agents-comm-bus/src/cli/migrate.ts`
+- Create: `core-daemon/cli/migrate.ts`
 - Create: `tests/migration/migrate-command.test.ts`
 
 **Requirements:**

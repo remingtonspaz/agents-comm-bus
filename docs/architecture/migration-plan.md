@@ -109,9 +109,9 @@ Invalid fallbacks:
 M1 can be completed before Phase 1, but the executable migration command depends
 on daemon work:
 
-- `agents-comm-bus/src/paths.ts` for canonical daemon paths
-- `agents-comm-bus/src/storage/sqlite.ts` and schema migrations
-- `agents-comm-bus/src/storage/audit.ts`
+- `core-daemon/paths.ts` for canonical daemon paths
+- `core-daemon/storage/sqlite.ts` and schema migrations
+- `core-daemon/storage/audit.ts`
 - account registration CLI/storage behavior
 - transition readers for `last-chat.json`, `queue.json`, and
   `pending-permission.json`

@@ -23,27 +23,27 @@
 
 | Current path | Proposed path | Notes |
 |---|---|---|
-| `agents-comm-bus/src/daemon.ts` | `core-daemon/daemon.ts` | Daemon library entrypoint stays in runtime core. |
-| `agents-comm-bus/src/bus.ts` | `core-daemon/bus.ts` | MessageBus is daemon runtime, not host glue. |
-| `agents-comm-bus/src/serve.ts` | `core-daemon/serve.ts` | Composition root remains daemon-side. |
-| `agents-comm-bus/src/config.ts` | `core-daemon/config.ts` | Daemon runtime config. |
-| `agents-comm-bus/src/paths.ts` | `core-daemon/paths.ts` | Daemon path resolution. |
-| `agents-comm-bus/src/runtime/**` | `core-daemon/runtime/**` | Shared daemon runtime contracts/helpers. |
-| `agents-comm-bus/src/ipc/**` | `core-daemon/ipc/**` | Daemon IPC server/client/protocol plumbing. |
-| `agents-comm-bus/src/bootstrap/**` | `core-daemon/bootstrap/**` | Daemon bootstrap / discovery / spawn lock logic. |
-| `agents-comm-bus/src/storage/**` | `core-daemon/storage/**` | SQLite / blobs / audit / transcript stores remain daemon runtime. |
-| `agents-comm-bus/src/migrations/**` | `core-daemon/migrations/**` | Legacy-import logic stays with daemon runtime. |
-| `agents-comm-bus/src/cli/**` | `core-daemon/cli/**` | CLI continues to operate on daemon/runtime state. |
-| `agents-comm-bus/src/types/vendor.d.ts` | `core-daemon/types/vendor.d.ts` | Keep with daemon source unless superseded during TS cleanup. Final `types/` consolidation depends on later interactions with `packages/core-contracts/src/types/**`. |
-| `agents-comm-bus/src/adapters/comm/telegram/**` | `adapters/telegram/**` | CommAdapter source moves out of daemon package tree into top-level comm space. |
-| `agents-comm-bus/src/adapters/comm/<future-comm>/**` | `adapters/<future-comm>/**` | Same rule for Matrix/Discord/Slack/etc. |
-| `agents-comm-bus/src/adapters/agent/claude/bridge.ts` | `core-daemon/bridges/claude/bridge.ts` | Settled decision #1: bridge is daemon-side agent runtime. |
-| `agents-comm-bus/src/adapters/agent/claude/adapter.ts` | `core-daemon/bridges/claude/adapter.ts` | Companion file stays grouped with Claude bridge module. |
-| `agents-comm-bus/src/adapters/agent/claude/wake.ts` | `core-daemon/bridges/claude/wake.ts` | Claude wake behavior is daemon-side bridge support code. |
-| `agents-comm-bus/src/adapters/agent/codex/bridge.ts` | `core-daemon/bridges/codex/bridge.ts` | Settled decision #1. |
-| `agents-comm-bus/src/adapters/agent/codex/adapter.ts` | `core-daemon/bridges/codex/adapter.ts` | Companion file stays grouped with Codex bridge module. |
-| `agents-comm-bus/src/adapters/agent/codex/app-server.ts` | `core-daemon/bridges/codex/app-server.ts` | Codex app-server handshake/runtime support is daemon-side bridge code today. |
-| `agents-comm-bus/src/adapters/agent/codex/app-server-lifecycle.ts` | `core-daemon/bridges/codex/app-server-lifecycle.ts` | Same as above. |
+| `core-daemon/daemon.ts` | `core-daemon/daemon.ts` | Daemon library entrypoint stays in runtime core. |
+| `core-daemon/bus.ts` | `core-daemon/bus.ts` | MessageBus is daemon runtime, not host glue. |
+| `core-daemon/serve.ts` | `core-daemon/serve.ts` | Composition root remains daemon-side. |
+| `core-daemon/config.ts` | `core-daemon/config.ts` | Daemon runtime config. |
+| `core-daemon/paths.ts` | `core-daemon/paths.ts` | Daemon path resolution. |
+| `core-daemon/runtime/**` | `core-daemon/runtime/**` | Shared daemon runtime contracts/helpers. |
+| `core-daemon/ipc/**` | `core-daemon/ipc/**` | Daemon IPC server/client/protocol plumbing. |
+| `core-daemon/bootstrap/**` | `core-daemon/bootstrap/**` | Daemon bootstrap / discovery / spawn lock logic. |
+| `core-daemon/storage/**` | `core-daemon/storage/**` | SQLite / blobs / audit / transcript stores remain daemon runtime. |
+| `core-daemon/migrations/**` | `core-daemon/migrations/**` | Legacy-import logic stays with daemon runtime. |
+| `core-daemon/cli/**` | `core-daemon/cli/**` | CLI continues to operate on daemon/runtime state. |
+| `core-daemon/types/vendor.d.ts` | `core-daemon/types/vendor.d.ts` | Keep with daemon source unless superseded during TS cleanup. Final `types/` consolidation depends on later interactions with `packages/core-contracts/src/types/**`. |
+| `core-daemon/adapters/comm/telegram/**` | `adapters/telegram/**` | CommAdapter source moves out of daemon package tree into top-level comm space. |
+| `core-daemon/adapters/comm/<future-comm>/**` | `adapters/<future-comm>/**` | Same rule for Matrix/Discord/Slack/etc. |
+| `core-daemon/adapters/agent/claude/bridge.ts` | `core-daemon/bridges/claude/bridge.ts` | Settled decision #1: bridge is daemon-side agent runtime. |
+| `core-daemon/adapters/agent/claude/adapter.ts` | `core-daemon/bridges/claude/adapter.ts` | Companion file stays grouped with Claude bridge module. |
+| `core-daemon/adapters/agent/claude/wake.ts` | `core-daemon/bridges/claude/wake.ts` | Claude wake behavior is daemon-side bridge support code. |
+| `core-daemon/adapters/agent/codex/bridge.ts` | `core-daemon/bridges/codex/bridge.ts` | Settled decision #1. |
+| `core-daemon/adapters/agent/codex/adapter.ts` | `core-daemon/bridges/codex/adapter.ts` | Companion file stays grouped with Codex bridge module. |
+| `core-daemon/adapters/agent/codex/app-server.ts` | `core-daemon/bridges/codex/app-server.ts` | Codex app-server handshake/runtime support is daemon-side bridge code today. |
+| `core-daemon/adapters/agent/codex/app-server-lifecycle.ts` | `core-daemon/bridges/codex/app-server-lifecycle.ts` | Same as above. |
 | `mcp-server/server.js` | `hosts/common/mcp-shim-shared.js` + `hosts/claude/claude-mcp-shim.js` + `hosts/codex/codex-mcp-shim.js` | Shared plumbing extracted once; final per-agent entrypoints live under `hosts/<agent>/`. Exact extraction split is part of the restructure, not a prerequisite. |
 | `mcp-server/codex-app-server.js` | `hosts/codex/codex-app-server.js` | Codex host helper; keep with Codex host-side glue unless later folded into bridge/runtime code. |
 | `hooks/claude/permission-request.js` | `hosts/claude/hooks/permission-request.js` | Host-installed Claude hook. |

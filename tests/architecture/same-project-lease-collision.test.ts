@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { openSqliteStorage } from "../../agents-comm-bus/src/storage/sqlite.js";
+import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import type { AgentId, SessionId } from "../../packages/core-contracts/src/types.js";
 import type { Session } from "../../packages/core-contracts/src/records/index.js";
 

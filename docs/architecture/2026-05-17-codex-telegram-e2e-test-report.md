@@ -306,11 +306,11 @@ Live daemon verification:
   registration.
 - `hooks/codex/user-prompt-submit.js` - daemon inbound drain/injection hook.
 - `hooks/codex/permission-request.js` - daemon-backed permission query hook.
-- `agents-comm-bus/src/adapters/agent/codex/{adapter,bridge}.ts` - Codex
+- `core-daemon/adapters/agent/codex/{adapter,bridge}.ts` - Codex
   wake/steer, query, lease, and session handling.
-- `agents-comm-bus/src/adapters/comm/telegram/factory.ts` - Telegram MCP
+- `core-daemon/adapters/comm/telegram/factory.ts` - Telegram MCP
   send surface and session-scoped explicit target resolution.
-- `agents-comm-bus/src/bus.ts` - session target selection and agent-scoped
+- `core-daemon/bus.ts` - session target selection and agent-scoped
   conversation identity.
-- `agents-comm-bus/src/storage/schema/002_conversation_agent_identity.sql` -
+- `core-daemon/storage/schema/002_conversation_agent_identity.sql` -
   live DB migration for agent-scoped conversation identity.

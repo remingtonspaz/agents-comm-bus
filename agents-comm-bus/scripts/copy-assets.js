@@ -3,7 +3,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const sourceDir = resolve(packageDir, "src/storage/schema");
+const sourceDir = resolve(packageDir, "../core-daemon/storage/schema");
 const targetDir = resolve(packageDir, "dist/storage/schema");
 
 await mkdir(targetDir, { recursive: true });

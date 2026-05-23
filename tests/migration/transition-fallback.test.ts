@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import {
   TRANSITION_CLEANUP_RELEASE,
   TRANSITION_ONLY_MARKER,
-} from "../../agents-comm-bus/src/migrations/legacy-readers.js";
+} from "../../core-daemon/migrations/legacy-readers.js";
 
 describe("transition fallback markers and docs", () => {
   it("marks retained fallback behavior as temporary in code", () => {

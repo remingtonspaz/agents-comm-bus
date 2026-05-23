@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   CodexAgentAdapter,
   codexDecisionFromResolution,
-} from "../../agents-comm-bus/src/adapters/agent/codex/adapter.js";
+} from "../../core-daemon/bridges/codex/adapter.js";
 import type {
   ChatRef,
   ControlChannel,

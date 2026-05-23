@@ -28,7 +28,7 @@ import {
   SCHEMA_VERSION_ACCOUNT,
   SCHEMA_VERSION_CONVERSATION,
 } from "../../packages/core-contracts/src/index.js";
-import { MessageBus } from "../../agents-comm-bus/src/bus.js";
+import { MessageBus } from "../../core-daemon/bus.js";
 
 const CLAUDE = "claude" as AgentId;
 const CODEX = "codex" as AgentId;

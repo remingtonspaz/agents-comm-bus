@@ -1,5 +1,5 @@
-import type { TranscriptEntry, TranscriptStore } from "../../../packages/core-contracts/dist/storage/transcript-store.js";
-import type { ConversationId } from "../../../packages/core-contracts/dist/types.js";
+import type { TranscriptEntry, TranscriptStore } from "../../packages/core-contracts/dist/storage/transcript-store.js";
+import type { ConversationId } from "../../packages/core-contracts/dist/types.js";
 export declare class JsonlTranscriptStore implements TranscriptStore {
     private readonly root;
     constructor(root: string);
