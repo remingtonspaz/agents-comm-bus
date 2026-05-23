@@ -35,16 +35,22 @@
 
 ### Package-local test commands currently defined
 - Shared package tests: `cd packages/core-contracts && npm test`
+  - Covers: `query-resolution`, `query-staleness`, `security-loop-prevention`, `session-lease` (core-contracts imports only).
+  - Does **not** cover daemon runtime, bridge, or adapter tests.
 - Daemon package tests: `cd agents-comm-bus && npm test`
+  - Covers: `bootstrap-race`, `ipc-versioning`, `sqlite-schema`, `allowlist-factory`, `reload-allowlist-refresh`, `drain-pending-inbound`.
 
 ### High-signal architecture tests worth running during migration
-Use these directly with `node --test --import tsx ...` when a phase touches their area.
+Use the package-local test commands above when a phase matches their ownership boundary. For ad-hoc combinations not covered by a package script, use `node --test --import tsx ...` directly from repo root.
 
-- core package / boundary / storage semantics:
-  - `tests/architecture/sqlite-schema.test.ts`
-  - `tests/architecture/bus-invariants.test.ts`
+- core package / boundary / storage semantics (covered by `packages/core-contracts && npm test`):
   - `tests/architecture/query-resolution.test.ts`
-- daemon bootstrap / IPC / CLI:
+  - `tests/architecture/query-staleness.test.ts`
+  - `tests/architecture/security-loop-prevention.test.ts`
+  - `tests/architecture/session-lease.test.ts`
+- daemon runtime / storage impl (covered by `agents-comm-bus && npm test`):
+  - `tests/architecture/bus-invariants.test.ts`
+  - `tests/architecture/sqlite-schema.test.ts`
   - `tests/architecture/bootstrap-race.test.ts`
   - `tests/architecture/ipc-versioning.test.ts`
   - `tests/architecture/account-registration-cli.test.ts`
@@ -53,10 +59,11 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
   - `tests/architecture/reload-allowlist-refresh.test.ts`
   - `tests/architecture/drain-pending-inbound.test.ts`
   - `tests/architecture/telegram-comm-adapter.test.ts`
-- host / shim / hook contracts:
+- host / bridge / hook contracts (**not** in core-contracts `npm test`):
   - `tests/architecture/claude-hooks.test.ts`
   - `tests/architecture/codex-hooks.test.ts`
   - `tests/architecture/codex-app-server-lifecycle.test.ts`
+  - `tests/architecture/codex-turn-control.test.ts`
   - `tests/architecture/daemon-build-assets.test.ts`
 
 ---
@@ -69,11 +76,11 @@ Use these directly with `node --test --import tsx ...` when a phase touches thei
 - [ ] Confirm working tree is clean.
 - [ ] Confirm branch tip includes the doc-settlement commits.
 - [ ] Run current package builds:
-  - [ ] `cd agents-comm-bus-core && npm run build`
+  - [ ] `cd packages/core-contracts && npm run build`
   - [ ] `cd agents-comm-bus && npm run build`
   - [ ] `cd mcp-server && npm run build`
 - [ ] Run current architecture tests:
-  - [ ] `cd agents-comm-bus-core && npm test`
+  - [ ] `cd packages/core-contracts && npm test`
   - [ ] `cd agents-comm-bus && npm test`
   - [ ] `node --test --import tsx tests/architecture/claude-hooks.test.ts tests/architecture/codex-hooks.test.ts tests/architecture/daemon-build-assets.test.ts`
 - [ ] Save the exact failing/passing baseline in the PR body or execution notes.
