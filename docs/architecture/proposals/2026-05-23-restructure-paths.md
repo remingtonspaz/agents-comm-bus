@@ -12,6 +12,7 @@
 - **`core/`** means **daemon runtime**, not "agent-agnostic kernel." Agent-specific code that runs inside the daemon process belongs here.
 - **`core/bridges/`** contains **daemon-side agent protocol handlers**.
 - **`hosts/<agent>/`** contains the **installed edge** for that host: MCP shim, hooks, skills, manifest wiring, and other host-runtime glue.
+- **`hosts/common/`** is allowed for **shared host-side plumbing** used by multiple host entrypoints (for example shared MCP-shim code). It is still host-edge code, not daemon runtime.
 - **`adapters/<comm>/`** contains **comm/provider integrations**.
 
 ---
@@ -31,7 +32,7 @@
 | `agents-comm-bus/src/storage/**` | `core/storage/**` | SQLite / blobs / audit / transcript stores remain daemon runtime. |
 | `agents-comm-bus/src/migrations/**` | `core/migrations/**` | Legacy-import logic stays with daemon runtime. |
 | `agents-comm-bus/src/cli/**` | `core/cli/**` | CLI continues to operate on daemon/runtime state. |
-| `agents-comm-bus/src/types/vendor.d.ts` | `core/types/vendor.d.ts` | Keep with daemon source unless superseded during TS cleanup. |
+| `agents-comm-bus/src/types/vendor.d.ts` | `core/types/vendor.d.ts` | Keep with daemon source unless superseded during TS cleanup. Final `types/` consolidation depends on decision #2 if `agents-comm-bus-core/src/types/**` is folded into the restructured tree. |
 | `agents-comm-bus/src/adapters/comm/telegram/**` | `adapters/telegram/**` | CommAdapter source moves out of daemon package tree into top-level comm space. |
 | `agents-comm-bus/src/adapters/comm/<future-comm>/**` | `adapters/<future-comm>/**` | Same rule for Matrix/Discord/Slack/etc. |
 | `agents-comm-bus/src/adapters/agent/claude/bridge.ts` | `core/bridges/claude/bridge.ts` | Settled decision #1: bridge is daemon-side agent runtime. |
@@ -49,10 +50,10 @@
 | `hooks/codex/permission-request.js` | `hosts/codex/hooks/permission-request.js` | Host-installed Codex hook. |
 | `hooks/codex/user-prompt-submit.js` | `hosts/codex/hooks/user-prompt-submit.js` | Host-installed Codex hook. |
 | `hooks/codex/session-start.js` | `hosts/codex/hooks/session-start.js` | Host-installed Codex hook. |
-| `hooks/session-start.js` | `hosts/claude/hooks/session-start.js` or delete during cleanup | Current root-level path should either become explicit Claude host glue or be removed if superseded. Resolve during hook normalization. |
-| `hooks/telegram-context.js` | `hosts/claude/hooks/telegram-context.js` or delete during cleanup | Same as above: legacy root-level hook should not remain ambiguous after restructure. |
+| `hooks/session-start.js` | `hosts/claude/hooks/session-start.js` or delete during cleanup | Current root-level path should either become explicit Claude host glue or be removed if superseded. Prefer deleting thin root-level compatibility wrappers during the hard-cut restructure unless a concrete compatibility contract still requires them. |
+| `hooks/telegram-context.js` | delete during cleanup | Current file is a thin backcompat wrapper into Claude host glue. Prefer deleting root-level compatibility wrappers during the hard-cut restructure rather than carrying them forward. |
 | `skills/telegram/SKILL.md` | `hosts/claude/skills/telegram.md` and `hosts/codex/skills/telegram.md` | Source can be duplicated or generated from a shared template; shipped artifact is per-agent. |
-| `.claude-plugin/plugin.json` | `plugins/claude/<comm>/.claude-plugin/plugin.json` | Built artifact location per install-model doc. |
+| `.claude-plugin/plugin.json` | `plugins/claude/<comm>/.claude-plugin/plugin.json` | Built artifact location per install-model doc. The `.claude-plugin/` directory is intentionally nested inside each comm-specific plugin subtree. |
 | `.codex-plugin/plugin.json` | `plugins/codex/<comm>/.codex-plugin/plugin.json` | Built artifact location per install-model doc. |
 | `.mcp.json.template` | `plugins/codex/<comm>/.mcp.json` (generated artifact) or `hosts/codex/.mcp.json.template` | Exact template-vs-generated choice is implementation detail; Codex still owns this file at the host/plugin edge. |
 | `agents-comm-bus-core/**` | **pending decision #2** | Either remains a separate package or is folded into the new tree. Do not hard-code paths until decision #2 is resolved. |
