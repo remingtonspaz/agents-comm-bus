@@ -4,6 +4,7 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import type { AgentBridge, AgentBridgeFactory } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
+import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 export type { AgentBridge, AgentBridgeFactory, AgentBridgeContext, } from "./runtime/agent-bridge.js";
 export type { CommAdapterFactory, CommAdapterFactoryEnv, CommIpcDeps, } from "./runtime/comm-factory.js";
 export type { IpcMethodHandler } from "./runtime/ipc-method.js";
@@ -97,4 +98,20 @@ export declare function reloadAdapters(input: {
     blobs: ContentAddressedBlobStore;
     stateRoot: string;
 }): Promise<ReloadSummary>;
+/**
+ * Drain the shared `pendingInbound` queue, optionally scoped to one comm.
+ *
+ * When `params.comm` is a non-empty string, only entries whose
+ * `message.chat.comm` matches that filter are spliced out and returned;
+ * entries for other comms stay in the queue. This is the correct shape for
+ * multi-comm setups — without scoped removal, a `{ comm: "matrix" }` call
+ * would destructively drain ALL comms and the caller would merely filter
+ * client-side, losing the other comms' pending entries as collateral.
+ *
+ * When `comm` is omitted (or empty / non-string), the behavior is the
+ * historical global drain: the entire queue is spliced.
+ *
+ * Returned entries preserve queue order (oldest first).
+ */
+export declare function drainPendingInbound(queue: PendingInboundEntry[], params?: Record<string, unknown> | undefined): PendingInboundEntry[];
 //# sourceMappingURL=daemon.d.ts.map

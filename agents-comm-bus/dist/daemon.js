@@ -86,10 +86,10 @@ export async function runDaemon(options) {
             }
         }
     }
-    // Generic, comm-agnostic drain of the shared pendingInbound queue. Used by
-    // the MCP shim's `comm_check_messages` tool so the shim doesn't have to
-    // know any per-comm IPC method names.
-    ipcMethods.set("drain_pending_inbound", async () => pendingInbound.splice(0));
+    // Generic drain of the shared pendingInbound queue. Used by the MCP shim's
+    // `comm_check_messages` tool so the shim doesn't have to know any per-comm
+    // IPC method names.
+    ipcMethods.set("drain_pending_inbound", async (params) => drainPendingInbound(pendingInbound, params));
     const bridgesByMethod = new Map();
     for (const bridge of bridges) {
         for (const method of bridge.ipcMethods) {
@@ -317,6 +317,36 @@ export async function reloadAdapters(input) {
         }
     }
     return { ok: true, added, removed, updated, skipped };
+}
+/**
+ * Drain the shared `pendingInbound` queue, optionally scoped to one comm.
+ *
+ * When `params.comm` is a non-empty string, only entries whose
+ * `message.chat.comm` matches that filter are spliced out and returned;
+ * entries for other comms stay in the queue. This is the correct shape for
+ * multi-comm setups — without scoped removal, a `{ comm: "matrix" }` call
+ * would destructively drain ALL comms and the caller would merely filter
+ * client-side, losing the other comms' pending entries as collateral.
+ *
+ * When `comm` is omitted (or empty / non-string), the behavior is the
+ * historical global drain: the entire queue is spliced.
+ *
+ * Returned entries preserve queue order (oldest first).
+ */
+export function drainPendingInbound(queue, params = {}) {
+    const raw = params?.comm;
+    const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
+    if (!commFilter) {
+        return queue.splice(0);
+    }
+    const drained = [];
+    for (let i = queue.length - 1; i >= 0; i -= 1) {
+        if (queue[i].message.chat.comm === commFilter) {
+            drained.unshift(queue[i]);
+            queue.splice(i, 1);
+        }
+    }
+    return drained;
 }
 function sameStringSet(a, b) {
     if (a.length !== b.length)

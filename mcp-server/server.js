@@ -505,14 +505,16 @@ async function handleSendAttachment(args) {
 }
 
 async function handleCheckMessages(args) {
-  const messages = await daemonRequest("drain_pending_inbound");
-  const filtered = args.comm
-    ? messages.filter((m) => m?.message?.chat?.comm === args.comm)
-    : messages;
-  if (!filtered.length) {
+  // Scoped drain: when `comm` is supplied, the daemon removes only matching
+  // entries; entries for other comms stay queued. Without this scoping a
+  // filtered check would destructively drain every comm's pending inbound
+  // and merely filter results client-side, losing the other comms' messages.
+  const params = args.comm ? { comm: args.comm } : {};
+  const messages = await daemonRequest("drain_pending_inbound", params);
+  if (!messages.length) {
     return toolText(`No pending messages${args.comm ? ` from ${args.comm}` : ""}`);
   }
-  return toolText(formatMessages(filtered));
+  return toolText(formatMessages(messages));
 }
 
 function toolText(text) {

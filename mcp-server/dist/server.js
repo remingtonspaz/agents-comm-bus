@@ -28967,12 +28967,12 @@ async function handleSendAttachment(args) {
   return toolText(`Attachment sent via agents-comm-bus (${result.message_id})`);
 }
 async function handleCheckMessages(args) {
-  const messages = await daemonRequest("drain_pending_inbound");
-  const filtered = args.comm ? messages.filter((m) => m?.message?.chat?.comm === args.comm) : messages;
-  if (!filtered.length) {
+  const params = args.comm ? { comm: args.comm } : {};
+  const messages = await daemonRequest("drain_pending_inbound", params);
+  if (!messages.length) {
     return toolText(`No pending messages${args.comm ? ` from ${args.comm}` : ""}`);
   }
-  return toolText(formatMessages(filtered));
+  return toolText(formatMessages(messages));
 }
 function toolText(text) {
   return { content: [{ type: "text", text }] };
