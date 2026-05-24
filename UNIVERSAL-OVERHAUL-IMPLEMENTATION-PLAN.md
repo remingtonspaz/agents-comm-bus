@@ -87,10 +87,10 @@ The codebase is not blank. The v4 plan must grow from the repo’s current insta
 
 ### Existing Claude-side surfaces on `main`
 - `.claude-plugin/plugin.json`
-- `hooks/hooks.json`
-- `hooks/telegram-context.js`
-- `hooks/permission-telegram.cjs`
-- `hooks/session-start.js`
+- `hosts/claude/hooks/hooks.json`
+- `hosts/claude/hooks/user-prompt-submit.js`
+- `hosts/claude/hooks/permission-request.js`
+- `hosts/claude/hooks/session-start.js`
 - `mcp-server/server.js`
 - `scripts/enter-watcher.ps1`
 - `install.js`
@@ -101,8 +101,8 @@ The codebase is not blank. The v4 plan must grow from the repo’s current insta
 
 ### Existing Codex-side surfaces on `origin/codex`
 - `.codex-plugin/plugin.json`
-- `hooks/codex/user-prompt-submit.js`
-- `hooks/codex/permission-request.js`
+- `hosts/codex/hooks/user-prompt-submit.js`
+- `hosts/codex/hooks/permission-request.js`
 - `mcp-server/codex-app-server.js`
 - `install-codex.js`
 - Codex-specific README/install notes on that branch
@@ -147,10 +147,10 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Existing paths that become thin clients or agent-specific wrappers
 - `mcp-server/server.js`
 - `mcp-server/dist/server.js`
-- `hooks/telegram-context.js`
-- `hooks/permission-telegram.cjs`
-- `hooks/session-start.js`
-- `hooks/codex/*.js`
+- `hosts/claude/hooks/user-prompt-submit.js`
+- `hosts/claude/hooks/permission-request.js`
+- `hosts/claude/hooks/session-start.js`
+- `hosts/codex/hooks/*.js`
 - `mcp-server/codex-app-server.js`
 - `.claude-plugin/plugin.json`
 - `.codex-plugin/plugin.json`
@@ -592,12 +592,12 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 2.2 — Re-home Claude hook entrypoints
 
 **Files:**
-- Create: `hooks/claude/user-prompt-submit.js`
-- Create: `hooks/claude/permission-request.js`
-- Modify: `hooks/hooks.json`
+- Create: `hosts/claude/hooks/user-prompt-submit.js`
+- Create: `hosts/claude/hooks/permission-request.js`
+- Modify: `hosts/claude/hooks/hooks.json`
 - Retain wrappers or deprecation stubs for:
-  - `hooks/telegram-context.js`
-  - `hooks/permission-telegram.cjs`
+  - `hosts/claude/hooks/user-prompt-submit.js`
+  - `hosts/claude/hooks/permission-request.js`
 
 **Steps:**
 1. Move Claude-specific logic into Claude-named paths.
@@ -610,7 +610,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 2.3 — Replace queue draining with daemon-backed inbound delivery
 
 **Files:**
-- Modify: `hooks/claude/user-prompt-submit.js`
+- Modify: `hosts/claude/hooks/user-prompt-submit.js`
 - Modify: `core-daemon/adapters/agent/claude.ts`
 
 **Steps:**
@@ -625,7 +625,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 2.4 — Replace pending-permission flow with `Query`
 
 **Files:**
-- Modify: `hooks/claude/permission-request.js`
+- Modify: `hosts/claude/hooks/permission-request.js`
 - Modify: `core-daemon/adapters/agent/claude.ts`
 - Create: `tests/architecture/claude-query-roundtrip.test.ts`
 
@@ -642,7 +642,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 
 **Files:**
 - Modify: `scripts/enter-watcher.ps1`
-- Modify or retire: `hooks/session-start.js`
+- Modify or retire: `hosts/claude/hooks/session-start.js`
 - Create: `docs/architecture/claude-wake-path.md`
 
 **Steps:**
@@ -681,8 +681,8 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 ### Task 3.2 — Convert Codex hook entrypoints to daemon clients
 
 **Files:**
-- Modify: `hooks/codex/user-prompt-submit.js`
-- Modify: `hooks/codex/permission-request.js`
+- Modify: `hosts/codex/hooks/user-prompt-submit.js`
+- Modify: `hosts/codex/hooks/permission-request.js`
 - Modify: `install-codex.js`
 
 **Steps:**

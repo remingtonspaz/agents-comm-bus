@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -10,7 +10,7 @@ async function readRepoFile(relativePath: string): Promise<string> {
 }
 
 test("Codex UserPromptSubmit drains daemon inbound without legacy queue files", async () => {
-  const hook = await readRepoFile("hooks/codex/user-prompt-submit.js");
+  const hook = await readRepoFile("hosts/codex/hooks/user-prompt-submit.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_register_session/);
@@ -21,7 +21,7 @@ test("Codex UserPromptSubmit drains daemon inbound without legacy queue files", 
 });
 
 test("Codex PermissionRequest opens daemon query without pending-permission files", async () => {
-  const hook = await readRepoFile("hooks/codex/permission-request.js");
+  const hook = await readRepoFile("hosts/codex/hooks/permission-request.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_register_session/);
@@ -34,7 +34,7 @@ test("Codex PermissionRequest opens daemon query without pending-permission file
 });
 
 test("Codex SessionStart schedules bootstrap restart through daemon status", async () => {
-  const hook = await readRepoFile("hooks/codex/session-start.js");
+  const hook = await readRepoFile("hosts/codex/hooks/session-start.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_bootstrap_status/);
@@ -44,11 +44,16 @@ test("Codex SessionStart schedules bootstrap restart through daemon status", asy
   assert.match(hook, /codexThreadId/);
   assert.match(hook, /const threadId = codexThreadId\(hookInput\)/);
   assert.match(hook, /bootstrap-codex-session\.ps1/);
+  assert.match(hook, /const repoRoot = path\.resolve\(__dirname, '\.\.', '\.\.', '\.\.'\);/);
   assert.match(hook, /RestartCurrent/);
   assert.match(hook, /SameTerminal/);
   assert.match(hook, /args\.push\('-ThreadId', String\(threadId\)\)/);
   assert.match(hook, /RESTART_GUARD_MS/);
   assert.doesNotMatch(hook, /\.codex-telegram/);
+});
+
+test("Codex SessionStart resolves the bootstrapper from the repo root scripts directory", async () => {
+  await access(path.join(repoRoot, "scripts/bootstrap-codex-session.ps1"));
 });
 
 test("Codex bridge exposes bootstrap status IPC for SessionStart", async () => {

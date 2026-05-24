@@ -304,8 +304,8 @@ Live daemon verification:
   Codex hook config.
 - `mcp-server/server.js` - Codex runtime discovery and persistent session
   registration.
-- `hooks/codex/user-prompt-submit.js` - daemon inbound drain/injection hook.
-- `hooks/codex/permission-request.js` - daemon-backed permission query hook.
+- `hosts/codex/hooks/user-prompt-submit.js` - daemon inbound drain/injection hook.
+- `hosts/codex/hooks/permission-request.js` - daemon-backed permission query hook.
 - `core-daemon/adapters/agent/codex/{adapter,bridge}.ts` - Codex
   wake/steer, query, lease, and session handling.
 - `core-daemon/adapters/comm/telegram/factory.ts` - Telegram MCP

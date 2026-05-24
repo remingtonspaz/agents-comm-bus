@@ -6,7 +6,7 @@
  * wake is appropriate and writes trigger-enter into the registered wake dir.
  */
 
-import { ensureClaudeWakeWatcher } from './claude/wake-support.js';
+import { ensureClaudeWakeWatcher } from './wake-support.js';
 
 function log(message) {
   console.error(`[claude-session-start] ${message}`);

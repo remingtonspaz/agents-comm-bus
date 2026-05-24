@@ -9,8 +9,8 @@
  */
 
 import crypto from 'node:crypto';
-import { ensureDaemon } from '../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
-import { connectIpc } from '../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { ensureDaemon } from '../../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
+import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import {
   ensureClaudeWakeWatcher,
   findCmdAncestor,
@@ -211,7 +211,7 @@ async function main() {
     log: (message) => process.stderr.write(`[claude-permission-request] ${message}\n`),
   });
   const metadata = {
-    shimName: 'hooks/claude/permission-request.js',
+    shimName: 'hosts/claude/hooks/permission-request.js',
     agent: 'claude',
     project,
     hookEventName: 'PermissionRequest',

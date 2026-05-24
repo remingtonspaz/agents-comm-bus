@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/claude/user-prompt-submit.js"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/user-prompt-submit.js"
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/claude/permission-request.js"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/permission-request.js"
           }
         ]
       }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/session-start.js"
           }
         ]
       }

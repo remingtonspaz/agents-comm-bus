@@ -302,8 +302,8 @@ This is the first phase that is a **true refactor**, not only a move.
 - [ ] move Claude hooks
 - [ ] move Codex hooks
 - [ ] update plugin manifests / installer wiring to new paths
-- [ ] delete root-level thin wrappers such as `hooks/telegram-context.js` if no compatibility contract still requires them
-- [ ] resolve `hooks/session-start.js` explicitly as either a real host file path or deletion, per the settled path manifest
+- [ ] delete root-level thin wrappers such as `hosts/claude/hooks/user-prompt-submit.js` if no compatibility contract still requires them
+- [ ] resolve `hosts/claude/hooks/session-start.js` explicitly as either a real host file path or deletion, per the settled path manifest
 
 ### Guardrails
 - Do not leave ambiguous duplicate live hook paths if the plugin manifests already point at the new locations.
@@ -354,7 +354,7 @@ This is the first phase that is a **true refactor**, not only a move.
   - [ ] `src/adapters/agent/claude/`
   - [ ] `src/adapters/agent/codex/`
   - [ ] `mcp-server/server.js`
-  - [ ] root `hooks/telegram-context.js`
+  - [ ] root `hosts/claude/hooks/user-prompt-submit.js`
 - [ ] remove dead wrappers / dead build code
 - [ ] update any remaining install/help docs not already covered by canonical docs
 - [ ] rerun the full build/test matrix

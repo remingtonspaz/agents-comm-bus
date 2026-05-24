@@ -50,7 +50,7 @@ Open follow-ups (none blocking):
 ```
 ┌──────────────────┐         ┌─────────────────────────────┐         ┌──────────────┐
 │ Claude Code      │  hooks  │  agents-comm-bus daemon     │ polls   │   Telegram   │
-│  - hooks/claude/ ├────────►│  (per-user, WebSocket IPC)  │◄────────┤   bot API    │
+│  - hosts/claude/hooks/ ├────────►│  (per-user, WebSocket IPC)  │◄────────┤   bot API    │
 │  - MCP server    │  WS IPC │                             │ sends   │              │
 └──────────────────┘  WS IPC │  ┌────────────────────────┐ │         └──────────────┘
                         ┌────┼─►│ MessageBus             │ │
@@ -137,14 +137,23 @@ Three perpendicular layers meeting at the bus:
 ├── mcp-server/                # esbuild-bundled MCP shim exposing comm_* tools
 │   ├── server.js
 │   └── dist/server.js         # bundled, gitignored
-├── hooks/
+├── hosts/
 │   ├── claude/
-│   │   ├── permission-request.js   # PermissionRequest hook → claude_open_query
-│   │   ├── user-prompt-submit.js   # UserPromptSubmit hook → claude_drain_inbound
-│   │   └── wake-support.js         # spawns + targets enter-watcher.ps1
-│   ├── permission-telegram.cjs     # Compat wrapper → claude/permission-request.js
-│   ├── session-start.js            # SessionStart hook → ensures watcher
-│   └── telegram-context.js         # Compat wrapper → claude/user-prompt-submit.js
+│   │   ├── claude-mcp-shim.js      # Claude MCP shim host entrypoint
+│   │   └── hooks/
+│   │       ├── hooks.json          # Claude hook manifest
+│   │       ├── permission-request.js   # PermissionRequest hook → claude_open_query
+│   │       ├── session-start.js        # SessionStart hook → ensures watcher
+│   │       ├── user-prompt-submit.js   # UserPromptSubmit hook → claude_drain_inbound
+│   │       └── wake-support.js         # spawns + targets enter-watcher.ps1
+│   ├── codex/
+│   │   ├── codex-mcp-shim.js       # Codex MCP shim host entrypoint
+│   │   └── hooks/
+│   │       ├── permission-request.js   # PermissionRequest hook → codex_open_query
+│   │       ├── session-start.js        # SessionStart repair hook → managed restart
+│   │       └── user-prompt-submit.js   # UserPromptSubmit hook → codex_drain_inbound
+│   └── common/
+│       └── mcp-shim-shared.js      # Shared MCP shim plumbing
 ├── scripts/
 │   └── enter-watcher.ps1      # The wake watcher; polls trigger-enter, types via WM_CHAR
 ├── tests/architecture/        # bootstrap-race, ipc-versioning, plus per-adapter
@@ -315,7 +324,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
   thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1`
   and runtime discovery in `hosts/codex/codex-mcp-shim.js`.
 - **Codex `SessionStart` is first-prompt repair, not true process startup.**
-  `hooks/codex/session-start.js` only schedules a same-terminal bootstrap
+  `hosts/codex/hooks/session-start.js` only schedules a same-terminal bootstrap
   restart when daemon IPC reports that this project has a Codex comm account
   registration and the current process lacks a reachable managed app-server
   (`CODEX_APP_SERVER_URL` + `AGENTS_COMM_BUS_SESSION_ID`). It has a short
@@ -346,7 +355,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
   PowerShell scripts on Windows** — it's unreliable, the process often dies
   immediately or returns a phantom PID. Use `Start-Process -PassThru |
   Select-Object -ExpandProperty Id` via `execSync` instead. See
-  `hooks/claude/wake-support.js`.
+  `hosts/claude/hooks/wake-support.js`.
 - **Don't return the first `cmd.exe` walking up the process tree from a
   hook** — that's the *transient* cmd.exe (child of `claude.exe`), which
   dies when the hook exits. Walk the full chain and return the cmd.exe
@@ -447,7 +456,7 @@ All state under `~/.agents-comm-bus/` (per-user, never per-project):
 
 `<key>` is `<basename(project)>-<8-char-fnv1a-hash(project)>`. Computed by
 `claudeWakeDirForProject` in `core-daemon/bridges/claude/wake.ts`
-and the hook side in `hooks/claude/wake-support.js`.
+and the hook side in `hosts/claude/hooks/wake-support.js`.
 
 ## Configuration files
 
@@ -545,9 +554,9 @@ sidecar is per-machine; there is no automated git-backed sync.
 ## Historical notes (preserve)
 
 These findings predate the universal-overhaul refactor but remain technically
-correct. The plugin code referenced (`hooks/telegram-context.js`,
-`hooks/permission-telegram.cjs`) now exists as thin compatibility wrappers
-that delegate to `hooks/claude/*.js`; the original implementation lives in
+correct. The plugin code referenced (`hosts/claude/hooks/user-prompt-submit.js`,
+`hosts/claude/hooks/permission-request.js`) now exists as thin compatibility wrappers
+that delegate to `hosts/claude/hooks/*.js`; the original implementation lives in
 the `main` branch.
 
 ### Wake / keystroke delivery (sessions 4–5, 2026-01-13 & 2026-02-14)

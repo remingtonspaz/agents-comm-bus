@@ -75,8 +75,8 @@ Fix landed in commit `8fd20ea`:
 3. Updated `.mcp.json` to include `TELEGRAM_BOT_TOKEN` and
    `TELEGRAM_USER_ID` in the `telegram` server's `env` block.
 4. Repointed hooks in `.claude/settings.local.json`:
-   - `UserPromptSubmit` → `hooks/claude/user-prompt-submit.js`
-   - `PermissionRequest` → `hooks/claude/permission-request.js`
+   - `UserPromptSubmit` → `hosts/claude/hooks/user-prompt-submit.js`
+   - `PermissionRequest` → `hosts/claude/hooks/permission-request.js`
    - `SessionStart` unchanged.
 5. Diagnosed the missing inbound (issue 2) via daemon audit log and
    source read.
@@ -197,7 +197,7 @@ in the wake directory. In the current universal-overhaul build, that
 writer does not exist. `core-daemon/adapters/agent/claude.ts`
 and `bus.ts` contain zero references to `trigger-enter` or
 `claude-wake`. The only callers that touch those paths in the repo
-are `hooks/session-start.js` (spawns the watcher) and the watcher
+are `hosts/claude/hooks/session-start.js` (spawns the watcher) and the watcher
 script itself.
 
 Compounding: during this test the watcher itself was not running for
@@ -207,7 +207,7 @@ not exist at all. Either `SessionStart` did not fire (known
 Claude Code harness issue per `CLAUDE.md` Session 4), or
 `session-start.js` failed silently. The old plugin worked around
 the `SessionStart`-doesn't-fire bug by spawning the watcher from
-`UserPromptSubmit`; the new `hooks/claude/user-prompt-submit.js`
+`UserPromptSubmit`; the new `hosts/claude/hooks/user-prompt-submit.js`
 does not have that fallback.
 
 Concretely the gap covers three pieces:
@@ -217,7 +217,7 @@ Concretely the gap covers three pieces:
    `~/.agents-comm-bus/claude-wake/sessions/<session-key>/trigger-enter`.
    Query-wake suppression (see `claude-wake-path.md`) belongs at this
    layer too.
-2. **Session-key agreement.** `hooks/session-start.js` derives the
+2. **Session-key agreement.** `hosts/claude/hooks/session-start.js` derives the
    wake dir from `basename(project) + fnv1a(project)`. The daemon
    needs to write to the same key — easiest if the hook stores the
    resolved path in the daemon's session record at register time.
@@ -256,7 +256,7 @@ Verification work that narrowed the cause:
 - A direct IPC `claude_open_query` call against the running daemon
   inserted a row and emitted `query_opened` in audit. The daemon path
   is functional.
-- A synthetic invocation of `hooks/claude/permission-request.js` with
+- A synthetic invocation of `hosts/claude/hooks/permission-request.js` with
   a JSON payload fed via `cmd /c node hook.js < payload.json` also
   inserted a row. The hook code is functional when given a real
   stdin.
@@ -397,7 +397,7 @@ Code changes landed beyond the upstream commits:
 - **`core-daemon/daemon.ts`** — `openClaudeQuery` now calls
   `supersedeOpenQueriesForSession` immediately before `bus.openQuery`
   so each new permission/question query gets a clean slate (LE-10).
-- **`hooks/claude/wake-support.js`** — full rewrite of the watcher
+- **`hosts/claude/hooks/wake-support.js`** — full rewrite of the watcher
   spawn path (LE-7):
   - Uses `Start-Process -PassThru | Select-Object -ExpandProperty Id`
     via `execSync` so the spawned watcher actually persists (Node
@@ -430,7 +430,7 @@ Code changes landed beyond the upstream commits:
   `user-prompt-submit.js` already calls `ensureClaudeWakeWatcher`, so
   technically the workaround is wired — but the *first* prompt is
   still required to land before the daemon has anywhere to deliver
-  inbound. Worth investigating whether `hooks/session-start.js` ever
+  inbound. Worth investigating whether `hosts/claude/hooks/session-start.js` ever
   fires on this Claude Code version.
 - **LE-2, LE-3, LE-5, LE-6** remain open — small ergonomic /
   hygiene items, not blockers.
@@ -445,7 +445,7 @@ Code changes landed beyond the upstream commits:
   `supersedeOpenQueriesForSession`.
 - `agents-comm-bus/scripts/copy-assets.js` + `package.json` build
   script (commit `a57e1aa`).
-- `hooks/claude/wake-support.js` — `Start-Process`-based watcher
+- `hosts/claude/hooks/wake-support.js` — `Start-Process`-based watcher
   spawn + persistent-cmd.exe targeting.
 - `.mcp.json` (gitignored) — `telegram` MCP server env block.
 - `.claude/settings.local.json` (gitignored) — hook command paths.

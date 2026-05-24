@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { claudeWakeDirForProject } from '../../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js';
+import { claudeWakeDirForProject } from '../../../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -164,7 +164,7 @@ export function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, pid: existingPid, wakeDir, reason: 'already_running' };
   }
 
-  const watcherScript = path.resolve(__dirname, '..', '..', 'scripts', 'enter-watcher.ps1');
+  const watcherScript = path.resolve(__dirname, '..', '..', '..', 'scripts', 'enter-watcher.ps1');
   if (!fs.existsSync(watcherScript)) {
     log(`ERROR: Watcher script not found: ${watcherScript}`);
     return { started: false, wakeDir, reason: 'missing_script' };
