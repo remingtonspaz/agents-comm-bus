@@ -62,9 +62,10 @@ test("Codex bridge exposes bootstrap status IPC for SessionStart", async () => {
   assert.match(bridge, /bootstrap_required/);
 });
 
-test("Codex installer uses shared MCP shim without --agent split", async () => {
+test("Codex installer uses Codex MCP shim without --agent split", async () => {
   const installer = await readRepoFile("install-codex.js");
 
+  assert.match(installer, /codex-mcp-shim/);
   assert.match(installer, /mcp-server/);
   assert.match(installer, /dist/);
   assert.match(installer, /SessionStart/);
@@ -73,8 +74,9 @@ test("Codex installer uses shared MCP shim without --agent split", async () => {
   assert.doesNotMatch(installer, /\.codex-telegram/);
 });
 
-test("shared MCP shim can infer Codex metadata from Codex env", async () => {
-  const shim = await readRepoFile("mcp-server/server.js");
+test("Codex MCP shim owns Codex metadata inference", async () => {
+  const shim = await readRepoFile("hosts/codex/codex-mcp-shim.js");
+  const shared = await readRepoFile("hosts/common/mcp-shim-shared.js");
 
   assert.match(shim, /function agentInUse/);
   assert.match(shim, /CODEX_APP_SERVER_URL/);
@@ -82,6 +84,7 @@ test("shared MCP shim can infer Codex metadata from Codex env", async () => {
   assert.match(shim, /CODEX_THREAD_ID/);
   assert.match(shim, /replace_existing_lease/);
   assert.match(shim, /manage_app_server_lifecycle/);
+  assert.doesNotMatch(shared, /function agentInUse/);
 });
 
 test("Codex plugin manifest describes daemon-backed runtime", async () => {
@@ -90,5 +93,6 @@ test("Codex plugin manifest describes daemon-backed runtime", async () => {
   assert.equal(manifest.name, "telegram");
   assert.match(manifest.description, /agents-comm-bus/);
   assert.equal(manifest.mcpServers.telegram.command, "node");
+  assert.deepEqual(manifest.mcpServers.telegram.args, ["${CODEX_PLUGIN_ROOT}/mcp-server/dist/codex-mcp-shim.js"]);
   assert.match(manifest.interface.longDescription, /shared agents-comm-bus daemon/);
 });

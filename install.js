@@ -20,6 +20,7 @@ const __dirname = path.dirname(__filename);
 const STATE_ROOT = path.join(os.homedir(), '.agents-comm-bus');
 const CORE_DIR = path.join(__dirname, 'packages', 'core-contracts');
 const DAEMON_DIR = path.join(__dirname, 'agents-comm-bus');
+const HOSTS_DIR = path.join(__dirname, 'hosts');
 const MCP_SERVER_DIR = path.join(__dirname, 'mcp-server');
 const HOOKS_DIR = path.join(__dirname, 'hooks');
 const MCP_CONFIG = path.join(__dirname, '.mcp.json');
@@ -122,7 +123,7 @@ async function showStatus() {
     log('agents-comm-bus daemon not built', 'warn');
   }
 
-  if (checkPackageBuilt(MCP_SERVER_DIR, 'dist/server.js')) {
+  if (checkPackageBuilt(MCP_SERVER_DIR, 'dist/claude-mcp-shim.js')) {
     log('MCP IPC shim built', 'success');
   } else {
     log('MCP IPC shim not built', 'warn');
@@ -198,7 +199,7 @@ async function install() {
   try {
     installAndBuildPackage('packages/core-contracts', CORE_DIR);
     installAndBuildPackage('agents-comm-bus daemon', DAEMON_DIR);
-    installAndBuildPackage('MCP IPC shim', MCP_SERVER_DIR);
+    installAndBuildPackage('MCP IPC shims', HOSTS_DIR);
   } catch (e) {
     log(`Failed to install/build packages: ${e.message}`, 'error');
     process.exit(1);
@@ -212,7 +213,7 @@ async function install() {
       mcpServers: {
         telegram: {
           command: 'node',
-          args: [path.join(__dirname, 'mcp-server', 'server.js')],
+          args: [path.join(__dirname, 'mcp-server', 'dist', 'claude-mcp-shim.js')],
           env: {
             TELEGRAM_BOT_TOKEN: 'YOUR_BOT_TOKEN',
             TELEGRAM_USER_ID: 'YOUR_USER_ID',

@@ -1,0 +1,19 @@
+{
+  "name": "agents-comm-bus-hosts",
+  "version": "1.0.0",
+  "description": "Host-specific MCP shim entrypoints for agents-comm-bus",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "npm run build:claude && npm run build:codex",
+    "build:claude": "npx esbuild claude/claude-mcp-shim.js --bundle --platform=node --outfile=../mcp-server/dist/claude-mcp-shim.js --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\"",
+    "build:codex": "npx esbuild codex/codex-mcp-shim.js --bundle --platform=node --outfile=../mcp-server/dist/codex-mcp-shim.js --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

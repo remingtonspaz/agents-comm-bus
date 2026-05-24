@@ -64,3 +64,11 @@ test("legacy Claude hook paths are compatibility wrappers only", async () => {
   assert.doesNotMatch(userPromptWrapper, /queue\.json/);
   assert.doesNotMatch(permissionWrapper, /pending-permission\.json/);
 });
+
+
+test("Claude plugin manifest points at Claude MCP shim", async () => {
+  const manifest = JSON.parse(await readRepoFile(".claude-plugin/plugin.json"));
+
+  assert.equal(manifest.mcpServers.telegram.command, "node");
+  assert.deepEqual(manifest.mcpServers.telegram.args, ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/claude-mcp-shim.js"]);
+});

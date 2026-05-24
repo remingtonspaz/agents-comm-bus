@@ -19,7 +19,7 @@
     "telegram": {
       "command": "node",
       "args": [
-        "${CODEX_PLUGIN_ROOT}/mcp-server/dist/server.js"
+        "${CODEX_PLUGIN_ROOT}/mcp-server/dist/codex-mcp-shim.js"
       ]
     }
   },

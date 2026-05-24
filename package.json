@@ -3,10 +3,11 @@
   "version": "2.0.0",
   "description": "Telegram MCP integration for Claude Code",
   "type": "module",
-  "main": "mcp-server/server.js",
+  "main": "hosts/claude/claude-mcp-shim.js",
   "workspaces": [
     "agents-comm-bus",
     "packages/*",
+    "hosts",
     "mcp-server"
   ],
   "scripts": {
@@ -40,7 +41,12 @@
   "engines": {
     "node": ">=22"
   },
-  "keywords": ["telegram", "claude-code", "mcp", "automation"],
+  "keywords": [
+    "telegram",
+    "claude-code",
+    "mcp",
+    "automation"
+  ],
   "author": "Claude Code User",
   "license": "MIT"
 }

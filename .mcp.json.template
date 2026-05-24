@@ -2,7 +2,7 @@
   "mcpServers": {
     "telegram": {
       "command": "node",
-      "args": ["ABSOLUTE_REPO_PATH/mcp-server/dist/server.js"]
+      "args": ["ABSOLUTE_REPO_PATH/mcp-server/dist/claude-mcp-shim.js"]
     }
   }
 }
