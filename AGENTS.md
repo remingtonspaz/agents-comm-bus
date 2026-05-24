@@ -311,9 +311,9 @@ version-compatible handshake before deciding whether to reuse or respawn.
   delivered messages from `pendingInbound` so a later `UserPromptSubmit` does
   not inject duplicates.
 - **Path-only Codex MCP config is intentional.** Global Codex config should
-  only point at `mcp-server/dist/claude-mcp-shim.js`. Session-specific app-server URL,
+  only point at `mcp-server/dist/codex-mcp-shim.js`. Session-specific app-server URL,
   thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1`
-  and runtime discovery in `hosts/claude/claude-mcp-shim.js`.
+  and runtime discovery in `hosts/codex/codex-mcp-shim.js`.
 - **Codex `SessionStart` is first-prompt repair, not true process startup.**
   `hooks/codex/session-start.js` only schedules a same-terminal bootstrap
   restart when daemon IPC reports that this project has a Codex comm account
@@ -699,7 +699,7 @@ High-signal findings:
   `~/.agents-comm-bus/codex-bootstrapper/sessions/`. Same-terminal restart
   relays pass `-StopPreviousAppServer` so repeated bootstrap runs can replace
   their own prior app-server window/process.
-- The global Codex MCP entry should be path-only. `hosts/claude/claude-mcp-shim.js`
+- The global Codex MCP entry should be path-only. `hosts/codex/codex-mcp-shim.js`
   discovers Codex runtime context and performs persistent
   `codex_register_session` with `persist_after_disconnect`.
 - `upsertSession` must not clobber lease columns either. Hook registrations
