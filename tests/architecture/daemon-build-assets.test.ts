@@ -15,7 +15,7 @@ describe("agents-comm-bus build assets", () => {
     assert.match(packageJson.scripts?.build ?? "", /copy-assets\.js/);
 
     const builtSchema = await readFile(
-      resolve(repoRoot, "agents-comm-bus/dist/storage/schema/001_initial.sql"),
+      resolve(repoRoot, "agents-comm-bus/dist/core-daemon/storage/schema/001_initial.sql"),
       "utf8",
     );
     assert.match(builtSchema, /CREATE TABLE IF NOT EXISTS account_registrations/);

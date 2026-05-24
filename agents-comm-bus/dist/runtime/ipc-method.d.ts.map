@@ -1,1 +1,0 @@
-{"version":3,"file":"ipc-method.d.ts","sourceRoot":"","sources":["../../../core-daemon/runtime/ipc-method.ts"],"names":[],"mappings":"AAAA;;;GAGG;AACH,MAAM,MAAM,gBAAgB,GAAG,CAC7B,MAAM,EAAE,MAAM,CAAC,MAAM,EAAE,OAAO,CAAC,EAC/B,GAAG,EAAE;IAAE,MAAM,CAAC,EAAE;QAAE,IAAI,CAAC,KAAK,EAAE,OAAO,EAAE,OAAO,EAAE,MAAM,IAAI,GAAG,IAAI,CAAA;KAAE,CAAA;CAAE,KAClE,OAAO,CAAC,OAAO,CAAC,CAAC"}
