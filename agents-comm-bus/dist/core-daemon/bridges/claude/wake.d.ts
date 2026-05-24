@@ -1,4 +1,4 @@
-import type { Conversation, SessionId, Storage } from "../../../packages/core-contracts/dist/index.js";
+import type { Conversation, SessionId, Storage } from "agents-comm-bus-core";
 export interface ClaudeWakeRegistration {
     session: SessionId;
     project: string;

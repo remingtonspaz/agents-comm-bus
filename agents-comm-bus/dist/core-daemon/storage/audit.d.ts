@@ -1,4 +1,4 @@
-import type { AuditEvent, AuditStore } from "../../packages/core-contracts/dist/storage/audit-store.js";
+import type { AuditEvent, AuditStore } from "agents-comm-bus-core";
 export declare class JsonlAuditStore implements AuditStore {
     private readonly root;
     constructor(root: string);

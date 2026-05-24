@@ -1,4 +1,4 @@
-import type { AccountRegistration, CommId, Storage } from "../../packages/core-contracts/dist/index.js";
+import type { AccountRegistration, CommId, Storage } from "agents-comm-bus-core";
 export interface PerBotSelector {
     comm: CommId;
     /** Override: caller passed --bot-id directly. Skip resolution. */

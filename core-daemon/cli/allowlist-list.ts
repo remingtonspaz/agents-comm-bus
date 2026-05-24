@@ -2,7 +2,7 @@ import type {
   AllowlistGlobalEntry,
   AllowlistPerBotEntry,
   CommId,
-} from "../../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 import { resolvePerBotSelector, type PerBotSelector } from "./allowlist-shared.js";

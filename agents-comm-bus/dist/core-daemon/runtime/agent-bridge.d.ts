@@ -1,4 +1,4 @@
-import type { AccountId, AgentId, CommAdapter, CommId, Conversation, Storage } from "../../packages/core-contracts/dist/index.js";
+import type { AccountId, AgentId, CommAdapter, CommId, Conversation, Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../bus.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 export interface AgentBridgeContext {

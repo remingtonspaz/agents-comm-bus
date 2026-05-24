@@ -1,4 +1,4 @@
-import type { AccountId, AccountRegistration, CommAdapter, CommId } from "../../packages/core-contracts/dist/index.js";
+import type { AccountId, AccountRegistration, CommAdapter, CommId } from "agents-comm-bus-core";
 import type { CommAdapterFactory, CommAdapterCreateContext, CommAdapterFactoryEnv, CommIpcDeps, ResolveCredentialsContext } from "../../core-daemon/runtime/comm-factory.js";
 import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
 export interface TelegramCredentials {

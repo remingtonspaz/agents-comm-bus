@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { SCHEMA_VERSION_CONVERSATION, SCHEMA_VERSION_QUERY, assertHasOrigin, isForeignBotAllowed, RecentSeenCache, tryResolve, } from "../packages/core-contracts/dist/index.js";
+import { SCHEMA_VERSION_CONVERSATION, SCHEMA_VERSION_QUERY, assertHasOrigin, isForeignBotAllowed, RecentSeenCache, tryResolve, } from "agents-comm-bus-core";
 export class MessageBus {
     options;
     /**

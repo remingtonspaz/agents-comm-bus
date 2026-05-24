@@ -19,7 +19,7 @@ import type {
   CommAdapter,
   CommId,
   SessionId,
-} from "../../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 
 import type { MessageBus } from "../../core-daemon/bus.js";
 import type {

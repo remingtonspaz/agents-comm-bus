@@ -1,4 +1,4 @@
-import type { BlobRef, BlobStore } from "../../packages/core-contracts/dist/storage/blob-store.js";
+import type { BlobRef, BlobStore } from "agents-comm-bus-core";
 export declare class ContentAddressedBlobStore implements BlobStore {
     private readonly root;
     constructor(root: string);

@@ -1,5 +1,5 @@
 import TelegramBot from "node-telegram-bot-api";
-import type { AccountId, BlobStore, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "../../packages/core-contracts/dist/index.js";
+import type { AccountId, BlobStore, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
 export interface TelegramCommAdapterOptions {
     botToken: string;
     /**

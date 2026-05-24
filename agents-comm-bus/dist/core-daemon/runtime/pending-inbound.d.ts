@@ -1,4 +1,4 @@
-import type { Conversation, Message } from "../../packages/core-contracts/dist/index.js";
+import type { Conversation, Message } from "agents-comm-bus-core";
 /**
  * Shared "messages waiting for an agent to drain" queue. Populated by the
  * daemon's dispatch sink on every inbound conversation; drained by agent

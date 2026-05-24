@@ -1,7 +1,7 @@
-import type { ResolvedDecision } from "../../packages/core-contracts/dist/queries.js";
-import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "../../packages/core-contracts/dist/records/index.js";
-import type { SessionLeaseOwner, Storage } from "../../packages/core-contracts/dist/storage/storage.js";
-import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../packages/core-contracts/dist/types.js";
+import type { ResolvedDecision } from "agents-comm-bus-core";
+import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
+import type { SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
     private readonly db;

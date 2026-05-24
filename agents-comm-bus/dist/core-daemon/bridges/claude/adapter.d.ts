@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentCapabilities, AgentId, ControlChannel, Message, Query, QueryChannel, QueryId, ResolvedDecision, SessionId } from "../../../packages/core-contracts/dist/index.js";
+import type { AgentAdapter, AgentCapabilities, AgentId, ControlChannel, Message, Query, QueryChannel, QueryId, ResolvedDecision, SessionId } from "agents-comm-bus-core";
 export type ClaudePromptType = "permission" | "question" | "plan_approval" | "plan_entry";
 export interface ClaudeHookPayload {
     hook_event_name?: string;

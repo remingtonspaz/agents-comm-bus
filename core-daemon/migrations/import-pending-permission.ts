@@ -1,4 +1,4 @@
-import type { QueryId, SessionId } from "../../packages/core-contracts/dist/types.js";
+import type { QueryId, SessionId } from "agents-comm-bus-core";
 import type { LegacyPendingPermission, LegacyStateFile } from "./legacy-readers.js";
 import { TRANSITION_CLEANUP_RELEASE, TRANSITION_ONLY_MARKER } from "./legacy-readers.js";
 
