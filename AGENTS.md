@@ -86,14 +86,14 @@ Three perpendicular layers meeting at the bus:
   (`core-daemon/bridges/codex/bridge.ts`) handles Codex IPC methods, app-server
   wake/steer capability dispatch, and blocking permission-query resolution.
   Future Gemini / etc. bridges live as siblings under `core-daemon/bridges/`.
-- **Comm side** — `TelegramCommAdapter` (in `adapters/comm/telegram/adapter.ts`)
+- **Comm side** — `TelegramCommAdapter` (in `adapters/telegram/adapter.ts`)
   plus `TelegramCommAdapterFactory` (`factory.ts`) handles polling, sending,
   callback events, credential resolution, and contributes its MCP-tool IPC
-  surface. Future Discord / Slack / Matrix adapters live as siblings under
-  `adapters/comm/`.
+  surface. Future Discord / Slack / Matrix adapters live as sibling top-level
+  folders under `adapters/`.
 - **Core daemon** — `runDaemon(options)` in `daemon.ts` knows nothing about
   specific agents or comms. The *only* file that imports both Claude- and
-  Telegram-specific factories is `serve.ts` (32 lines, the composition root).
+  Telegram-specific factories is `serve.ts` (the composition root).
 
 ## Repo layout
 
@@ -105,10 +105,11 @@ Three perpendicular layers meeting at the bus:
 │       ├── records/           # AccountRegistration, Conversation, Query, Session
 │       ├── storage/           # Storage interface, MigrationRunner
 │       └── ...
+├── adapters/
+│   └── telegram/
+│       ├── adapter.ts         # TelegramCommAdapter
+│       └── factory.ts         # TelegramCommAdapterFactory + MCP IPC surface
 ├── core-daemon/               # Daemon source (compiled into agents-comm-bus/dist/).
-│   ├── adapters/comm/telegram/
-│   │   ├── adapter.ts         # TelegramCommAdapter
-│   │   └── factory.ts         # TelegramCommAdapterFactory + MCP IPC surface
 │   ├── bridges/
 │   │   ├── claude/
 │   │   │   ├── adapter.ts     # ClaudeAgentAdapter (v3 contract, currently unused)

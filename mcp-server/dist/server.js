@@ -24777,13 +24777,13 @@ var StdioServerTransport = class {
   }
 };
 
-// ../agents-comm-bus/dist/bootstrap/ensure-daemon.js
+// ../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { mkdir as mkdir2, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 
-// ../agents-comm-bus/dist/config.js
+// ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
 var DAEMON_VERSION = "0.1.1";
 var IPC_PROTOCOL_VERSION = "1.0.0";
@@ -24791,7 +24791,7 @@ var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
 
-// ../agents-comm-bus/dist/paths.js
+// ../agents-comm-bus/dist/core-daemon/paths.js
 import os from "node:os";
 import path from "node:path";
 function stateRoot(options = {}) {
@@ -24813,7 +24813,7 @@ function resolveStatePaths(options = {}) {
   };
 }
 
-// ../agents-comm-bus/dist/ipc/protocol.js
+// ../agents-comm-bus/dist/core-daemon/ipc/protocol.js
 var IPC_MESSAGE_TYPES = {
   clientHello: "client.hello",
   daemonHello: "daemon.hello",
@@ -24860,7 +24860,7 @@ function cryptoRandomId() {
   return `ipc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 }
 
-// ../agents-comm-bus/dist/ipc/client.js
+// ../agents-comm-bus/dist/core-daemon/ipc/client.js
 async function connectIpc(options) {
   const host = options.host ?? IPC_HOST;
   const timeoutMs = options.timeoutMs ?? 1e3;
@@ -24931,7 +24931,7 @@ async function sendRequest(socket, request) {
   });
 }
 
-// ../agents-comm-bus/dist/bootstrap/handshake.js
+// ../agents-comm-bus/dist/core-daemon/bootstrap/handshake.js
 async function probeDaemon(options) {
   const connection = await connectIpc({
     port: options.port,
@@ -24944,7 +24944,7 @@ async function probeDaemon(options) {
   return connection.hello;
 }
 
-// ../agents-comm-bus/dist/bootstrap/spawn-lock.js
+// ../agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.js
 import { constants } from "node:fs";
 import { open, mkdir, readFile, rm } from "node:fs/promises";
 import path2 from "node:path";
@@ -24983,7 +24983,7 @@ function isAlreadyExistsError(error2) {
   return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "EEXIST";
 }
 
-// ../agents-comm-bus/dist/bootstrap/ensure-daemon.js
+// ../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js
 async function ensureDaemon(options = {}) {
   const paths = resolveStatePaths(options);
   await mkdir2(paths.root, { recursive: true });
@@ -25146,7 +25146,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ../agents-comm-bus/dist/ipc/persistent-client.js
+// ../agents-comm-bus/dist/core-daemon/ipc/persistent-client.js
 var DisconnectedError = class extends Error {
   retryable = true;
   constructor(message = "agents-comm-bus IPC connection unavailable") {
@@ -25692,9 +25692,9 @@ function resolveDaemonEntry() {
   const here = fileURLToPath2(import.meta.url);
   const candidates = [
     // Bundled runtime: mcp-server/dist/server.js -> repo root.
-    new URL("../../agents-comm-bus/dist/serve.js", import.meta.url),
+    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
     // Source runtime: mcp-server/server.js -> repo root.
-    new URL("../agents-comm-bus/dist/serve.js", import.meta.url)
+    new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url)
   ].map((url) => fileURLToPath2(url));
   const found = candidates.find((candidate) => existsSync(candidate));
   if (!found) {
