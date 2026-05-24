@@ -256,10 +256,23 @@ Send Claude Code slash commands from Telegram using `;` as the prefix (since Tel
 claude-code-telegram/
 ├── .claude-plugin/
 │   └── plugin.json              # Plugin metadata
-├── hooks/
-│   ├── telegram-context.js      # Injects Telegram messages into prompts
-│   ├── permission-telegram.cjs  # Sends permission requests to Telegram
-│   └── session-start.js         # Auto-spawns watcher on session start
+├── hosts/
+│   ├── claude/
+│   │   ├── claude-mcp-shim.js   # Claude MCP shim entrypoint
+│   │   └── hooks/
+│   │       ├── hooks.json       # Claude hook manifest
+│   │       ├── permission-request.js
+│   │       ├── session-start.js
+│   │       ├── user-prompt-submit.js
+│   │       └── wake-support.js
+│   ├── codex/
+│   │   ├── codex-mcp-shim.js    # Codex MCP shim entrypoint
+│   │   └── hooks/
+│   │       ├── permission-request.js
+│   │       ├── session-start.js
+│   │       └── user-prompt-submit.js
+│   └── common/
+│       └── mcp-shim-shared.js   # Shared MCP shim plumbing
 ├── skills/
 │   └── telegram/
 │       └── SKILL.md             # Claude skill instructions

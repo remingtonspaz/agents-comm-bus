@@ -164,7 +164,7 @@ export function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, pid: existingPid, wakeDir, reason: 'already_running' };
   }
 
-  const watcherScript = path.resolve(__dirname, '..', '..', 'scripts', 'enter-watcher.ps1');
+  const watcherScript = path.resolve(__dirname, '..', '..', '..', 'scripts', 'enter-watcher.ps1');
   if (!fs.existsSync(watcherScript)) {
     log(`ERROR: Watcher script not found: ${watcherScript}`);
     return { started: false, wakeDir, reason: 'missing_script' };

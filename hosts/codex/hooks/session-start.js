@@ -31,7 +31,7 @@ const watchdog = setTimeout(() => {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '..', '..');
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const bootstrapperPath = path.join(repoRoot, 'scripts', 'bootstrap-codex-session.ps1');
 
 function stableSessionId(hookInput) {

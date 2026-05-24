@@ -87,7 +87,7 @@ The codebase is not blank. The v4 plan must grow from the repo’s current insta
 
 ### Existing Claude-side surfaces on `main`
 - `.claude-plugin/plugin.json`
-- `hooks/hooks.json`
+- `hosts/claude/hooks/hooks.json`
 - `hosts/claude/hooks/user-prompt-submit.js`
 - `hosts/claude/hooks/permission-request.js`
 - `hosts/claude/hooks/session-start.js`
@@ -594,7 +594,7 @@ Land the new architecture alongside the old entrypoints first. Only flip runtime
 **Files:**
 - Create: `hosts/claude/hooks/user-prompt-submit.js`
 - Create: `hosts/claude/hooks/permission-request.js`
-- Modify: `hooks/hooks.json`
+- Modify: `hosts/claude/hooks/hooks.json`
 - Retain wrappers or deprecation stubs for:
   - `hosts/claude/hooks/user-prompt-submit.js`
   - `hosts/claude/hooks/permission-request.js`

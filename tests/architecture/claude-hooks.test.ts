@@ -52,7 +52,12 @@ test("Claude wake support uses daemon wake directory and watcher pid marker", as
   assert.match(hook, /claudeWakeDirForProject/);
   assert.match(hook, /watcher\.pid/);
   assert.match(hook, /enter-watcher\.ps1/);
+  assert.match(hook, /path\.resolve\(__dirname, '\.\.', '\.\.', '\.\.', 'scripts', 'enter-watcher\.ps1'\)/);
   assert.doesNotMatch(hook, /\.claude-telegram/);
+});
+
+test("Claude wake support resolves the watcher script from the repo root scripts directory", async () => {
+  await access(path.join(repoRoot, "scripts/enter-watcher.ps1"));
 });
 
 test("legacy root Claude compatibility wrapper paths are removed", async () => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -44,11 +44,16 @@ test("Codex SessionStart schedules bootstrap restart through daemon status", asy
   assert.match(hook, /codexThreadId/);
   assert.match(hook, /const threadId = codexThreadId\(hookInput\)/);
   assert.match(hook, /bootstrap-codex-session\.ps1/);
+  assert.match(hook, /const repoRoot = path\.resolve\(__dirname, '\.\.', '\.\.', '\.\.'\);/);
   assert.match(hook, /RestartCurrent/);
   assert.match(hook, /SameTerminal/);
   assert.match(hook, /args\.push\('-ThreadId', String\(threadId\)\)/);
   assert.match(hook, /RESTART_GUARD_MS/);
   assert.doesNotMatch(hook, /\.codex-telegram/);
+});
+
+test("Codex SessionStart resolves the bootstrapper from the repo root scripts directory", async () => {
+  await access(path.join(repoRoot, "scripts/bootstrap-codex-session.ps1"));
 });
 
 test("Codex bridge exposes bootstrap status IPC for SessionStart", async () => {

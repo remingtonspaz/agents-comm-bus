@@ -137,14 +137,23 @@ Three perpendicular layers meeting at the bus:
 ├── mcp-server/                # esbuild-bundled MCP shim exposing comm_* tools
 │   ├── server.js
 │   └── dist/server.js         # bundled, gitignored
-├── hooks/
+├── hosts/
 │   ├── claude/
-│   │   ├── permission-request.js   # PermissionRequest hook → claude_open_query
-│   │   ├── user-prompt-submit.js   # UserPromptSubmit hook → claude_drain_inbound
-│   │   └── wake-support.js         # spawns + targets enter-watcher.ps1
-│   ├── permission-telegram.cjs     # Compat wrapper → claude/permission-request.js
-│   ├── session-start.js            # SessionStart hook → ensures watcher
-│   └── telegram-context.js         # Compat wrapper → claude/user-prompt-submit.js
+│   │   ├── claude-mcp-shim.js      # Claude MCP shim host entrypoint
+│   │   └── hooks/
+│   │       ├── hooks.json          # Claude hook manifest
+│   │       ├── permission-request.js   # PermissionRequest hook → claude_open_query
+│   │       ├── session-start.js        # SessionStart hook → ensures watcher
+│   │       ├── user-prompt-submit.js   # UserPromptSubmit hook → claude_drain_inbound
+│   │       └── wake-support.js         # spawns + targets enter-watcher.ps1
+│   ├── codex/
+│   │   ├── codex-mcp-shim.js       # Codex MCP shim host entrypoint
+│   │   └── hooks/
+│   │       ├── permission-request.js   # PermissionRequest hook → codex_open_query
+│   │       ├── session-start.js        # SessionStart repair hook → managed restart
+│   │       └── user-prompt-submit.js   # UserPromptSubmit hook → codex_drain_inbound
+│   └── common/
+│       └── mcp-shim-shared.js      # Shared MCP shim plumbing
 ├── scripts/
 │   └── enter-watcher.ps1      # The wake watcher; polls trigger-enter, types via WM_CHAR
 ├── tests/architecture/        # bootstrap-race, ipc-versioning, plus per-adapter
