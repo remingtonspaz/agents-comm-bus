@@ -9,8 +9,8 @@
  */
 
 import crypto from 'node:crypto';
-import { ensureDaemon } from '../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
-import { connectIpc } from '../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { ensureDaemon } from '../../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
+import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import {
   ensureClaudeWakeWatcher,
   findCmdAncestor,
@@ -141,7 +141,7 @@ async function main() {
   const cmdInfo = findCmdAncestor();
   const claudePid = cmdInfo?.claudePid;
   const metadata = {
-    shimName: 'hooks/claude/user-prompt-submit.js',
+    shimName: 'hosts/claude/hooks/user-prompt-submit.js',
     agent: 'claude',
     project,
     hookEventName: 'UserPromptSubmit',

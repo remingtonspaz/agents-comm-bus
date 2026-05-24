@@ -25,9 +25,9 @@ const configPath = path.join(codexHome, 'config.toml');
 const projectCodexDir = path.join(projectDir, '.codex');
 const projectConfigPath = path.join(projectCodexDir, 'config.toml');
 const serverPath = path.resolve(__dirname, 'mcp-server', 'dist', 'codex-mcp-shim.js');
-const sessionStartHookPath = path.resolve(__dirname, 'hooks', 'codex', 'session-start.js');
-const userPromptHookPath = path.resolve(__dirname, 'hooks', 'codex', 'user-prompt-submit.js');
-const permissionHookPath = path.resolve(__dirname, 'hooks', 'codex', 'permission-request.js');
+const sessionStartHookPath = path.resolve(__dirname, 'hosts', 'codex', 'hooks', 'session-start.js');
+const userPromptHookPath = path.resolve(__dirname, 'hosts', 'codex', 'hooks', 'user-prompt-submit.js');
+const permissionHookPath = path.resolve(__dirname, 'hosts', 'codex', 'hooks', 'permission-request.js');
 if (!fs.existsSync(serverPath)) {
   console.error(`error: bundled MCP server not found at ${serverPath}`);
   console.error('hint:  cd hosts && npm install && npm run build');

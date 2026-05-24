@@ -170,7 +170,7 @@ The hooks should be configured automatically if you place this plugin in your pr
         "hooks": [
           {
             "type": "command",
-            "command": "node path/to/hooks/telegram-context.js"
+            "command": "node path/to/hosts/claude/hooks/user-prompt-submit.js"
           }
         ]
       }
@@ -181,7 +181,7 @@ The hooks should be configured automatically if you place this plugin in your pr
         "hooks": [
           {
             "type": "command",
-            "command": "node path/to/hooks/permission-telegram.cjs"
+            "command": "node path/to/hosts/claude/hooks/permission-request.js"
           }
         ]
       }
@@ -192,7 +192,7 @@ The hooks should be configured automatically if you place this plugin in your pr
         "hooks": [
           {
             "type": "command",
-            "command": "node path/to/hooks/session-start.js"
+            "command": "node path/to/hosts/claude/hooks/session-start.js"
           }
         ]
       }

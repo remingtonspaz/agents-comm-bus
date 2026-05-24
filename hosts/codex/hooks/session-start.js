@@ -16,8 +16,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { ensureDaemon } from '../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
-import { connectIpc } from '../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { ensureDaemon } from '../../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
+import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 
 const CLIENT_VERSION = 'codex-session-start-bootstrap';
 const RESTART_GUARD_MS = 60_000;
@@ -211,7 +211,7 @@ async function main() {
   const session = stableSessionId(hookInput);
   const project = process.cwd();
   const metadata = {
-    shimName: 'hooks/codex/session-start.js',
+    shimName: 'hosts/codex/hooks/session-start.js',
     agent: 'codex',
     project,
     hookEventName: 'SessionStart',

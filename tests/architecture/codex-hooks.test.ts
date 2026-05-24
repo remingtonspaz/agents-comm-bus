@@ -10,7 +10,7 @@ async function readRepoFile(relativePath: string): Promise<string> {
 }
 
 test("Codex UserPromptSubmit drains daemon inbound without legacy queue files", async () => {
-  const hook = await readRepoFile("hooks/codex/user-prompt-submit.js");
+  const hook = await readRepoFile("hosts/codex/hooks/user-prompt-submit.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_register_session/);
@@ -21,7 +21,7 @@ test("Codex UserPromptSubmit drains daemon inbound without legacy queue files", 
 });
 
 test("Codex PermissionRequest opens daemon query without pending-permission files", async () => {
-  const hook = await readRepoFile("hooks/codex/permission-request.js");
+  const hook = await readRepoFile("hosts/codex/hooks/permission-request.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_register_session/);
@@ -34,7 +34,7 @@ test("Codex PermissionRequest opens daemon query without pending-permission file
 });
 
 test("Codex SessionStart schedules bootstrap restart through daemon status", async () => {
-  const hook = await readRepoFile("hooks/codex/session-start.js");
+  const hook = await readRepoFile("hosts/codex/hooks/session-start.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_bootstrap_status/);

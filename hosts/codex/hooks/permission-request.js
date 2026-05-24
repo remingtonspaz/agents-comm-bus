@@ -9,8 +9,8 @@
  */
 
 import crypto from 'node:crypto';
-import { ensureDaemon } from '../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
-import { connectIpc } from '../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { ensureDaemon } from '../../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
+import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 
 const CLIENT_VERSION = 'codex-hook-phase3';
 const DEFAULT_TTL_SECONDS = 9 * 60;
@@ -106,7 +106,7 @@ async function main() {
   const session = stableSessionId(hookInput);
   const project = process.cwd();
   const metadata = {
-    shimName: 'hooks/codex/permission-request.js',
+    shimName: 'hosts/codex/hooks/permission-request.js',
     agent: 'codex',
     project,
     hookEventName: 'PermissionRequest',

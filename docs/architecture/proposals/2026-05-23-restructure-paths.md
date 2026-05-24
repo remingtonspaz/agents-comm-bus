@@ -52,7 +52,7 @@
 | `hooks/codex/permission-request.js` | `hosts/codex/hooks/permission-request.js` | Host-installed Codex hook. |
 | `hooks/codex/user-prompt-submit.js` | `hosts/codex/hooks/user-prompt-submit.js` | Host-installed Codex hook. |
 | `hooks/codex/session-start.js` | `hosts/codex/hooks/session-start.js` | Host-installed Codex hook. |
-| `hooks/session-start.js` | `hosts/claude/hooks/session-start.js` or delete during cleanup | Current root-level path should either become explicit Claude host glue or be removed if superseded. Prefer deleting thin root-level compatibility wrappers during the hard-cut restructure unless a concrete compatibility contract still requires them. |
+| `hooks/session-start.js` | `hosts/claude/hooks/session-start.js` | Current root-level path became explicit Claude host glue. |
 | `hooks/telegram-context.js` | delete during cleanup | Current file is a thin backcompat wrapper into Claude host glue. Prefer deleting root-level compatibility wrappers during the hard-cut restructure rather than carrying them forward. |
 | `skills/telegram/SKILL.md` | `hosts/claude/skills/telegram.md` and `hosts/codex/skills/telegram.md` | Source can be duplicated or generated from a shared template; shipped artifact is per-agent. |
 | `.claude-plugin/plugin.json` | `plugins/claude/<comm>/.claude-plugin/plugin.json` | Built artifact location per install-model doc. The `.claude-plugin/` directory is intentionally nested inside each comm-specific plugin subtree. |

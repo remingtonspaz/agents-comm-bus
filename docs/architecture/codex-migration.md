@@ -30,9 +30,9 @@ report the calling agent while daemon ownership remains in v4 storage.
 
 Codex hooks are thin daemon clients:
 
-- `hooks/codex/user-prompt-submit.js` calls `ensureDaemon()`,
+- `hosts/codex/hooks/user-prompt-submit.js` calls `ensureDaemon()`,
   `codex_register_session`, then `codex_drain_inbound`.
-- `hooks/codex/permission-request.js` calls `ensureDaemon()`,
+- `hosts/codex/hooks/permission-request.js` calls `ensureDaemon()`,
   `codex_register_session`, then blocks on `codex_open_query`.
 
 The permission hook fails closed if the daemon cannot resolve a decision before
