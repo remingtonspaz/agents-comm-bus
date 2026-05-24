@@ -1,12 +1,12 @@
 {
   "name": "telegram-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for Telegram integration with Claude Code",
+  "description": "Deprecated compatibility package; build host-specific MCP shims from ../hosts",
   "type": "module",
-  "main": "server.js",
+  "main": "dist/claude-mcp-shim.js",
   "scripts": {
-    "start": "node server.js",
-    "build": "npx esbuild server.js --bundle --platform=node --outfile=dist/server.js --format=esm --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\""
+    "start": "node dist/claude-mcp-shim.js",
+    "build": "npm --prefix ../hosts run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

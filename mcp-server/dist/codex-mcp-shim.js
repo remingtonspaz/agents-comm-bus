@@ -49,10 +49,10 @@ var require_constants = __commonJS({
       EMPTY_BUFFER: Buffer.alloc(0),
       GUID: "258EAFA5-E914-47DA-95CA-C5AB0DC85B11",
       hasBlob,
-      kForOnEventAttribute: /* @__PURE__ */ Symbol("kIsForOnEventAttribute"),
-      kListener: /* @__PURE__ */ Symbol("kListener"),
-      kStatusCode: /* @__PURE__ */ Symbol("status-code"),
-      kWebSocket: /* @__PURE__ */ Symbol("websocket"),
+      kForOnEventAttribute: Symbol("kIsForOnEventAttribute"),
+      kListener: Symbol("kListener"),
+      kStatusCode: Symbol("status-code"),
+      kWebSocket: Symbol("websocket"),
       NOOP: () => {
       }
     };
@@ -138,8 +138,8 @@ var require_buffer_util = __commonJS({
 var require_limiter = __commonJS({
   "../node_modules/ws/lib/limiter.js"(exports, module) {
     "use strict";
-    var kDone = /* @__PURE__ */ Symbol("kDone");
-    var kRun = /* @__PURE__ */ Symbol("kRun");
+    var kDone = Symbol("kDone");
+    var kRun = Symbol("kRun");
     var Limiter = class {
       /**
        * Creates a new `Limiter`.
@@ -194,11 +194,11 @@ var require_permessage_deflate = __commonJS({
     var { kStatusCode } = require_constants();
     var FastBuffer = Buffer[Symbol.species];
     var TRAILER = Buffer.from([0, 0, 255, 255]);
-    var kPerMessageDeflate = /* @__PURE__ */ Symbol("permessage-deflate");
-    var kTotalLength = /* @__PURE__ */ Symbol("total-length");
-    var kCallback = /* @__PURE__ */ Symbol("callback");
-    var kBuffers = /* @__PURE__ */ Symbol("buffers");
-    var kError = /* @__PURE__ */ Symbol("error");
+    var kPerMessageDeflate = Symbol("permessage-deflate");
+    var kTotalLength = Symbol("total-length");
+    var kCallback = Symbol("callback");
+    var kBuffers = Symbol("buffers");
+    var kError = Symbol("error");
     var zlibLimiter;
     var PerMessageDeflate = class {
       /**
@@ -1370,7 +1370,7 @@ var require_sender = __commonJS({
     var { EMPTY_BUFFER, kWebSocket, NOOP } = require_constants();
     var { isBlob, isValidStatusCode } = require_validation();
     var { mask: applyMask, toBuffer } = require_buffer_util();
-    var kByteLength = /* @__PURE__ */ Symbol("kByteLength");
+    var kByteLength = Symbol("kByteLength");
     var maskBuffer = Buffer.alloc(4);
     var RANDOM_POOL_SIZE = 8 * 1024;
     var randomPool;
@@ -1853,14 +1853,14 @@ var require_event_target = __commonJS({
   "../node_modules/ws/lib/event-target.js"(exports, module) {
     "use strict";
     var { kForOnEventAttribute, kListener } = require_constants();
-    var kCode = /* @__PURE__ */ Symbol("kCode");
-    var kData = /* @__PURE__ */ Symbol("kData");
-    var kError = /* @__PURE__ */ Symbol("kError");
-    var kMessage = /* @__PURE__ */ Symbol("kMessage");
-    var kReason = /* @__PURE__ */ Symbol("kReason");
-    var kTarget = /* @__PURE__ */ Symbol("kTarget");
-    var kType = /* @__PURE__ */ Symbol("kType");
-    var kWasClean = /* @__PURE__ */ Symbol("kWasClean");
+    var kCode = Symbol("kCode");
+    var kData = Symbol("kData");
+    var kError = Symbol("kError");
+    var kMessage = Symbol("kMessage");
+    var kReason = Symbol("kReason");
+    var kTarget = Symbol("kTarget");
+    var kType = Symbol("kType");
+    var kWasClean = Symbol("kWasClean");
     var Event = class {
       /**
        * Create a new `Event`.
@@ -2262,7 +2262,7 @@ var require_websocket = __commonJS({
     } = require_event_target();
     var { format, parse: parse3 } = require_extension();
     var { toBuffer } = require_buffer_util();
-    var kAborted = /* @__PURE__ */ Symbol("kAborted");
+    var kAborted = Symbol("kAborted");
     var protocolVersions = [8, 13];
     var readyStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
     var subprotocolRegex = /^[!#$%&'*+\-.0-9A-Z^_`|a-z~]+$/;
@@ -3425,10 +3425,10 @@ var require_websocket_server = __commonJS({
             process.nextTick(emitClose, this);
           }
         } else {
-          const server2 = this._server;
+          const server = this._server;
           this._removeListeners();
           this._removeListeners = this._server = null;
-          server2.close(() => {
+          server.close(() => {
             emitClose(this);
           });
         }
@@ -3611,17 +3611,17 @@ var require_websocket_server = __commonJS({
       }
     };
     module.exports = WebSocketServer2;
-    function addListeners(server2, map) {
-      for (const event of Object.keys(map)) server2.on(event, map[event]);
+    function addListeners(server, map) {
+      for (const event of Object.keys(map)) server.on(event, map[event]);
       return function removeListeners() {
         for (const event of Object.keys(map)) {
-          server2.removeListener(event, map[event]);
+          server.removeListener(event, map[event]);
         }
       };
     }
-    function emitClose(server2) {
-      server2._state = CLOSED;
-      server2.emit("close");
+    function emitClose(server) {
+      server._state = CLOSED;
+      server.emit("close");
     }
     function socketOnError() {
       this.destroy();
@@ -3640,11 +3640,11 @@ var require_websocket_server = __commonJS({
 ` + Object.keys(headers).map((h) => `${h}: ${headers[h]}`).join("\r\n") + "\r\n\r\n" + message
       );
     }
-    function abortHandshakeOrEmitwsClientError(server2, req, socket, code, message, headers) {
-      if (server2.listenerCount("wsClientError")) {
+    function abortHandshakeOrEmitwsClientError(server, req, socket, code, message, headers) {
+      if (server.listenerCount("wsClientError")) {
         const err = new Error(message);
         Error.captureStackTrace(err, abortHandshakeOrEmitwsClientError);
-        server2.emit("wsClientError", err, socket, req);
+        server.emit("wsClientError", err, socket, req);
       } else {
         abortHandshake(socket, code, message, headers);
       }
@@ -16203,11 +16203,9 @@ var require_dist = __commonJS({
   }
 });
 
-// server.js
-import { existsSync } from "node:fs";
+// codex/codex-mcp-shim.js
 import crypto from "node:crypto";
-import { execFileSync, spawn as spawn2 } from "node:child_process";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { execFileSync } from "node:child_process";
 
 // ../node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
@@ -16216,6 +16214,11 @@ var import_sender = __toESM(require_sender(), 1);
 var import_websocket = __toESM(require_websocket(), 1);
 var import_websocket_server = __toESM(require_websocket_server(), 1);
 var wrapper_default = import_websocket.default;
+
+// common/mcp-shim-shared.js
+import { existsSync } from "node:fs";
+import { spawn as spawn2 } from "node:child_process";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // ../node_modules/zod/v4/core/core.js
 var _a;
@@ -16271,6 +16274,7 @@ function $constructor(name, initializer3, params) {
   Object.defineProperty(_, "name", { value: name });
   return _;
 }
+var $brand = Symbol("zod_brand");
 var $ZodAsyncError = class extends Error {
   constructor() {
     super(`Encountered Promise during synchronous parse. Use .parseAsync() instead.`);
@@ -19219,6 +19223,8 @@ function en_default() {
 
 // ../node_modules/zod/v4/core/registries.js
 var _a2;
+var $output = Symbol("ZodOutput");
+var $input = Symbol("ZodInput");
 var $ZodRegistry = class {
   constructor() {
     this._map = /* @__PURE__ */ new WeakMap();
@@ -23011,6 +23017,9 @@ function isTerminal(status) {
   return status === "completed" || status === "failed" || status === "cancelled";
 }
 
+// ../node_modules/zod-to-json-schema/dist/esm/Options.js
+var ignoreOverride = Symbol("Let zodToJsonSchema decide on which parser to use");
+
 // ../node_modules/zod-to-json-schema/dist/esm/parsers/string.js
 var ALPHA_NUMERIC = new Set("ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvxyz0123456789");
 
@@ -25390,30 +25399,252 @@ var PersistentIpcClient = class {
   }
 };
 
-// server.js
+// common/mcp-shim-shared.js
 function log(message) {
   console.error(`[acb-mcp] ${message}`);
 }
+function spawnDaemonFromMcpShim(paths) {
+  const daemonEntry = resolveDaemonEntry();
+  const child = spawn2(process.execPath, [daemonEntry, "serve"], {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      AGENTS_COMM_BUS_STATE_ROOT: paths.root
+    }
+  });
+  child.unref();
+}
+function resolveDaemonEntry() {
+  const here = fileURLToPath2(import.meta.url);
+  const candidates = [
+    // Source runtime: hosts/common/mcp-shim-shared.js -> repo root.
+    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
+    // Bundled runtime: mcp-server/dist/<host>-mcp-shim.js -> repo root.
+    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
+    // Compatibility fallback for older mcp-server/source layouts.
+    new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url)
+  ].map((url) => fileURLToPath2(url));
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error(`agents-comm-bus daemon entry not found from ${here}; checked ${candidates.join(", ")}`);
+  }
+  return found;
+}
+function createDaemonRequester(options) {
+  return async function daemonRequest(method, params = {}) {
+    await options.beforeDaemonRequest?.();
+    const agent = options.agentInUse();
+    const metadata = {
+      shimName: options.shimName ?? "agents-comm-mcp-shim",
+      agent,
+      project: process.cwd()
+    };
+    const ensured = await ensureDaemon({
+      clientVersion: DAEMON_VERSION,
+      metadata,
+      spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim
+    });
+    const connection = await connectIpc({
+      port: ensured.port,
+      clientVersion: DAEMON_VERSION,
+      metadata
+    });
+    try {
+      return await connection.request(method, {
+        session: options.sessionInUse(),
+        ...params
+      });
+    } finally {
+      connection.close();
+    }
+  };
+}
+function createMcpServer({ daemonRequest }) {
+  const server = new Server(
+    { name: "agents-comm-mcp-shim", version: "2.0.0" },
+    { capabilities: { tools: {} } }
+  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: "comm_send_message",
+        description: "Send a text message via the agents-comm-bus daemon. `comm` selects which platform adapter delivers the message. Target via the nested `target` object; omit to fall back to the session's most-recent-inbound conversation.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            comm: { type: "string", description: "Comm adapter id to route through. Must match a registered comm." },
+            message: { type: "string", description: "The message text to send" },
+            target: {
+              type: "object",
+              description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
+              properties: {
+                chat_native_id: { type: ["string", "number"] },
+                thread_native_id: { type: ["string", "number"] },
+                account: { type: ["string", "number"] }
+              }
+            }
+          },
+          required: ["comm", "message"]
+        }
+      },
+      {
+        name: "comm_send_attachment",
+        description: "Send a file/image attachment via the agents-comm-bus daemon. Same `comm`/`target` semantics as `comm_send_message`. The adapter handles platform-specific upload mechanics.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            comm: { type: "string", description: "Comm to route through." },
+            path: { type: "string", description: "Absolute path to the file/image" },
+            caption: { type: "string", description: "Optional caption rendered alongside the attachment (mapping is comm-specific)." },
+            target: {
+              type: "object",
+              description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
+              properties: {
+                chat_native_id: { type: ["string", "number"] },
+                thread_native_id: { type: ["string", "number"] },
+                account: { type: ["string", "number"] }
+              }
+            }
+          },
+          required: ["comm", "path"]
+        }
+      },
+      {
+        name: "comm_check_messages",
+        description: "Drain pending inbound messages from the agents-comm-bus daemon, optionally filtered by `comm`.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            comm: { type: "string", description: "Optional comm filter; when omitted all pending inbound messages across comms are returned." }
+          },
+          required: []
+        }
+      },
+      {
+        name: "list_conversations",
+        description: "List conversation inventory from the agents-comm-bus daemon.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            comm: { type: "string", description: "Optional comm filter." },
+            limit: { type: "number", description: "Maximum conversations to return" }
+          },
+          required: []
+        }
+      }
+    ]
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args = {} } = request.params;
+    try {
+      if (name === "comm_send_message") {
+        return await handleSendMessage(daemonRequest, args);
+      }
+      if (name === "comm_send_attachment") {
+        return await handleSendAttachment(daemonRequest, args);
+      }
+      if (name === "comm_check_messages") {
+        return await handleCheckMessages(daemonRequest, args);
+      }
+      if (name === "list_conversations") {
+        const conversations = await daemonRequest("list_conversations", args);
+        if (!conversations.length) return toolText("No conversations found");
+        return toolText(formatConversations(conversations));
+      }
+      return toolError(`Unknown tool: ${name}`);
+    } catch (error2) {
+      return toolError(error2 instanceof Error ? error2.message : String(error2));
+    }
+  });
+  return server;
+}
+async function handleSendMessage(daemonRequest, args) {
+  if (!args.comm) return toolError("Error: comm is required");
+  if (!args.message) return toolError("Error: message is required");
+  const params = { message: args.message, target: args.target };
+  const result = await daemonRequest(`${args.comm}_send`, params);
+  return toolText(`Message sent via agents-comm-bus (${result.message_id})`);
+}
+async function handleSendAttachment(daemonRequest, args) {
+  if (!args.comm) return toolError("Error: comm is required");
+  if (!args.path) return toolError("Error: path is required");
+  if (!existsSync(args.path)) return toolError(`Error: File not found: ${args.path}`);
+  const params = {
+    path: args.path,
+    caption: args.caption,
+    target: args.target
+  };
+  const result = await daemonRequest(`${args.comm}_send_image`, params);
+  return toolText(`Attachment sent via agents-comm-bus (${result.message_id})`);
+}
+async function handleCheckMessages(daemonRequest, args) {
+  const params = args.comm ? { comm: args.comm } : {};
+  const messages = await daemonRequest("drain_pending_inbound", params);
+  if (!messages.length) {
+    return toolText(`No pending messages${args.comm ? ` from ${args.comm}` : ""}`);
+  }
+  return toolText(formatMessages(messages));
+}
+function toolText(text) {
+  return { content: [{ type: "text", text }] };
+}
+function toolError(text) {
+  return { content: [{ type: "text", text }], isError: true };
+}
+function formatMessages(items) {
+  return `${items.length} pending message(s):
+
+${items.map((item) => {
+    const message = item.message;
+    const comm = message?.chat?.comm ?? "unknown";
+    const time3 = new Date(message.received_at).toLocaleTimeString();
+    const from = message.sender?.display_name ?? message.sender?.id ?? "User";
+    const attachments = message.attachments?.length ? ` [${message.attachments.length} attachment(s)]` : "";
+    return `[${time3}] (${comm}) ${from}: ${message.text ?? ""}${attachments}`;
+  }).join("\n")}`;
+}
+function formatConversations(conversations) {
+  return conversations.map((conversation) => {
+    const thread = conversation.thread_native_id ? `:${conversation.thread_native_id}` : "";
+    const last = conversation.last_inbound_at ?? conversation.last_outbound_at;
+    const lastText = last ? new Date(last).toISOString() : "no activity";
+    return `${conversation.comm}/${conversation.account_label} ${conversation.chat_native_id}${thread} agent=${conversation.agent} last=${lastText}`;
+  }).join("\n");
+}
+async function runMcpShim(options) {
+  const daemonRequest = createDaemonRequester(options);
+  const server = createMcpServer({ daemonRequest });
+  await options.beforeConnect?.();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  log("MCP shim connected via stdio");
+}
+function installShutdownHandlers(close) {
+  process.once("exit", close);
+  process.once("SIGINT", () => {
+    close();
+    process.exit(130);
+  });
+  process.once("SIGTERM", () => {
+    close();
+    process.exit(143);
+  });
+}
+
+// codex/codex-mcp-shim.js
 var persistentRegistration = null;
 var codexRuntime = {
   appServerUrl: null,
   threadId: null
 };
 function agentInUse() {
-  if (process.env.AGENTS_COMM_BUS_AGENT) return process.env.AGENTS_COMM_BUS_AGENT;
-  if (process.env.CODEX_APP_SERVER_URL || process.env.CODEX_SESSION_ID || process.env.CODEX_THREAD_ID || process.env.CODEX_PLUGIN_ROOT || codexRuntime.appServerUrl) {
-    return "codex";
-  }
-  return "claude";
+  return process.env.AGENTS_COMM_BUS_AGENT ?? "codex";
 }
 function sessionInUse() {
   if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  if (process.env.CLAUDE_SESSION_ID) return process.env.CLAUDE_SESSION_ID;
-  if (process.env.CODEX_SESSION_ID || process.env.CODEX_THREAD_ID || process.env.CODEX_APP_SERVER_URL || codexRuntime.threadId || codexRuntime.appServerUrl) {
-    const raw = process.env.CODEX_SESSION_ID ?? process.env.CODEX_THREAD_ID ?? codexRuntime.threadId ?? `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl ?? ""}`;
-    return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
-  }
-  return "mcp";
+  const raw = process.env.CODEX_SESSION_ID ?? process.env.CODEX_THREAD_ID ?? codexRuntime.threadId ?? `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl ?? ""}`;
+  return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
 }
 async function discoverCodexRuntime() {
   codexRuntime.appServerUrl ??= process.env.CODEX_APP_SERVER_URL ?? discoverAppServerUrlFromAncestors();
@@ -25593,39 +25824,8 @@ function threadIdFrom(value) {
   const id = value.threadId ?? value.id;
   return typeof id === "string" && id.length > 0 ? id : null;
 }
-async function daemonRequest(method, params = {}) {
-  await discoverCodexRuntime();
-  const agent = agentInUse();
-  const ensured = await ensureDaemon({
-    clientVersion: DAEMON_VERSION,
-    metadata: {
-      shimName: "agents-comm-mcp-shim",
-      agent,
-      project: process.cwd()
-    },
-    spawnDaemon: spawnDaemonFromMcpShim
-  });
-  const connection = await connectIpc({
-    port: ensured.port,
-    clientVersion: DAEMON_VERSION,
-    metadata: {
-      shimName: "agents-comm-mcp-shim",
-      agent,
-      project: process.cwd()
-    }
-  });
-  try {
-    return await connection.request(method, {
-      session: sessionInUse(),
-      ...params
-    });
-  } finally {
-    connection.close();
-  }
-}
 async function startPersistentCodexRegistration() {
   await discoverCodexRuntime();
-  if (agentInUse() !== "codex") return;
   const appServerUrl = process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl;
   if (!appServerUrl) {
     log("Codex session registration skipped: CODEX_APP_SERVER_URL is not set");
@@ -25676,202 +25876,18 @@ async function startPersistentCodexRegistration() {
     log(`Codex session registration failed: ${error2 instanceof Error ? error2.message : String(error2)}`);
   }
 }
-function spawnDaemonFromMcpShim(paths) {
-  const daemonEntry = resolveDaemonEntry();
-  const child = spawn2(process.execPath, [daemonEntry, "serve"], {
-    detached: true,
-    stdio: "ignore",
-    env: {
-      ...process.env,
-      AGENTS_COMM_BUS_STATE_ROOT: paths.root
-    }
-  });
-  child.unref();
-}
-function resolveDaemonEntry() {
-  const here = fileURLToPath2(import.meta.url);
-  const candidates = [
-    // Bundled runtime: mcp-server/dist/server.js -> repo root.
-    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
-    // Source runtime: mcp-server/server.js -> repo root.
-    new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url)
-  ].map((url) => fileURLToPath2(url));
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (!found) {
-    throw new Error(`agents-comm-bus daemon entry not found from ${here}; checked ${candidates.join(", ")}`);
-  }
-  return found;
-}
 function closePersistentRegistration() {
   if (!persistentRegistration) return;
   persistentRegistration.close();
   persistentRegistration = null;
 }
-var server = new Server(
-  { name: "agents-comm-mcp-shim", version: "2.0.0" },
-  { capabilities: { tools: {} } }
-);
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: "comm_send_message",
-      description: "Send a text message via the agents-comm-bus daemon. `comm` selects which platform adapter delivers the message. Target via the nested `target` object; omit to fall back to the session's most-recent-inbound conversation.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          comm: { type: "string", description: "Comm adapter id to route through. Must match a registered comm." },
-          message: { type: "string", description: "The message text to send" },
-          target: {
-            type: "object",
-            description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
-            properties: {
-              chat_native_id: { type: ["string", "number"] },
-              thread_native_id: { type: ["string", "number"] },
-              account: { type: ["string", "number"] }
-            }
-          }
-        },
-        required: ["comm", "message"]
-      }
-    },
-    {
-      name: "comm_send_attachment",
-      description: "Send a file/image attachment via the agents-comm-bus daemon. Same `comm`/`target` semantics as `comm_send_message`. The adapter handles platform-specific upload mechanics.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          comm: { type: "string", description: "Comm to route through." },
-          path: { type: "string", description: "Absolute path to the file/image" },
-          caption: { type: "string", description: "Optional caption rendered alongside the attachment (mapping is comm-specific)." },
-          target: {
-            type: "object",
-            description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
-            properties: {
-              chat_native_id: { type: ["string", "number"] },
-              thread_native_id: { type: ["string", "number"] },
-              account: { type: ["string", "number"] }
-            }
-          }
-        },
-        required: ["comm", "path"]
-      }
-    },
-    {
-      name: "comm_check_messages",
-      description: "Drain pending inbound messages from the agents-comm-bus daemon, optionally filtered by `comm`.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          comm: { type: "string", description: "Optional comm filter; when omitted all pending inbound messages across comms are returned." }
-        },
-        required: []
-      }
-    },
-    {
-      name: "list_conversations",
-      description: "List conversation inventory from the agents-comm-bus daemon.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          comm: { type: "string", description: "Optional comm filter." },
-          limit: { type: "number", description: "Maximum conversations to return" }
-        },
-        required: []
-      }
-    }
-  ]
-}));
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args = {} } = request.params;
-  try {
-    if (name === "comm_send_message") {
-      return await handleSendMessage(args);
-    }
-    if (name === "comm_send_attachment") {
-      return await handleSendAttachment(args);
-    }
-    if (name === "comm_check_messages") {
-      return await handleCheckMessages(args);
-    }
-    if (name === "list_conversations") {
-      const conversations = await daemonRequest("list_conversations", args);
-      if (!conversations.length) return toolText("No conversations found");
-      return toolText(formatConversations(conversations));
-    }
-    return toolError(`Unknown tool: ${name}`);
-  } catch (error2) {
-    return toolError(error2 instanceof Error ? error2.message : String(error2));
-  }
-});
-async function handleSendMessage(args) {
-  if (!args.comm) return toolError("Error: comm is required");
-  if (!args.message) return toolError("Error: message is required");
-  const params = { message: args.message, target: args.target };
-  const result = await daemonRequest(`${args.comm}_send`, params);
-  return toolText(`Message sent via agents-comm-bus (${result.message_id})`);
-}
-async function handleSendAttachment(args) {
-  if (!args.comm) return toolError("Error: comm is required");
-  if (!args.path) return toolError("Error: path is required");
-  if (!existsSync(args.path)) return toolError(`Error: File not found: ${args.path}`);
-  const params = {
-    path: args.path,
-    caption: args.caption,
-    target: args.target
-  };
-  const result = await daemonRequest(`${args.comm}_send_image`, params);
-  return toolText(`Attachment sent via agents-comm-bus (${result.message_id})`);
-}
-async function handleCheckMessages(args) {
-  const params = args.comm ? { comm: args.comm } : {};
-  const messages = await daemonRequest("drain_pending_inbound", params);
-  if (!messages.length) {
-    return toolText(`No pending messages${args.comm ? ` from ${args.comm}` : ""}`);
-  }
-  return toolText(formatMessages(messages));
-}
-function toolText(text) {
-  return { content: [{ type: "text", text }] };
-}
-function toolError(text) {
-  return { content: [{ type: "text", text }], isError: true };
-}
-function formatMessages(items) {
-  return `${items.length} pending message(s):
-
-${items.map((item) => {
-    const message = item.message;
-    const comm = message?.chat?.comm ?? "unknown";
-    const time3 = new Date(message.received_at).toLocaleTimeString();
-    const from = message.sender?.display_name ?? message.sender?.id ?? "User";
-    const attachments = message.attachments?.length ? ` [${message.attachments.length} attachment(s)]` : "";
-    return `[${time3}] (${comm}) ${from}: ${message.text ?? ""}${attachments}`;
-  }).join("\n")}`;
-}
-function formatConversations(conversations) {
-  return conversations.map((conversation) => {
-    const thread = conversation.thread_native_id ? `:${conversation.thread_native_id}` : "";
-    const last = conversation.last_inbound_at ?? conversation.last_outbound_at;
-    const lastText = last ? new Date(last).toISOString() : "no activity";
-    return `${conversation.comm}/${conversation.account_label} ${conversation.chat_native_id}${thread} agent=${conversation.agent} last=${lastText}`;
-  }).join("\n");
-}
-async function main() {
-  await startPersistentCodexRegistration();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  log("MCP shim connected via stdio");
-}
-process.once("exit", closePersistentRegistration);
-process.once("SIGINT", () => {
-  closePersistentRegistration();
-  process.exit(130);
-});
-process.once("SIGTERM", () => {
-  closePersistentRegistration();
-  process.exit(143);
-});
-main().catch((error2) => {
+installShutdownHandlers(closePersistentRegistration);
+runMcpShim({
+  agentInUse,
+  sessionInUse,
+  beforeDaemonRequest: discoverCodexRuntime,
+  beforeConnect: startPersistentCodexRegistration
+}).catch((error2) => {
   console.error("Fatal error:", error2);
   process.exit(1);
 });

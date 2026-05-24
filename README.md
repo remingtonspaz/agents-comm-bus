@@ -112,7 +112,7 @@ Add the MCP server to your project's `.mcp.json` with your credentials:
   "mcpServers": {
     "telegram": {
       "command": "node",
-      "args": ["/path/to/claude-code-telegram/mcp-server/server.js"],
+      "args": ["/path/to/claude-code-telegram/hosts/claude/claude-mcp-shim.js"],
       "env": {
         "TELEGRAM_BOT_TOKEN": "your_bot_token_here",
         "TELEGRAM_USER_ID": "your_user_id_here"

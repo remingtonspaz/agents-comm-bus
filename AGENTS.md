@@ -195,7 +195,7 @@ Add new tests to `tests/architecture/*.test.ts`; tsx + `node --test` runner.
 daemon (`Stop-Process` the pid in `~/.agents-comm-bus/daemon.pid`, delete the
 `port` and `daemon.pid` files) so the next hook/MCP call respawns it via the
 new `serve.js` entry. The MCP server picks up changes only when Claude Code
-itself restarts — kill the `node …/mcp-server/dist/server.js` process and end
+itself restarts — kill the `node …/mcp-server/dist/claude-mcp-shim.js` process and end
 the Claude session to force a fresh spawn.
 
 **Smoke test:** trigger an `AskUserQuestion` from Claude; confirm the Telegram
@@ -239,7 +239,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
      the comm id (e.g. `discord_send`).
 3. Add the factory to `serve.ts`'s `commAdapterFactories` array.
 4. If you want to use this comm from agents, add a corresponding tool in
-   `mcp-server/server.js` so the agent's harness discovers it.
+   `hosts/claude/claude-mcp-shim.js` so the agent's harness discovers it.
 
 ## Adding a new agent bridge
 
@@ -311,9 +311,9 @@ version-compatible handshake before deciding whether to reuse or respawn.
   delivered messages from `pendingInbound` so a later `UserPromptSubmit` does
   not inject duplicates.
 - **Path-only Codex MCP config is intentional.** Global Codex config should
-  only point at `mcp-server/dist/server.js`. Session-specific app-server URL,
+  only point at `mcp-server/dist/claude-mcp-shim.js`. Session-specific app-server URL,
   thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1`
-  and runtime discovery in `mcp-server/server.js`.
+  and runtime discovery in `hosts/claude/claude-mcp-shim.js`.
 - **Codex `SessionStart` is first-prompt repair, not true process startup.**
   `hooks/codex/session-start.js` only schedules a same-terminal bootstrap
   restart when daemon IPC reports that this project has a Codex comm account
@@ -400,7 +400,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
   index inside an `accountKey`-filtered loop; only the Codex side's
   post-steer cleanup carried the bug.
 - **Don't forget to rebundle `mcp-server` after changing
-  `bootstrap/ensure-daemon.ts`.** `mcp-server/dist/server.js` is an esbuild
+  `bootstrap/ensure-daemon.ts`.** `mcp-server/dist/claude-mcp-shim.js` is an esbuild
   bundle that *inlines* `defaultSpawnDaemon`. The bundle stays stale until
   `npm run build` in `mcp-server/` rebakes it. If the bundle still spawns
   the old entry path, a cold start where the MCP server is the first to
@@ -647,7 +647,7 @@ both registered under `comm="telegram"` with their own bots.
   `bootstrap/ensure-daemon.ts`.** esbuild inlines the spawn target into
   the bundle. The fix for the daemon-vs-serve.js entry-point change
   (commit `96b40ad`) updated `ensure-daemon.ts` and the live `agents-comm-bus`
-  dist, but `mcp-server/dist/server.js` carried the stale spawn line
+  dist, but `mcp-server/dist/claude-mcp-shim.js` carried the stale spawn line
   until a separate `npm run build` in `mcp-server/`. Symptom: hooks
   worked (they import the live `ensure-daemon.js`); a cold start where
   the MCP server is the first to call `ensureDaemon()` would have
@@ -699,7 +699,7 @@ High-signal findings:
   `~/.agents-comm-bus/codex-bootstrapper/sessions/`. Same-terminal restart
   relays pass `-StopPreviousAppServer` so repeated bootstrap runs can replace
   their own prior app-server window/process.
-- The global Codex MCP entry should be path-only. `mcp-server/server.js`
+- The global Codex MCP entry should be path-only. `hosts/claude/claude-mcp-shim.js`
   discovers Codex runtime context and performs persistent
   `codex_register_session` with `persist_after_disconnect`.
 - `upsertSession` must not clobber lease columns either. Hook registrations
