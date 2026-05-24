@@ -92,7 +92,7 @@ reference and stores account ownership in SQLite.
 
 ```bash
 TELEGRAM_BOT_TOKEN="your_bot_token_here" \
-node agents-comm-bus/dist/cli/index.js account-add \
+node agents-comm-bus/dist/core-daemon/cli/index.js account-add \
   --project "/path/to/project" \
   --agent claude \
   --account-label main

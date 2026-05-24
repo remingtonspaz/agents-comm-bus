@@ -208,11 +208,11 @@ The daemon is per-user, not per-project. It bootstraps lazily — any hook or
 MCP-server call to `ensureDaemon()` spawns it if not already running. State
 root is `~/.agents-comm-bus/`.
 
-Entry point: `agents-comm-bus/dist/serve.js`. Spawning is automatic; for
+Entry point: `agents-comm-bus/dist/core-daemon/serve.js`. Spawning is automatic; for
 manual debugging:
 
 ```powershell
-node agents-comm-bus\dist\serve.js
+node agents-comm-bus\dist\core-daemon\serve.js
 ```
 
 Discovery files: `~/.agents-comm-bus/port` (listening port), `~/.agents-comm-bus/daemon.pid`
@@ -221,12 +221,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## Adding a new comm adapter
 
-1. Create `core-daemon/adapters/comm/<name>/adapter.ts` implementing
+1. Create `adapters/<name>/adapter.ts` implementing
    `CommAdapter` (from `packages/core-contracts/dist/contracts/comm-adapter.js`).
    At minimum: `start`, `stop`, `send`, `onInbound`, `onConnectionState`,
    `reportPressure`, `classifyFailure`. Optionally `onCallback`,
    `answerCallback`, `editMessage` if the platform supports inline buttons.
-2. Create `core-daemon/adapters/comm/<name>/factory.ts` implementing
+2. Create `adapters/<name>/factory.ts` implementing
    `CommAdapterFactory` (from `runtime/comm-factory.js`):
    - `commId` — the string written to `account_registrations.comm`.
    - `resolveCredentials(registration, env)` — read whatever `credentials_ref`
@@ -255,7 +255,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
    - `handleIpcMethod(method, params, ctx)` — dispatch within the bridge.
 2. Add a sibling `AgentBridgeFactory` (`agentId` + `create(context)`).
 3. Add hook scripts under `hooks/<agent>/` that talk to the daemon via the
-   shared IPC client (`agents-comm-bus/dist/ipc/client.js`).
+   shared IPC client (`agents-comm-bus/dist/core-daemon/ipc/client.js`).
 4. Register the factory in `serve.ts`'s `agentBridgeFactories` array.
 
 ## Generic patterns
