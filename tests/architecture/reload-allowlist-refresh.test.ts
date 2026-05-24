@@ -16,7 +16,7 @@ import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
 import { JsonlAuditStore } from "../../core-daemon/storage/audit.js";
 import { JsonlTranscriptStore } from "../../core-daemon/storage/transcripts.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
-import { TelegramCommAdapterFactory } from "../../core-daemon/adapters/comm/telegram/factory.js";
+import { TelegramCommAdapterFactory } from "../../adapters/telegram/factory.js";
 import { reloadAdapters } from "../../core-daemon/daemon.js";
 
 const TELEGRAM = "telegram" as CommId;

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type {
   Migration,
   MigrationRunner,
-} from "../../../packages/core-contracts/dist/storage/migrations.js";
+} from "agents-comm-bus-core";
 
 export interface SqliteLike {
   exec(sql: string): void;

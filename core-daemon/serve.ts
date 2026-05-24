@@ -14,7 +14,7 @@
 import { pathToFileURL } from "node:url";
 
 import { runDaemon } from "./daemon.js";
-import { TelegramCommAdapterFactory } from "./adapters/comm/telegram/factory.js";
+import { TelegramCommAdapterFactory } from "../adapters/telegram/factory.js";
 import { ClaudeBridgeFactory } from "./bridges/claude/bridge.js";
 import { CodexBridgeFactory } from "./bridges/codex/bridge.js";
 

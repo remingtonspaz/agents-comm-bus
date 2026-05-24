@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import type { ResolvedDecision } from "../../packages/core-contracts/dist/queries.js";
+import type { ResolvedDecision } from "agents-comm-bus-core";
 import type {
   AccountRegistration,
   AllowlistGlobalEntry,
@@ -8,11 +8,11 @@ import type {
   Conversation,
   QueryRecord,
   Session,
-} from "../../packages/core-contracts/dist/records/index.js";
+} from "agents-comm-bus-core/records";
 import type {
   SessionLeaseOwner,
   Storage,
-} from "../../packages/core-contracts/dist/storage/storage.js";
+} from "agents-comm-bus-core/storage/storage";
 import type {
   AgentId,
   CommId,
@@ -20,7 +20,7 @@ import type {
   MessageId,
   QueryId,
   SessionId,
-} from "../../packages/core-contracts/dist/types.js";
+} from "agents-comm-bus-core";
 import { runStorageMigrations, type SqliteLike } from "./schema/runner.js";
 
 const require = createRequire(import.meta.url);

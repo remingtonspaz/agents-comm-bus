@@ -86,14 +86,14 @@ Three perpendicular layers meeting at the bus:
   (`core-daemon/bridges/codex/bridge.ts`) handles Codex IPC methods, app-server
   wake/steer capability dispatch, and blocking permission-query resolution.
   Future Gemini / etc. bridges live as siblings under `core-daemon/bridges/`.
-- **Comm side** — `TelegramCommAdapter` (in `adapters/comm/telegram/adapter.ts`)
+- **Comm side** — `TelegramCommAdapter` (in `adapters/telegram/adapter.ts`)
   plus `TelegramCommAdapterFactory` (`factory.ts`) handles polling, sending,
   callback events, credential resolution, and contributes its MCP-tool IPC
-  surface. Future Discord / Slack / Matrix adapters live as siblings under
-  `adapters/comm/`.
+  surface. Future Discord / Slack / Matrix adapters live as sibling top-level
+  folders under `adapters/`.
 - **Core daemon** — `runDaemon(options)` in `daemon.ts` knows nothing about
   specific agents or comms. The *only* file that imports both Claude- and
-  Telegram-specific factories is `serve.ts` (32 lines, the composition root).
+  Telegram-specific factories is `serve.ts` (the composition root).
 
 ## Repo layout
 
@@ -105,10 +105,11 @@ Three perpendicular layers meeting at the bus:
 │       ├── records/           # AccountRegistration, Conversation, Query, Session
 │       ├── storage/           # Storage interface, MigrationRunner
 │       └── ...
+├── adapters/
+│   └── telegram/
+│       ├── adapter.ts         # TelegramCommAdapter
+│       └── factory.ts         # TelegramCommAdapterFactory + MCP IPC surface
 ├── core-daemon/               # Daemon source (compiled into agents-comm-bus/dist/).
-│   ├── adapters/comm/telegram/
-│   │   ├── adapter.ts         # TelegramCommAdapter
-│   │   └── factory.ts         # TelegramCommAdapterFactory + MCP IPC surface
 │   ├── bridges/
 │   │   ├── claude/
 │   │   │   ├── adapter.ts     # ClaudeAgentAdapter (v3 contract, currently unused)
@@ -207,11 +208,11 @@ The daemon is per-user, not per-project. It bootstraps lazily — any hook or
 MCP-server call to `ensureDaemon()` spawns it if not already running. State
 root is `~/.agents-comm-bus/`.
 
-Entry point: `agents-comm-bus/dist/serve.js`. Spawning is automatic; for
+Entry point: `agents-comm-bus/dist/core-daemon/serve.js`. Spawning is automatic; for
 manual debugging:
 
 ```powershell
-node agents-comm-bus\dist\serve.js
+node agents-comm-bus\dist\core-daemon\serve.js
 ```
 
 Discovery files: `~/.agents-comm-bus/port` (listening port), `~/.agents-comm-bus/daemon.pid`
@@ -220,12 +221,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## Adding a new comm adapter
 
-1. Create `core-daemon/adapters/comm/<name>/adapter.ts` implementing
+1. Create `adapters/<name>/adapter.ts` implementing
    `CommAdapter` (from `packages/core-contracts/dist/contracts/comm-adapter.js`).
    At minimum: `start`, `stop`, `send`, `onInbound`, `onConnectionState`,
    `reportPressure`, `classifyFailure`. Optionally `onCallback`,
    `answerCallback`, `editMessage` if the platform supports inline buttons.
-2. Create `core-daemon/adapters/comm/<name>/factory.ts` implementing
+2. Create `adapters/<name>/factory.ts` implementing
    `CommAdapterFactory` (from `runtime/comm-factory.js`):
    - `commId` — the string written to `account_registrations.comm`.
    - `resolveCredentials(registration, env)` — read whatever `credentials_ref`
@@ -254,7 +255,7 @@ version-compatible handshake before deciding whether to reuse or respawn.
    - `handleIpcMethod(method, params, ctx)` — dispatch within the bridge.
 2. Add a sibling `AgentBridgeFactory` (`agentId` + `create(context)`).
 3. Add hook scripts under `hooks/<agent>/` that talk to the daemon via the
-   shared IPC client (`agents-comm-bus/dist/ipc/client.js`).
+   shared IPC client (`agents-comm-bus/dist/core-daemon/ipc/client.js`).
 4. Register the factory in `serve.ts`'s `agentBridgeFactories` array.
 
 ## Generic patterns

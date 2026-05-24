@@ -5,7 +5,7 @@ import type {
   CommId,
   Conversation,
   Storage,
-} from "../../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 
 import type { MessageBus } from "../bus.js";
 import type { IpcMethodHandler } from "./ipc-method.js";

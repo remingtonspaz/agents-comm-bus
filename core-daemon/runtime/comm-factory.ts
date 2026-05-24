@@ -4,10 +4,10 @@ import type {
   BlobStore,
   CommAdapter,
   CommId,
-} from "../../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 
 import type { MessageBus } from "../bus.js";
-import type { Storage } from "../../packages/core-contracts/dist/index.js";
+import type { Storage } from "agents-comm-bus-core";
 import type { IpcMethodHandler } from "./ipc-method.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 

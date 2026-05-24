@@ -23,7 +23,7 @@ import type {
   SessionId,
   Storage,
   TranscriptStore,
-} from "../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 import {
   SCHEMA_VERSION_CONVERSATION,
   SCHEMA_VERSION_QUERY,
@@ -31,7 +31,7 @@ import {
   isForeignBotAllowed,
   RecentSeenCache,
   tryResolve,
-} from "../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 
 export interface MessageBusOptions {
   project: string;

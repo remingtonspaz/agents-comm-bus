@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceDir = resolve(packageDir, "../core-daemon/storage/schema");
-const targetDir = resolve(packageDir, "dist/storage/schema");
+const targetDir = resolve(packageDir, "dist/core-daemon/storage/schema");
 
 await mkdir(targetDir, { recursive: true });
 

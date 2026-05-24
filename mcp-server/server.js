@@ -11,10 +11,10 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { ensureDaemon } from "../agents-comm-bus/dist/bootstrap/ensure-daemon.js";
-import { connectIpc } from "../agents-comm-bus/dist/ipc/client.js";
-import { PersistentIpcClient } from "../agents-comm-bus/dist/ipc/persistent-client.js";
-import { DAEMON_VERSION } from "../agents-comm-bus/dist/config.js";
+import { ensureDaemon } from "../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js";
+import { connectIpc } from "../agents-comm-bus/dist/core-daemon/ipc/client.js";
+import { PersistentIpcClient } from "../agents-comm-bus/dist/core-daemon/ipc/persistent-client.js";
+import { DAEMON_VERSION } from "../agents-comm-bus/dist/core-daemon/config.js";
 
 function log(message) {
   console.error(`[acb-mcp] ${message}`);
@@ -362,9 +362,9 @@ function resolveDaemonEntry() {
   const here = fileURLToPath(import.meta.url);
   const candidates = [
     // Bundled runtime: mcp-server/dist/server.js -> repo root.
-    new URL("../../agents-comm-bus/dist/serve.js", import.meta.url),
+    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
     // Source runtime: mcp-server/server.js -> repo root.
-    new URL("../agents-comm-bus/dist/serve.js", import.meta.url),
+    new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
   ].map((url) => fileURLToPath(url));
   const found = candidates.find((candidate) => existsSync(candidate));
   if (!found) {

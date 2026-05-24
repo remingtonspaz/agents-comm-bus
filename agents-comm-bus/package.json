@@ -3,26 +3,26 @@
   "version": "0.1.0",
   "description": "Per-user daemon and localhost IPC layer for agent communication adapters.",
   "type": "module",
-  "main": "./dist/daemon.js",
-  "types": "./dist/daemon.d.ts",
+  "main": "./dist/core-daemon/daemon.js",
+  "types": "./dist/core-daemon/daemon.d.ts",
   "bin": {
-    "agents-comm": "./dist/cli/index.js",
-    "agents-comm-bus": "./dist/cli/index.js",
-    "agents-comm-bus-daemon": "./dist/serve.js"
+    "agents-comm": "./dist/core-daemon/cli/index.js",
+    "agents-comm-bus": "./dist/core-daemon/cli/index.js",
+    "agents-comm-bus-daemon": "./dist/core-daemon/serve.js"
   },
   "exports": {
-    ".": { "import": "./dist/daemon.js", "types": "./dist/daemon.d.ts" },
-    "./paths": { "import": "./dist/paths.js", "types": "./dist/paths.d.ts" },
-    "./config": { "import": "./dist/config.js", "types": "./dist/config.d.ts" },
-    "./bootstrap/ensure-daemon": { "import": "./dist/bootstrap/ensure-daemon.js", "types": "./dist/bootstrap/ensure-daemon.d.ts" },
-    "./bootstrap/spawn-lock": { "import": "./dist/bootstrap/spawn-lock.js", "types": "./dist/bootstrap/spawn-lock.d.ts" },
-    "./bootstrap/handshake": { "import": "./dist/bootstrap/handshake.js", "types": "./dist/bootstrap/handshake.d.ts" },
-    "./ipc/protocol": { "import": "./dist/ipc/protocol.js", "types": "./dist/ipc/protocol.d.ts" },
-    "./ipc/server": { "import": "./dist/ipc/server.js", "types": "./dist/ipc/server.d.ts" },
-    "./ipc/client": { "import": "./dist/ipc/client.js", "types": "./dist/ipc/client.d.ts" },
-    "./bus": { "import": "./dist/bus.js", "types": "./dist/bus.d.ts" },
-    "./storage/sqlite": { "import": "./dist/storage/sqlite.js", "types": "./dist/storage/sqlite.d.ts" },
-    "./cli": { "import": "./dist/cli/index.js", "types": "./dist/cli/index.d.ts" }
+    ".": { "import": "./dist/core-daemon/daemon.js", "types": "./dist/core-daemon/daemon.d.ts" },
+    "./paths": { "import": "./dist/core-daemon/paths.js", "types": "./dist/core-daemon/paths.d.ts" },
+    "./config": { "import": "./dist/core-daemon/config.js", "types": "./dist/core-daemon/config.d.ts" },
+    "./bootstrap/ensure-daemon": { "import": "./dist/core-daemon/bootstrap/ensure-daemon.js", "types": "./dist/core-daemon/bootstrap/ensure-daemon.d.ts" },
+    "./bootstrap/spawn-lock": { "import": "./dist/core-daemon/bootstrap/spawn-lock.js", "types": "./dist/core-daemon/bootstrap/spawn-lock.d.ts" },
+    "./bootstrap/handshake": { "import": "./dist/core-daemon/bootstrap/handshake.js", "types": "./dist/core-daemon/bootstrap/handshake.d.ts" },
+    "./ipc/protocol": { "import": "./dist/core-daemon/ipc/protocol.js", "types": "./dist/core-daemon/ipc/protocol.d.ts" },
+    "./ipc/server": { "import": "./dist/core-daemon/ipc/server.js", "types": "./dist/core-daemon/ipc/server.d.ts" },
+    "./ipc/client": { "import": "./dist/core-daemon/ipc/client.js", "types": "./dist/core-daemon/ipc/client.d.ts" },
+    "./bus": { "import": "./dist/core-daemon/bus.js", "types": "./dist/core-daemon/bus.d.ts" },
+    "./storage/sqlite": { "import": "./dist/core-daemon/storage/sqlite.js", "types": "./dist/core-daemon/storage/sqlite.d.ts" },
+    "./cli": { "import": "./dist/core-daemon/cli/index.js", "types": "./dist/core-daemon/cli/index.d.ts" }
   },
   "scripts": {
     "build": "tsc && node scripts/copy-assets.js",

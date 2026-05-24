@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type {
   AuditEvent,
   AuditStore,
-} from "../../packages/core-contracts/dist/storage/audit-store.js";
+} from "agents-comm-bus-core";
 
 import { appendJsonLine } from "./jsonl.js";
 

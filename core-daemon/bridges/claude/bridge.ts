@@ -27,7 +27,7 @@ import {
   type ResolvedDecision,
   type SessionId,
   type Storage,
-} from "../../../packages/core-contracts/dist/index.js";
+} from "agents-comm-bus-core";
 
 import type { MessageBus } from "../../bus.js";
 import type {
