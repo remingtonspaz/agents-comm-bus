@@ -145,9 +145,9 @@ directory sketch this section follows.
 
 | Repo | Role |
 |---|---|
-| `agents-comm-bus` | Source monorepo with source dirs **and** built artifacts. Sources: `core-daemon/` (daemon runtime, including daemon-side agent bridges under `core-daemon/bridges/<agent>/`), `packages/core-contracts/` (shared contracts/types/records/storage interfaces package), `adapters/<comm>/` (CommAdapter), `hosts/<agent>/` (installed host edge: MCP shim + hooks + skills + manifest wiring). Built artifacts: `claude/<comm>/`, `codex/<comm>/` — one subdir per `(agent, comm)` pair, ready for marketplace consumption via git-subdir. **No marketplace manifest at any path** in this repo. |
-| `agents-comm-bus-claude` | Distribution endpoint for Claude Code. Contains only `.claude-plugin/marketplace.json` referencing `agents-comm-bus#<tag>:claude/<comm>` per plugin. |
-| `agents-comm-bus-codex` | Distribution endpoint for Codex. Contains only `.agents/plugins/marketplace.json` referencing `agents-comm-bus#<tag>:codex/<comm>` per plugin. |
+| `agents-comm-bus` | Source monorepo with source dirs **and** built artifacts. Sources: `core-daemon/` (daemon runtime, including daemon-side agent bridges under `core-daemon/bridges/<agent>/`), `packages/core-contracts/` (shared contracts/types/records/storage interfaces package), `adapters/<comm>/` (CommAdapter), `hosts/<agent>/` (installed host edge: MCP shim + hooks + skills + manifest wiring). Built artifacts: `plugins/claude/<comm>/`, `plugins/codex/<comm>/` — one subdir per `(agent, comm)` pair, ready for marketplace consumption via git-subdir. **No marketplace manifest at any path** in this repo. |
+| `agents-comm-bus-claude` | Distribution endpoint for Claude Code. Contains only `.claude-plugin/marketplace.json` referencing `agents-comm-bus#<tag>:plugins/claude/<comm>` per plugin. |
+| `agents-comm-bus-codex` | Distribution endpoint for Codex. Contains only `.agents/plugins/marketplace.json` referencing `agents-comm-bus#<tag>:plugins/codex/<comm>` per plugin. |
 
 ### Monorepo structure (Option A — preferred)
 
@@ -324,9 +324,9 @@ For each `(agent, comm)` combination, CI:
 9. Updates each marketplace repo's manifest to bump the pinned git
    tag in the corresponding plugin entries.
 
-**Daemon and adapter bundles are byte-identical across `claude/<comm>/`
-and `codex/<comm>/`** for a given release — they come from the same
-build step, just copied into each agent's tree.
+**Daemon and adapter bundles are byte-identical across `plugins/claude/<comm>/`
+and `plugins/codex/<comm>/`** for a given release — they come from the same
+build step, just copied into each agent's built artifact tree.
 
 Combinations that aren't supported in v1 (e.g., Codex+Discord may be
 deferred) get gated by a flag in CI rather than coded out of the
