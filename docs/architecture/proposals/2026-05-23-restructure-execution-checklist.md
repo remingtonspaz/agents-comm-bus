@@ -415,8 +415,7 @@ acceptance should stay split at that seam.
 - [ ] Assert generated manifests reference artifact-local paths, not source
   paths such as `hosts/...` or root-level compatibility paths.
 - [ ] Assert the staged skill files byte-match or otherwise exactly match the
-  assembled output contract produced by 7A before any agent-specific staging
-  wrappers are applied.
+  `(agent, comm)` assembled output produced by 7A.
 
 ### Verify before commit
 - [ ] build all artifact-producing packages/scripts
