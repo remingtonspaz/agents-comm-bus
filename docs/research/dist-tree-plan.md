@@ -31,7 +31,8 @@ agents-comm-bus (repo root)/
     │   │   ├── claude-install-hook.js
     │   │   ├── claude-mcp-shim.js
     │   │   └── skills/
-    │   │       └── telegram.md
+    │   │       └── telegram/
+    │   │           └── SKILL.md
     │   ├── matrix/
     │   │   └── ...
     │   ├── discord/
@@ -47,7 +48,8 @@ agents-comm-bus (repo root)/
         │   ├── telegram.adapter.bundle.js
         │   ├── codex-mcp-shim.js
         │   └── skills/
-        │       └── telegram.md
+        │       └── telegram/
+        │           └── SKILL.md
         ├── matrix/
         │   └── ...
         ├── discord/

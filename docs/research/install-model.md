@@ -76,7 +76,7 @@ That shape was rejected because:
 | `<comm>.adapter.bundle.js` | agent-agnostic | esbuilt CommAdapter for this one comm. Loaded dynamically by the daemon at runtime. |
 | `<agent>-install-hook.js` (Claude, at plugin root) or `hooks/<agent>-install-hook.js` (Codex) | agent-specific | Plugin lifecycle hook (e.g., Claude Code's `UserPromptSubmit`) that bootstraps the daemon if missing and drops the adapter into the shared location. Uses that agent's hook contract. Codex convention is to nest hooks in a `hooks/` directory; Claude declares the path inline in `plugin.json` so the script can live at root. |
 | `<agent>-mcp-shim.js` | agent-specific | Thin MCP server that brokers `register_account`, `send_message`, etc. between the agent and the daemon's WS. This **is** the AgentAdapter implementation for this host. |
-| `skills/<comm>.md` | agent-specific | Setup walkthrough that the host agent's skill system can read. Both Claude and Codex use a `skills/` subdir per their respective plugin specs. |
+| `skills/<skill-name>/SKILL.md` | agent-specific | Setup walkthrough that the host agent's skill system can read. Both Claude and Codex use directory-form plugin skills, with a required `SKILL.md` plus optional supporting files. |
 | `.claude-plugin/plugin.json` (Claude) or `.codex-plugin/plugin.json` + `.mcp.json` (Codex) | agent-specific | Plugin manifest. Claude declares MCP server, hook paths, and skill all inside `.claude-plugin/plugin.json`. Codex splits these — manifest at `.codex-plugin/plugin.json`, MCP server config at `.mcp.json`, lifecycle hooks under `hooks/`. Both paths verified against each agent's plugin-format spec. |
 
 Disk cost: ~3 MB per plugin (the daemon bundle dominates). With four
@@ -180,7 +180,7 @@ agents-comm-bus/                       (single monorepo)
 │   │   │   ├── telegram.adapter.bundle.js
 │   │   │   ├── claude-install-hook.js
 │   │   │   ├── claude-mcp-shim.js
-│   │   │   └── skills/telegram.md
+│   │   │   └── skills/telegram/SKILL.md
 │   │   ├── matrix/
 │   │   ├── discord/
 │   │   └── slack/
@@ -193,7 +193,7 @@ agents-comm-bus/                       (single monorepo)
 │       │   ├── daemon.bundle.js
 │       │   ├── telegram.adapter.bundle.js
 │       │   ├── codex-mcp-shim.js
-│       │   └── skills/telegram.md
+│       │   └── skills/telegram/SKILL.md
 │       └── ... (matrix, discord, slack)
 └── package.json, .gitattributes, CI configs
 ```
@@ -314,8 +314,11 @@ For each `(agent, comm)` combination, CI:
      skill inline).
    - Codex: `.codex-plugin/plugin.json` (manifest) + `.mcp.json`
      (MCP-server declaration; separate file per Codex spec).
-5. Copies the agent-specific skill from `hosts/<agent>/skills/<comm>.md`
-   to `skills/<comm>.md` in the plugin tree.
+5. Assembles the agent-specific skill from source inputs such as
+   `hosts/common/skills/**` and `hosts/<agent>/skills/<comm>/**` into
+   `skills/<skill-name>/SKILL.md` in the plugin tree. Skill assembly is
+   frontmatter-aware: each shipped skill has one final `name` and
+   `description` block, not concatenated fragment frontmatter.
 6. Writes the resulting directory tree to `plugins/<agent>/<comm>/` in
    the monorepo.
 7. Commits the artifact tree on a separate "build:" commit after the
