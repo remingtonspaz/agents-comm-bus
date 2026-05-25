@@ -321,11 +321,13 @@ This is the first phase that is a **true refactor**, not only a move.
 ## Phase 7 — split skills from build artifacts
 
 **Objective:** complete the source-vs-artifact split for host install
-surfaces, but treat the work as two separately reviewable tracks:
-**Phase 7A = skills** and **Phase 7B = build artifacts**. `hosts/<agent>/...`
-remains source-side host edge code and authoring input.
+surfaces, but treat the work as two separately reviewable, sequential tracks:
+**Phase 7A = skills first** and **Phase 7B = build artifacts second**.
+`hosts/<agent>/...` remains source-side host edge code and authoring input.
 `plugins/<agent>/<comm>/...` becomes the generated/staged plugin artifact tree
-consumed by marketplace git-subdir entries.
+consumed by marketplace git-subdir entries. 7B consumes the skill-assembly
+contract defined by 7A; parallel implementation is allowed, but review and
+acceptance should stay split at that seam.
 
 ### Current repo state to account for
 - `hosts/claude/` and `hosts/codex/` contain MCP shims and lifecycle hooks.
@@ -360,31 +362,39 @@ consumed by marketplace git-subdir entries.
 - [ ] Update canonical docs that still describe flat skill files, including
   `docs/research/dist-tree-plan.md` and `docs/research/install-model.md`, from
   `skills/<comm>.md` to `skills/<skill-name>/SKILL.md`.
+- [ ] Pin the `<skill-name>` directory contract for Telegram in this phase
+  (currently `telegram`) so assembly output naming is settled before 7B stages
+  artifact paths.
 - [ ] Create a source-side skill layout / mapping that makes it clear which
-  shared fragments and agent-specific inputs produce each shipped
-  `skills/<skill-name>/SKILL.md` artifact.
+  shared fragments and agent-specific inputs produce the assembled Telegram
+  skill output and its final `skills/<skill-name>/SKILL.md` packaging contract.
 - [ ] Move or split `skills/telegram/SKILL.md` into source-side authoring
   inputs. Do not copy it verbatim into shipped artifacts.
-- [ ] Rewrite the migrated Telegram skill content so the shipped skill is
-  daemon-current and does not preserve stale queue-file, project-local, or
+- [ ] Rewrite the migrated Telegram skill content so the assembled skill output
+  is daemon-current and does not preserve stale queue-file, project-local, or
   single-agent assumptions.
-- [ ] Make skill assembly frontmatter-aware. The final shipped `SKILL.md` must
+- [ ] Make skill assembly frontmatter-aware. The assembled `SKILL.md` must
   have exactly one `name` and `description` block authored for that
   `(agent, comm)` artifact; do not concatenate multiple `SKILL.md` files
   verbatim.
 - [ ] Write comm-scoped and agent-aware skill descriptions so Telegram,
   Matrix, Discord, etc. can coexist without misleading implicit invocation.
-- [ ] Add assertions that shipped Telegram skill files do not contain known
-  stale strings: `.claude-telegram/queue.json`, "configure credentials in
+- [ ] Add a source-side generated file or test fixture for the assembled skill
+  output so 7A can validate content without requiring `plugins/<agent>/<comm>`
+  staging to exist yet.
+- [ ] Add assertions that the assembled Telegram skill output does not contain
+  known stale strings: `.claude-telegram/queue.json`, "configure credentials in
   `.mcp.json`", "ALL sessions in this project", or Claude-only restart wording
   in the Codex artifact.
-- [ ] Assert shipped skills use the directory-form plugin layout
-  `skills/<skill-name>/SKILL.md` for both Claude and Codex artifacts.
+- [ ] Assert the assembled skill output uses the agreed directory-form plugin
+  layout contract `skills/<skill-name>/SKILL.md` and contains a single final
+  frontmatter block ready for 7B staging.
 
 ### Phase 7B — build artifacts and staged plugin trees
 - [ ] Create a source-to-artifact mapping for each generated artifact. The
   mapping should make it clear which source files/fragments produce each
-  `plugins/<agent>/<comm>/...` output.
+  `plugins/<agent>/<comm>/...` output, including the assembled skill output
+  from 7A.
 - [ ] Update build/staging code to generate complete artifact directories under
   `plugins/<agent>/<comm>/...`. This phase is not complete if it only moves
   source files or only generates manifests.
@@ -404,6 +414,9 @@ consumed by marketplace git-subdir entries.
   shim, and `skills/telegram/SKILL.md`.
 - [ ] Assert generated manifests reference artifact-local paths, not source
   paths such as `hosts/...` or root-level compatibility paths.
+- [ ] Assert the staged skill files byte-match or otherwise exactly match the
+  assembled output contract produced by 7A before any agent-specific staging
+  wrappers are applied.
 
 ### Verify before commit
 - [ ] build all artifact-producing packages/scripts
