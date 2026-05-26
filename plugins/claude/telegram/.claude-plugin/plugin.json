@@ -1,0 +1,16 @@
+{
+  "name": "telegram",
+  "description": "Telegram messaging for Claude Code through the agents-comm-bus daemon",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "telegram": {
+      "command": "node",
+      "args": [
+        "./claude-mcp-shim.js"
+      ]
+    }
+  },
+  "skills": "./skills/"
+}

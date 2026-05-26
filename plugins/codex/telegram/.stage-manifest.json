@@ -1,0 +1,977 @@
+{
+  "agent": "codex",
+  "comm": "telegram",
+  "staged_at": "2026-05-26T04:41:05.395Z",
+  "artifacts": [
+    {
+      "source": "hosts/codex/skills/telegram/SKILL.md",
+      "artifact": "plugins/codex/telegram/skills/telegram/SKILL.md",
+      "type": "assembled-skill"
+    },
+    {
+      "source": "hosts/common/skills/fragments/telegram/shared-body.md",
+      "artifact": "plugins/codex/telegram/skills/telegram/SKILL.md",
+      "type": "skill-fragment"
+    },
+    {
+      "source": "mcp-server/dist/codex-mcp-shim.js",
+      "artifact": "plugins/codex/telegram/codex-mcp-shim.js",
+      "type": "bundled-mcp-shim"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/adapter.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/adapter.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/adapter.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/adapter.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/adapter.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/adapter.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/adapter.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/adapter.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/factory.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/factory.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/factory.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/factory.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/factory.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/factory.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/factory.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/factory.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/handshake.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/handshake.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/handshake.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/handshake.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/handshake.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/handshake.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/handshake.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/handshake.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/adapter.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/adapter.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/adapter.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/adapter.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/adapter.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/adapter.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/adapter.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/adapter.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/bridge.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/bridge.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/bridge.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/bridge.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/bridge.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/bridge.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/bridge.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/bridge.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/wake.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/wake.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/wake.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/wake.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/wake.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/wake.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/claude/wake.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/claude/wake.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/adapter.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/adapter.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/adapter.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/adapter.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/adapter.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/adapter.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/adapter.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/adapter.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server-lifecycle.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/app-server.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/app-server.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/bridge.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/bridge.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/bridge.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/bridge.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/bridge.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/bridge.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bridges/codex/bridge.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bridges/codex/bridge.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bus.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bus.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bus.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bus.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bus.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bus.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bus.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bus.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-add.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-add.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-add.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-add.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-add.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-add.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-add.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-add.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-list.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-list.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-list.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-list.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-list.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-list.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-list.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-list.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-remove.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-remove.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-remove.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-remove.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-remove.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-remove.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-remove.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-remove.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-add.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-add.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-add.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-add.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-import.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-import.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-import.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-import.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-import.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-import.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-import.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-import.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-list.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-list.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-list.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-list.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-list.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-list.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-list.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-list.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-remove.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-remove.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-remove.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-remove.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-remove.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-remove.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-remove.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-remove.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-shared.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-shared.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-shared.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-shared.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-shared.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-shared.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-shared.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-shared.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/index.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/index.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/index.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/index.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/index.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/index.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/index.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/index.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/migrate.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/migrate.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/migrate.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/migrate.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/migrate.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/migrate.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/migrate.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/migrate.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/reload-helper.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/reload-helper.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/reload-helper.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/reload-helper.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/reload-helper.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/reload-helper.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/reload-helper.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/reload-helper.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/config.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/config.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/config.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/config.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/config.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/config.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/config.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/config.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/daemon.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/daemon.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/daemon.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/daemon.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/daemon.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/daemon.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/daemon.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/daemon.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/client.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/client.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/client.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/client.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/client.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/client.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/client.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/client.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/persistent-client.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/persistent-client.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/persistent-client.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/persistent-client.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/persistent-client.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/persistent-client.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/persistent-client.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/persistent-client.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/protocol.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/protocol.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/protocol.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/protocol.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/protocol.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/protocol.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/protocol.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/protocol.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/server.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/server.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/server.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/server.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/server.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/server.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/ipc/server.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/ipc/server.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-last-chat.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-last-chat.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-last-chat.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-last-chat.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-last-chat.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-last-chat.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-last-chat.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-last-chat.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/import-pending-permission.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/legacy-readers.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/legacy-readers.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/legacy-readers.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/legacy-readers.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/legacy-readers.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/legacy-readers.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/migrations/legacy-readers.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/migrations/legacy-readers.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/paths.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/paths.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/paths.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/paths.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/paths.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/paths.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/paths.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/paths.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/agent-bridge.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/agent-bridge.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/agent-bridge.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/agent-bridge.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/agent-bridge.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/agent-bridge.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/agent-bridge.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/agent-bridge.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/comm-factory.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/comm-factory.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/comm-factory.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/comm-factory.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/comm-factory.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/comm-factory.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/comm-factory.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/comm-factory.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/ipc-method.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/ipc-method.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/ipc-method.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/ipc-method.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/ipc-method.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/ipc-method.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/ipc-method.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/ipc-method.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/pending-inbound.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/pending-inbound.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/pending-inbound.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/pending-inbound.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/pending-inbound.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/pending-inbound.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/runtime/pending-inbound.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/runtime/pending-inbound.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/serve.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/serve.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/serve.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/serve.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/serve.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/serve.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/serve.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/serve.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/audit.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/audit.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/audit.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/audit.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/audit.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/audit.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/audit.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/audit.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/blobs.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/blobs.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/blobs.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/blobs.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/blobs.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/blobs.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/blobs.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/blobs.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/jsonl.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/jsonl.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/jsonl.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/jsonl.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/jsonl.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/jsonl.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/jsonl.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/jsonl.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/001_initial.sql",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/001_initial.sql",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/002_conversation_agent_identity.sql",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/002_conversation_agent_identity.sql",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/003_allowlist.sql",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/003_allowlist.sql",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/004_session_owner_process.sql",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/004_session_owner_process.sql",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/runner.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/runner.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/runner.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/runner.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/sqlite.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/sqlite.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/sqlite.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/sqlite.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/sqlite.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/sqlite.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/sqlite.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/sqlite.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/transcripts.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/transcripts.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/transcripts.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/transcripts.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/transcripts.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/transcripts.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/storage/transcripts.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/transcripts.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/package.json",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/package.json",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "hosts/codex/hooks/permission-request.js",
+      "artifact": "plugins/codex/telegram/hooks/permission-request.js",
+      "type": "hook"
+    },
+    {
+      "source": "hosts/codex/hooks/session-start.js",
+      "artifact": "plugins/codex/telegram/hooks/session-start.js",
+      "type": "hook"
+    },
+    {
+      "source": "hosts/codex/hooks/user-prompt-submit.js",
+      "artifact": "plugins/codex/telegram/hooks/user-prompt-submit.js",
+      "type": "hook"
+    },
+    {
+      "source": ".codex-plugin/plugin.json",
+      "artifact": "plugins/codex/telegram/.codex-plugin/plugin.json",
+      "type": "manifest"
+    },
+    {
+      "source": ".mcp.json.template",
+      "artifact": "plugins/codex/telegram/.mcp.json",
+      "type": "mcp-config"
+    },
+    {
+      "source": "scripts/bootstrap-codex-session.ps1",
+      "artifact": "plugins/codex/telegram/scripts/bootstrap-codex-session.ps1",
+      "type": "supporting-script"
+    }
+  ]
+}
