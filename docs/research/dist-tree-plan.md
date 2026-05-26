@@ -18,9 +18,9 @@ agents-comm-bus (repo root)/
 │   ├── discord/
 │   └── slack/
 ├── hosts/
-│   ├── claude/                                 installed host edge (Claude shim + hooks + skills)
-│   ├── codex/                                  installed host edge (Codex shim + hooks + skills)
-│   └── common/                                 shared host-side plumbing
+│   ├── claude/                                 installed host edge source (Claude shim + hooks + skill inputs)
+│   ├── codex/                                  installed host edge source (Codex shim + hooks + skill inputs)
+│   └── common/                                 shared host-side plumbing + shared skill authoring inputs
 └── plugins/                                    BUILT ARTIFACTS
     ├── claude/
     │   ├── telegram/
@@ -66,5 +66,7 @@ agents-comm-bus-codex (repo root)/
 
 Notes:
 - `core-daemon/bridges/<agent>/` means daemon-side agent protocol handlers, not host/plugin glue.
-- `hosts/<agent>/` remains the installed edge for MCP shims, hooks, skills, and manifest wiring.
+- `hosts/<agent>/` remains the installed edge source for MCP shims, hooks, host-facing skill inputs, and manifest wiring.
+- Source-side skill authoring inputs may live under `hosts/common/skills/**` and `hosts/<agent>/skills/<comm>/**`, but that authoring layout is not a shipped plugin contract. Assembly/staging must emit self-contained plugin artifacts.
+- Shipped plugin skills use directory-form skill packaging: `skills/<skill-name>/SKILL.md` plus optional supporting files under that skill directory. For Phase 7 Track 2 the Telegram skill-name is pinned to `telegram`, so both Claude and Codex Telegram artifacts must stage the skill at `plugins/<agent>/telegram/skills/telegram/SKILL.md` (installed as `skills/telegram/SKILL.md` inside the plugin), never as a flat `skills/telegram.md` or copied verbatim from source-side fragments.
 - When referring to bridge entry files in docs/reviews/plans, use the full path (for example `core-daemon/bridges/claude/bridge.ts`), never bare `bridge.ts`.
