@@ -54,7 +54,7 @@
 | `hooks/codex/session-start.js` | `hosts/codex/hooks/session-start.js` | Host-installed Codex hook. |
 | `hooks/session-start.js` | `hosts/claude/hooks/session-start.js` | Current root-level path became explicit Claude host glue. |
 | `hooks/telegram-context.js` | delete during cleanup | Current file is a thin backcompat wrapper into Claude host glue. Prefer deleting root-level compatibility wrappers during the hard-cut restructure rather than carrying them forward. |
-| `skills/telegram/SKILL.md` | `hosts/claude/skills/telegram.md` and `hosts/codex/skills/telegram.md` | Source can be duplicated or generated from a shared template; shipped artifact is per-agent. |
+| `skills/telegram/SKILL.md` | source authoring inputs under `hosts/common/skills/**` plus `hosts/<agent>/skills/telegram/**`; assembled artifacts at `plugins/<agent>/telegram/skills/telegram/SKILL.md` | Source input layout is not the shipped contract. Phase 7 Track 2 pins the Telegram skill directory name to `telegram`; assembly must emit self-contained `skills/telegram/SKILL.md` artifacts, not flat `skills/telegram.md` files and not verbatim copies of source fragments. |
 | `.claude-plugin/plugin.json` | `plugins/claude/<comm>/.claude-plugin/plugin.json` | Built artifact location per install-model doc. The `.claude-plugin/` directory is intentionally nested inside each comm-specific plugin subtree. |
 | `.codex-plugin/plugin.json` | `plugins/codex/<comm>/.codex-plugin/plugin.json` | Built artifact location per install-model doc. |
 | `.mcp.json.template` | `plugins/codex/<comm>/.mcp.json` (generated artifact) or `hosts/codex/.mcp.json.template` | Exact template-vs-generated choice is implementation detail; Codex still owns this file at the host/plugin edge. |
@@ -87,7 +87,8 @@ After the move, `hosts/<agent>/` is the **installed edge** for that agent host. 
   - host lifecycle hooks
   - prompt-submit / permission / session-start / wake glue
 - `skills/**`
-  - host-consumable skill/docs shipped with the plugin
+  - source authoring inputs for host-consumable skill/docs
+  - not necessarily the final installed skill tree; build/assembly stages self-contained plugin skills under `plugins/<agent>/<comm>/skills/<skill-name>/SKILL.md`
 - host manifest/config wiring
   - e.g. `.claude-plugin/plugin.json`
   - e.g. Codex `.codex-plugin/plugin.json`

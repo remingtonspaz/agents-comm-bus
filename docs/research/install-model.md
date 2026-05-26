@@ -76,7 +76,7 @@ That shape was rejected because:
 | `<comm>.adapter.bundle.js` | agent-agnostic | esbuilt CommAdapter for this one comm. Loaded dynamically by the daemon at runtime. |
 | `<agent>-install-hook.js` (Claude, at plugin root) or `hooks/<agent>-install-hook.js` (Codex) | agent-specific | Plugin lifecycle hook (e.g., Claude Code's `UserPromptSubmit`) that bootstraps the daemon if missing and drops the adapter into the shared location. Uses that agent's hook contract. Codex convention is to nest hooks in a `hooks/` directory; Claude declares the path inline in `plugin.json` so the script can live at root. |
 | `<agent>-mcp-shim.js` | agent-specific | Thin MCP server that brokers `register_account`, `send_message`, etc. between the agent and the daemon's WS. This **is** the AgentAdapter implementation for this host. |
-| `skills/<skill-name>/SKILL.md` | agent-specific | Setup walkthrough that the host agent's skill system can read. Both Claude and Codex use directory-form plugin skills, with a required `SKILL.md` plus optional supporting files. |
+| `skills/<skill-name>/SKILL.md` | agent-specific | Setup walkthrough that the host agent's skill system can read. Both Claude and Codex use directory-form plugin skills, with a required `SKILL.md` plus optional supporting files. In Phase 7 Track 2 the Telegram skill-name is pinned to `telegram`, so the Telegram artifact path is fixed as `skills/telegram/SKILL.md`. |
 | `.claude-plugin/plugin.json` (Claude) or `.codex-plugin/plugin.json` + `.mcp.json` (Codex) | agent-specific | Plugin manifest. Claude declares MCP server, hook paths, and skill all inside `.claude-plugin/plugin.json`. Codex splits these — manifest at `.codex-plugin/plugin.json`, MCP server config at `.mcp.json`, lifecycle hooks under `hooks/`. Both paths verified against each agent's plugin-format spec. |
 
 Disk cost: ~3 MB per plugin (the daemon bundle dominates). With four
@@ -145,9 +145,36 @@ directory sketch this section follows.
 
 | Repo | Role |
 |---|---|
-| `agents-comm-bus` | Source monorepo with source dirs **and** built artifacts. Sources: `core-daemon/` (daemon runtime, including daemon-side agent bridges under `core-daemon/bridges/<agent>/`), `packages/core-contracts/` (shared contracts/types/records/storage interfaces package), `adapters/<comm>/` (CommAdapter), `hosts/<agent>/` (installed host edge: MCP shim + hooks + skills + manifest wiring). Built artifacts: `plugins/claude/<comm>/`, `plugins/codex/<comm>/` — one subdir per `(agent, comm)` pair, ready for marketplace consumption via git-subdir. **No marketplace manifest at any path** in this repo. |
+| `agents-comm-bus` | Source monorepo with source dirs **and** built artifacts. Sources: `core-daemon/` (daemon runtime, including daemon-side agent bridges under `core-daemon/bridges/<agent>/`), `packages/core-contracts/` (shared contracts/types/records/storage interfaces package), `adapters/<comm>/` (CommAdapter), `hosts/<agent>/` (installed host edge: MCP shim + hooks + source skill inputs + manifest wiring). Built artifacts: `plugins/claude/<comm>/`, `plugins/codex/<comm>/` — one subdir per `(agent, comm)` pair, ready for marketplace consumption via git-subdir and containing self-contained shipped skill artifacts at `skills/<skill-name>/SKILL.md` (Telegram pinned to `skills/telegram/SKILL.md`). **No marketplace manifest at any path** in this repo. |
 | `agents-comm-bus-claude` | Distribution endpoint for Claude Code. Contains only `.claude-plugin/marketplace.json` referencing `agents-comm-bus#<tag>:plugins/claude/<comm>` per plugin. |
 | `agents-comm-bus-codex` | Distribution endpoint for Codex. Contains only `.agents/plugins/marketplace.json` referencing `agents-comm-bus#<tag>:plugins/codex/<comm>` per plugin. |
+
+### Source skill inputs vs shipped skill artifacts
+
+The source monorepo may keep skill authoring material in whatever layout is
+most maintainable for humans and generators — for example shared fragments
+under `hosts/common/skills/**` plus host/comm-specific inputs under
+`hosts/<agent>/skills/<comm>/**`. Those paths are **inputs** to the build,
+not files the marketplace installs directly.
+
+The shipped plugin artifact must be self-contained under
+`plugins/<agent>/<comm>/` and must use the host plugin skill contract:
+`skills/<skill-name>/SKILL.md` plus any supporting files underneath the same
+skill directory. The assembly step is responsible for resolving fragments,
+frontmatter, relative links, and supporting files so the installed plugin can
+be copied as a standalone subtree. It must not copy the source-side authoring
+layout verbatim into the shipped artifact.
+
+For Phase 7 Track 2, the Telegram skill-name is explicitly pinned to
+`telegram`. Therefore every Telegram artifact in this phase stages its skill
+at:
+
+- `plugins/claude/telegram/skills/telegram/SKILL.md`
+- `plugins/codex/telegram/skills/telegram/SKILL.md`
+
+Inside either installed plugin, the relative path is always
+`skills/telegram/SKILL.md`. Implementations and tests should assert this
+fixed path; do not accept or produce the old flat `skills/telegram.md` shape.
 
 ### Monorepo structure (Option A — preferred)
 
@@ -169,9 +196,9 @@ agents-comm-bus/                       (single monorepo)
 │   ├── discord/
 │   └── slack/
 ├── hosts/
-│   ├── claude/                        installed host edge: hooks + MCP shim + skills
-│   ├── codex/                         installed host edge for Codex
-│   └── common/                        shared host-side plumbing (e.g. shim helpers)
+│   ├── claude/                        installed host edge source: hooks + MCP shim + skill inputs
+│   ├── codex/                         installed host edge source for Codex
+│   └── common/                        shared host-side plumbing and shared skill inputs
 ├── plugins/                           BUILT ARTIFACTS
 │   ├── claude/
 │   │   ├── telegram/
@@ -316,9 +343,13 @@ For each `(agent, comm)` combination, CI:
      (MCP-server declaration; separate file per Codex spec).
 5. Assembles the agent-specific skill from source inputs such as
    `hosts/common/skills/**` and `hosts/<agent>/skills/<comm>/**` into
-   `skills/<skill-name>/SKILL.md` in the plugin tree. Skill assembly is
+   `skills/<skill-name>/SKILL.md` in the plugin tree. For Telegram in
+   Phase 7 Track 2, `<skill-name>` is fixed to `telegram`, so the exact
+   output path is `skills/telegram/SKILL.md`. Skill assembly is
    frontmatter-aware: each shipped skill has one final `name` and
-   `description` block, not concatenated fragment frontmatter.
+   `description` block, not concatenated fragment frontmatter; it also
+   resolves any supporting files and relative links so the staged plugin
+   is self-contained.
 6. Writes the resulting directory tree to `plugins/<agent>/<comm>/` in
    the monorepo.
 7. Commits the artifact tree on a separate "build:" commit after the
