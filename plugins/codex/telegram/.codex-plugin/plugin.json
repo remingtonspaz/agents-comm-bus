@@ -1,0 +1,32 @@
+{
+  "name": "telegram",
+  "version": "0.1.0",
+  "description": "Bidirectional Telegram messaging for Codex through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "homepage": "https://github.com/remingtonspaz/claude-code-telegram",
+  "repository": "https://github.com/remingtonspaz/claude-code-telegram",
+  "license": "MIT",
+  "keywords": [
+    "telegram",
+    "messaging",
+    "remote-control",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Telegram",
+    "shortDescription": "Talk to Codex from Telegram",
+    "longDescription": "Bidirectional Telegram messaging for Codex. Send progress updates and results to your phone; reply on Telegram to start or steer a turn and approve or deny tool permissions through the shared agents-comm-bus daemon.",
+    "developerName": "Satrio",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Send a status update to my Telegram"
+    ]
+  }
+}

@@ -54,7 +54,7 @@
 | `hooks/codex/session-start.js` | `hosts/codex/hooks/session-start.js` | Host-installed Codex hook. |
 | `hooks/session-start.js` | `hosts/claude/hooks/session-start.js` | Current root-level path became explicit Claude host glue. |
 | `hooks/telegram-context.js` | delete during cleanup | Current file is a thin backcompat wrapper into Claude host glue. Prefer deleting root-level compatibility wrappers during the hard-cut restructure rather than carrying them forward. |
-| `skills/telegram/SKILL.md` | `hosts/claude/skills/telegram.md` and `hosts/codex/skills/telegram.md` | Source can be duplicated or generated from a shared template; shipped artifact is per-agent. |
+| `skills/telegram/SKILL.md` | `hosts/common/skills/fragments/telegram/**` plus `hosts/<agent>/skills/telegram/SKILL.md` | Source is split into shared fragments plus per-agent frontmatter/body inputs. The assembled shipped artifact is per-agent at `plugins/<agent>/telegram/skills/telegram/SKILL.md`. |
 | `.claude-plugin/plugin.json` | `plugins/claude/<comm>/.claude-plugin/plugin.json` | Built artifact location per install-model doc. The `.claude-plugin/` directory is intentionally nested inside each comm-specific plugin subtree. |
 | `.codex-plugin/plugin.json` | `plugins/codex/<comm>/.codex-plugin/plugin.json` | Built artifact location per install-model doc. |
 | `.mcp.json.template` | `plugins/codex/<comm>/.mcp.json` (generated artifact) or `hosts/codex/.mcp.json.template` | Exact template-vs-generated choice is implementation detail; Codex still owns this file at the host/plugin edge. |

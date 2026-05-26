@@ -1,26 +1,38 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const artifactRoot = path.join(repoRoot, "plugins/claude/telegram");
 
-async function readRepoFile(relativePath: string): Promise<string> {
-  return readFile(path.join(repoRoot, relativePath), "utf8");
+async function readArtifactFile(relativePath: string): Promise<string> {
+  return readFile(path.join(artifactRoot, relativePath), "utf8");
 }
 
-test("Claude hooks config points at Claude-named hook entrypoints", async () => {
-  const hooksJson = JSON.parse(await readRepoFile("hosts/claude/hooks/hooks.json"));
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("Claude artifact hooks config points at artifact-local hook entrypoints", async () => {
+  const hooksJson = JSON.parse(await readArtifactFile("hooks/hooks.json"));
 
   const userPromptCommand = hooksJson.hooks.UserPromptSubmit[0].hooks[0].command;
   const permissionCommand = hooksJson.hooks.PermissionRequest[0].hooks[0].command;
+  const sessionStartCommand = hooksJson.hooks.SessionStart[0].hooks[0].command;
 
-  assert.equal(userPromptCommand, "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/user-prompt-submit.js");
-  assert.equal(permissionCommand, "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/permission-request.js");
+  assert.equal(userPromptCommand, "node ./hooks/user-prompt-submit.js");
+  assert.equal(permissionCommand, "node ./hooks/permission-request.js");
+  assert.equal(sessionStartCommand, "node ./hooks/session-start.js");
 });
 
-test("Claude UserPromptSubmit drains daemon inbound without legacy queue files", async () => {
-  const hook = await readRepoFile("hosts/claude/hooks/user-prompt-submit.js");
+test("Claude staged UserPromptSubmit drains daemon inbound without legacy queue files", async () => {
+  const hook = await readArtifactFile("hooks/user-prompt-submit.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /ensureClaudeWakeWatcher/);
@@ -32,8 +44,8 @@ test("Claude UserPromptSubmit drains daemon inbound without legacy queue files",
   assert.doesNotMatch(hook, /\.claude-telegram/);
 });
 
-test("Claude PermissionRequest opens daemon query without pending-permission file", async () => {
-  const hook = await readRepoFile("hosts/claude/hooks/permission-request.js");
+test("Claude staged PermissionRequest opens daemon query without pending-permission file", async () => {
+  const hook = await readArtifactFile("hooks/permission-request.js");
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /claude_register_session/);
@@ -46,18 +58,26 @@ test("Claude PermissionRequest opens daemon query without pending-permission fil
   assert.doesNotMatch(hook, /\.claude-telegram/);
 });
 
-test("Claude wake support uses daemon wake directory and watcher pid marker", async () => {
-  const hook = await readRepoFile("hosts/claude/hooks/wake-support.js");
+test("Claude staged wake support uses daemon wake directory and watcher pid marker", async () => {
+  const hook = await readArtifactFile("hooks/wake-support.js");
 
   assert.match(hook, /claudeWakeDirForProject/);
   assert.match(hook, /watcher\.pid/);
   assert.match(hook, /enter-watcher\.ps1/);
-  assert.match(hook, /path\.resolve\(__dirname, '\.\.', '\.\.', '\.\.', 'scripts', 'enter-watcher\.ps1'\)/);
+  assert.match(hook, /path\.resolve\(__dirname, '\.\.', 'scripts', 'enter-watcher\.ps1'\)/);
   assert.doesNotMatch(hook, /\.claude-telegram/);
 });
 
-test("Claude wake support resolves the watcher script from the repo root scripts directory", async () => {
-  await access(path.join(repoRoot, "scripts/enter-watcher.ps1"));
+test("Claude staged wake support resolves watcher script from artifact-local scripts directory", async () => {
+  await access(path.join(artifactRoot, "scripts/enter-watcher.ps1"));
+});
+
+test("Claude staged hooks use artifact-local shimNames", async () => {
+  const userPrompt = await readArtifactFile("hooks/user-prompt-submit.js");
+  const permission = await readArtifactFile("hooks/permission-request.js");
+
+  assert.match(userPrompt, /shimName: '\.\/hooks\/user-prompt-submit\.js'/);
+  assert.match(permission, /shimName: '\.\/hooks\/permission-request\.js'/);
 });
 
 test("legacy root Claude compatibility wrapper paths are removed", async () => {
@@ -66,10 +86,30 @@ test("legacy root Claude compatibility wrapper paths are removed", async () => {
   await assert.rejects(access(path.join(repoRoot, "hooks/session-start.js")), { code: "ENOENT" });
 });
 
+test("Claude staged plugin manifest is self-contained with local MCP shim path", async () => {
+  const manifest = JSON.parse(await readArtifactFile(".claude-plugin/plugin.json"));
 
-test("Claude plugin manifest points at Claude MCP shim", async () => {
-  const manifest = JSON.parse(await readRepoFile(".claude-plugin/plugin.json"));
-
+  assert.equal(manifest.name, "telegram");
   assert.equal(manifest.mcpServers.telegram.command, "node");
-  assert.deepEqual(manifest.mcpServers.telegram.args, ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/claude-mcp-shim.js"]);
+  // Manifest in artifact must use artifact-local relative path
+  assert.deepEqual(manifest.mcpServers.telegram.args, ["./claude-mcp-shim.js"]);
+  assert.ok(manifest.skills?.endsWith("skills/"), "skills field points to ./skills/");
+});
+
+test("Claude staged manifest does not leak source paths", async () => {
+  const manifest = JSON.parse(await readArtifactFile(".claude-plugin/plugin.json"));
+  const manifestStr = JSON.stringify(manifest);
+  assert.doesNotMatch(manifestStr, /hosts\/claude/);
+  assert.doesNotMatch(manifestStr, /mcp-server\/dist/);
+  assert.doesNotMatch(manifestStr, /\$\{CLAUDE_PLUGIN_ROOT\}/);
+});
+
+test("Claude staged hooks do not import from source paths", async () => {
+  const entries = await readdir(path.join(artifactRoot, "hooks"), { withFileTypes: true });
+  const jsFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".js"));
+  for (const f of jsFiles) {
+    const content = await readArtifactFile(`hooks/${f.name}`);
+    assert.doesNotMatch(content, /from ['"]\.\.\/..\/hosts\/claude\//);
+    assert.doesNotMatch(content, /from ['"]hosts\/claude\//);
+  }
 });

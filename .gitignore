@@ -11,6 +11,7 @@ node_modules/
 # Local MCP override for in-tree development
 # (canonical config lives in .claude-plugin/plugin.json under mcpServers)
 .mcp.json
+!plugins/codex/telegram/.mcp.json
 
 # Local team scratchpad: the canvas + its seed sidecar are local-only
 docs/Command Center.html

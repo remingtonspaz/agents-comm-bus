@@ -1,0 +1,13 @@
+# Keep generated and assembled artifacts byte-stable across platforms.
+*.md text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.ps1 text eol=lf
+
+hosts/**/skills/**/*.md text eol=lf
+hosts/common/skills/fragments/**/*.md text eol=lf
+plugins/**/skills/**/*.md text eol=lf
+plugins/**/*.json text eol=lf
+plugins/**/*.js text eol=lf
+plugins/**/*.ps1 text eol=lf

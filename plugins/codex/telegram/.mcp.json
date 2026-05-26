@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "telegram": {
+      "command": "node",
+      "args": [
+        "./codex-mcp-shim.js"
+      ]
+    }
+  }
+}
