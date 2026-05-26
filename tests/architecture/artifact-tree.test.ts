@@ -293,6 +293,33 @@ describe("Artifact-global invariants", () => {
     }
   });
 
+  it("no staged text artifact contains CRLF line endings", async () => {
+    const artifactRoots = [
+      resolve(repoRoot, "plugins/claude/telegram"),
+      resolve(repoRoot, "plugins/codex/telegram"),
+    ];
+    for (const root of artifactRoots) {
+      const entries = await readdir(root, { recursive: true, withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const p = resolve(entry.parentPath ?? root, entry.name);
+        if (!/\.(js|json|md|ps1)$/.test(entry.name) && !entry.name.endsWith(".mcp.json")) continue;
+        const content = await readFile(p, "utf-8");
+        assert.doesNotMatch(content, /\r\n?/, `${relative(repoRoot, p)} must use LF line endings`);
+      }
+    }
+  });
+
+  it("staged MCP shims contain no trailing whitespace", async () => {
+    for (const p of [
+      resolve(repoRoot, "plugins/claude/telegram/claude-mcp-shim.js"),
+      resolve(repoRoot, "plugins/codex/telegram/codex-mcp-shim.js"),
+    ]) {
+      const content = await readFile(p, "utf-8");
+      assert.doesNotMatch(content, /[ 	]+$/m, `${relative(repoRoot, p)} must be diff-check clean`);
+    }
+  });
+
   it("dev install scripts at repo root are distinct from artifact trees", async () => {
     const devScripts = [
       resolve(repoRoot, "install.js"),
@@ -537,6 +564,7 @@ describe("Source-to-artifact mapping invariants", () => {
     assert.ok(script.includes("frontmatter-aware"), "script is frontmatter-aware");
     assert.ok(script.includes("validateFrontmatter"), "script validates frontmatter");
     assert.ok(script.includes("parseSkill"), "script parses skill frontmatter");
+    assert.ok(script.includes("normalizeEol"), "script normalizes line endings");
   });
 
   it("stage-plugins script exists and creates mapping metadata", async () => {
@@ -546,6 +574,22 @@ describe("Source-to-artifact mapping invariants", () => {
     assert.ok(script.includes("stage-manifest.json"), "script writes .stage-manifest.json");
     assert.ok(script.includes("source"), "script records source provenance");
     assert.ok(script.includes("artifact"), "script records artifact destination");
+    assert.ok(script.includes("normalizeEol"), "script normalizes generated text line endings");
+    assert.ok(script.includes("stripTrailingWhitespace"), "script strips generated shim trailing whitespace");
+  });
+
+  it("repository attributes pin generated text artifacts to LF", async () => {
+    const attrs = await readFile(resolve(repoRoot, ".gitattributes"), "utf-8");
+    for (const rule of [
+      "hosts/**/skills/**/*.md text eol=lf",
+      "hosts/common/skills/fragments/**/*.md text eol=lf",
+      "plugins/**/skills/**/*.md text eol=lf",
+      "plugins/**/*.json text eol=lf",
+      "plugins/**/*.js text eol=lf",
+      "plugins/**/*.ps1 text eol=lf",
+    ]) {
+      assert.ok(attrs.includes(rule), `.gitattributes must include ${rule}`);
+    }
   });
 
   it("package.json includes stage:plugins script", async () => {

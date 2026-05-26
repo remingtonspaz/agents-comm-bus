@@ -1,7 +1,7 @@
 {
   "agent": "codex",
   "comm": "telegram",
-  "staged_at": "2026-05-26T04:41:05.395Z",
+  "staged_at": "2026-05-26T05:47:43.654Z",
   "artifacts": [
     {
       "source": "hosts/codex/skills/telegram/SKILL.md",

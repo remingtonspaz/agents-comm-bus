@@ -1,7 +1,7 @@
 {
   "agent": "claude",
   "comm": "telegram",
-  "staged_at": "2026-05-26T04:41:05.056Z",
+  "staged_at": "2026-05-26T05:47:43.373Z",
   "artifacts": [
     {
       "source": "hosts/claude/skills/telegram/SKILL.md",

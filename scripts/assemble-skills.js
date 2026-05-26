@@ -28,6 +28,10 @@ const DEFAULT_OUTPUT_DIR = resolve(REPO_ROOT, "plugins");
 const args = process.argv.slice(2);
 const verifyMode = args.includes("--verify");
 const outputDirFlag = args.indexOf("--output-dir");
+
+function normalizeEol(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
 const OUTPUT_BASE =
   outputDirFlag !== -1 && args[outputDirFlag + 1]
     ? resolve(args[outputDirFlag + 1])
@@ -38,13 +42,14 @@ const OUTPUT_BASE =
  * Returns { frontmatter: string|null, body: string, hasFrontmatter: boolean }
  */
 function parseSkill(content) {
-  const trimmed = content.trimStart();
+  const normalized = normalizeEol(content);
+  const trimmed = normalized.trimStart();
   if (!trimmed.startsWith("---")) {
-    return { frontmatter: null, body: content, hasFrontmatter: false };
+    return { frontmatter: null, body: normalized, hasFrontmatter: false };
   }
   const endIdx = trimmed.indexOf("---", 3);
   if (endIdx === -1) {
-    return { frontmatter: null, body: content, hasFrontmatter: false };
+    return { frontmatter: null, body: normalized, hasFrontmatter: false };
   }
   const frontmatter = trimmed.slice(0, endIdx + 3).trimEnd();
   const body = trimmed.slice(endIdx + 3).replace(/^\n+/, "");
@@ -100,7 +105,7 @@ async function readFragments(dir) {
       .map((e) => e.name)
       .sort();
     for (const name of files) {
-      const text = await readFile(resolve(dir, name), "utf-8");
+      const text = normalizeEol(await readFile(resolve(dir, name), "utf-8"));
       const parsed = parseSkill(text);
       const body = parsed.hasFrontmatter ? parsed.body.trimEnd() : text.trimEnd();
       const kind = name.startsWith("prepend-") ? "prepend" : "append";
@@ -141,7 +146,7 @@ async function assemble(agent, comm) {
     throw new Error(`Missing agent-specific skill: ${agentPath}`);
   }
 
-  const parsed = parseSkill(agentRaw);
+  const parsed = parseSkill(normalizeEol(agentRaw));
   if (!parsed.hasFrontmatter) {
     throw new Error(`Agent-specific skill must start with frontmatter: ${agentPath}`);
   }
@@ -198,7 +203,7 @@ async function verify(agent, comm) {
   );
   let existing;
   try {
-    existing = await readFile(outPath, "utf-8");
+    existing = normalizeEol(await readFile(outPath, "utf-8"));
   } catch (err) {
     if (err.code === "ENOENT") {
       return { ok: false, reason: "missing staged file", path: outPath };

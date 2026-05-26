@@ -30,6 +30,18 @@ const args = process.argv.slice(2);
 const verifyMode = args.includes("--verify");
 const dryRun = args.includes("--dry-run");
 const outputDirFlag = args.indexOf("--output-dir");
+
+function normalizeEol(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+function stripTrailingWhitespace(text) {
+  return normalizeEol(text).replace(/[ \t]+$/gm, "");
+}
+
+function isTextArtifactPath(filePath) {
+  return /\.(js|json|md|ps1|ts|map)$/.test(filePath) || filePath.endsWith(".d.ts");
+}
 const OUTPUT_BASE =
   outputDirFlag !== -1 && args[outputDirFlag + 1]
     ? resolve(args[outputDirFlag + 1])
@@ -68,6 +80,11 @@ async function copyFileAtomic(src, dst) {
   await pipeline(createReadStream(src), createWriteStream(dst));
 }
 
+async function copyTextFileAtomic(src, dst, transform = normalizeEol) {
+  const content = transform(await readText(src));
+  await writeText(dst, content);
+}
+
 async function copyTree(srcDir, dstDir, recordFn, type) {
   const entries = await readdir(srcDir, { withFileTypes: true });
   for (const entry of entries) {
@@ -76,14 +93,18 @@ async function copyTree(srcDir, dstDir, recordFn, type) {
     if (entry.isDirectory()) {
       await copyTree(src, dst, recordFn, type);
     } else if (entry.isFile()) {
-      await copyFileAtomic(src, dst);
+      if (isTextArtifactPath(src)) {
+        await copyTextFileAtomic(src, dst);
+      } else {
+        await copyFileAtomic(src, dst);
+      }
       recordFn(src, dst, type);
     }
   }
 }
 
 async function readText(p) {
-  return readFile(p, "utf-8");
+  return normalizeEol(await readFile(p, "utf-8"));
 }
 
 async function writeText(p, text) {
@@ -92,7 +113,7 @@ async function writeText(p, text) {
     return;
   }
   await ensureDir(dirname(p));
-  await writeFile(p, text, "utf-8");
+  await writeFile(p, normalizeEol(text), "utf-8");
 }
 
 async function readJson(p) {
@@ -106,13 +127,14 @@ async function writeJson(p, obj) {
 /* ── skill assembly (copied from assemble-skills.js for self-containment) ── */
 
 function parseSkill(content) {
-  const trimmed = content.trimStart();
+  const normalized = normalizeEol(content);
+  const trimmed = normalized.trimStart();
   if (!trimmed.startsWith("---")) {
-    return { frontmatter: null, body: content, hasFrontmatter: false };
+    return { frontmatter: null, body: normalized, hasFrontmatter: false };
   }
   const endIdx = trimmed.indexOf("---", 3);
   if (endIdx === -1) {
-    return { frontmatter: null, body: content, hasFrontmatter: false };
+    return { frontmatter: null, body: normalized, hasFrontmatter: false };
   }
   const frontmatter = trimmed.slice(0, endIdx + 3).trimEnd();
   const body = trimmed.slice(endIdx + 3).replace(/^\n+/, "");
@@ -311,7 +333,7 @@ async function stagePair(agent, comm) {
     throw new Error(`Missing bundled MCP shim: ${bundledShimSrc}. Run 'npm run build' in hosts/.`);
   }
   const shimDst = resolve(outDir, bundledShimName);
-  await copyFileAtomic(bundledShimSrc, shimDst);
+  await copyTextFileAtomic(bundledShimSrc, shimDst, stripTrailingWhitespace);
   record(bundledShimSrc, shimDst, "bundled-mcp-shim");
 
   /* 3. Daemon runtime package used by staged hooks */
@@ -398,7 +420,7 @@ async function stagePair(agent, comm) {
     const src = resolve(scriptsSrcDir, scriptName);
     if (await pathExists(src)) {
       const dst = resolve(scriptsDstDir, scriptName);
-      await copyFileAtomic(src, dst);
+      await copyTextFileAtomic(src, dst);
       record(src, dst, "supporting-script");
     }
   }
