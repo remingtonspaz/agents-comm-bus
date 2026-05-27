@@ -254,40 +254,43 @@ Send Claude Code slash commands from Telegram using `;` as the prefix (since Tel
 
 ```
 claude-code-telegram/
-├── .claude-plugin/
-│   └── plugin.json              # Plugin metadata
-├── hosts/
-│   ├── claude/
-│   │   ├── claude-mcp-shim.js   # Claude MCP shim entrypoint
-│   │   └── hooks/
-│   │       ├── hooks.json       # Claude hook manifest
-│   │       ├── permission-request.js
-│   │       ├── session-start.js
-│   │       ├── user-prompt-submit.js
-│   │       └── wake-support.js
-│   ├── codex/
-│   │   ├── codex-mcp-shim.js    # Codex MCP shim entrypoint
-│   │   └── hooks/
-│   │       ├── permission-request.js
-│   │       ├── session-start.js
-│   │       └── user-prompt-submit.js
-│   └── common/
-│       └── mcp-shim-shared.js   # Shared MCP shim plumbing
-├── skills/
-│   └── telegram/
-│       └── SKILL.md             # Claude skill instructions
-├── scripts/
-│   ├── enter-watcher.ps1        # Keystroke automation (main watcher)
-│   ├── list-windows.ps1         # Helper to find Claude windows
-│   ├── send-enter.ps1           # Helper to send keystrokes
-│   └── post-install.js          # Post-install setup script
-├── mcp-server/
-│   ├── server.js                # MCP server with Telegram bot
-│   └── package.json             # MCP server dependencies
-├── .mcp.json.template           # Credential template
-├── install.js                   # Installation script
-├── package.json                 # Root package.json
-└── README.md
+|-- .claude-plugin/
+|   `-- plugin.json                 # Claude plugin metadata
+|-- .codex-plugin/
+|   `-- plugin.json                 # Codex plugin metadata
+|-- packages/core-contracts/        # Shared contracts/types package
+|-- core-daemon/                    # Daemon source
+|-- adapters/
+|   `-- telegram/                   # Telegram comm adapter source
+|-- agents-comm-bus/                # Daemon npm package + dist
+|-- hosts/
+|   |-- claude/
+|   |   |-- claude-mcp-shim.js      # Claude MCP shim entrypoint
+|   |   |-- hooks/                  # Claude hook source
+|   |   `-- skills/telegram/        # Claude skill source
+|   |-- codex/
+|   |   |-- codex-mcp-shim.js       # Codex MCP shim entrypoint
+|   |   |-- hooks/                  # Codex hook source
+|   |   `-- skills/telegram/        # Codex skill source
+|   `-- common/
+|       |-- mcp-shim-shared.js      # Shared MCP shim plumbing
+|       `-- skills/fragments/       # Shared skill prose fragments
+|-- mcp-server/
+|   |-- dist/                       # Bundled MCP shims
+|   `-- package.json                # Shim build package
+|-- plugins/
+|   |-- claude/telegram/            # Staged Claude plugin artifact
+|   `-- codex/telegram/             # Staged Codex plugin artifact
+|-- scripts/
+|   |-- bootstrap-codex-session.ps1 # Codex app-server bootstrapper
+|   |-- enter-watcher.ps1           # Claude keystroke watcher
+|   |-- assemble-skills.js          # Skill assembly script
+|   `-- stage-plugins.js            # Plugin artifact staging script
+|-- .mcp.json.template              # Credential template
+|-- install.js                      # Claude dev install script
+|-- install-codex.js                # Codex dev install script
+|-- package.json                    # Root workspace package.json
+`-- README.md
 ```
 
 ## Components

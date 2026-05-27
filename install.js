@@ -22,7 +22,6 @@ const CORE_DIR = path.join(__dirname, 'packages', 'core-contracts');
 const DAEMON_DIR = path.join(__dirname, 'agents-comm-bus');
 const HOSTS_DIR = path.join(__dirname, 'hosts');
 const MCP_SERVER_DIR = path.join(__dirname, 'mcp-server');
-const HOOKS_DIR = path.join(__dirname, 'hooks');
 const MCP_CONFIG = path.join(__dirname, '.mcp.json');
 const SETTINGS_FILE = path.join(__dirname, '.claude', 'settings.local.json');
 
@@ -117,7 +116,7 @@ async function showStatus() {
     log('packages/core-contracts not built', 'warn');
   }
 
-  if (checkPackageBuilt(DAEMON_DIR, 'dist/daemon.js')) {
+  if (checkPackageBuilt(DAEMON_DIR, 'dist/core-daemon/daemon.js')) {
     log('agents-comm-bus daemon built', 'success');
   } else {
     log('agents-comm-bus daemon not built', 'warn');
