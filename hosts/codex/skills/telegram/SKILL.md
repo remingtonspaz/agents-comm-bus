@@ -1,6 +1,6 @@
 ---
 name: telegram-integration
-description: Telegram integration for Codex through the agents-comm-bus daemon.
+description: Use when Codex is connected to Telegram through agents-comm-bus -- especially when the user sends work requests, approvals, status checks, or follow-up instructions from Telegram, when you need to send a Telegram update, or when you inspect Telegram conversation state.
 skillName: telegram-integration
 metadata:
   hermes:
@@ -9,55 +9,40 @@ metadata:
 ---
 # Telegram Integration for Codex
 
-This skill enables bidirectional communication with Telegram.
+## When To Use
 
-## IMPORTANT: Always Forward to Telegram
+Use this skill whenever a Telegram message reaches the Codex session, when the
+user asks you to send a Telegram update, or when you need to inspect Telegram
+conversation state through agents-comm-bus. The Telegram chat is part of the
+active collaboration channel, not an external notification sink.
 
-**You MUST use the `comm_send_message` tool with `comm: "telegram"` to forward your responses to Telegram.** The user monitors this session remotely via Telegram and needs to see what you're doing.
+When a message arrives from Telegram, **reply on Telegram** as part of the
+normal response loop -- do not assume the user is watching the local terminal.
 
-### Communication Pattern
-1. **First**: Send an initial acknowledgment/plan when you receive a message
-2. **During**: Send milestone updates for important progress (found the issue, making changes, tests passing, etc.)
-3. **Finally**: Send a summary of what was completed
+## Codex Behavior
 
-Keep Telegram messages concise but informative.
+Codex receives Telegram inbound through the agents-comm-bus Codex bridge and
+its app-server wake path. In current builds the bridge **steers the active
+Codex turn first**, falling back to starting a new turn only when steering is
+unavailable -- so an inbound message may arrive mid-turn rather than as a fresh
+prompt. Treat injected Telegram messages as live user instructions unless they
+are clearly stale or superseded by a newer local prompt.
 
-## Quick Status Check
+Outbound goes back over the same channel with `comm_send_message`
+(`comm: "telegram"`) -- a local-only response is invisible to a user who is
+watching from their phone.
 
-To verify the integration is working, check the MCP server status:
-```
-/mcp
-```
+## Essential Telegram Tools
 
-Look for the `telegram` server in the list. If it shows as connected, the integration is active.
+- `list_conversations` -- inspect known conversations and get exact chat or
+  thread targets before sending to a non-current chat.
+- `comm_send_message` -- send concise status, questions, and final reports with
+  `comm: "telegram"`.
+- `comm_check_messages` -- drain pending inbound when you suspect new Telegram
+  context has arrived but has not yet appeared in the prompt.
+- `comm_send_attachment` -- send a file or image when a report needs an artifact
+  rather than text.
 
-## Installation
-
-If the integration isn't set up yet:
-
-1. Set up the plugin: follow the install-codex.js instructions
-2. Configure credentials in `~/.codex/config.toml`
-3. Restart Codex to load the MCP server
-
-## Troubleshooting
-
-### MCP server not showing in /mcp
-1. Check that `agents-comm-bus` package is built (`cd agents-comm-bus && npm run build`)
-2. Verify `~/.codex/config.toml` contains the `[mcp_servers.telegram]` block
-3. Restart Codex
-
-### Messages not being received
-1. Check the daemon is running: `node agents-comm-bus/dist/core-daemon/cli/index.js account-list`
-2. Verify the bot token is valid
-3. Make sure you're messaging from the authorized Telegram user ID
-
-### Send failing
-1. Check the bot token in `~/.codex/config.toml`
-2. Verify the user ID is correct
-3. Check MCP server logs in Codex output
-
-## Configuration
-
-- Bot credentials: `~/.codex/config.toml` (under `[mcp_servers.telegram]`)
-- Hook configuration: `.codex/config.toml` in project root
-- Daemon state: `~/.agents-comm-bus/`
+Use the nested target shape to send to a specific chat or topic:
+`{ chat_native_id, thread_native_id?, account? }`. With no target, the daemon
+routes to the session's most-recent inbound conversation.

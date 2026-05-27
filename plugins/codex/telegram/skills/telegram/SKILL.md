@@ -1,6 +1,6 @@
 ---
 name: telegram-integration
-description: Telegram integration for Codex through the agents-comm-bus daemon.
+description: Use when Codex is connected to Telegram through agents-comm-bus -- especially when the user sends work requests, approvals, status checks, or follow-up instructions from Telegram, when you need to send a Telegram update, or when you inspect Telegram conversation state.
 skillName: telegram-integration
 metadata:
   hermes:
@@ -10,86 +10,118 @@ metadata:
 
 # Telegram Integration for Codex
 
-This skill enables bidirectional communication with Telegram.
+## When To Use
 
-## IMPORTANT: Always Forward to Telegram
+Use this skill whenever a Telegram message reaches the Codex session, when the
+user asks you to send a Telegram update, or when you need to inspect Telegram
+conversation state through agents-comm-bus. The Telegram chat is part of the
+active collaboration channel, not an external notification sink.
 
-**You MUST use the `comm_send_message` tool with `comm: "telegram"` to forward your responses to Telegram.** The user monitors this session remotely via Telegram and needs to see what you're doing.
+When a message arrives from Telegram, **reply on Telegram** as part of the
+normal response loop -- do not assume the user is watching the local terminal.
 
-### Communication Pattern
-1. **First**: Send an initial acknowledgment/plan when you receive a message
-2. **During**: Send milestone updates for important progress (found the issue, making changes, tests passing, etc.)
-3. **Finally**: Send a summary of what was completed
+## Codex Behavior
 
-Keep Telegram messages concise but informative.
+Codex receives Telegram inbound through the agents-comm-bus Codex bridge and
+its app-server wake path. In current builds the bridge **steers the active
+Codex turn first**, falling back to starting a new turn only when steering is
+unavailable -- so an inbound message may arrive mid-turn rather than as a fresh
+prompt. Treat injected Telegram messages as live user instructions unless they
+are clearly stale or superseded by a newer local prompt.
 
-## Quick Status Check
+Outbound goes back over the same channel with `comm_send_message`
+(`comm: "telegram"`) -- a local-only response is invisible to a user who is
+watching from their phone.
 
-To verify the integration is working, check the MCP server status:
+## Essential Telegram Tools
+
+- `list_conversations` -- inspect known conversations and get exact chat or
+  thread targets before sending to a non-current chat.
+- `comm_send_message` -- send concise status, questions, and final reports with
+  `comm: "telegram"`.
+- `comm_check_messages` -- drain pending inbound when you suspect new Telegram
+  context has arrived but has not yet appeared in the prompt.
+- `comm_send_attachment` -- send a file or image when a report needs an artifact
+  rather than text.
+
+Use the nested target shape to send to a specific chat or topic:
+`{ chat_native_id, thread_native_id?, account? }`. With no target, the daemon
+routes to the session's most-recent inbound conversation.
+
+## Messaging Etiquette
+
+Telegram is usually the user's active surface. Keep messages short, concrete,
+and useful.
+
+1. **Acknowledge when Telegram initiates or redirects the work.** Send a
+   one-line "got it + what I'm about to do" before you start. Skip the ack for
+   work that originated locally -- don't echo to Telegram just to echo.
+2. **Update only at real signal points.** A key finding, a decision point, a
+   test result, a blocker -- not a play-by-play.
+3. **Send a final post-work report** with the outcome, the files changed or
+   commands run when relevant, and anything that could not be verified.
+
+Avoid flooding group chats with duplicate updates. If another agent has
+already answered the same question and you have no additional evidence or
+agent-specific delta, stay quiet or keep your reply to a brief, explicit
+acknowledgement.
+
+## agents-comm-bus Collection
+
+This Telegram plugin is one member of an **agents-comm-bus** plugin collection
+that separates agent harnesses from communication channels:
+
+- **Agent plugins** (Claude Code, Codex) translate host-specific hooks, MCP
+  setup, permission prompts, and wake behavior into the daemon protocol.
+- **Comm plugins** (Telegram, and later Matrix / Discord / Slack) translate
+  platform-specific chats, messages, callbacks, credentials, and attachments
+  into generic bus records.
+- The **per-user daemon** owns account registrations, conversations, pending
+  inbound queues, query resolution, transcripts, and audit logs under
+  `~/.agents-comm-bus/`. Installing any one comm plugin ships the daemon
+  runtime; the daemon itself is started lazily by the first hook or MCP call.
+
+The MCP tools are intentionally generic: `comm: "telegram"` selects Telegram
+today, but the same tool shape addresses any future comm adapter. Prefer the
+generic agents-comm-bus concepts -- comm, account, conversation, query,
+session -- when reasoning about behavior, rather than treating this as
+Telegram-only product documentation.
+
+## Useful agents-comm-bus Commands
+
+If `agents-comm-bus` has been linked onto PATH, the shorter `agents-comm` alias
+may also be available. In a local checkout, use
+`node agents-comm-bus/dist/core-daemon/cli/index.js ...` for the same commands.
+
+Account registration:
+
+```powershell
+agents-comm-bus account-add --project "<absolute project path>" --agent claude --account-label main --comm telegram
+agents-comm-bus account-add --project "<absolute project path>" --agent codex --account-label main --comm telegram
+agents-comm-bus account-list --project "<absolute project path>" --comm telegram
+agents-comm-bus account-remove --project "<absolute project path>" --agent claude --account-label main --comm telegram
 ```
-/mcp
+
+Allowlist control (the sender flag is `--user`; `allowlist` is a parent command
+with `add` / `remove` / `list` / `import-from-env` / `import-from-files`
+sub-subcommands):
+
+```powershell
+agents-comm-bus allowlist add --comm telegram --user <telegram_user_id> --note "trusted operator"
+agents-comm-bus allowlist add --comm telegram --user <telegram_user_id> --agent codex --account-label main --project "<absolute project path>"
+agents-comm-bus allowlist list --comm telegram --scope all
+agents-comm-bus allowlist remove --comm telegram --user <telegram_user_id>
+agents-comm-bus allowlist import-from-env --comm telegram
+agents-comm-bus allowlist import-from-files --comm telegram --dry-run
+agents-comm-bus migrate
 ```
 
-Look for the `telegram` server in the list. If it shows as connected, the integration is active.
+Operational checks:
 
-## Installation
-
-If the integration isn't set up yet:
-
-1. Set up the plugin: follow the install-codex.js instructions
-2. Configure credentials in `~/.codex/config.toml`
-3. Restart Codex to load the MCP server
-
-## Troubleshooting
-
-### MCP server not showing in /mcp
-1. Check that `agents-comm-bus` package is built (`cd agents-comm-bus && npm run build`)
-2. Verify `~/.codex/config.toml` contains the `[mcp_servers.telegram]` block
-3. Restart Codex
-
-### Messages not being received
-1. Check the daemon is running: `node agents-comm-bus/dist/core-daemon/cli/index.js account-list`
-2. Verify the bot token is valid
-3. Make sure you're messaging from the authorized Telegram user ID
-
-### Send failing
-1. Check the bot token in `~/.codex/config.toml`
-2. Verify the user ID is correct
-3. Check MCP server logs in Codex output
-
-## Configuration
-
-- Bot credentials: `~/.codex/config.toml` (under `[mcp_servers.telegram]`)
-- Hook configuration: `.codex/config.toml` in project root
-- Daemon state: `~/.agents-comm-bus/`
-
-## Available Tools
-
-Once the MCP server is running, you have access to these tools:
-
-### comm_send_message
-Send a text message to Telegram.
-```
-Use the comm_send_message tool with comm: "telegram", message: "Your message here"
+```powershell
+Get-Content "$env:USERPROFILE\.agents-comm-bus\port"
+Get-Process -Id (Get-Content "$env:USERPROFILE\.agents-comm-bus\daemon.pid") -ErrorAction SilentlyContinue
 ```
 
-### comm_send_attachment
-Send an image file to Telegram.
-```
-Use the comm_send_attachment tool with comm: "telegram", path: "/absolute/path/to/image.png" and optional caption
-```
-
-### comm_check_messages
-Manually check for pending messages (messages are also auto-injected on each prompt).
-```
-Use the comm_check_messages tool with comm: "telegram"
-```
-
-When you need to target a specific Telegram chat or topic, use the nested
-`target` object shape: `{ chat_native_id, thread_native_id? }`. The shim no
-longer accepts flat `chat_id` / `message_thread_id` fields.
-
-## How It Works
-
-1. **Outbound (Agent to Telegram)**: Call `comm_send_message` or `comm_send_attachment` with `comm: "telegram"`
-2. **Inbound (Telegram to Agent)**: Messages are automatically injected as context before each prompt via a UserPromptSubmit hook
+Use `list_conversations` from the MCP tool surface to inspect the live daemon
+conversation inventory before sending to an unfamiliar Telegram chat or topic.
