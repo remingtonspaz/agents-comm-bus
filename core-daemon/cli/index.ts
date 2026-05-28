@@ -169,7 +169,7 @@ function printHelp(): void {
   console.error(`agents-comm-bus CLI
 
 Account commands:
-  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>]
+  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>] [--credentials-ref <ref>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove --project <path> --agent <agent> --account-label <label> [--comm telegram]
 
@@ -184,6 +184,7 @@ Allowlist commands:
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
 
 For per-bot scope without --bot-id, --project defaults to the current working directory.
+account-add stores --bot-token in a daemon-owned file ref by default; explicit --credentials-ref values are honored.
 --account-label defaults to "main".
 `);
 }
