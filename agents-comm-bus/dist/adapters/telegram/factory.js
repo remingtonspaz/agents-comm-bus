@@ -162,6 +162,15 @@ function extractThreadNativeId(params) {
     return undefined;
 }
 async function targetFromParams(storage, params, chatNativeId) {
+    const explicitAccount = extractTargetAccount(params);
+    if (explicitAccount != null) {
+        return {
+            comm: TELEGRAM_COMM_ID,
+            account: explicitAccount,
+            chat_native_id: chatNativeId,
+            thread_native_id: extractThreadNativeId(params),
+        };
+    }
     const session = typeof params.session === "string"
         ? await storage.getSession(params.session)
         : null;
@@ -182,6 +191,15 @@ async function targetFromParams(storage, params, chatNativeId) {
         chat_native_id: chatNativeId,
         thread_native_id: extractThreadNativeId(params),
     };
+}
+function extractTargetAccount(params) {
+    const target = params.target;
+    if (target && typeof target === "object" && "account" in target) {
+        const value = target.account;
+        if (value != null)
+            return String(value);
+    }
+    return undefined;
 }
 function normalizeCsv(value) {
     return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);

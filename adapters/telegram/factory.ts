@@ -211,6 +211,16 @@ async function targetFromParams(
   params: Record<string, unknown>,
   chatNativeId: string,
 ): Promise<ChatRef> {
+  const explicitAccount = extractTargetAccount(params);
+  if (explicitAccount != null) {
+    return {
+      comm: TELEGRAM_COMM_ID,
+      account: explicitAccount as ChatRef["account"],
+      chat_native_id: chatNativeId,
+      thread_native_id: extractThreadNativeId(params),
+    };
+  }
+
   const session = typeof params.session === "string"
     ? await storage.getSession(params.session as SessionId)
     : null;
@@ -233,6 +243,15 @@ async function targetFromParams(
     chat_native_id: chatNativeId,
     thread_native_id: extractThreadNativeId(params),
   };
+}
+
+function extractTargetAccount(params: Record<string, unknown>): string | undefined {
+  const target = params.target;
+  if (target && typeof target === "object" && "account" in target) {
+    const value = (target as Record<string, unknown>).account;
+    if (value != null) return String(value);
+  }
+  return undefined;
 }
 
 function normalizeCsv(value: string | undefined): string[] {
