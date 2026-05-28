@@ -62,7 +62,7 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
           },
         };
       }
-      const fromFile = await readProjectTelegramConfig(registration.project);
+      const fromFile = await readProjectTelegramConfig(registration.project, registration.agent);
       if (fromFile?.botToken) {
         return {
           credentials: {
@@ -295,8 +295,14 @@ async function readAllowlistFromDb(
 
 async function readProjectTelegramConfig(
   project: string,
+  agent: string,
 ): Promise<{ botToken?: string; userId?: string[] } | undefined> {
-  return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
+  const agentConfig = await readJsonTelegramConfig(path.join(project, `.${agent}`, "telegram.json"));
+  if (agentConfig) return agentConfig;
+  if (agent !== "claude") {
+    return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
+  }
+  return undefined;
 }
 
 async function readJsonTelegramConfig(

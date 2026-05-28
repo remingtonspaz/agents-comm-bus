@@ -30,7 +30,7 @@ export class TelegramCommAdapterFactory {
                     },
                 };
             }
-            const fromFile = await readProjectTelegramConfig(registration.project);
+            const fromFile = await readProjectTelegramConfig(registration.project, registration.agent);
             if (fromFile?.botToken) {
                 return {
                     credentials: {
@@ -235,8 +235,14 @@ async function readAllowlistFromDb(context, bot_user_id) {
     }
     return out;
 }
-async function readProjectTelegramConfig(project) {
-    return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
+async function readProjectTelegramConfig(project, agent) {
+    const agentConfig = await readJsonTelegramConfig(path.join(project, `.${agent}`, "telegram.json"));
+    if (agentConfig)
+        return agentConfig;
+    if (agent !== "claude") {
+        return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
+    }
+    return undefined;
 }
 async function readJsonTelegramConfig(filePath) {
     try {

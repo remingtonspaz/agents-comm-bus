@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
@@ -15,6 +15,7 @@ import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/index.
 
 const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;
+const CODEX = "codex" as AgentId;
 
 function makeRegistration(overrides: Partial<AccountRegistration> = {}): AccountRegistration {
   return {
@@ -139,5 +140,37 @@ describe("Telegram factory allowlist union", () => {
     );
     assert.ok(resolved);
     assert.deepEqual(resolved.credentials.allowedUserIds, ["env-only-sender"]);
+  });
+
+  it("prefers project-local .codex credentials for Codex registrations", async () => {
+    const project = await mkdtemp(join(tmpdir(), "acb-codex-telegram-config-"));
+    try {
+      await mkdir(join(project, ".claude"));
+      await mkdir(join(project, ".codex"));
+      await writeFile(
+        join(project, ".claude", "telegram.json"),
+        JSON.stringify({ botToken: "claude-token", userId: ["claude-user"] }),
+      );
+      await writeFile(
+        join(project, ".codex", "telegram.json"),
+        JSON.stringify({ botToken: "codex-token", userId: ["codex-user"] }),
+      );
+
+      const factory = new TelegramCommAdapterFactory();
+      const resolved = await factory.resolveCredentials(
+        makeRegistration({
+          project,
+          agent: CODEX,
+          credentials_ref: "env:TELEGRAM_BOT_TOKEN",
+        }),
+        {},
+      );
+
+      assert.ok(resolved);
+      assert.equal(resolved.credentials.botToken, "codex-token");
+      assert.deepEqual(resolved.credentials.allowedUserIds, ["codex-user"]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
   });
 });
