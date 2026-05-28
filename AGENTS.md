@@ -448,6 +448,7 @@ All state under `~/.agents-comm-bus/` (per-user, never per-project):
 | `audit/<date>.jsonl` | Append-only audit log: query_opened, query_resolved, inbound_received, outbound_sent, etc. |
 | `chats/<conversation_id>/transcript.jsonl` | Per-conversation inbound + outbound transcript |
 | `blobs/<hash>` | Content-addressed attachment blobs |
+| `tokens/<comm>/<project-key>/<agent>/<bot-id>.json` | Daemon-owned token files used by `file:` credential refs created by `account-add --bot-token` |
 | `claude-wake/sessions/<key>/trigger-enter` | Wake trigger file (watcher polls this) |
 | `claude-wake/sessions/<key>/permission-response.json` | Wake response payload (watcher reads, types chars) |
 | `claude-wake/sessions/<key>/watcher.pid` | Watcher process id |
