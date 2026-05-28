@@ -161,7 +161,7 @@ function writeRestartMarker(project, session, status) {
   }, null, 2));
 }
 
-function scheduleBootstrapRestart(threadId) {
+function scheduleBootstrapRestart(project, threadId) {
   if (process.platform !== 'win32') {
     throw new Error('Codex bootstrap restart hook currently supports Windows PowerShell only');
   }
@@ -175,6 +175,8 @@ function scheduleBootstrapRestart(threadId) {
     'Bypass',
     '-File',
     bootstrapperPath,
+    '-ProjectDir',
+    project,
     '-RestartCurrent',
     '-SameTerminal',
     '-Exec',
@@ -184,7 +186,7 @@ function scheduleBootstrapRestart(threadId) {
   }
 
   const result = spawnSync('powershell.exe', args, {
-    cwd: repoRoot,
+    cwd: project,
     encoding: 'utf8',
     windowsHide: true,
     timeout: 15_000,
@@ -245,7 +247,7 @@ async function main() {
     }
 
     writeRestartMarker(project, session, status);
-    const scheduled = scheduleBootstrapRestart(threadId);
+    const scheduled = scheduleBootstrapRestart(project, threadId);
     process.stderr.write(
       `Codex SessionStart scheduled comm-bus bootstrap restart for ${session}\n`,
     );

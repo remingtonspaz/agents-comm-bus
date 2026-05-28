@@ -49,6 +49,9 @@ test("Codex staged SessionStart schedules bootstrap restart through daemon statu
   assert.match(hook, /codexThreadId/);
   assert.match(hook, /const threadId = codexThreadId\(hookInput\)/);
   assert.match(hook, /bootstrap-codex-session\.ps1/);
+  assert.match(hook, /'-ProjectDir'/);
+  assert.match(hook, /scheduleBootstrapRestart\(project, threadId\)/);
+  assert.match(hook, /cwd: project/);
   assert.match(hook, /RestartCurrent/);
   assert.match(hook, /SameTerminal/);
   assert.match(hook, /args\.push\('-ThreadId', String\(threadId\)\)/);
