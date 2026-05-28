@@ -101,7 +101,8 @@ export class CodexAgentAdapter {
     }
     async wakeOrSteer(session, payload) {
         const client = this.clientFor(session);
-        const steerResult = await client.steerMostRecentThread(steerText(payload));
+        const text = steerText(payload);
+        const steerResult = await client.steerMostRecentThread(text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.steer",
             agent: this.id,
@@ -110,7 +111,7 @@ export class CodexAgentAdapter {
         });
         if (steerResult.ok)
             return steerResult;
-        const wakeResult = await client.wakeMostRecentThread(this.wakePlaceholder);
+        const wakeResult = await client.wakeMostRecentThread(text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.wake",
             agent: this.id,

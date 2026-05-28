@@ -87,7 +87,7 @@ describe("CodexAgentAdapter", () => {
     assert.equal(control.sent.at(-1)?.type, "turn.wake");
     assert.deepEqual(fake.calls, [
       ["turn/steer", "new Telegram guidance"],
-      ["turn/start", "."],
+      ["turn/start", "new Telegram guidance"],
     ]);
   });
 

@@ -148,7 +148,7 @@ export class CodexBridge implements AgentBridge {
         session,
         formatInboundMessagesForTurn(pendingForSession),
       );
-      if (result.ok && result.method === "turn/steer") {
+      if (result.ok) {
         this.removePendingInbound(pendingForSession);
       }
     } catch (error) {

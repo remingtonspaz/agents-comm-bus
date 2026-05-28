@@ -67,7 +67,7 @@ export class CodexBridge {
         await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
         try {
             const result = await this.adapter.wakeOrSteer(session, formatInboundMessagesForTurn(pendingForSession));
-            if (result.ok && result.method === "turn/steer") {
+            if (result.ok) {
                 this.removePendingInbound(pendingForSession);
             }
         }
