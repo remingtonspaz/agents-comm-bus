@@ -146,3 +146,55 @@ describe("ensureCentralInstall — production mode, strict", () => {
     assert.equal(dv.content_version, "1.0.0");
   });
 });
+
+describe("ensureCentralInstall — stamp keeps provenance separate from content (regression guard)", () => {
+  it("higher plugin_version shipping an older daemon bundle does not downgrade the installed daemon", async () => {
+    const root = await tempRoot();
+
+    // Seed: production install of daemon bundle 2.0.0.
+    const v2 = await fixturedPlugin("telegram", "2.0.0");
+    await ensureCentralInstall({
+      stateRoot: root,
+      pluginInstallDir: v2,
+      env: {},
+      installedAt: "2026-05-29T00:00:00Z",
+    });
+
+    // Incoming hotfix: HIGHER plugin_version (3.0.0) but an OLDER daemon bundle
+    // (1.0.0). A provenance-keyed rule would wrongly treat it as "newer" and
+    // downgrade the daemon. The stamp's three distinct fields prevent that.
+    const hotfix = await mkdtemp(path.join(os.tmpdir(), "plugin-"));
+    await writeFile(path.join(hotfix, "daemon.bundle.js"), "DAEMON_BUNDLE_v1.0.0", "utf8");
+    await writeFile(path.join(hotfix, "telegram.adapter.bundle.js"), "TELEGRAM_ADAPTER_v1.0.0", "utf8");
+    await writeFile(
+      path.join(hotfix, INSTALL_STAMP_NAME),
+      JSON.stringify({
+        schema_version: 1,
+        agent: "claude",
+        comm: "telegram",
+        plugin_version: "3.0.0", // higher provenance
+        daemon_bundle_version: "1.0.0", // older content
+        adapter_bundle_version: "1.0.0",
+      }),
+      "utf8",
+    );
+
+    const res = await ensureCentralInstall({
+      stateRoot: root,
+      pluginInstallDir: hotfix,
+      env: {},
+      installedAt: "2026-05-29T01:00:00Z",
+    });
+
+    // The actor is built from three distinct fields, not a collapsed "version".
+    assert.equal(res.actor?.pluginVersion, "3.0.0");
+    assert.equal(res.actor?.daemonBundleVersion, "1.0.0");
+
+    // Install keyed off the daemon BUNDLE version (1.0.0 < installed 2.0.0) →
+    // no downgrade, regardless of the higher plugin_version.
+    const paths = resolveCentralPaths(root, "telegram");
+    assert.equal(await readFile(paths.daemonBundle, "utf8"), "DAEMON_BUNDLE_v2.0.0", "daemon not downgraded");
+    const dv = JSON.parse(await readFile(paths.daemonVersionFile, "utf8"));
+    assert.equal(dv.content_version, "2.0.0");
+  });
+});
