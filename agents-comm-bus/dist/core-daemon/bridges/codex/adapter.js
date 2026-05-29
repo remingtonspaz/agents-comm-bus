@@ -54,6 +54,9 @@ export class CodexAgentAdapter {
         if (state && url)
             state.appServerUrl = url;
     }
+    appServerUrlFor(session) {
+        return this.sessions.get(session)?.appServerUrl ?? this.defaultAppServerUrl;
+    }
     async deliverInbound(session, message) {
         const state = this.requireSession(session);
         state.queuedInbound.push(message);
@@ -120,7 +123,9 @@ export class CodexAgentAdapter {
             fallback_from: steerResult,
         });
         throwIfTurnFailed(wakeResult);
-        return wakeResult;
+        return wakeResult.ok
+            ? { ...wakeResult, fallbackFrom: steerResult }
+            : wakeResult;
     }
     async steer(session, payload) {
         const text = steerText(payload);

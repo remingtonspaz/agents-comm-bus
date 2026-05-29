@@ -126,6 +126,10 @@ export class CodexAgentAdapter implements AgentAdapter {
     if (state && url) state.appServerUrl = url;
   }
 
+  appServerUrlFor(session: SessionId): string {
+    return this.sessions.get(session)?.appServerUrl ?? this.defaultAppServerUrl;
+  }
+
   async deliverInbound(session: SessionId, message: Message): Promise<void> {
     const state = this.requireSession(session);
     state.queuedInbound.push(message);
@@ -199,7 +203,9 @@ export class CodexAgentAdapter implements AgentAdapter {
       fallback_from: steerResult,
     });
     throwIfTurnFailed(wakeResult);
-    return wakeResult;
+    return wakeResult.ok
+      ? { ...wakeResult, fallbackFrom: steerResult }
+      : wakeResult;
   }
 
   async steer(session: SessionId, payload: unknown): Promise<void> {

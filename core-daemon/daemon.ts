@@ -109,7 +109,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   });
 
   const bridges: AgentBridge[] = options.agentBridgeFactories.map((factory) =>
-    factory.create({ storage, bus, pendingInbound }),
+    factory.create({ storage, bus, audit, pendingInbound }),
   );
 
   bus.setDispatchSink({

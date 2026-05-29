@@ -55,7 +55,7 @@ export async function runDaemon(options) {
         blobs,
         comms,
     });
-    const bridges = options.agentBridgeFactories.map((factory) => factory.create({ storage, bus, pendingInbound }));
+    const bridges = options.agentBridgeFactories.map((factory) => factory.create({ storage, bus, audit, pendingInbound }));
     bus.setDispatchSink({
         enqueueInbound: async (message, conversation) => {
             pendingInbound.push({ message, conversation });

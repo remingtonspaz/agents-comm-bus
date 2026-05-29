@@ -1,6 +1,7 @@
 import type {
   AccountId,
   AgentId,
+  AuditStore,
   CommAdapter,
   CommId,
   Conversation,
@@ -14,6 +15,7 @@ import type { PendingInboundEntry } from "./pending-inbound.js";
 export interface AgentBridgeContext {
   storage: Storage;
   bus: MessageBus;
+  audit: AuditStore;
   pendingInbound: PendingInboundEntry[];
 }
 

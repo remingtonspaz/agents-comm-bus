@@ -10,14 +10,20 @@ const CLIENT_INFO = {
 export interface CodexAppServerClient {
   call(method: string, params: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
   listLoadedThreads(): Promise<unknown>;
+  listThreadTurns(threadId: string): Promise<unknown>;
   startTurn(threadId: string, text: string): Promise<unknown>;
-  steerTurn(threadId: string, text: string): Promise<unknown>;
+  steerTurn(threadId: string, text: string, expectedTurnId: string): Promise<unknown>;
   wakeMostRecentThread(text?: string): Promise<CodexTurnResult>;
   steerMostRecentThread(text: string): Promise<CodexTurnResult>;
 }
 
 export type CodexTurnResult =
-  | { ok: true; threadId: string; method: "turn/start" | "turn/steer" }
+  | {
+      ok: true;
+      threadId: string;
+      method: "turn/start" | "turn/steer";
+      fallbackFrom?: { ok: false; reason: string; error?: string; threadId?: string; raw?: string; url?: string };
+    }
   | { ok: false; reason: string; error?: string; threadId?: string; raw?: string; url?: string };
 
 export class WebSocketCodexAppServerClient implements CodexAppServerClient {
@@ -31,6 +37,10 @@ export class WebSocketCodexAppServerClient implements CodexAppServerClient {
     return this.call("thread/loaded/list", {});
   }
 
+  listThreadTurns(threadId: string): Promise<unknown> {
+    return this.call("thread/turns/list", { threadId });
+  }
+
   startTurn(threadId: string, text: string): Promise<unknown> {
     return this.call("turn/start", {
       threadId,
@@ -38,9 +48,10 @@ export class WebSocketCodexAppServerClient implements CodexAppServerClient {
     });
   }
 
-  steerTurn(threadId: string, text: string): Promise<unknown> {
+  steerTurn(threadId: string, text: string, expectedTurnId: string): Promise<unknown> {
     return this.call("turn/steer", {
       threadId,
+      expectedTurnId,
       input: [{ type: "text", text }],
     });
   }
@@ -64,8 +75,10 @@ export class WebSocketCodexAppServerClient implements CodexAppServerClient {
   async steerMostRecentThread(text: string): Promise<CodexTurnResult> {
     const thread = await this.mostRecentThread();
     if (!thread.ok) return thread;
+    const turn = await this.activeTurn(thread.threadId);
+    if (!turn.ok) return turn;
     try {
-      await this.steerTurn(thread.threadId, text);
+      await this.steerTurn(thread.threadId, text, turn.turnId);
       return { ok: true, threadId: thread.threadId, method: "turn/steer" };
     } catch (error) {
       return {
@@ -113,6 +126,46 @@ export class WebSocketCodexAppServerClient implements CodexAppServerClient {
     }
     return { ok: true, threadId };
   }
+
+  private async activeTurn(threadId: string): Promise<
+    | { ok: true; turnId: string }
+    | { ok: false; reason: string; error?: string; threadId?: string; raw?: string; url?: string }
+  > {
+    let result: unknown;
+    try {
+      result = await this.listThreadTurns(threadId);
+    } catch (error) {
+      return {
+        ok: false,
+        reason: "listThreadTurns-failed",
+        error: error instanceof Error ? error.message : String(error),
+        threadId,
+        url: this.url,
+      };
+    }
+
+    const turns = listedTurns(result);
+    if (turns.length === 0) {
+      return {
+        ok: false,
+        reason: "no-turns-loaded",
+        raw: stringifyShort(result),
+        threadId,
+      };
+    }
+
+    const active = turns.find((turn) => turnStatus(turn) === "inProgress") ?? turns[0];
+    const turnId = turnIdFrom(active);
+    if (!turnId) {
+      return {
+        ok: false,
+        reason: "no-turn-id-in-response",
+        raw: stringifyShort(active),
+        threadId,
+      };
+    }
+    return { ok: true, turnId };
+  }
 }
 
 function callOnce(
@@ -157,7 +210,7 @@ function callOnce(
         jsonrpc: "2.0",
         id: initId,
         method: "initialize",
-        params: { clientInfo: CLIENT_INFO },
+        params: { clientInfo: CLIENT_INFO, capabilities: { experimentalApi: true } },
       }));
     });
 
@@ -201,6 +254,14 @@ function loadedThreads(result: unknown): unknown[] {
   return Array.isArray(candidate) ? candidate : [];
 }
 
+function listedTurns(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
+  if (!result || typeof result !== "object") return [];
+  const record = result as Record<string, unknown>;
+  const candidate = record.data ?? record.turns ?? record.items;
+  return Array.isArray(candidate) ? candidate : [];
+}
+
 function compareThreadRecency(a: unknown, b: unknown): number {
   if (typeof a === "string" || typeof b === "string") return 0;
   const left = Date.parse(String((a as Record<string, unknown>)?.lastActiveAt
@@ -220,6 +281,20 @@ function threadIdFrom(value: unknown): string | null {
   const record = value as Record<string, unknown>;
   const id = record.threadId ?? record.id;
   return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function turnIdFrom(value: unknown): string | null {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const id = record.turnId ?? record.id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function turnStatus(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const status = (value as Record<string, unknown>).status;
+  return typeof status === "string" ? status : null;
 }
 
 function parseJsonMessage(data: RawData): Record<string, any> | null {

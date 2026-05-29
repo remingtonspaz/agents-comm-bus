@@ -17,6 +17,7 @@ describe("Codex app-server turn control", () => {
     socket.on("message", (data) => {
       const request = JSON.parse(data.toString());
       if (request.method === "initialize") {
+        assert.equal(request.params?.capabilities?.experimentalApi, true);
         socket.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {} }));
         return;
       }
@@ -28,6 +29,17 @@ describe("Codex app-server turn control", () => {
           result: { data: ["thread-1"] },
         }));
         return;
+      }
+      if (request.method === "thread/turns/list") {
+        socket.send(JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: { data: [{ id: "turn-1", status: "inProgress" }] },
+        }));
+        return;
+      }
+      if (request.method === "turn/steer") {
+        assert.equal(request.params?.expectedTurnId, "turn-1");
       }
       socket.send(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { ok: true } }));
     });
@@ -47,6 +59,7 @@ describe("Codex app-server turn control", () => {
       "thread/loaded/list",
       "turn/start",
       "thread/loaded/list",
+      "thread/turns/list",
       "turn/steer",
     ]);
   });

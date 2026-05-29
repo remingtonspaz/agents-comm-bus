@@ -15,6 +15,10 @@ export type AuditEventKind =
   | "query_rejected_stale"
   | "session_lease_acquired"
   | "session_lease_released"
+  | "agent_wake_attempt"
+  | "agent_wake_succeeded"
+  | "agent_wake_failed"
+  | "agent_wake_skipped"
   | "registration_added"
   | "registration_removed"
   | "loop_prevention_drop";

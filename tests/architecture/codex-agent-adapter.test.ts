@@ -82,7 +82,17 @@ describe("CodexAgentAdapter", () => {
 
     const result = await adapter.wakeOrSteer(session, { text: "new Telegram guidance" });
 
-    assert.deepEqual(result, { ok: true, threadId: "thread-1", method: "turn/start" });
+    assert.deepEqual(result, {
+      ok: true,
+      threadId: "thread-1",
+      method: "turn/start",
+      fallbackFrom: {
+        ok: false,
+        reason: "steerTurn-failed",
+        error: "no active turn",
+        threadId: "thread-1",
+      },
+    });
     assert.equal(control.sent.at(-2)?.type, "turn.steer");
     assert.equal(control.sent.at(-1)?.type, "turn.wake");
     assert.deepEqual(fake.calls, [
@@ -214,12 +224,16 @@ class FakeCodexClient {
     return { data: ["thread-1"] };
   }
 
+  async listThreadTurns(): Promise<unknown> {
+    return { data: [{ id: "turn-1", status: "inProgress" }] };
+  }
+
   async startTurn(_threadId: string, text: string): Promise<unknown> {
     this.calls.push(["turn/start", text]);
     return {};
   }
 
-  async steerTurn(_threadId: string, text: string): Promise<unknown> {
+  async steerTurn(_threadId: string, text: string, _expectedTurnId: string): Promise<unknown> {
     this.calls.push(["turn/steer", text]);
     return {};
   }
