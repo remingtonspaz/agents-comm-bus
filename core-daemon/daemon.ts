@@ -13,6 +13,7 @@ import { resolveStatePaths } from "./paths.js";
 import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { startDaemonPidWatchdog } from "./bootstrap/pid-watchdog.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
@@ -243,6 +244,23 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     throw error;
   }
   await bus.start();
+  startDaemonPidWatchdog({
+    stateRoot: paths.root,
+    pidFile: paths.pidFile,
+    port: server.port,
+    audit,
+    stopDaemon: async () => {
+      try {
+        await bus.stop();
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to stop comm adapters during daemon retirement: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      await server.close();
+    },
+  });
 
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }

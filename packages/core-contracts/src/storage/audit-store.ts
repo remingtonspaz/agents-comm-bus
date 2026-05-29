@@ -23,6 +23,9 @@ export type AuditEventKind =
   | "inbound_dispatch_bridge_invoked"
   | "inbound_dispatch_bridge_completed"
   | "inbound_dispatch_bridge_failed"
+  | "daemon_superseded"
+  | "daemon_discovery_reclaimed"
+  | "daemon_pid_watchdog_error"
   | "registration_added"
   | "registration_removed"
   | "loop_prevention_drop";
