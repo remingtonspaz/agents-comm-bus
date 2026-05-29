@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   reconcileInstall,
+  executeInstallPlan,
   compareVersions,
   VERSION_FILE_SCHEMA,
 } from "../../hosts/common/install/reconcile-central-install.js";
@@ -181,15 +182,55 @@ describe("reconcileInstall — REGRESSION: plugin_version must not drive blob re
 describe("reconcileInstall — reference counting keyed on (agent, comm)", () => {
   it("one agent installing two comm plugins yields two distinct daemon references", () => {
     const tg = reconcileInstall(actor({ agent: "claude", comm: "telegram" }), EMPTY_STATE);
-    const state2 = applied(EMPTY_STATE, tg);
 
-    const mx = reconcileInstall(actor({ agent: "claude", comm: "matrix" }), state2);
+    // Installing the *matrix* adapter next: carry the shared daemon state
+    // forward, but adapter state is per-comm so matrix's adapter is null (the
+    // telegram adapter file is a different artifact, irrelevant here).
+    const daemonState = {
+      daemonExists: true,
+      daemonVersionFile: tg.daemon.resultingVersionFile,
+      adapterExists: false,
+      adapterVersionFile: null,
+      daemonRunning: false,
+    };
+
+    const mx = reconcileInstall(actor({ agent: "claude", comm: "matrix" }), daemonState);
 
     // claude appears twice in the shared daemon's reference set — once per comm
     // plugin — so uninstalling one comm plugin can't orphan the daemon that the
     // other still needs.
     const refs = mx.daemon.resultingVersionFile.installed_by.map((e: any) => `${e.agent}:${e.comm}`).sort();
     assert.deepEqual(refs, ["claude:matrix", "claude:telegram"]);
+  });
+});
+
+describe("executeInstallPlan — partial-install guard", () => {
+  it("rejects a plan that requires a bundle copy with no pluginInstallDir, writing nothing", async () => {
+    const calls: string[] = [];
+    const fakeFs = {
+      mkdirp: async (d: string) => { calls.push(`mkdirp:${d}`); },
+      copyFile: async (a: string, b: string) => { calls.push(`copy:${a}->${b}`); },
+      writeFile: async (f: string, _data: string) => { calls.push(`write:${f}`); },
+    };
+    const paths = {
+      daemonBundle: "/central/bin/daemon.js",
+      daemonVersionFile: "/central/bin/version.json",
+      adapterBundle: "/central/adapters/telegram.js",
+      adapterVersionFile: "/central/adapters/telegram.version.json",
+    };
+
+    // Cold install plan (writeBundle=true) but actor has no pluginInstallDir.
+    const noSrcActor = { ...actor(), pluginInstallDir: undefined as unknown as string };
+    const plan = reconcileInstall(noSrcActor, EMPTY_STATE);
+    assert.equal(plan.daemon.writeBundle, true);
+
+    await assert.rejects(
+      () => executeInstallPlan(plan, noSrcActor, paths, fakeFs),
+      /pluginInstallDir is unset/,
+    );
+    // The critical property: nothing was written before the throw — no
+    // version file claiming a blob that was never copied.
+    assert.deepEqual(calls, []);
   });
 });
 

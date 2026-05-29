@@ -303,16 +303,33 @@ function parseVersion(v) {
  * @returns {Promise<ExecutionResult>}
  */
 export async function executeInstallPlan(plan, actor, paths, fs) {
-  const wroteBundles = [];
-  const wroteVersionFiles = [];
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir
     ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js`
     : null;
 
-  if (plan.daemon.writeBundle && daemonSrc) {
+  // Fail hard BEFORE any write. A `writeBundle` with no source path would
+  // otherwise silently skip the copy yet still write the version file —
+  // manufacturing a partial-install state where the metadata claims a blob
+  // that was never laid down. Validate up front so a rejected plan writes
+  // nothing at all.
+  if (plan.daemon.writeBundle && !daemonSrc) {
+    throw new Error(
+      "executeInstallPlan: daemon bundle write required but actor.pluginInstallDir is unset",
+    );
+  }
+  if (plan.adapter.writeBundle && !adapterSrc) {
+    throw new Error(
+      "executeInstallPlan: adapter bundle write required but actor.pluginInstallDir is unset",
+    );
+  }
+
+  const wroteBundles = [];
+  const wroteVersionFiles = [];
+
+  if (plan.daemon.writeBundle) {
     await fs.mkdirp(dirname(paths.daemonBundle));
-    await fs.copyFile(daemonSrc, paths.daemonBundle);
+    await fs.copyFile(/** @type {string} */ (daemonSrc), paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
   }
   if (plan.daemon.writeVersionFile) {
@@ -320,9 +337,9 @@ export async function executeInstallPlan(plan, actor, paths, fs) {
     await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
-  if (plan.adapter.writeBundle && adapterSrc) {
+  if (plan.adapter.writeBundle) {
     await fs.mkdirp(dirname(paths.adapterBundle));
-    await fs.copyFile(adapterSrc, paths.adapterBundle);
+    await fs.copyFile(/** @type {string} */ (adapterSrc), paths.adapterBundle);
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
