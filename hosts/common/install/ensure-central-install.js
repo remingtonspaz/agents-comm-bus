@@ -134,9 +134,14 @@ export async function ensureCentralInstall(options) {
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
     throw new Error(
-      `central install (production mode): missing or invalid plugin install metadata — ` +
-        `expected ${INSTALL_STAMP_NAME} under pluginInstallDir=${options.pluginInstallDir ?? "<unset>"}. ` +
-        `Set AGENTS_COMM_BUS_BIN for source/dev mode, or fix the plugin packaging.`,
+      `central install (production mode): missing or invalid plugin install metadata.\n` +
+        `  - no source-mode signal (no AGENTS_COMM_BUS_BIN, no .agents-comm-bus-dev.json marker resolved)\n` +
+        `  - no valid packaged install artifact (expected ${INSTALL_STAMP_NAME} under ` +
+        `pluginInstallDir=${options.pluginInstallDir ?? "<unset>"})\n` +
+        `Fix one of:\n` +
+        `  - source/dev checkout: create .agents-comm-bus-dev.json at the repo root ` +
+        `(see .agents-comm-bus-dev.json.example), or set AGENTS_COMM_BUS_BIN\n` +
+        `  - packaged install: provide the staged plugin artifacts incl. ${INSTALL_STAMP_NAME}`,
     );
   }
 
