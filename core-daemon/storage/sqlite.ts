@@ -50,6 +50,14 @@ export class SqliteStorage implements Storage {
   static async open(path: string): Promise<SqliteStorage> {
     const db = new DatabaseSync(path);
     db.exec("PRAGMA foreign_keys = ON");
+    // Wait for the write lock instead of failing instantly with SQLITE_BUSY.
+    // The daemon is multi-writer: with one Telegram bot per agent, the same
+    // group message arrives at both bots near-simultaneously and both record
+    // inbound at once. Without busy_timeout the loser of that race gets
+    // "database is locked" and the write is dropped — the symptom being a group
+    // message that reaches only one agent. WAL keeps readers off writers but
+    // does not serialize two concurrent writers.
+    db.exec("PRAGMA busy_timeout = 5000");
     await runStorageMigrations(db);
     return new SqliteStorage(db);
   }
