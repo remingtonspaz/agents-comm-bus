@@ -109,23 +109,81 @@ prompt the install hooks reinstall the code from plugin install paths.
 Because both `~/.claude/plugins/agents-comm-bus-<comm>/` and
 `~/.codex/plugins/agents-comm-bus-<comm>/` (and any future agent's
 equivalent) may all try to install the same shared file, the metadata
-file is a **list of installers**, not a single string:
+file is a **list of installers**, not a single string.
+
+### Version metadata policy
+
+`plugin_version` is **provenance only**. It identifies the marketplace
+plugin package that carried a bundle, but it is **not** the replacement
+key for the installed bytes.
+
+Replacement decisions key on the installed artifact's **own bundle
+version**:
+
+- `bin/version.json` tracks the daemon bundle's version.
+- `adapters/<comm>.version.json` tracks that adapter bundle's version.
+- `plugin_version` remains in provenance so the system can tell *which
+  plugin package* installed or last refreshed a given entry.
+
+This matters because plugin versions and bundle versions can drift. For
+example, `agents-comm-bus-telegram@1.3.0` could ship an unchanged
+daemon bundle `1.0.0` while `agents-comm-bus-matrix@1.2.0` already
+shipped daemon bundle `2.0.0`. In that case, the Telegram plugin's
+higher `plugin_version` must **not** replace the newer installed daemon
+bundle.
+
+The metadata shape therefore records the installed artifact separately
+from the plugins that contributed provenance:
 
 ```json
 {
-  "version": "1.2.0",
+  "schema_version": 1,
+  "content_kind": "daemon",
+  "content_id": "daemon",
+  "content_version": "2.0.0",
+  "content_source": {
+    "agent": "claude",
+    "comm": "telegram",
+    "plugin_version": "1.2.0",
+    "bundle_version": "2.0.0"
+  },
   "installed_by": [
-    { "agent": "claude", "plugin_version": "1.2.0", "installed_at": "2026-05-18T20:25:00Z" },
-    { "agent": "codex",  "plugin_version": "1.1.5", "installed_at": "2026-05-19T03:18:00Z" }
+    {
+      "agent": "claude",
+      "comm": "telegram",
+      "plugin_version": "1.2.0",
+      "bundle_version": "2.0.0",
+      "installed_at": "2026-05-18T20:25:00Z"
+    },
+    {
+      "agent": "codex",
+      "comm": "telegram",
+      "plugin_version": "1.3.0",
+      "bundle_version": "1.0.0",
+      "installed_at": "2026-05-19T03:18:00Z"
+    }
   ]
 }
 ```
 
-The actual file content reflects the **highest** `plugin_version` across
-all entries. Install hooks **add** their entry on install (replacing any
-prior entry for that same `agent`); uninstall hooks **remove** their
-entry. When the `installed_by` list goes empty, the file is safe to
-clean up (probably with a confirm prompt — see open questions).
+For adapters, `content_kind` is `"adapter"` and `content_id` is the
+comm name (for example `"telegram"`).
+
+Rules:
+
+- `installed_by` entries are keyed on **`(agent, comm)`**, not `agent`
+  alone. `claude+telegram` and `claude+matrix` are independent
+  references to the shared daemon.
+- Install hooks **add or replace** their own provenance entry on install.
+- The installed bytes are replaced only when the incoming
+  `bundle_version` is newer than `content_version`.
+- An older bundle version must **not** downgrade an already-installed
+  newer bundle, even if the incoming `plugin_version` is higher.
+- Uninstall hooks remove their provenance entry, but uninstalling the
+  plugin that most recently provided the installed bytes does **not**
+  auto-downgrade the shared file to the next-highest remaining entry.
+- When `installed_by` becomes empty, the file is safe to clean up
+  (probably with a confirm prompt — see open questions).
 
 Install hooks are themselves agent-specific (Claude Code's hook contract
 differs from Codex's — different env vars, different stdin envelope,
@@ -378,9 +436,9 @@ agents. Not a v1 concern.
    1. Checks `~/.agents-comm-bus/bin/daemon.js` — missing.
    2. Creates `~/.agents-comm-bus/`, copies the plugin's
       `daemon.bundle.js` → `bin/daemon.js`, writes `bin/version.json`
-      with `installed_by` containing this agent's entry.
+      with `installed_by` containing this `(agent, comm)` entry.
    3. Copies the plugin's `<comm>.adapter.bundle.js` → `adapters/<comm>.js`,
-      writes `adapters/<comm>.version.json` with this agent's entry.
+      writes `adapters/<comm>.version.json` with this `(agent, comm)` entry.
    4. Spawns daemon detached (`Start-Process` on Windows, `nohup` on
       Unix).
    5. Polls `~/.agents-comm-bus/port` until present, opens the WS
@@ -395,14 +453,16 @@ agents. Not a v1 concern.
 
 1. User runs `/plugin install agents-comm-bus-<other-comm>` (or the
    same `<comm>` from the second agent's marketplace).
-2. First prompt after install: that plugin's `install-hook.js` fires:
+2. First usable hook invocation after install: that plugin's
+   `install-hook.js` fires:
    1. Reads `~/.agents-comm-bus/bin/version.json` — daemon present.
-      Compares versions; upgrades `bin/daemon.js` if the plugin's
-      bundle is newer (see below). Adds this hook's agent entry to
-      `installed_by` (or updates the existing entry).
-   2. Reads `~/.agents-comm-bus/adapters/<comm>.version.json` —
-      missing or older plugin_version → copies the plugin's adapter,
-      updates `installed_by`.
+      Compares the incoming daemon `bundle_version` against
+      `content_version`; upgrades `bin/daemon.js` only if the incoming
+      bundle is newer (see below). Adds this hook's `(agent, comm)`
+      entry to `installed_by` (or updates the existing entry).
+   2. Reads `~/.agents-comm-bus/adapters/<comm>.version.json` for this
+      actor's comm only — missing or older `content_version` → copies
+      the plugin's adapter, updates `installed_by`.
    3. Sends a `reload-adapters` control message to the daemon over the
       existing WS. **[TBD: v1 may simplify to "next daemon restart"
       and skip hot-reload.]**
@@ -414,9 +474,11 @@ agents. Not a v1 concern.
   same monorepo, but releases drift —
   `agents-comm-bus-telegram@1.0` may ship daemon@1, and
   `agents-comm-bus-matrix@1.2` may ship daemon@2.
-- The install hook compares `plugin's daemon.bundle.js` plugin_version
-  vs the highest `plugin_version` already in `bin/version.json`.
-  **Highest wins.**
+- The install hook compares the incoming daemon bundle's
+  `bundle_version` against `bin/version.json.content_version`.
+  **Highest bundle version wins.** `plugin_version` is provenance only.
+- A plugin with a higher `plugin_version` but an older daemon bundle
+  must **not** replace the newer installed daemon.
 - The **running** daemon does not hot-swap its own binary. It picks up
   a newer `bin/daemon.js` on next restart. **[TBD: trigger choice —
   "next idle period," "next session start," or explicit
@@ -430,12 +492,130 @@ agents. Not a v1 concern.
 - Daemon upgrade: restart required. In-flight long-poll connections
   drop and reconnect.
 
+## Testability / simulated live-install strategy
+
+The tested contract is **first usable hook invocation**, not literal
+`SessionStart`. That matches the current architecture more accurately:
+Claude's `UserPromptSubmit` path and Codex's `UserPromptSubmit` / repair
+paths already participate in daemon bootstrap, while literal session
+start behavior may differ by host.
+
+Marketplace fetch/extract is **out of scope** for these tests. The host
+runtime's `/plugin install` step is treated as a prerequisite that
+produces a populated plugin directory. Tests fixture that populated
+plugin dir and then verify what our install hook and daemon do with it.
+
+To make the behavior testable, central install logic should be split
+into a shared library boundary before writing most tests:
+
+- `reconcileInstall(actor, state) -> plan` (pure decision function)
+- `executeInstallPlan(plan, actor, paths, fs) -> effects`
+
+The actor must carry three distinct versions:
+
+- `pluginVersion` for provenance
+- `daemonBundleVersion` for daemon replacement decisions
+- `adapterBundleVersion` for adapter replacement decisions
+- `pluginInstallDir` for executor-side bundle source resolution when a
+  plan requires copying bytes
+
+Keeping those separate prevents a plugin-only hotfix from accidentally
+downgrading a newer installed daemon or adapter. In the long run, the
+safest wiring is to derive the bundle versions from the bundles (or a
+sidecar/version stamp shipped with them) when constructing the actor, so
+accidentally passing `pluginVersion` as a replacement key becomes
+structurally harder.
+
+### Four test layers
+
+#### T1 — pure reconciliation tests
+
+Most coverage and most value should live here. These tests exercise the
+planning logic without real subprocesses.
+
+Required invariants:
+
+- idempotent reruns do not duplicate provenance entries
+- install order is irrelevant to final settled metadata
+- highest **bundle** version wins for installed bytes
+- older bundle versions never downgrade a newer installed bundle
+- uninstall of the plugin that most recently provided the installed
+  bytes does **not** auto-downgrade the shared file
+
+#### T2 — temp-filesystem integration tests
+
+Run real reconciles against temp directories representing HOME, plugin
+install dirs, and the shared `~/.agents-comm-bus/` root. Spawn/restart
+behavior can still be injected.
+
+These prove the library works against actual filesystem state:
+
+- cold install lays down daemon bundle, adapter bundle, and both metadata
+  files
+- warm install merges `installed_by` without unnecessary rewrites
+- adding a second comm installs only that adapter while preserving the
+  daemon and existing adapters
+- missing file / present metadata and present file / missing metadata
+  recovery converge to a valid state
+- executor rejects a plan that requires bundle copies when
+  `pluginInstallDir` or source bundle paths are unavailable, and writes
+  no metadata in that failure path
+
+#### T3 — concurrency tests (mandatory)
+
+Concurrency is mandatory because mixed-version double-install is the
+highest-risk path in the model. The shared install location is only
+trustworthy if concurrent callers converge cleanly.
+
+Required assertions:
+
+- concurrent cold installs converge on one valid final state
+- mixed-version concurrent installs settle on the highest daemon bundle
+  version
+- `version.json` remains valid JSON with merged provenance
+- no truncated `bin/daemon.js` or adapter bundle files are left behind
+- if bootstrap also starts the daemon, only one spawn occurs and other
+  callers converge on the same result
+
+#### T4 — subprocess hook simulation (gated smoke)
+
+Keep a small number of heavier tests that run the real hook wrappers in
+subprocesses against temp roots. These verify script plumbing rather
+than core reconciliation logic:
+
+- env-var and stdin-envelope handling
+- hook-to-library wiring
+- first-run hint injection
+- real copied daemon startup smoke after install
+
+These should be gated like integration smoke tests, not carry the main
+correctness burden.
+
+### Concrete first-batch matrix
+
+- cold install from empty shared root
+- same plugin rerun is idempotent
+- same comm on a second agent merges provenance without content churn
+- second comm install adds only its adapter
+- newer daemon bundle replaces older installed daemon
+- higher `plugin_version` carrying an older `daemonBundleVersion` does
+  **not** replace the newer installed daemon
+- newer adapter bundle replaces older installed adapter for that comm
+- uninstall removes provenance but does **not** auto-downgrade the
+  installed daemon or adapter
+- partial-state recovery: missing file / missing metadata / corrupt
+  metadata
+- executor guard: plan requires bundle copy but bundle source is
+  unavailable -> reject and write nothing
+- mixed-version concurrent double-install converges on the highest
+  bundle version with valid merged metadata
+
 ## Migration from `claude-code-telegram`
 
 1. User uninstalls the old `claude-code-telegram` plugin.
 2. User installs `agents-comm-bus-telegram` from the Claude marketplace.
-3. First prompt bootstraps the daemon and drops the Telegram adapter
-   (cold-install lifecycle above).
+3. First usable hook invocation bootstraps the daemon and drops the
+   Telegram adapter (cold-install lifecycle above).
 4. User re-runs registration with their existing bot token:
    `/comm-register telegram <token>` (or via the conversational
    `register_account` MCP tool).
