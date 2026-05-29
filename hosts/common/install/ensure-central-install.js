@@ -102,6 +102,7 @@ export async function readInstallStamp(pluginInstallDir, deps = {}) {
     const parsed = JSON.parse(raw);
     if (
       !parsed ||
+      parsed.schema_version !== 1 ||
       typeof parsed.plugin_version !== "string" ||
       typeof parsed.daemon_bundle_version !== "string" ||
       typeof parsed.adapter_bundle_version !== "string"
@@ -139,10 +140,29 @@ export async function ensureCentralInstall(options) {
     );
   }
 
+  // Resolve actor identity (caller override wins, else the stamp) and validate
+  // it before building the actor. Production-strict: an unresolved agent/comm
+  // must fail loud, never flow into runCentralInstall and write paths like
+  // adapters/undefined.js or metadata with an undefined comm.
+  const resolvedAgent = options.agent ?? stamp.agent;
+  const resolvedComm = options.comm ?? stamp.comm;
+  if (
+    typeof resolvedAgent !== "string" ||
+    resolvedAgent.length === 0 ||
+    typeof resolvedComm !== "string" ||
+    resolvedComm.length === 0
+  ) {
+    throw new Error(
+      `central install (production mode): install stamp resolved an invalid actor identity ` +
+        `(agent=${JSON.stringify(resolvedAgent)}, comm=${JSON.stringify(resolvedComm)}). ` +
+        `The stamp must carry agent + comm, or the caller must supply them.`,
+    );
+  }
+
   /** @type {import("./reconcile-central-install.js").InstallActor} */
   const actor = {
-    agent: /** @type {any} */ (options.agent ?? stamp.agent),
-    comm: options.comm ?? stamp.comm,
+    agent: /** @type {any} */ (resolvedAgent),
+    comm: resolvedComm,
     pluginVersion: stamp.plugin_version,
     daemonBundleVersion: stamp.daemon_bundle_version,
     adapterBundleVersion: stamp.adapter_bundle_version,

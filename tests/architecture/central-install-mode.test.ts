@@ -61,6 +61,23 @@ describe("readInstallStamp", () => {
     assert.equal(await readInstallStamp(dir), null);
   });
 
+  it("returns null when schema_version is not 1", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "badschema-"));
+    await writeFile(
+      path.join(dir, INSTALL_STAMP_NAME),
+      JSON.stringify({
+        schema_version: 2,
+        agent: "claude",
+        comm: "telegram",
+        plugin_version: "1.0.0",
+        daemon_bundle_version: "1.0.0",
+        adapter_bundle_version: "1.0.0",
+      }),
+      "utf8",
+    );
+    assert.equal(await readInstallStamp(dir), null);
+  });
+
   it("parses a well-formed stamp", async () => {
     const dir = await fixturedPlugin("telegram", "1.0.0");
     const stamp = await readInstallStamp(dir);
@@ -122,6 +139,65 @@ describe("ensureCentralInstall — production mode, strict", () => {
       /missing or invalid plugin install metadata/,
     );
     assert.equal(called, false, "must not attempt install when metadata is missing");
+  });
+
+  it("fails loud when the stamp lacks agent/comm and the caller supplies none", async () => {
+    const root = await tempRoot();
+    // Valid versions + schema, but NO agent/comm in the stamp.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "noident-"));
+    await writeFile(path.join(dir, "daemon.bundle.js"), "DAEMON_BUNDLE_v1.0.0", "utf8");
+    await writeFile(path.join(dir, "telegram.adapter.bundle.js"), "TG", "utf8");
+    await writeFile(
+      path.join(dir, INSTALL_STAMP_NAME),
+      JSON.stringify({
+        schema_version: 1,
+        plugin_version: "1.0.0",
+        daemon_bundle_version: "1.0.0",
+        adapter_bundle_version: "1.0.0",
+      }),
+      "utf8",
+    );
+    let called = false;
+    const spy = async () => {
+      called = true;
+      return { plan: {} as any, result: {} as any, stoleStale: false };
+    };
+
+    await assert.rejects(
+      () => ensureCentralInstall({ stateRoot: root, pluginInstallDir: dir, env: {}, deps: { runCentralInstall: spy } }),
+      /invalid actor identity/,
+    );
+    assert.equal(called, false, "must not run install with an unresolved actor");
+  });
+
+  it("accepts caller-supplied agent/comm overriding a stamp that omits them", async () => {
+    const root = await tempRoot();
+    const dir = await mkdtemp(path.join(os.tmpdir(), "ident-override-"));
+    await writeFile(path.join(dir, "daemon.bundle.js"), "DAEMON_BUNDLE_v1.0.0", "utf8");
+    await writeFile(path.join(dir, "telegram.adapter.bundle.js"), "TELEGRAM_ADAPTER_v1.0.0", "utf8");
+    await writeFile(
+      path.join(dir, INSTALL_STAMP_NAME),
+      JSON.stringify({
+        schema_version: 1,
+        plugin_version: "1.0.0",
+        daemon_bundle_version: "1.0.0",
+        adapter_bundle_version: "1.0.0",
+      }),
+      "utf8",
+    );
+
+    const res = await ensureCentralInstall({
+      stateRoot: root,
+      agent: "claude",
+      comm: "telegram",
+      pluginInstallDir: dir,
+      env: {},
+      installedAt: "2026-05-29T00:00:00Z",
+    });
+    assert.equal(res.mode, "production");
+    assert.equal(res.actor?.comm, "telegram");
+    const paths = resolveCentralPaths(root, "telegram");
+    assert.equal(await readFile(paths.adapterBundle, "utf8"), "TELEGRAM_ADAPTER_v1.0.0");
   });
 
   it("builds the actor from the stamp and lands bundles via the real orchestrator", async () => {
