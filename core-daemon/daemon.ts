@@ -119,11 +119,61 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       if (pendingInbound.length > 100) {
         pendingInbound.splice(0, pendingInbound.length - 100);
       }
+      await audit.append({
+        timestamp: Date.now(),
+        kind: "inbound_dispatch_enqueued",
+        agent: conversation.agent,
+        conversation_id: conversation.conversation_id,
+        detail: {
+          comm: message.chat.comm,
+          account: message.chat.account,
+          account_label: conversation.account_label,
+          platform_message_id: message.platform_message_id,
+          message_id: message.message_id,
+          queue_length: pendingInbound.length,
+        },
+      });
       for (const bridge of bridges) {
         if (bridge.onInboundConversation) {
           try {
+            await audit.append({
+              timestamp: Date.now(),
+              kind: "inbound_dispatch_bridge_invoked",
+              agent: bridge.agentId,
+              conversation_id: conversation.conversation_id,
+              detail: {
+                conversation_agent: conversation.agent,
+                platform_message_id: message.platform_message_id,
+                message_id: message.message_id,
+                queue_length: pendingInbound.length,
+              },
+            });
             await bridge.onInboundConversation(conversation);
+            await audit.append({
+              timestamp: Date.now(),
+              kind: "inbound_dispatch_bridge_completed",
+              agent: bridge.agentId,
+              conversation_id: conversation.conversation_id,
+              detail: {
+                conversation_agent: conversation.agent,
+                platform_message_id: message.platform_message_id,
+                message_id: message.message_id,
+                queue_length: pendingInbound.length,
+              },
+            });
           } catch (error) {
+            await audit.append({
+              timestamp: Date.now(),
+              kind: "inbound_dispatch_bridge_failed",
+              agent: bridge.agentId,
+              conversation_id: conversation.conversation_id,
+              detail: {
+                conversation_agent: conversation.agent,
+                platform_message_id: message.platform_message_id,
+                message_id: message.message_id,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
             console.error(
               `agents-comm-bus: bridge ${bridge.agentId} onInboundConversation failed: ` +
                 `${error instanceof Error ? error.message : String(error)}`,
