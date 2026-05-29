@@ -652,6 +652,46 @@ state.
 | `AGENTS_COMM_BUS_BIN=<project>/core/index.js` | Overrides the daemon entry point. Install hook skips the "copy bundle to shared location" step when set. Daemon runs from raw project source — no esbuild round-trip per iteration. |
 | `AGENTS_COMM_BUS_ADAPTERS_DIR=<project>/adapters/` | Overrides the adapter discovery directory. Daemon loads from project source rather than the shared `adapters/` dir. |
 
+`AGENTS_COMM_BUS_BIN` remains the authoritative source-mode switch.
+`resolveInstallMode(env)` should stay env-only: if that variable is set,
+the caller is in source/dev mode; if it is absent, the caller is in
+strict production/plugin mode and missing plugin metadata is a hard
+packaging error.
+
+### Workspace-wide dev marker
+
+MCP server env blocks are not enough by themselves: they reach the MCP
+shim process, but hook processes are launched by the host agent and do
+not necessarily inherit the MCP server's environment. Setting the same
+three variables separately on every Claude hook, Codex hook, and MCP
+shim is fragile.
+
+The dev setup should therefore support a gitignored repo-local marker
+or config file, for example:
+
+```text
+<project>/.agents-comm-bus-dev.json
+```
+
+This marker is a workspace convenience, not a second runtime mode
+switch. Production/plugin artifacts must not ship it and production
+bootstrap must not treat the marker's mere presence as permission to
+skip central install. Instead, all runtime entrypoints should call a
+shared dev-config resolver before central-install reconciliation:
+
+1. Resolve the project/worktree root for the current hook or shim.
+2. If the gitignored dev marker/config exists, read it and validate that
+   the referenced source daemon entry exists inside that project root.
+3. Populate the same env-shaped values used by the strict contract:
+   `AGENTS_COMM_BUS_BIN`, `AGENTS_COMM_BUS_ROOT`, and
+   `AGENTS_COMM_BUS_ADAPTERS_DIR`.
+4. Pass those resolved values to the common central-install wrapper.
+
+That keeps the safety property intact: the install-mode decision is
+still made from explicit env-shaped values, while the workspace gets one
+local switch that applies consistently to both shims and all hook
+entrypoints.
+
 Plus the existing pattern from today's codebase:
 
 - Project-local `.mcp.json` (gitignored) declares the MCP server with
@@ -686,9 +726,12 @@ server with the env vars in `env`:
 ```
 
 Same env block goes on the hook entry in `.claude/settings.local.json`
-or analogous Codex config. A bootstrap script (`npm run dev`) can
-template these paths automatically against the dev's checkout
-location.
+or analogous Codex config when the host supports hook env directly. When
+it does not, the shared dev-config resolver is the preferred path: the
+hook command stays simple, and the hook reads the gitignored marker from
+the project root to populate the same env-shaped values before calling
+the central-install wrapper. A bootstrap script (`npm run dev`) can
+template these paths automatically against the dev's checkout location.
 
 ### Coexistence with production daemon
 

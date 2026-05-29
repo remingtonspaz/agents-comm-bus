@@ -13,6 +13,9 @@ node_modules/
 .mcp.json
 !plugins/codex/telegram/.mcp.json
 
+# Local source-mode switch for central-install development
+.agents-comm-bus-dev.json
+
 # Local team scratchpad: the canvas + its seed sidecar are local-only
 docs/Command Center.html
 docs/command-center-notes.js
