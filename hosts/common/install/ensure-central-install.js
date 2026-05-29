@@ -41,8 +41,8 @@ export const INSTALL_STAMP_NAME = "install-stamp.json";
  *
  * @typedef {Object} InstallStamp
  * @property {number} schema_version
- * @property {string} agent
- * @property {string} comm
+ * @property {string} [agent]   identity; may be omitted if the caller supplies options.agent
+ * @property {string} [comm]    identity; may be omitted if the caller supplies options.comm
  * @property {string} plugin_version          provenance only
  * @property {string} daemon_bundle_version   bin/daemon.js replace key
  * @property {string} adapter_bundle_version  adapters/<comm>.js replace key
