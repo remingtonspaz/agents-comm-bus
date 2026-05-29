@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, access, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -169,5 +169,73 @@ describe("T2 executeInstallPlan — second agent merges provenance without recop
     const dv = await readJson(paths.daemonVersionFile);
     const agents = dv.installed_by.map((e: any) => e.agent).sort();
     assert.deepEqual(agents, ["claude", "codex"]);
+  });
+});
+
+describe("T2 executeInstallPlan — second comm install", () => {
+  it("preserves the daemon + existing adapter and writes the new comm's adapter", async () => {
+    const root = await tempRoot();
+    const tgPlugin = await fakePlugin("telegram", "DAEMON_BUNDLE_v1.0.0", "TELEGRAM_ADAPTER");
+    const mxPlugin = await fakePlugin("matrix", "DAEMON_BUNDLE_v1.0.0", "MATRIX_ADAPTER");
+
+    await install(root, actor(tgPlugin, { comm: "telegram" }));
+    const { paths: mxPaths } = await install(root, actor(mxPlugin, { comm: "matrix" }));
+
+    // Telegram adapter untouched; matrix adapter freshly written.
+    const tgPaths = resolveCentralPaths(root, "telegram");
+    assert.equal(await readFile(tgPaths.adapterBundle, "utf8"), "TELEGRAM_ADAPTER");
+    assert.equal(await readFile(mxPaths.adapterBundle, "utf8"), "MATRIX_ADAPTER");
+
+    // Shared daemon preserved (same version) and now referenced by both comms.
+    assert.equal(await readFile(mxPaths.daemonBundle, "utf8"), "DAEMON_BUNDLE_v1.0.0");
+    const dv = await readJson(mxPaths.daemonVersionFile);
+    const refs = dv.installed_by.map((e: any) => `${e.agent}:${e.comm}`).sort();
+    assert.deepEqual(refs, ["claude:matrix", "claude:telegram"]);
+  });
+});
+
+describe("T2 executeInstallPlan — missing-bundle recovery", () => {
+  it("restores a lost daemon blob when the version file still claims it", async () => {
+    const root = await tempRoot();
+    const plugin = await fakePlugin("telegram", "DAEMON_BUNDLE_v1.0.0", "TG_v1");
+
+    await install(root, actor(plugin));
+
+    // Simulate the blob going missing while metadata still records it.
+    const paths = resolveCentralPaths(root, "telegram");
+    await rm(paths.daemonBundle);
+    assert.equal(await exists(paths.daemonBundle), false);
+
+    // Rerunning the same install must detect daemonExists=false and rewrite
+    // the blob (the !bundleExists recovery branch), leaving metadata valid.
+    const { plan } = await install(root, actor(plugin));
+
+    assert.equal(plan.daemon.writeBundle, true);
+    assert.ok(plan.daemon.reasons.some((r: string) => r.includes("recovery")));
+    assert.equal(await readFile(paths.daemonBundle, "utf8"), "DAEMON_BUNDLE_v1.0.0");
+    const dv = await readJson(paths.daemonVersionFile);
+    assert.equal(dv.content_version, "1.0.0");
+  });
+});
+
+describe("T2 executeInstallPlan — executor guard on a real root", () => {
+  it("rejects a bundle-requiring plan with no source and creates no files", async () => {
+    const root = await tempRoot();
+    const noSrc = { ...actor("/does/not/matter"), pluginInstallDir: undefined as unknown as string };
+
+    const state = await readCentralState(root, noSrc.comm);
+    const plan = reconcileInstall(noSrc, state);
+    const paths = resolveCentralPaths(root, noSrc.comm);
+
+    await assert.rejects(
+      () => executeInstallPlan(plan, noSrc, paths, createNodeFsSeam()),
+      /pluginInstallDir is unset/,
+    );
+
+    // Nothing landed anywhere under the central root.
+    assert.equal(await exists(paths.daemonBundle), false);
+    assert.equal(await exists(paths.daemonVersionFile), false);
+    assert.equal(await exists(paths.adapterBundle), false);
+    assert.equal(await exists(paths.adapterVersionFile), false);
   });
 });
