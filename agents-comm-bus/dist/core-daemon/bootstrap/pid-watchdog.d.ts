@@ -15,7 +15,7 @@ export type DaemonPidWatchdogResult = {
 } | {
     status: "stayed_alive";
     selfPid: number;
-    reason: "invalid_pid" | "read_error" | "liveness_error";
+    reason: "invalid_pid" | "read_error" | "liveness_error" | "reclaim_error";
     ownerPid?: number;
     error?: string;
 };

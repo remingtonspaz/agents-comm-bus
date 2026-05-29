@@ -7,7 +7,7 @@ export type DaemonPidWatchdogResult =
   | { status: "current"; selfPid: number }
   | { status: "superseded"; selfPid: number; ownerPid: number }
   | { status: "reclaimed"; selfPid: number; reason: "missing" | "dead_owner"; ownerPid?: number }
-  | { status: "stayed_alive"; selfPid: number; reason: "invalid_pid" | "read_error" | "liveness_error"; ownerPid?: number; error?: string };
+  | { status: "stayed_alive"; selfPid: number; reason: "invalid_pid" | "read_error" | "liveness_error" | "reclaim_error"; ownerPid?: number; error?: string };
 
 export type PidFileRead =
   | { status: "pid"; pid: number }
@@ -130,8 +130,17 @@ export async function checkDaemonPidOwnership(
 
   const pidFile = await read(options.pidFile);
   if (pidFile.status === "missing") {
-    await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
-    return { status: "reclaimed", selfPid, reason: "missing" };
+    try {
+      await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+      return { status: "reclaimed", selfPid, reason: "missing" };
+    } catch (error) {
+      return {
+        status: "stayed_alive",
+        selfPid,
+        reason: "reclaim_error",
+        error: errorMessage(error),
+      };
+    }
   }
 
   if (pidFile.status === "invalid") {
@@ -173,13 +182,23 @@ export async function checkDaemonPidOwnership(
     return { status: "superseded", selfPid, ownerPid: pidFile.pid };
   }
 
-  await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
-  return {
-    status: "reclaimed",
-    selfPid,
-    reason: "dead_owner",
-    ownerPid: pidFile.pid,
-  };
+  try {
+    await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+    return {
+      status: "reclaimed",
+      selfPid,
+      reason: "dead_owner",
+      ownerPid: pidFile.pid,
+    };
+  } catch (error) {
+    return {
+      status: "stayed_alive",
+      selfPid,
+      reason: "reclaim_error",
+      ownerPid: pidFile.pid,
+      error: errorMessage(error),
+    };
+  }
 }
 
 async function readPidFile(pidFile: string): Promise<PidFileRead> {

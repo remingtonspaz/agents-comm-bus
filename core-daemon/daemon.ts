@@ -250,19 +250,50 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     port: server.port,
     audit,
     stopDaemon: async () => {
-      try {
-        await bus.stop();
-      } catch (error) {
-        console.error(
-          `agents-comm-bus: failed to stop comm adapters during daemon retirement: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      await server.close();
+      await bestEffortWithTimeout(
+        () => bus.stop(),
+        5_000,
+        "stop comm adapters during daemon retirement",
+      );
+      await bestEffortWithTimeout(
+        () => server.close(),
+        1_000,
+        "close IPC server during daemon retirement",
+      );
     },
   });
 
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
+}
+
+async function bestEffortWithTimeout(
+  action: () => Promise<void>,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  try {
+    await Promise.race([
+      action(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, timeoutMs);
+      }),
+    ]);
+    if (timedOut) {
+      console.error(`agents-comm-bus: timed out trying to ${label}`);
+    }
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: failed to ${label}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function loadCommAdapters(input: {

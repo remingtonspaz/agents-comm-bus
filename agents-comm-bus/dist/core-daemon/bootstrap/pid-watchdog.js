@@ -76,8 +76,18 @@ export async function checkDaemonPidOwnership(options) {
     const writeDiscovery = options.writeDiscoveryFiles ?? writeDaemonDiscoveryFiles;
     const pidFile = await read(options.pidFile);
     if (pidFile.status === "missing") {
-        await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
-        return { status: "reclaimed", selfPid, reason: "missing" };
+        try {
+            await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+            return { status: "reclaimed", selfPid, reason: "missing" };
+        }
+        catch (error) {
+            return {
+                status: "stayed_alive",
+                selfPid,
+                reason: "reclaim_error",
+                error: errorMessage(error),
+            };
+        }
     }
     if (pidFile.status === "invalid") {
         return {
@@ -114,13 +124,24 @@ export async function checkDaemonPidOwnership(options) {
     if (ownerAlive) {
         return { status: "superseded", selfPid, ownerPid: pidFile.pid };
     }
-    await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
-    return {
-        status: "reclaimed",
-        selfPid,
-        reason: "dead_owner",
-        ownerPid: pidFile.pid,
-    };
+    try {
+        await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+        return {
+            status: "reclaimed",
+            selfPid,
+            reason: "dead_owner",
+            ownerPid: pidFile.pid,
+        };
+    }
+    catch (error) {
+        return {
+            status: "stayed_alive",
+            selfPid,
+            reason: "reclaim_error",
+            ownerPid: pidFile.pid,
+            error: errorMessage(error),
+        };
+    }
 }
 async function readPidFile(pidFile) {
     try {

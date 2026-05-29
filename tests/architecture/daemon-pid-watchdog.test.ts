@@ -177,4 +177,30 @@ describe("daemon pid watchdog", () => {
     assert.equal(result.ownerPid, 205);
     assert.equal(events[0].kind, "daemon_pid_watchdog_error");
   });
+
+  it("stays alive when reclaiming discovery fails", async () => {
+    const { audit, events } = auditRecorder();
+
+    const result = await runDaemonPidWatchdogTick({
+      stateRoot: "state",
+      pidFile: "daemon.pid",
+      port: 45_007,
+      selfPid: 106,
+      audit,
+      readPidFile: async () => ({ status: "pid", pid: 206 }),
+      isPidAlive: () => false,
+      writeDiscoveryFiles: async () => {
+        throw new Error("port belongs to a live daemon");
+      },
+      stopDaemon: async () => {
+        throw new Error("must not retire on reclaim failure");
+      },
+    });
+
+    assert.equal(result.status, "stayed_alive");
+    assert.equal(result.reason, "reclaim_error");
+    assert.equal(result.ownerPid, 206);
+    assert.equal(events[0].kind, "daemon_pid_watchdog_error");
+    assert.equal(events[0].detail?.reason, "reclaim_error");
+  });
 });
