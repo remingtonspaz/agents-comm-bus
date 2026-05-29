@@ -18,9 +18,51 @@
  * (entryEnsures IS the outermost wrapper the hooks/shim call); inner logic uses
  * the passed/merged env. All collaborators are injectable for testing.
  */
+import { existsSync } from "node:fs";
+import path from "node:path";
+
 import { ensureDaemon as defaultEnsureDaemon } from "../../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js";
 import { ensureCentralInstall as defaultEnsureCentralInstall } from "./ensure-central-install.js";
-import { applyDevConfig } from "./dev-config-resolver.js";
+import { applyDevConfig, DEV_MARKER_NAME } from "./dev-config-resolver.js";
+import { INSTALL_STAMP_NAME } from "./ensure-central-install.js";
+
+/**
+ * Derive the entry context for a calling hook/shim from its own directory, so
+ * every entrypoint can pass just `fromDir` and get identical resolution:
+ *   - projectRoot:      nearest ancestor containing the gitignored dev marker
+ *                       (`.agents-comm-bus-dev.json`). In a source/dev checkout
+ *                       this is the repo root; in a packaged install it is
+ *                       absent (no marker shipped).
+ *   - pluginInstallDir: nearest ancestor containing `install-stamp.json`. In a
+ *                       packaged install this is the plugin root; in a dev
+ *                       checkout it is absent (no committed stamp).
+ *
+ * Symmetric "nearest ancestor with marker X" walk for both, so the same hook
+ * file resolves correctly whether it runs from the source tree or a staged
+ * plugin dir.
+ *
+ * @param {string} fromDir
+ * @param {{ exists?: (p: string) => boolean }} [deps]
+ * @returns {{ projectRoot?: string, pluginInstallDir?: string }}
+ */
+export function resolveEntryContext(fromDir, deps = {}) {
+  const exists = deps.exists ?? existsSync;
+  return {
+    projectRoot: findAncestorContaining(fromDir, DEV_MARKER_NAME, exists),
+    pluginInstallDir: findAncestorContaining(fromDir, INSTALL_STAMP_NAME, exists),
+  };
+}
+
+/** @returns {string|undefined} nearest ancestor of `dir` (inclusive) holding `name` */
+function findAncestorContaining(dir, name, exists) {
+  let current = path.resolve(dir);
+  for (;;) {
+    if (exists(path.join(current, name))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
 
 /**
  * @typedef {Object} EntryEnsuresOptions
@@ -49,6 +91,7 @@ export async function entryEnsures(options) {
     agent,
     comm,
     stateRoot,
+    fromDir,
     projectRoot,
     pluginInstallDir,
     env = process.env,
@@ -60,16 +103,28 @@ export async function entryEnsures(options) {
   const ensureDaemonFn = deps.ensureDaemon ?? defaultEnsureDaemon;
   const ensureCentralInstallFn = deps.ensureCentralInstall ?? defaultEnsureCentralInstall;
 
+  // Hooks/shims pass their own dir; explicit projectRoot/pluginInstallDir still
+  // win (used by tests). fromDir derives both via the symmetric marker walk.
+  let resolvedProjectRoot = projectRoot;
+  let resolvedPluginInstallDir = pluginInstallDir;
+  if (fromDir && (resolvedProjectRoot === undefined || resolvedPluginInstallDir === undefined)) {
+    const ctx = resolveEntryContext(fromDir, deps.entryContextDeps);
+    resolvedProjectRoot = resolvedProjectRoot ?? ctx.projectRoot;
+    resolvedPluginInstallDir = resolvedPluginInstallDir ?? ctx.pluginInstallDir;
+  }
+
   // 1. Dev-config marker → merged env (no-op without a marker; never mutates the
   //    caller's env object).
-  const resolvedEnv = projectRoot ? applyDevConfig(env, projectRoot, deps.devConfigDeps).env : env;
+  const resolvedEnv = resolvedProjectRoot
+    ? applyDevConfig(env, resolvedProjectRoot, deps.devConfigDeps).env
+    : env;
 
   // 2. Central install FIRST — production failures throw here, before any spawn.
   const centralInstall = await ensureCentralInstallFn({
     stateRoot,
     agent,
     comm,
-    pluginInstallDir,
+    pluginInstallDir: resolvedPluginInstallDir,
     env: resolvedEnv,
     daemonRunning,
     deps: deps.centralInstallDeps,

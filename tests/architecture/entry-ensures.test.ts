@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { entryEnsures } from "../../hosts/common/install/entry-ensures.js";
+import { entryEnsures, resolveEntryContext } from "../../hosts/common/install/entry-ensures.js";
 import { INSTALL_STAMP_NAME } from "../../hosts/common/install/ensure-central-install.js";
 import { resolveCentralPaths } from "../../hosts/common/install/node-fs-seam.js";
 import { DEV_MARKER_NAME } from "../../hosts/common/install/dev-config-resolver.js";
@@ -89,6 +89,28 @@ describe("entryEnsures — production mode", () => {
       /missing or invalid plugin install metadata/,
     );
     assert.equal(daemon.called, 0, "ensureDaemon must NOT run after a central-install failure");
+  });
+});
+
+describe("resolveEntryContext", () => {
+  it("finds projectRoot at the nearest ancestor holding the dev marker", async () => {
+    const root = await tempDir("acb-ee-ctx-");
+    await writeFile(path.join(root, DEV_MARKER_NAME), "{}", "utf8");
+    const hookDir = path.join(root, "hosts", "claude", "hooks");
+    await mkdir(hookDir, { recursive: true });
+    const ctx = resolveEntryContext(hookDir);
+    assert.equal(ctx.projectRoot, root);
+    assert.equal(ctx.pluginInstallDir, undefined, "no stamp in a dev tree");
+  });
+
+  it("finds pluginInstallDir at the nearest ancestor holding install-stamp.json", async () => {
+    const pluginRoot = await tempDir("acb-ee-plug-");
+    await writeFile(path.join(pluginRoot, INSTALL_STAMP_NAME), "{}", "utf8");
+    const hookDir = path.join(pluginRoot, "hooks");
+    await mkdir(hookDir, { recursive: true });
+    const ctx = resolveEntryContext(hookDir);
+    assert.equal(ctx.pluginInstallDir, pluginRoot);
+    assert.equal(ctx.projectRoot, undefined, "no dev marker in a packaged install");
   });
 });
 
