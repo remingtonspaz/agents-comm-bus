@@ -21,7 +21,10 @@
 import { copyFile, mkdir, readFile, readdir, writeFile, access, rm } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
 import { extname, resolve, relative, basename, dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { pipeline } from "node:stream/promises";
+
+import { buildInstallStamp } from "../hosts/common/install/install-stamp.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const DEFAULT_OUTPUT_DIR = resolve(REPO_ROOT, "plugins");
@@ -122,6 +125,25 @@ async function readJson(p) {
 
 async function writeJson(p, obj) {
   return writeText(p, JSON.stringify(obj, null, 2) + "\n");
+}
+
+/**
+ * Load a named string export from a built dist module. Used to source the
+ * install-stamp version fields from authoritative, independent sources:
+ * DAEMON_VERSION (core-daemon) and ADAPTER_VERSION (per-comm adapter). Requires
+ * `npm --workspace agents-comm-bus run build` to have produced dist first.
+ */
+async function loadDistExport(distRelPath, exportName) {
+  const abs = resolve(REPO_ROOT, distRelPath);
+  if (!(await pathExists(abs))) {
+    throw new Error(`stage-plugins: missing ${distRelPath} (run the agents-comm-bus build first)`);
+  }
+  const mod = await import(pathToFileURL(abs).href);
+  const value = mod[exportName];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`stage-plugins: ${exportName} missing/invalid in ${distRelPath}`);
+  }
+  return value;
 }
 
 /* ── skill assembly (copied from assemble-skills.js for self-containment) ── */
@@ -374,8 +396,10 @@ async function stagePair(agent, comm) {
   const manifestSrcDir = resolve(REPO_ROOT, manifestName);
   const manifestSrc = resolve(manifestSrcDir, "plugin.json");
   const manifestDst = resolve(outDir, manifestName, "plugin.json");
+  let pluginVersion = null;
   if (await pathExists(manifestSrc)) {
     const manifest = await readJson(manifestSrc);
+    pluginVersion = typeof manifest.version === "string" ? manifest.version : null;
     // Ensure MCP server args point to the staged shim. Codex stores MCP
     // server declarations in artifact-local .mcp.json, not plugin.json.
     if (agent === "codex") {
@@ -388,6 +412,35 @@ async function stagePair(agent, comm) {
     await writeJson(manifestDst, manifest);
     record(manifestSrc, manifestDst, "manifest");
   }
+
+  /* 4b. Central-install stamp — runtime-readable version source. Three
+     independent fields so adapter/daemon/plugin versions can diverge without
+     one masquerading as another (see install-model.md + AGE-13). No timestamp,
+     so the stamp is byte-stable across stagings. */
+  const daemonBundleVersion = await loadDistExport(
+    "agents-comm-bus/dist/core-daemon/config.js",
+    "DAEMON_VERSION",
+  );
+  const adapterBundleVersion = await loadDistExport(
+    `agents-comm-bus/dist/adapters/${comm}/version.js`,
+    "ADAPTER_VERSION",
+  );
+  const stampDst = resolve(outDir, "install-stamp.json");
+  await writeJson(
+    stampDst,
+    buildInstallStamp({
+      agent,
+      comm,
+      pluginVersion,
+      daemonBundleVersion,
+      adapterBundleVersion,
+    }),
+  );
+  mapping.artifacts.push({
+    source: `core-daemon/config.ts (DAEMON_VERSION) + adapters/${comm}/version.ts (ADAPTER_VERSION) + ${manifestName}/plugin.json (version)`,
+    artifact: relative(REPO_ROOT, stampDst),
+    type: "install-stamp",
+  });
 
   /* 5. Codex .mcp.json */
   if (agent === "codex") {
