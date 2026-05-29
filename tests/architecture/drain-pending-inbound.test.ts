@@ -157,3 +157,69 @@ describe("drainPendingInbound (scoped drain)", () => {
     assert.equal(queue.length, 2, "no entries removed when filter matches nothing");
   });
 });
+
+function entryAcct(id: string, comm: CommId, account: string): PendingInboundEntry {
+  const e = entry(id, comm);
+  e.message.chat.account = account as AccountId;
+  return e;
+}
+
+describe("drainPendingInbound (account-scoped drain)", () => {
+  it("removes only the caller's owned-account entries, leaving another agent's entries", () => {
+    // Claude + Codex share comm=telegram with different bot accounts. A Claude
+    // check must not cannibalize Codex's pending inbound, and vice versa.
+    const queue: PendingInboundEntry[] = [
+      entryAcct("1", TELEGRAM, "claude-bot"),
+      entryAcct("2", TELEGRAM, "codex-bot"),
+      entryAcct("3", TELEGRAM, "claude-bot"),
+    ];
+
+    const drained = drainPendingInbound(queue, {
+      ownedAccountKeys: new Set(["telegram:claude-bot"]),
+    });
+
+    assert.deepEqual(
+      drained.map((e) => e.message.platform_message_id),
+      ["1", "3"],
+      "only claude-owned entries drain",
+    );
+    assert.deepEqual(
+      queue.map((e) => e.message.platform_message_id),
+      ["2"],
+      "the codex-bot entry must survive the claude check",
+    );
+  });
+
+  it("drains nothing for an empty owned set (unknown session must not global-wipe)", () => {
+    const queue: PendingInboundEntry[] = [entryAcct("1", TELEGRAM, "claude-bot")];
+
+    const drained = drainPendingInbound(queue, { ownedAccountKeys: new Set<string>() });
+
+    assert.equal(drained.length, 0);
+    assert.equal(queue.length, 1, "empty owned set must NOT fall through to a global drain");
+  });
+
+  it("combines the comm filter with account ownership", () => {
+    const queue: PendingInboundEntry[] = [
+      entryAcct("1", TELEGRAM, "claude-bot"),
+      entryAcct("2", MATRIX, "claude-bot"),
+      entryAcct("3", TELEGRAM, "codex-bot"),
+    ];
+
+    const drained = drainPendingInbound(queue, {
+      comm: "telegram",
+      ownedAccountKeys: new Set(["telegram:claude-bot", "matrix:claude-bot"]),
+    });
+
+    assert.deepEqual(
+      drained.map((e) => e.message.platform_message_id),
+      ["1"],
+      "must match BOTH the comm filter and account ownership",
+    );
+    assert.deepEqual(
+      queue.map((e) => e.message.platform_message_id),
+      ["2", "3"],
+      "matrix-owned and codex-owned entries remain",
+    );
+  });
+});

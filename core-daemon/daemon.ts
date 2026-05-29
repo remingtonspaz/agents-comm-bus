@@ -5,6 +5,7 @@ import {
   type AccountRegistration,
   type CommAdapter,
   type CommId,
+  type SessionId,
   type Storage,
 } from "agents-comm-bus-core";
 import { DAEMON_VERSION } from "./config.js";
@@ -148,9 +149,14 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // Generic drain of the shared pendingInbound queue. Used by the MCP shim's
   // `comm_check_messages` tool so the shim doesn't have to know any per-comm
   // IPC method names.
-  ipcMethods.set("drain_pending_inbound", async (params) =>
-    drainPendingInbound(pendingInbound, params),
-  );
+  ipcMethods.set("drain_pending_inbound", async (params) => {
+    const base = params ?? {};
+    // Scope the drain to the calling session's owned bot accounts so one
+    // agent's `comm_check_messages` cannot cannibalize another agent's pending
+    // inbound (Claude + Codex share comm="telegram" with different bots).
+    const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
+    return drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+  });
   const bridgesByMethod = new Map<string, AgentBridge>();
   for (const bridge of bridges) {
     for (const method of bridge.ipcMethods) {
@@ -444,8 +450,18 @@ export async function reloadAdapters(input: {
  * would destructively drain ALL comms and the caller would merely filter
  * client-side, losing the other comms' pending entries as collateral.
  *
- * When `comm` is omitted (or empty / non-string), the behavior is the
- * historical global drain: the entire queue is spliced.
+ * When `ownedAccountKeys` is supplied (a Set of `${comm}:${account}` keys),
+ * the drain is additionally scoped to those accounts â€” only entries the caller
+ * actually owns are removed. This is essential in a multi-bot setup where two
+ * agents share a comm (Claude + Codex both on telegram with different bot
+ * accounts): without account scoping a `comm_check_messages` from one agent
+ * destructively drains the OTHER agent's pending inbound as collateral, so the
+ * other agent's wake-driven drain then finds an empty queue and never injects
+ * the message. An empty Set drains nothing.
+ *
+ * When neither `comm` nor `ownedAccountKeys` is supplied, the behavior is the
+ * historical global drain: the entire queue is spliced (internal/legacy callers
+ * without a session).
  *
  * Returned entries preserve queue order (oldest first).
  */
@@ -455,17 +471,43 @@ export function drainPendingInbound(
 ): PendingInboundEntry[] {
   const raw = params?.comm;
   const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
-  if (!commFilter) {
+  const owned = params?.ownedAccountKeys instanceof Set
+    ? (params.ownedAccountKeys as Set<string>)
+    : null;
+  if (!commFilter && owned === null) {
     return queue.splice(0);
   }
   const drained: PendingInboundEntry[] = [];
   for (let i = queue.length - 1; i >= 0; i -= 1) {
-    if (queue[i].message.chat.comm === commFilter) {
-      drained.unshift(queue[i]);
-      queue.splice(i, 1);
-    }
+    const entry = queue[i];
+    if (commFilter && entry.message.chat.comm !== commFilter) continue;
+    if (owned !== null && !owned.has(pendingAccountKey(entry))) continue;
+    drained.unshift(entry);
+    queue.splice(i, 1);
   }
   return drained;
+}
+
+function pendingAccountKey(entry: PendingInboundEntry): string {
+  return `${entry.message.chat.comm}:${entry.message.chat.account}`;
+}
+
+/**
+ * Resolve the bot accounts a calling session owns, as `${comm}:${account}`
+ * keys, for scoping a generic drain. Mirrors the per-agent ownership the
+ * bridges use. Returns undefined when there is no session (legacy caller â†’
+ * fall back to comm/global), and an empty Set when the session is unknown
+ * (scope to nothing rather than global-wipe).
+ */
+async function resolveOwnedAccountKeys(
+  storage: Storage,
+  session: unknown,
+): Promise<Set<string> | undefined> {
+  if (typeof session !== "string" || session.length === 0) return undefined;
+  const sess = await storage.getSession(session as SessionId);
+  if (!sess) return new Set<string>();
+  const regs = await storage.listAccountRegistrations({ agent: sess.agent });
+  return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 
 function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
