@@ -22,6 +22,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 import { ensureDaemon as defaultEnsureDaemon } from "../../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js";
+import { resolveStatePaths as defaultResolveStatePaths } from "../../../agents-comm-bus/dist/core-daemon/paths.js";
 import { ensureCentralInstall as defaultEnsureCentralInstall } from "./ensure-central-install.js";
 import { applyDevConfig, DEV_MARKER_NAME } from "./dev-config-resolver.js";
 import { INSTALL_STAMP_NAME } from "./ensure-central-install.js";
@@ -79,8 +80,10 @@ function findAncestorContaining(dir, name, exists) {
  * @typedef {Object} EntryEnsuresDeps
  * @property {typeof defaultEnsureDaemon} [ensureDaemon]
  * @property {typeof defaultEnsureCentralInstall} [ensureCentralInstall]
+ * @property {typeof defaultResolveStatePaths} [resolveStatePaths]  default-root resolver (injectable in tests so the fallback can't touch the real ~/.agents-comm-bus)
  * @property {import("./dev-config-resolver.js").DevConfigDeps} [devConfigDeps]
  * @property {import("./ensure-central-install.js").EnsureCentralInstallDeps} [centralInstallDeps]
+ * @property {{ exists?: (p: string) => boolean }} [entryContextDeps]
  */
 
 /**
@@ -119,9 +122,23 @@ export async function entryEnsures(options) {
     ? applyDevConfig(env, resolvedProjectRoot, deps.devConfigDeps).env
     : env;
 
+  // 1b. Derive ONE canonical state root and feed it to both ensureCentralInstall
+  //     and ensureDaemon, so they never diverge. Precedence: explicit option ->
+  //     resolved AGENTS_COMM_BUS_ROOT (marker/env) -> the daemon's own default
+  //     (which honors AGENTS_COMM_BUS_STATE_ROOT, else ~/.agents-comm-bus).
+  //     Live hooks/shim call entryEnsures WITHOUT an explicit stateRoot, so
+  //     without this the production path passed undefined into runCentralInstall
+  //     (path.join(undefined, ...) crash) and the daemon ensure never saw the
+  //     marker-resolved root.
+  const resolveStatePathsFn = deps.resolveStatePaths ?? defaultResolveStatePaths;
+  const canonicalStateRoot =
+    stateRoot ??
+    resolvedEnv.AGENTS_COMM_BUS_ROOT ??
+    resolveStatePathsFn({ stateRoot: resolvedEnv.AGENTS_COMM_BUS_STATE_ROOT }).root;
+
   // 2. Central install FIRST — production failures throw here, before any spawn.
   const centralInstall = await ensureCentralInstallFn({
-    stateRoot,
+    stateRoot: canonicalStateRoot,
     agent,
     comm,
     pluginInstallDir: resolvedPluginInstallDir,
@@ -130,7 +147,8 @@ export async function entryEnsures(options) {
     deps: deps.centralInstallDeps,
   });
 
-  // 3. Then ensure the daemon; return its result so callers keep {port, hello, spawned}.
-  const daemon = await ensureDaemonFn(ensureDaemonOptions);
+  // 3. Then ensure the daemon with the SAME canonical root; return its result so
+  //    callers keep using { port, hello, spawned }.
+  const daemon = await ensureDaemonFn({ ...ensureDaemonOptions, stateRoot: canonicalStateRoot });
   return { ...daemon, centralInstall };
 }

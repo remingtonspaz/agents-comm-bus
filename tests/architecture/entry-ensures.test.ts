@@ -40,11 +40,21 @@ async function fixturedPlugin(): Promise<string> {
 
 function spyEnsureDaemon() {
   let calls = 0;
-  const fn = async () => {
+  let lastOpts: Record<string, unknown> | undefined;
+  const fn = async (opts: Record<string, unknown>) => {
     calls += 1;
+    lastOpts = opts;
     return { port: 51999, hello: { daemonName: "agents-comm-bus" }, spawned: false };
   };
-  return { fn, get called() { return calls; } };
+  return {
+    fn,
+    get called() {
+      return calls;
+    },
+    get lastOpts() {
+      return lastOpts;
+    },
+  };
 }
 
 describe("entryEnsures — production mode", () => {
@@ -89,6 +99,79 @@ describe("entryEnsures — production mode", () => {
       /missing or invalid plugin install metadata/,
     );
     assert.equal(daemon.called, 0, "ensureDaemon must NOT run after a central-install failure");
+  });
+});
+
+describe("entryEnsures — canonical stateRoot derivation", () => {
+  it("uses AGENTS_COMM_BUS_ROOT when no explicit stateRoot, feeding it to both install and daemon", async () => {
+    const envRoot = await tempDir("acb-ee-envroot-");
+    const plugin = await fixturedPlugin();
+    const daemon = spyEnsureDaemon();
+
+    const result = await entryEnsures({
+      agent: "claude",
+      comm: "telegram",
+      pluginInstallDir: plugin,
+      // no explicit stateRoot — must derive from env
+      env: { AGENTS_COMM_BUS_ROOT: envRoot },
+      deps: { ensureDaemon: daemon.fn },
+    });
+
+    assert.equal(result.centralInstall.mode, "production");
+    assert.equal(daemon.lastOpts?.stateRoot, envRoot, "daemon got the env-derived canonical root");
+    const paths = resolveCentralPaths(envRoot, "telegram");
+    const { readFile } = await import("node:fs/promises");
+    assert.equal(await readFile(paths.daemonBundle, "utf8"), "DAEMON_BUNDLE_v1.0.0");
+  });
+
+  it("falls back to the daemon default root (injected) when neither stateRoot nor env root is set", async () => {
+    const defaultRoot = await tempDir("acb-ee-default-");
+    const plugin = await fixturedPlugin();
+    const daemon = spyEnsureDaemon();
+
+    const result = await entryEnsures({
+      agent: "claude",
+      comm: "telegram",
+      pluginInstallDir: plugin,
+      env: {}, // no explicit stateRoot, no env root -> daemon default
+      deps: {
+        ensureDaemon: daemon.fn,
+        resolveStatePaths: (() => ({ root: defaultRoot })) as never,
+      },
+    });
+
+    assert.equal(result.centralInstall.mode, "production");
+    assert.equal(daemon.lastOpts?.stateRoot, defaultRoot, "fell back to the injected default root");
+    const { access } = await import("node:fs/promises");
+    await access(resolveCentralPaths(defaultRoot, "telegram").daemonBundle); // throws if not installed
+  });
+
+  it("propagates a dev-marker stateRoot to the daemon ensure (source mode)", async () => {
+    const daemon = spyEnsureDaemon();
+    const projectRoot = await tempDir("acb-ee-mk-");
+    const binRel = "agents-comm-bus/dist/core-daemon/serve.js";
+    await mkdir(path.join(projectRoot, path.dirname(binRel)), { recursive: true });
+    await writeFile(path.join(projectRoot, binRel), "// daemon\n", "utf8");
+    await writeFile(
+      path.join(projectRoot, DEV_MARKER_NAME),
+      JSON.stringify({ daemonBin: binRel, stateRoot: ".acb-dev" }),
+      "utf8",
+    );
+
+    const result = await entryEnsures({
+      agent: "claude",
+      comm: "telegram",
+      projectRoot,
+      env: {}, // marker supplies AGENTS_COMM_BUS_BIN (source) + AGENTS_COMM_BUS_ROOT
+      deps: { ensureDaemon: daemon.fn },
+    });
+
+    assert.equal(result.centralInstall.mode, "source");
+    assert.equal(
+      daemon.lastOpts?.stateRoot,
+      path.join(projectRoot, ".acb-dev"),
+      "marker-resolved stateRoot reached the daemon ensure",
+    );
   });
 });
 

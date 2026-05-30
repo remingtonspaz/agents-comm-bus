@@ -32,6 +32,17 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+/**
+ * Child env in the real wired-hook shape: the state root comes from
+ * AGENTS_COMM_BUS_ROOT (not an explicit stateRoot arg), and AGENTS_COMM_BUS_BIN
+ * is cleared so we stay on the strict production path.
+ */
+function childEnv(stateRoot: string): NodeJS.ProcessEnv {
+  const e: NodeJS.ProcessEnv = { ...process.env, AGENTS_COMM_BUS_ROOT: stateRoot };
+  delete e.AGENTS_COMM_BUS_BIN;
+  return e;
+}
+
 /** A production plugin dir (bundles + stamp) with a hooks/ subdir for fromDir. */
 async function fixturePlugin(withStamp: boolean): Promise<{ pluginDir: string; hookDir: string }> {
   const pluginDir = await tempDir("acb-ee-sub-plugin-");
@@ -61,11 +72,14 @@ describe("entryEnsures wiring — subprocess real-installed-path proof", () => {
     const { hookDir } = await fixturePlugin(true);
     const stateRoot = await tempDir("acb-ee-sub-state-");
 
-    const { stdout } = await run("node", [HARNESS, hookDir, stateRoot]);
+    // No explicit stateRoot arg — entryEnsures must derive the canonical root
+    // from the env (the real wired-hook shape that the old harness masked).
+    const { stdout } = await run("node", [HARNESS, hookDir], { env: childEnv(stateRoot) });
     const out = JSON.parse(stdout.trim());
     assert.equal(out.ok, true);
     assert.equal(out.mode, "production");
     assert.equal(out.port, 1, "stubbed ensureDaemon ran and its result shape survived");
+    assert.equal(out.daemonStateRoot, stateRoot, "daemon ensure got the SAME canonical root as central install");
 
     // The decisive check: the real bundle was copied into the state root.
     const paths = resolveCentralPaths(stateRoot, "telegram");
@@ -78,7 +92,7 @@ describe("entryEnsures wiring — subprocess real-installed-path proof", () => {
     const stateRoot = await tempDir("acb-ee-sub-state-");
 
     await assert.rejects(
-      () => run("node", [HARNESS, hookDir, stateRoot]),
+      () => run("node", [HARNESS, hookDir], { env: childEnv(stateRoot) }),
       (err: unknown) => {
         const e = err as { code?: number; stderr?: string };
         assert.equal(e.code, 3, "harness exits non-zero on entryEnsures throw");
