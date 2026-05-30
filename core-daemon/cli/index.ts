@@ -77,7 +77,7 @@ async function handleAllowlist(rest: string[]): Promise<void> {
         scope,
         botId: args.botId ?? args["bot-id"],
         agent: args.agent,
-        project: args.project ?? (scope === "per-bot" && !(args.botId ?? args["bot-id"]) ? process.cwd() : undefined),
+        project: args.project,
         accountLabel: args.accountLabel ?? args["account-label"],
       });
       const reload = await reloadDaemonRegistrations();
@@ -92,7 +92,7 @@ async function handleAllowlist(rest: string[]): Promise<void> {
         scope,
         botId: args.botId ?? args["bot-id"],
         agent: args.agent,
-        project: args.project ?? (scope === "per-bot" && !(args.botId ?? args["bot-id"]) ? process.cwd() : undefined),
+        project: args.project,
         accountLabel: args.accountLabel ?? args["account-label"],
       });
       const reload = await reloadDaemonRegistrations();
@@ -109,9 +109,7 @@ async function handleAllowlist(rest: string[]): Promise<void> {
         scope: scopeArg as AllowlistScopeFilter | undefined,
         botId: args.botId ?? args["bot-id"],
         agent: args.agent,
-        project:
-          args.project ??
-          (args.agent && !(args.botId ?? args["bot-id"]) ? process.cwd() : undefined),
+        project: args.project,
         accountLabel: args.accountLabel ?? args["account-label"],
       });
       console.log(JSON.stringify(out, null, 2));
@@ -176,16 +174,13 @@ Account commands:
 Allowlist commands:
   agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                            # global
   agents-comm-bus allowlist add    --comm <c> --user <id> --bot-id <id>                             # per-bot (canonical)
-  agents-comm-bus allowlist add    --comm <c> --user <id> --agent <a> [--account-label <l>] [--project <p>]
-                                                                                                    # per-bot (resolved)
-  agents-comm-bus allowlist remove --comm <c> --user <id> [--bot-id <id> | --agent <a> [--project <p>]]
-  agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id> | --agent <a> ...]
+  agents-comm-bus allowlist remove --comm <c> --user <id> --bot-id <id>
+  agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id>]
   agents-comm-bus allowlist import-from-env   [--comm telegram]
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
 
-For per-bot scope without --bot-id, --project defaults to the current working directory.
+Per-bot allowlist selectors require --bot-id. Account labels are display metadata and are not accepted.
 account-add stores --bot-token in a daemon-owned file ref by default; explicit --credentials-ref values are honored.
---account-label defaults to "main".
 `);
 }
 

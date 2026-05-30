@@ -500,6 +500,8 @@ export function conversationIdForChat(chat) {
 export function chatRefFromConversation(conversation) {
     return {
         comm: conversation.comm,
+        // Legacy/null bot_user_id fallback only preserves chat shape for display
+        // and query resolution. Send paths must resolve a real bot id first.
         account: (conversation.bot_user_id ?? conversation.account_label),
         chat_native_id: conversation.chat_native_id,
         thread_native_id: conversation.thread_native_id ?? undefined,
