@@ -2569,3 +2569,150 @@ index 942974c..08b0256 100644
   * @property {string} adapter_bundle_version  adapters/<comm>.js replace key
 
 ````
+
+---
+
+## Appendix A — post-`34670d8` commits on `universal-overhaul`
+
+Append-only note: everything above this appendix is intentionally left untouched,
+including the existing inline `human comment:` annotations and the original
+`6163e96..34670d8` foundation narrative.
+
+These are the follow-on `universal-overhaul` commits that landed after the
+original foundation cutoff and before the AGE-13 merge.
+
+### `996a323` — Add annotated unified diff of central-install foundation
+
+Bootstrap commit for this very document. It materialized the annotated
+`6163e96..34670d8` write-up as a tracked artifact so later follow-on notes could
+append here instead of rewriting the earlier sections.
+
+### `9a8b535` — Instrument Codex wake and steer app server turns
+
+Adds diagnostic visibility around the Codex app-server wake/steer path. This is
+operational tracing, not central-install activation, but it landed on the same
+branch arc while the daemon/control-plane work was still moving.
+
+### `c562a16` — Set SQLite `busy_timeout` to stop dropped inbound under multi-bot writes
+
+Hardens the daemon's SQLite behavior under concurrent writer pressure. The
+practical effect is to wait for the lock instead of failing fast and silently
+losing inbound work during overlapping multi-bot activity.
+
+### `04e9fb4` — Scope `comm_check_messages` drain by the caller's owned accounts
+
+Narrows message draining to the accounts actually owned by the caller, so one
+agent's inbound poll/drain cannot accidentally consume another agent's queued
+messages just because they share a daemon.
+
+### `c38a3c7` — Audit inbound dispatch bridge flow
+
+Follow-up inspection/repair pass on the inbound dispatch path: make the bridge
+flow more explicit, easier to reason about, and safer to verify when multi-agent
+traffic shares the same daemon.
+
+### `42ab787` — Rebuild daemon dist for `04e9fb4` + `c38a3c7`
+
+Generated-artifact sync commit. Important only because the tracked daemon dist
+must match the source-side inbound-drain / bridge-flow changes that landed just
+before it.
+
+### `fd36433` — Add `restart-daemon.ps1` to reap ALL stale `serve.js` daemons
+
+Operational cleanup tool for Windows dev/test loops. Gives a deterministic way
+to kill stale daemon processes before restart instead of relying on narrower
+single-pid assumptions.
+
+### `21d6d44` — Harden daemon pid watchdog cleanup
+
+Strengthens the watchdog path so stale/incorrect process cleanup is less likely
+to leave a bad daemon ownership state behind.
+
+### `92a9d34` — Run daemon pid watchdog tests in package suite
+
+Promotes the watchdog coverage into the package test suite so the cleanup logic
+stays exercised by the normal verification path rather than drifting as a
+one-off script concern.
+
+### `fdcfc17` — Document workspace dev marker for central install
+
+Documents the dev-marker/source-mode contract that AGE-13 depends on: a
+workspace-local marker resolves into env-shaped overrides (`AGENTS_COMM_BUS_BIN`
+and, when present, the workspace state root) so dev sessions skip the production
+central-install path while still exercising the same top-level ensure entry.
+
+---
+
+## Appendix B — AGE-13 branch arc (`age-13-central-install-wiring`)
+
+This branch was reviewed as a separate arc and is now merged into
+`universal-overhaul` via `29197e4`. During review it was the "branch / pending
+merge" slice; this appendix preserves that chronology while also recording the
+actual landing commit.
+
+### `6777606` — AGE-13 step 1: dev-config resolver (gitignored marker -> validated env)
+
+Introduces the repo-local dev marker reader/validator and turns it into the
+resolved env overrides that source-mode entrypoints consume. This is the piece
+that lets dev installs stay source-backed without pretending a staged central
+install exists.
+
+### `c889fb8` — AGE-13 step 2: install-stamp emission (source) — independent adapter version
+
+Adds install-stamp emission as the plugin-side input artifact for production
+installs, including separate daemon/adapter bundle version tracking so the
+central install can key replacement on the blob's own version rather than the
+plugin version.
+
+### `df554f6` — AGE-13 step 3 (part 1): `entryEnsures` — canonical ensure path
+
+Creates the single shared host-edge ensure entrypoint so hooks and MCP shims stop
+open-coding `ensureCentralInstall(...)` + `ensureDaemon(...)` themselves.
+
+### `8727ea7` — AGE-13 step 3 (part 1b): entry-path resolver for `entryEnsures`
+
+Adds the symmetric ancestor walk for the dev marker and `install-stamp.json` so
+an entrypoint can derive both `projectRoot` and `pluginInstallDir` from its own
+location without duplicating path logic.
+
+### `47c5c55` — AGE-13 step 3 (part 2a): dev-marker template + actionable production error
+
+Rounds out the operator experience: example dev marker, clearer production error
+when install metadata is missing, and safer handoff between source-mode and
+production-mode expectations.
+
+### `6f1d516` — AGE-13 step 3 (final): wire all entrypoints to `entryEnsures` + subprocess proof
+
+Hooks and shims now actually call the canonical ensure path, and the test suite
+adds subprocess coverage so the real-wired entrypoint shape is exercised instead
+of only unit-level seams.
+
+### `2d4539e` — AGE-13 step 3 (blocker fix): canonical `stateRoot` in `entryEnsures`
+
+Acceptance-review blocker fix. `entryEnsures` now derives one canonical state
+root and feeds that SAME root to both `ensureCentralInstall` and `ensureDaemon`:
+explicit option first, then resolved `AGENTS_COMM_BUS_ROOT`, then the daemon's
+own default-root resolver. This closes the real production crash where
+live hooks/shim called `entryEnsures` without an explicit `stateRoot` and the
+central-install path hit `path.join(undefined, ...)`.
+
+The corresponding tests now cover:
+- env-derived root with no explicit `stateRoot`
+- injected daemon-default fallback
+- dev-marker-provided root reaching both install + daemon ensure
+- subprocess proof in the real wired-hook shape
+
+### `29197e4` — Merge branch `age-13-central-install-wiring` into `universal-overhaul`
+
+Records the branch landing. After this merge, the AGE-13 wiring arc is no longer
+just a reviewed side branch; it is part of `universal-overhaul` proper.
+
+---
+
+## Deferred follow-ups noted during review
+
+- Previously-tracked AGE-14 follow-up: deterministic artifact restage /
+  toolchain pin work remains intentionally deferred and is not part of the
+  branch merge above.
+- AGE-16 inbound-attribution follow-up has now been filed separately as issue
+  #34: <https://github.com/remingtonspaz/agents-comm-bus/issues/34>.
