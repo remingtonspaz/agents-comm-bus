@@ -528,34 +528,6 @@ Get-Process -Id (Get-Content "$wake\watcher.pid") -ErrorAction SilentlyContinue
 node -e "const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(require('os').homedir()+'/.agents-comm-bus/agents-comm-bus.db');console.log(db.prepare('SELECT * FROM queries WHERE query_id = ?').get('q_...'))"
 ```
 
-## Team scratchpad (local-only)
-
-`docs/Command Center.html` is a single-file sticky-note canvas used as
-a private scratchpad. Open it in a browser. Double-click empty space
-to add a note; drag to reposition; pick a color from the toolbar
-before creating.
-
-**Both files are gitignored** (`docs/Command Center.html` and
-`docs/command-center-notes.js`). If your checkout doesn't have them,
-ignore this section — the canvas isn't part of the repo distribution.
-Ask the canvas's owner for the HTML if you want a copy.
-
-**Persistence model (per-machine).**
-- The canvas writes every edit to the visitor's browser `localStorage`
-  (key `brainstorm-scratch-notes-v1`). That's the working copy.
-- On first load (no localStorage entry) the canvas seeds from
-  `window.SEED_NOTES`, which is set by an optional sidecar
-  `docs/command-center-notes.js` loaded via
-  `<script src="command-center-notes.js">`. If the sidecar is absent,
-  the canvas opens to an empty board — no error.
-- Seeding is gated by a `…-seeded-<SEED_VERSION>` flag so re-opens
-  don't clobber in-progress edits. Bump `SEED_VERSION` in the sidecar
-  to invalidate the flag and force a fresh seed on next reload (only
-  affects visitors whose localStorage is empty at that moment).
-
-**Sharing notes across contributors is out of scope for now.** The
-sidecar is per-machine; there is no automated git-backed sync.
-
 ## Historical notes (preserve)
 
 These findings predate the universal-overhaul refactor but remain technically
