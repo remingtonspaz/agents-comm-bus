@@ -54,6 +54,9 @@ export class CodexAgentAdapter {
         if (state && url)
             state.appServerUrl = url;
     }
+    appServerUrlFor(session) {
+        return this.sessions.get(session)?.appServerUrl ?? this.defaultAppServerUrl;
+    }
     async deliverInbound(session, message) {
         const state = this.requireSession(session);
         state.queuedInbound.push(message);
@@ -101,7 +104,8 @@ export class CodexAgentAdapter {
     }
     async wakeOrSteer(session, payload) {
         const client = this.clientFor(session);
-        const steerResult = await client.steerMostRecentThread(steerText(payload));
+        const text = steerText(payload);
+        const steerResult = await client.steerMostRecentThread(text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.steer",
             agent: this.id,
@@ -110,7 +114,7 @@ export class CodexAgentAdapter {
         });
         if (steerResult.ok)
             return steerResult;
-        const wakeResult = await client.wakeMostRecentThread(this.wakePlaceholder);
+        const wakeResult = await client.wakeMostRecentThread(text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.wake",
             agent: this.id,
@@ -119,7 +123,9 @@ export class CodexAgentAdapter {
             fallback_from: steerResult,
         });
         throwIfTurnFailed(wakeResult);
-        return wakeResult;
+        return wakeResult.ok
+            ? { ...wakeResult, fallbackFrom: steerResult }
+            : wakeResult;
     }
     async steer(session, payload) {
         const text = steerText(payload);

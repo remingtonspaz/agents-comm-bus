@@ -1,9 +1,10 @@
-import type { AccountId, AgentId, CommAdapter, CommId, Conversation, Storage } from "agents-comm-bus-core";
+import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../bus.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 export interface AgentBridgeContext {
     storage: Storage;
     bus: MessageBus;
+    audit: AuditStore;
     pendingInbound: PendingInboundEntry[];
 }
 export interface AgentBridge {

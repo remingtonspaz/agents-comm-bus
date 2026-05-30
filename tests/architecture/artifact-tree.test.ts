@@ -15,6 +15,43 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+async function readJson(p: string): Promise<any> {
+  return JSON.parse(await readFile(p, "utf-8"));
+}
+
+async function readSourceConst(p: string, name: string): Promise<string> {
+  const content = await readFile(p, "utf-8");
+  const match = content.match(new RegExp(`export const ${name} = "([^"]+)"`));
+  assert.ok(match, `${name} must be exported from ${relative(repoRoot, p)}`);
+  return match[1];
+}
+
+function assertStageManifestInvariants(manifest: any) {
+  assert.strictEqual(manifest.schema_version, 1, "stage manifest schema version");
+  assert.strictEqual("staged_at" in manifest, false, "stage manifest must not contain timestamps");
+  for (const art of manifest.artifacts) {
+    assert.doesNotMatch(art.source, /\\/, "source provenance paths must use / separators");
+    assert.doesNotMatch(art.artifact, /\\/, "artifact provenance paths must use / separators");
+  }
+}
+
+async function assertInstallStamp(base: string, agent: "claude" | "codex") {
+  const manifestName = agent === "claude" ? ".claude-plugin" : ".codex-plugin";
+  const stamp = await readJson(resolve(base, "install-stamp.json"));
+  const plugin = await readJson(resolve(base, `${manifestName}/plugin.json`));
+  const daemonVersion = await readSourceConst(resolve(repoRoot, "core-daemon/config.ts"), "DAEMON_VERSION");
+  const adapterVersion = await readSourceConst(resolve(repoRoot, "adapters/telegram/version.ts"), "ADAPTER_VERSION");
+
+  assert.deepStrictEqual(stamp, {
+    schema_version: 1,
+    agent,
+    comm: "telegram",
+    plugin_version: plugin.version,
+    daemon_bundle_version: daemonVersion,
+    adapter_bundle_version: adapterVersion,
+  });
+}
+
 describe("Claude Telegram artifact tree", () => {
   const base = resolve(repoRoot, "plugins/claude/telegram");
 
@@ -129,15 +166,18 @@ describe("Claude Telegram artifact tree", () => {
   it("has .stage-manifest.json with provenance", async () => {
     const manifestPath = resolve(base, ".stage-manifest.json");
     assert.ok(await pathExists(manifestPath), ".stage-manifest.json exists");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+    const manifest = await readJson(manifestPath);
     assert.strictEqual(manifest.agent, "claude");
     assert.strictEqual(manifest.comm, "telegram");
     assert.ok(Array.isArray(manifest.artifacts), "artifacts is array");
+    assertStageManifestInvariants(manifest);
 
     const types = new Set(manifest.artifacts.map((a: any) => a.type));
     assert.ok(types.has("assembled-skill"), "has assembled-skill provenance");
     assert.ok(types.has("bundled-mcp-shim"), "has bundled-mcp-shim provenance");
+    assert.ok(types.has("common-install"), "has common install helper provenance");
     assert.ok(types.has("hook"), "has hook provenance");
+    assert.ok(types.has("install-stamp"), "has install-stamp provenance");
     assert.ok(types.has("manifest"), "has manifest provenance");
     assert.ok(types.has("supporting-script"), "has supporting-script provenance");
 
@@ -147,6 +187,10 @@ describe("Claude Telegram artifact tree", () => {
       assert.ok(art.artifact, "artifact has artifact path");
       assert.ok(art.type, "artifact has type");
     }
+  });
+
+  it("has install-stamp.json with independently sourced versions", async () => {
+    await assertInstallStamp(base, "claude");
   });
 });
 
@@ -247,15 +291,18 @@ describe("Codex Telegram artifact tree", () => {
   it("has .stage-manifest.json with provenance", async () => {
     const manifestPath = resolve(base, ".stage-manifest.json");
     assert.ok(await pathExists(manifestPath), ".stage-manifest.json exists");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+    const manifest = await readJson(manifestPath);
     assert.strictEqual(manifest.agent, "codex");
     assert.strictEqual(manifest.comm, "telegram");
     assert.ok(Array.isArray(manifest.artifacts), "artifacts is array");
+    assertStageManifestInvariants(manifest);
 
     const types = new Set(manifest.artifacts.map((a: any) => a.type));
     assert.ok(types.has("assembled-skill"), "has assembled-skill provenance");
     assert.ok(types.has("bundled-mcp-shim"), "has bundled-mcp-shim provenance");
+    assert.ok(types.has("common-install"), "has common install helper provenance");
     assert.ok(types.has("hook"), "has hook provenance");
+    assert.ok(types.has("install-stamp"), "has install-stamp provenance");
     assert.ok(types.has("manifest"), "has manifest provenance");
     assert.ok(types.has("mcp-config"), "has mcp-config provenance");
     assert.ok(types.has("supporting-script"), "has supporting-script provenance");
@@ -265,6 +312,10 @@ describe("Codex Telegram artifact tree", () => {
       assert.ok(art.artifact, "artifact has artifact path");
       assert.ok(art.type, "artifact has type");
     }
+  });
+
+  it("has install-stamp.json with independently sourced versions", async () => {
+    await assertInstallStamp(base, "codex");
   });
 });
 
@@ -303,7 +354,7 @@ describe("Artifact-global invariants", () => {
       for (const entry of entries) {
         if (!entry.isFile()) continue;
         const p = resolve(entry.parentPath ?? root, entry.name);
-        if (!/\.(js|json|md|ps1)$/.test(entry.name) && !entry.name.endsWith(".mcp.json")) continue;
+        if (!/\.(js|json|md|ps1|sql|map)$/.test(entry.name) && !entry.name.endsWith(".d.ts") && !entry.name.endsWith(".mcp.json")) continue;
         const content = await readFile(p, "utf-8");
         assert.doesNotMatch(content, /\r\n?/, `${relative(repoRoot, p)} must use LF line endings`);
       }
@@ -461,6 +512,13 @@ describe("Staged hook import locality", () => {
             `${relative(repoRoot, p)} must import the staged daemon runtime inside the plugin artifact`
           );
         }
+        if (content.includes("entry-ensures.js")) {
+          assert.match(
+            content,
+            /\.\.\/common\/install\/entry-ensures\.js/,
+            `${relative(repoRoot, p)} must import the staged common install helper inside the plugin artifact`
+          );
+        }
       }
     }
   });
@@ -470,6 +528,8 @@ describe("Staged hook import locality", () => {
       const root = resolve(repoRoot, `plugins/${agent}/telegram`);
       assert.ok(await pathExists(resolve(root, "agents-comm-bus/dist/core-daemon/serve.js")));
       assert.ok(await pathExists(resolve(root, "agents-comm-bus/package.json")));
+      assert.ok(await pathExists(resolve(root, "common/install/entry-ensures.js")));
+      assert.ok(await pathExists(resolve(root, "common/install/ensure-central-install.js")));
     }
   });
 });
@@ -586,6 +646,9 @@ describe("Source-to-artifact mapping invariants", () => {
       "plugins/**/skills/**/*.md text eol=lf",
       "plugins/**/*.json text eol=lf",
       "plugins/**/*.js text eol=lf",
+      "plugins/**/*.d.ts text eol=lf",
+      "plugins/**/*.map text eol=lf",
+      "plugins/**/*.sql text eol=lf",
       "plugins/**/*.ps1 text eol=lf",
     ]) {
       assert.ok(attrs.includes(rule), `.gitattributes must include ${rule}`);

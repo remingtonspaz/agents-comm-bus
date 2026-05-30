@@ -15,15 +15,19 @@ export class WebSocketCodexAppServerClient {
     listLoadedThreads() {
         return this.call("thread/loaded/list", {});
     }
+    listThreadTurns(threadId) {
+        return this.call("thread/turns/list", { threadId });
+    }
     startTurn(threadId, text) {
         return this.call("turn/start", {
             threadId,
             input: [{ type: "text", text }],
         });
     }
-    steerTurn(threadId, text) {
+    steerTurn(threadId, text, expectedTurnId) {
         return this.call("turn/steer", {
             threadId,
+            expectedTurnId,
             input: [{ type: "text", text }],
         });
     }
@@ -48,8 +52,11 @@ export class WebSocketCodexAppServerClient {
         const thread = await this.mostRecentThread();
         if (!thread.ok)
             return thread;
+        const turn = await this.activeTurn(thread.threadId);
+        if (!turn.ok)
+            return turn;
         try {
-            await this.steerTurn(thread.threadId, text);
+            await this.steerTurn(thread.threadId, text, turn.turnId);
             return { ok: true, threadId: thread.threadId, method: "turn/steer" };
         }
         catch (error) {
@@ -93,6 +100,41 @@ export class WebSocketCodexAppServerClient {
         }
         return { ok: true, threadId };
     }
+    async activeTurn(threadId) {
+        let result;
+        try {
+            result = await this.listThreadTurns(threadId);
+        }
+        catch (error) {
+            return {
+                ok: false,
+                reason: "listThreadTurns-failed",
+                error: error instanceof Error ? error.message : String(error),
+                threadId,
+                url: this.url,
+            };
+        }
+        const turns = listedTurns(result);
+        if (turns.length === 0) {
+            return {
+                ok: false,
+                reason: "no-turns-loaded",
+                raw: stringifyShort(result),
+                threadId,
+            };
+        }
+        const active = turns.find((turn) => turnStatus(turn) === "inProgress") ?? turns[0];
+        const turnId = turnIdFrom(active);
+        if (!turnId) {
+            return {
+                ok: false,
+                reason: "no-turn-id-in-response",
+                raw: stringifyShort(active),
+                threadId,
+            };
+        }
+        return { ok: true, turnId };
+    }
 }
 function callOnce(url, method, params, { timeoutMs = 5_000 } = {}) {
     return new Promise((resolve, reject) => {
@@ -132,7 +174,7 @@ function callOnce(url, method, params, { timeoutMs = 5_000 } = {}) {
                 jsonrpc: "2.0",
                 id: initId,
                 method: "initialize",
-                params: { clientInfo: CLIENT_INFO },
+                params: { clientInfo: CLIENT_INFO, capabilities: { experimentalApi: true } },
             }));
         });
         ws.on("message", (data) => {
@@ -176,6 +218,15 @@ function loadedThreads(result) {
     const candidate = record.data ?? record.threads ?? record.items ?? record.loaded;
     return Array.isArray(candidate) ? candidate : [];
 }
+function listedTurns(result) {
+    if (Array.isArray(result))
+        return result;
+    if (!result || typeof result !== "object")
+        return [];
+    const record = result;
+    const candidate = record.data ?? record.turns ?? record.items;
+    return Array.isArray(candidate) ? candidate : [];
+}
 function compareThreadRecency(a, b) {
     if (typeof a === "string" || typeof b === "string")
         return 0;
@@ -197,6 +248,21 @@ function threadIdFrom(value) {
     const record = value;
     const id = record.threadId ?? record.id;
     return typeof id === "string" && id.length > 0 ? id : null;
+}
+function turnIdFrom(value) {
+    if (typeof value === "string" && value.length > 0)
+        return value;
+    if (!value || typeof value !== "object")
+        return null;
+    const record = value;
+    const id = record.turnId ?? record.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+}
+function turnStatus(value) {
+    if (!value || typeof value !== "object")
+        return null;
+    const status = value.status;
+    return typeof status === "string" ? status : null;
 }
 function parseJsonMessage(data) {
     try {

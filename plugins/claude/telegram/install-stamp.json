@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "agent": "claude",
+  "comm": "telegram",
+  "plugin_version": "0.1.0",
+  "daemon_bundle_version": "0.1.1",
+  "adapter_bundle_version": "0.1.0"
+}

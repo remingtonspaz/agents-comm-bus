@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,8 +8,14 @@ const targetDir = resolve(packageDir, "dist/core-daemon/storage/schema");
 
 await mkdir(targetDir, { recursive: true });
 
+function normalizeEol(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
   if (entry.isFile() && extname(entry.name) === ".sql") {
-    await cp(resolve(sourceDir, entry.name), resolve(targetDir, entry.name));
+    const source = resolve(sourceDir, entry.name);
+    const target = resolve(targetDir, entry.name);
+    await writeFile(target, normalizeEol(await readFile(source, "utf8")), "utf8");
   }
 }

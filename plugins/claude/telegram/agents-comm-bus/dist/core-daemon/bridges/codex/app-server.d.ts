@@ -4,8 +4,9 @@ export interface CodexAppServerClient {
         timeoutMs?: number;
     }): Promise<unknown>;
     listLoadedThreads(): Promise<unknown>;
+    listThreadTurns(threadId: string): Promise<unknown>;
     startTurn(threadId: string, text: string): Promise<unknown>;
-    steerTurn(threadId: string, text: string): Promise<unknown>;
+    steerTurn(threadId: string, text: string, expectedTurnId: string): Promise<unknown>;
     wakeMostRecentThread(text?: string): Promise<CodexTurnResult>;
     steerMostRecentThread(text: string): Promise<CodexTurnResult>;
 }
@@ -13,6 +14,14 @@ export type CodexTurnResult = {
     ok: true;
     threadId: string;
     method: "turn/start" | "turn/steer";
+    fallbackFrom?: {
+        ok: false;
+        reason: string;
+        error?: string;
+        threadId?: string;
+        raw?: string;
+        url?: string;
+    };
 } | {
     ok: false;
     reason: string;
@@ -28,10 +37,12 @@ export declare class WebSocketCodexAppServerClient implements CodexAppServerClie
         timeoutMs?: number;
     }): Promise<unknown>;
     listLoadedThreads(): Promise<unknown>;
+    listThreadTurns(threadId: string): Promise<unknown>;
     startTurn(threadId: string, text: string): Promise<unknown>;
-    steerTurn(threadId: string, text: string): Promise<unknown>;
+    steerTurn(threadId: string, text: string, expectedTurnId: string): Promise<unknown>;
     wakeMostRecentThread(text?: string): Promise<CodexTurnResult>;
     steerMostRecentThread(text: string): Promise<CodexTurnResult>;
     private mostRecentThread;
+    private activeTurn;
 }
 //# sourceMappingURL=app-server.d.ts.map

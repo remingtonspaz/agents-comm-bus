@@ -1,13 +1,15 @@
-import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
+import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
-import { CodexAgentAdapter } from "./adapter.js";
+import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 export interface CodexBridgeOptions {
     storage: Storage;
     bus: MessageBus;
+    audit?: AuditStore;
     pendingInbound: PendingInboundEntry[];
     defaultAppServerUrl?: string;
+    appServerClientFactory?: CodexAgentAdapterOptions["appServerClientFactory"];
     queryPollTimeoutMs?: number;
     appServerCleanupDelayMs?: number;
     sessionOwnerCheckIntervalMs?: number;
@@ -71,6 +73,7 @@ export declare class CodexBridge implements AgentBridge {
     private scheduleManagedAppServerCleanup;
     private cleanupManagedAppServerIfLeaseIsIdle;
     private chatRefForConversation;
+    private auditWake;
     private pendingInboundForConversation;
     /**
      * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See

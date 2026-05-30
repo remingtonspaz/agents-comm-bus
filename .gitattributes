@@ -3,6 +3,9 @@
 *.json text eol=lf
 *.js text eol=lf
 *.ts text eol=lf
+*.d.ts text eol=lf
+*.map text eol=lf
+*.sql text eol=lf
 *.ps1 text eol=lf
 
 hosts/**/skills/**/*.md text eol=lf
@@ -10,4 +13,7 @@ hosts/common/skills/fragments/**/*.md text eol=lf
 plugins/**/skills/**/*.md text eol=lf
 plugins/**/*.json text eol=lf
 plugins/**/*.js text eol=lf
+plugins/**/*.d.ts text eol=lf
+plugins/**/*.map text eol=lf
+plugins/**/*.sql text eol=lf
 plugins/**/*.ps1 text eol=lf

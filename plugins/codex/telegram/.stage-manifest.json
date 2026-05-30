@@ -1,7 +1,7 @@
 {
+  "schema_version": 1,
   "agent": "codex",
   "comm": "telegram",
-  "staged_at": "2026-05-26T05:47:43.654Z",
   "artifacts": [
     {
       "source": "hosts/codex/skills/telegram/SKILL.md",
@@ -59,6 +59,26 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "agents-comm-bus/dist/adapters/telegram/version.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/version.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/version.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/version.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/version.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/version.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/adapters/telegram/version.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/adapters/telegram/version.js.map",
+      "type": "daemon-runtime"
+    },
+    {
       "source": "agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.d.ts",
       "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.d.ts",
       "type": "daemon-runtime"
@@ -96,6 +116,26 @@
     {
       "source": "agents-comm-bus/dist/core-daemon/bootstrap/handshake.js.map",
       "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/handshake.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/bootstrap/pid-watchdog.js.map",
       "type": "daemon-runtime"
     },
     {
@@ -944,6 +984,46 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "hosts/common/install/dev-config-resolver.js",
+      "artifact": "plugins/codex/telegram/common/install/dev-config-resolver.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/ensure-central-install.js",
+      "artifact": "plugins/codex/telegram/common/install/ensure-central-install.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/entry-ensures.js",
+      "artifact": "plugins/codex/telegram/common/install/entry-ensures.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/install-lock.js",
+      "artifact": "plugins/codex/telegram/common/install/install-lock.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/install-stamp.js",
+      "artifact": "plugins/codex/telegram/common/install/install-stamp.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/node-fs-seam.js",
+      "artifact": "plugins/codex/telegram/common/install/node-fs-seam.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/reconcile-central-install.js",
+      "artifact": "plugins/codex/telegram/common/install/reconcile-central-install.js",
+      "type": "common-install"
+    },
+    {
+      "source": "hosts/common/install/run-central-install.js",
+      "artifact": "plugins/codex/telegram/common/install/run-central-install.js",
+      "type": "common-install"
+    },
+    {
       "source": "hosts/codex/hooks/permission-request.js",
       "artifact": "plugins/codex/telegram/hooks/permission-request.js",
       "type": "hook"
@@ -962,6 +1042,11 @@
       "source": ".codex-plugin/plugin.json",
       "artifact": "plugins/codex/telegram/.codex-plugin/plugin.json",
       "type": "manifest"
+    },
+    {
+      "source": "core-daemon/config.ts (DAEMON_VERSION) + adapters/telegram/version.ts (ADAPTER_VERSION) + .codex-plugin/plugin.json (version)",
+      "artifact": "plugins/codex/telegram/install-stamp.json",
+      "type": "install-stamp"
     },
     {
       "source": ".mcp.json.template",

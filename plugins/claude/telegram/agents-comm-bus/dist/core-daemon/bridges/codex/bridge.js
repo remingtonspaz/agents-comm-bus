@@ -27,6 +27,7 @@ export class CodexBridge {
         this.options = options;
         this.adapter = new CodexAgentAdapter({
             defaultAppServerUrl: options.defaultAppServerUrl ?? process.env.CODEX_APP_SERVER_URL,
+            appServerClientFactory: options.appServerClientFactory,
         });
     }
     attach(comms) {
@@ -60,18 +61,42 @@ export class CodexBridge {
         const sessions = this.sessionsByProject.get(conversation.project);
         const session = sessions?.values().next().value;
         if (!session) {
+            await this.auditWake("agent_wake_skipped", conversation, undefined, {
+                reason: "no_codex_session_for_project",
+            });
             return;
         }
         const pendingForSession = await this.pendingInboundForConversation(conversation);
         const mostRecentConversationId = pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
         await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
+        await this.auditWake("agent_wake_attempt", conversation, session, {
+            app_server_url: this.adapter.appServerUrlFor(session),
+            pending_count: pendingForSession.length,
+            pending_message_ids: pendingForSession.map((entry) => entry.message.message_id),
+            pending_conversation_ids: [...new Set(pendingForSession.map((entry) => entry.conversation.conversation_id))],
+        });
         try {
             const result = await this.adapter.wakeOrSteer(session, formatInboundMessagesForTurn(pendingForSession));
-            if (result.ok && result.method === "turn/steer") {
+            if (result.ok) {
+                await this.auditWake("agent_wake_succeeded", conversation, session, {
+                    app_server_url: this.adapter.appServerUrlFor(session),
+                    method: result.method,
+                    thread_id: result.threadId,
+                    fallback_reason: result.fallbackFrom?.reason,
+                    fallback_error: result.fallbackFrom?.error,
+                    fallback_thread_id: result.fallbackFrom?.threadId,
+                    pending_count: pendingForSession.length,
+                    removed_pending_count: pendingForSession.length,
+                });
                 this.removePendingInbound(pendingForSession);
             }
         }
         catch (error) {
+            await this.auditWake("agent_wake_failed", conversation, session, {
+                app_server_url: this.adapter.appServerUrlFor(session),
+                pending_count: pendingForSession.length,
+                error: error instanceof Error ? error.message : String(error),
+            });
             console.error(`agents-comm-bus: failed to wake Codex for ${conversation.conversation_id}: ` +
                 `${error instanceof Error ? error.message : String(error)}`);
         }
@@ -442,6 +467,29 @@ export class CodexBridge {
             thread_native_id: conversation.thread_native_id ?? undefined,
         };
     }
+    async auditWake(kind, conversation, session, detail) {
+        try {
+            await this.options.audit?.append({
+                timestamp: Date.now(),
+                kind,
+                agent: this.agentId,
+                session,
+                conversation_id: conversation.conversation_id,
+                detail: {
+                    comm: conversation.comm,
+                    account_label: conversation.account_label,
+                    chat_native_id: conversation.chat_native_id,
+                    thread_native_id: conversation.thread_native_id ?? undefined,
+                    project: conversation.project,
+                    ...detail,
+                },
+            });
+        }
+        catch (error) {
+            console.error(`agents-comm-bus: failed to audit Codex wake event for ${conversation.conversation_id}: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     async pendingInboundForConversation(conversation) {
         const owned = await this.ownedAccountKeys();
         return this.options.pendingInbound.filter((entry) => owned.has(accountKey(entry)) &&
@@ -617,6 +665,7 @@ export class CodexBridgeFactory {
         return new CodexBridge({
             storage: context.storage,
             bus: context.bus,
+            audit: context.audit,
             pendingInbound: context.pendingInbound,
         });
     }

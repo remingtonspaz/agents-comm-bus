@@ -16,7 +16,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { ensureDaemon } from '../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
+import { entryEnsures } from '../common/install/entry-ensures.js';
 import { connectIpc } from '../agents-comm-bus/dist/core-daemon/ipc/client.js';
 
 const CLIENT_VERSION = 'codex-session-start-bootstrap';
@@ -66,7 +66,12 @@ async function readStdinJson() {
 }
 
 async function openDaemonConnection(metadata) {
-  const daemon = await ensureDaemon({ clientVersion: CLIENT_VERSION, metadata });
+  const daemon = await entryEnsures({
+    fromDir: __dirname,
+    agent: 'codex',
+    env: process.env,
+    ensureDaemonOptions: { clientVersion: CLIENT_VERSION, metadata },
+  });
   return connectIpc({
     port: daemon.port,
     clientVersion: CLIENT_VERSION,

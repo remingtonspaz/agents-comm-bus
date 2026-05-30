@@ -48,6 +48,7 @@ export declare class CodexAgentAdapter implements AgentAdapter {
     connect(session: SessionId, controlChannel: ControlChannel): Promise<void>;
     disconnect(session: SessionId): Promise<void>;
     setAppServerUrl(session: SessionId, url: string | undefined): void;
+    appServerUrlFor(session: SessionId): string;
     deliverInbound(session: SessionId, message: Message): Promise<void>;
     openQuery(session: SessionId, query: Query, queryChannel: QueryChannel): Promise<void>;
     wake(session: SessionId): Promise<void>;

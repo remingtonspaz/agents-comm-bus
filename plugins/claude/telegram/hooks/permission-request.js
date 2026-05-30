@@ -9,7 +9,7 @@
  */
 
 import crypto from 'node:crypto';
-import { ensureDaemon } from '../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js';
+import { entryEnsures } from '../common/install/entry-ensures.js';
 import { connectIpc } from '../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import {
   ensureClaudeWakeWatcher,
@@ -38,7 +38,12 @@ async function readStdinJson() {
 }
 
 async function openDaemonConnection(metadata) {
-  const daemon = await ensureDaemon({ clientVersion: CLIENT_VERSION, metadata });
+  const daemon = await entryEnsures({
+    fromDir: import.meta.dirname,
+    agent: 'claude',
+    env: process.env,
+    ensureDaemonOptions: { clientVersion: CLIENT_VERSION, metadata },
+  });
   return connectIpc({
     port: daemon.port,
     clientVersion: CLIENT_VERSION,

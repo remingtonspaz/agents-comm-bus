@@ -413,11 +413,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -434,10 +434,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -498,8 +498,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants3) {
+        this.code = optimizeExpr(this.code, names, constants3);
         return this;
       }
       get names() {
@@ -528,12 +528,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants3))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -586,12 +586,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        if (!(super.optimizeNames(names, constants3) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants3);
         return this;
       }
       get names() {
@@ -614,10 +614,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants3);
         return this;
       }
       get names() {
@@ -653,10 +653,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants3);
         return this;
       }
       get names() {
@@ -698,11 +698,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3, _b;
-        super.optimizeNames(names, constants2);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants3);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
         return this;
       }
       get names() {
@@ -1003,7 +1003,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants3) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1018,14 +1018,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants3[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -3232,8 +3232,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path4) {
-      let input = path4;
+    function removeDotSegments(path10) {
+      let input = path10;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3485,8 +3485,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path4, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path4 && path4 !== "/" ? path4 : void 0;
+        const [path10, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path10 && path10 !== "/" ? path10 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -3641,7 +3641,7 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse3(serialize(uri, options), options);
+        parse3(serialize2(uri, options), options);
       }
       return uri;
     }
@@ -3649,13 +3649,13 @@ var require_fast_uri = __commonJS({
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
-      return serialize(resolved, schemelessOptions);
+      return serialize2(resolved, schemelessOptions);
     }
     function resolveComponent(base, relative, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base = parse3(serialize(base, options), options);
-        relative = parse3(serialize(relative, options), options);
+        base = parse3(serialize2(base, options), options);
+        relative = parse3(serialize2(relative, options), options);
       }
       options = options || {};
       if (!options.tolerant && relative.scheme) {
@@ -3709,7 +3709,7 @@ var require_fast_uri = __commonJS({
       const normalizedB = normalizeComparableURI(uriB, options);
       return normalizedA !== void 0 && normalizedB !== void 0 && normalizedA.toLowerCase() === normalizedB.toLowerCase();
     }
-    function serialize(cmpts, opts) {
+    function serialize2(cmpts, opts) {
       const component = {
         host: cmpts.host,
         scheme: cmpts.scheme,
@@ -3887,7 +3887,7 @@ var require_fast_uri = __commonJS({
     function normalizeStringWithStatus(uri, opts) {
       const { parsed, malformedAuthorityOrPort } = parseWithStatus(uri, opts);
       return {
-        normalized: malformedAuthorityOrPort ? uri : serialize(parsed, opts),
+        normalized: malformedAuthorityOrPort ? uri : serialize2(parsed, opts),
         malformedAuthorityOrPort
       };
     }
@@ -3897,7 +3897,7 @@ var require_fast_uri = __commonJS({
         return malformedAuthorityOrPort ? void 0 : normalized;
       }
       if (typeof uri === "object") {
-        return serialize(uri, opts);
+        return serialize2(uri, opts);
       }
     }
     var fastUri = {
@@ -3906,7 +3906,7 @@ var require_fast_uri = __commonJS({
       resolve,
       resolveComponent,
       equal,
-      serialize,
+      serialize: serialize2,
       parse: parse3
     };
     module.exports = fastUri;
@@ -7155,11 +7155,11 @@ var require_codegen2 = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -7176,10 +7176,10 @@ var require_codegen2 = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants3);
         return this;
       }
       get names() {
@@ -7240,8 +7240,8 @@ var require_codegen2 = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants3) {
+        this.code = optimizeExpr(this.code, names, constants3);
         return this;
       }
       get names() {
@@ -7270,12 +7270,12 @@ var require_codegen2 = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants3))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -7328,12 +7328,12 @@ var require_codegen2 = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        if (!(super.optimizeNames(names, constants3) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants3);
         return this;
       }
       get names() {
@@ -7356,10 +7356,10 @@ var require_codegen2 = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants3);
         return this;
       }
       get names() {
@@ -7395,10 +7395,10 @@ var require_codegen2 = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants3) {
+        if (!super.optimizeNames(names, constants3))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants3);
         return this;
       }
       get names() {
@@ -7440,11 +7440,11 @@ var require_codegen2 = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants3) {
         var _a3, _b;
-        super.optimizeNames(names, constants2);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants3);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants3);
         return this;
       }
       get names() {
@@ -7745,7 +7745,7 @@ var require_codegen2 = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants3) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -7760,14 +7760,14 @@ var require_codegen2 = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants3[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -15729,7 +15729,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open2() {
+          ws.once("open", function open3() {
             duplex._final(callback);
           });
           return;
@@ -15750,7 +15750,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open2() {
+          ws.once("open", function open3() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -16204,7 +16204,7 @@ var require_websocket_server = __commonJS({
 });
 
 // common/mcp-shim-shared.js
-import { existsSync } from "node:fs";
+import { existsSync as existsSync3 } from "node:fs";
 import { spawn as spawn2 } from "node:child_process";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 
@@ -16449,10 +16449,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path10) {
+  if (!path10)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path10.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -16861,11 +16861,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path10, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path10);
     return iss;
   });
 }
@@ -17012,16 +17012,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path4 = []) => {
+  const processError = (error3, path10 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path10, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -24774,6 +24774,10 @@ var StdioServerTransport = class {
   }
 };
 
+// common/install/entry-ensures.js
+import { existsSync as existsSync2 } from "node:fs";
+import path9 from "node:path";
+
 // ../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { mkdir as mkdir2, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
@@ -24804,6 +24808,7 @@ function resolveStatePaths(options = {}) {
     databaseShm: `${database}-shm`,
     auditDir: path.join(root, "audit"),
     chatsDir: path.join(root, "chats"),
+    tokensDir: path.join(root, "tokens"),
     pidFile: path.join(root, "daemon.pid"),
     portFile: path.join(root, "port"),
     spawnLock: path.join(root, ".spawn.lock")
@@ -25151,6 +25156,503 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// common/install/ensure-central-install.js
+import path7 from "node:path";
+import { readFile as readFile5 } from "node:fs/promises";
+
+// common/install/run-central-install.js
+import path6 from "node:path";
+
+// common/install/reconcile-central-install.js
+var VERSION_FILE_SCHEMA = 1;
+function reconcileInstall(actor, state) {
+  const daemon = reconcileArtifact("daemon", actor, state.daemonVersionFile, state.daemonExists, void 0);
+  const adapter = reconcileArtifact("adapter", actor, state.adapterVersionFile, state.adapterExists, actor.comm);
+  const requiresSpawn = !state.daemonRunning;
+  const requiresDaemonRestart = state.daemonRunning && daemon.contentReplaced;
+  const requiresAdapterReload = state.daemonRunning && adapter.contentReplaced;
+  return {
+    daemon,
+    adapter,
+    requiresSpawn,
+    requiresDaemonRestart,
+    requiresAdapterReload,
+    reasons: [...daemon.reasons, ...adapter.reasons]
+  };
+}
+function reconcileArtifact(kind, actor, existing, bundleExists, contentId) {
+  const incomingVersion = kind === "daemon" ? actor.daemonBundleVersion : actor.adapterBundleVersion;
+  const entry = makeEntry(actor, kind);
+  if (!existing) {
+    const record3 = {
+      schema_version: VERSION_FILE_SCHEMA,
+      content_version: incomingVersion,
+      content_kind: kind,
+      ...contentId ? { content_id: contentId } : {},
+      content_source: entry,
+      installed_by: [entry]
+    };
+    return {
+      writeBundle: true,
+      writeVersionFile: true,
+      contentReplaced: true,
+      resultingContentVersion: incomingVersion,
+      resultingVersionFile: record3,
+      reasons: [`cold install: no existing ${kind}`]
+    };
+  }
+  const { list, changed } = upsertInstalledBy(existing.installed_by, entry);
+  const record2 = { ...existing, installed_by: list };
+  const reasons = [];
+  let writeBundle = false;
+  let contentReplaced = false;
+  const cmp = compareVersions(incomingVersion, existing.content_version);
+  if (cmp > 0) {
+    writeBundle = true;
+    contentReplaced = true;
+    record2.content_version = incomingVersion;
+    record2.content_source = entry;
+    reasons.push(`upgrade ${kind}: incoming ${incomingVersion} > installed ${existing.content_version}`);
+  } else if (cmp === 0) {
+    reasons.push(`no content change: incoming ${kind} equals installed ${incomingVersion}`);
+    if (!bundleExists) {
+      writeBundle = true;
+      reasons.push(`recovery: ${kind} blob missing on disk, rewriting at installed version`);
+    }
+  } else {
+    reasons.push(`no downgrade: incoming ${kind} ${incomingVersion} < installed ${existing.content_version}`);
+    if (!bundleExists) {
+      writeBundle = true;
+      contentReplaced = true;
+      record2.content_version = incomingVersion;
+      record2.content_source = entry;
+      reasons.push(`recovery: ${kind} blob missing and only older bundle available; restoring at ${incomingVersion}`);
+    }
+  }
+  return {
+    writeBundle,
+    writeVersionFile: changed || contentReplaced,
+    contentReplaced,
+    resultingContentVersion: record2.content_version,
+    resultingVersionFile: record2,
+    reasons
+  };
+}
+function upsertInstalledBy(list, entry) {
+  const idx = list.findIndex((e) => e.agent === entry.agent && e.comm === entry.comm);
+  if (idx === -1) {
+    return { list: [...list, entry], changed: true };
+  }
+  const prev = list[idx];
+  if (prev.plugin_version === entry.plugin_version && prev.bundle_version === entry.bundle_version) {
+    return { list, changed: false };
+  }
+  const next = list.slice();
+  next[idx] = entry;
+  return { list: next, changed: true };
+}
+function makeEntry(actor, kind) {
+  return {
+    agent: actor.agent,
+    comm: actor.comm,
+    plugin_version: actor.pluginVersion,
+    bundle_version: kind === "daemon" ? actor.daemonBundleVersion : actor.adapterBundleVersion,
+    installed_at: actor.installedAt
+  };
+}
+function compareVersions(a, b) {
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (typeof x === "number" && typeof y === "number") {
+      if (x !== y) return x < y ? -1 : 1;
+    } else {
+      const xs = String(x);
+      const ys = String(y);
+      if (xs !== ys) return xs < ys ? -1 : 1;
+    }
+  }
+  return 0;
+}
+function parseVersion(v) {
+  return String(v).split("-")[0].split(".").map((s) => {
+    const num = Number(s);
+    return Number.isInteger(num) ? num : s;
+  });
+}
+async function executeInstallPlan(plan, actor, paths, fs) {
+  const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
+  const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
+  if (plan.daemon.writeBundle && !daemonSrc) {
+    throw new Error(
+      "executeInstallPlan: daemon bundle write required but actor.pluginInstallDir is unset"
+    );
+  }
+  if (plan.adapter.writeBundle && !adapterSrc) {
+    throw new Error(
+      "executeInstallPlan: adapter bundle write required but actor.pluginInstallDir is unset"
+    );
+  }
+  const wroteBundles = [];
+  const wroteVersionFiles = [];
+  if (plan.daemon.writeBundle) {
+    await fs.mkdirp(dirname(paths.daemonBundle));
+    await fs.copyFile(
+      /** @type {string} */
+      daemonSrc,
+      paths.daemonBundle
+    );
+    wroteBundles.push(paths.daemonBundle);
+  }
+  if (plan.daemon.writeVersionFile) {
+    await fs.mkdirp(dirname(paths.daemonVersionFile));
+    await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
+    wroteVersionFiles.push(paths.daemonVersionFile);
+  }
+  if (plan.adapter.writeBundle) {
+    await fs.mkdirp(dirname(paths.adapterBundle));
+    await fs.copyFile(
+      /** @type {string} */
+      adapterSrc,
+      paths.adapterBundle
+    );
+    wroteBundles.push(paths.adapterBundle);
+  }
+  if (plan.adapter.writeVersionFile) {
+    await fs.mkdirp(dirname(paths.adapterVersionFile));
+    await fs.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
+    wroteVersionFiles.push(paths.adapterVersionFile);
+  }
+  return { wroteBundles, wroteVersionFiles };
+}
+function serialize(record2) {
+  return `${JSON.stringify(record2, null, 2)}
+`;
+}
+function dirname(p) {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i === -1 ? "." : p.slice(0, i);
+}
+
+// common/install/node-fs-seam.js
+import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3 } from "node:fs/promises";
+import path4 from "node:path";
+function createAtomicNodeFsSeam() {
+  return {
+    mkdirp: async (dir) => {
+      await mkdir3(dir, { recursive: true });
+    },
+    copyFile: async (from, to) => {
+      const tmp = `${to}.tmp`;
+      await copyFile(from, tmp);
+      await rename(tmp, to);
+    },
+    writeFile: async (file, data) => {
+      const tmp = `${file}.tmp`;
+      await writeFile2(tmp, data, "utf8");
+      await rename(tmp, file);
+    }
+  };
+}
+async function readCentralState(stateRoot2, comm) {
+  const paths = resolveCentralPaths(stateRoot2, comm);
+  return {
+    daemonExists: await pathExists(paths.daemonBundle),
+    daemonVersionFile: await readJsonOrNull(paths.daemonVersionFile),
+    adapterExists: await pathExists(paths.adapterBundle),
+    adapterVersionFile: await readJsonOrNull(paths.adapterVersionFile),
+    daemonRunning: false
+  };
+}
+async function pathExists(p) {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function readJsonOrNull(p) {
+  try {
+    return JSON.parse(await readFile3(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function resolveCentralPaths(stateRoot2, comm) {
+  const bin = path4.join(stateRoot2, "bin");
+  const adapters = path4.join(stateRoot2, "adapters");
+  return {
+    daemonBundle: path4.join(bin, "daemon.js"),
+    daemonVersionFile: path4.join(bin, "version.json"),
+    adapterBundle: path4.join(adapters, `${comm}.js`),
+    adapterVersionFile: path4.join(adapters, `${comm}.version.json`)
+  };
+}
+
+// common/install/install-lock.js
+import { constants as constants2 } from "node:fs";
+import { open as open2, readFile as readFile4, rm as rm3, mkdir as mkdir4, stat } from "node:fs/promises";
+import path5 from "node:path";
+var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
+async function acquireInstallLock(lockPath, options = {}) {
+  const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs;
+  const retryMs = options.retryMs ?? DEFAULTS.retryMs;
+  const staleMs = options.staleMs ?? DEFAULTS.staleMs;
+  const now = options.now ?? Date.now;
+  const sleep2 = options.sleep ?? defaultSleep;
+  await mkdir4(path5.dirname(lockPath), { recursive: true });
+  const token = `${process.pid}:${now()}`;
+  const start = now();
+  let stoleStale = false;
+  for (; ; ) {
+    try {
+      const handle = await open2(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
+      await handle.writeFile(`${token}
+`, "utf8");
+      await handle.close();
+      return {
+        path: lockPath,
+        token,
+        stoleStale,
+        release: async () => {
+          try {
+            const current = await readFile4(lockPath, "utf8");
+            if (current.trim() === token) {
+              await rm3(lockPath, { force: true });
+            }
+          } catch {
+          }
+        }
+      };
+    } catch (error2) {
+      if (!isAlreadyExistsError2(error2)) throw error2;
+      if (await stealIfStale(lockPath, staleMs, now)) {
+        stoleStale = true;
+        continue;
+      }
+      if (now() - start >= timeoutMs) {
+        throw new Error(`central install lock at ${lockPath} is held; timed out after ${timeoutMs}ms`);
+      }
+      await sleep2(retryMs);
+    }
+  }
+}
+async function stealIfStale(lockPath, staleMs, now) {
+  try {
+    const info = await stat(lockPath);
+    if (now() - info.mtimeMs > staleMs) {
+      await rm3(lockPath, { force: true });
+      return true;
+    }
+  } catch {
+  }
+  return false;
+}
+function defaultSleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function isAlreadyExistsError2(error2) {
+  return typeof error2 === "object" && error2 !== null && "code" in error2 && /** @type {any} */
+  error2.code === "EEXIST";
+}
+
+// common/install/run-central-install.js
+var INSTALL_LOCK_NAME = "install.lock";
+async function runCentralInstall(stateRoot2, actor, deps = {}) {
+  const fs = deps.fs ?? createAtomicNodeFsSeam();
+  const lockPath = path6.join(stateRoot2, INSTALL_LOCK_NAME);
+  const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
+  try {
+    const state = await readCentralState(stateRoot2, actor.comm);
+    state.daemonRunning = deps.daemonRunning ?? false;
+    const plan = reconcileInstall(actor, state);
+    const paths = resolveCentralPaths(stateRoot2, actor.comm);
+    const result = await executeInstallPlan(plan, actor, paths, fs);
+    return { plan, result, stoleStale: lock.stoleStale };
+  } finally {
+    await lock.release();
+  }
+}
+
+// common/install/ensure-central-install.js
+var INSTALL_STAMP_NAME = "install-stamp.json";
+function resolveInstallMode(env) {
+  return env && env.AGENTS_COMM_BUS_BIN ? "source" : "production";
+}
+async function readInstallStamp(pluginInstallDir, deps = {}) {
+  if (!pluginInstallDir) return null;
+  const read = deps.readFile ?? readFile5;
+  try {
+    const raw = await read(path7.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function ensureCentralInstall(options) {
+  const env = options.env ?? process.env;
+  const mode = resolveInstallMode(env);
+  if (mode === "source") {
+    return { mode: "source", skipped: true };
+  }
+  const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
+  if (!options.pluginInstallDir || !stamp) {
+    throw new Error(
+      `central install (production mode): missing or invalid plugin install metadata.
+  - no source-mode signal (no AGENTS_COMM_BUS_BIN, no .agents-comm-bus-dev.json marker resolved)
+  - no valid packaged install artifact (expected ${INSTALL_STAMP_NAME} under pluginInstallDir=${options.pluginInstallDir ?? "<unset>"})
+Fix one of:
+  - source/dev checkout: create .agents-comm-bus-dev.json at the repo root (see .agents-comm-bus-dev.json.example), or set AGENTS_COMM_BUS_BIN
+  - packaged install: provide the staged plugin artifacts incl. ${INSTALL_STAMP_NAME}`
+    );
+  }
+  const resolvedAgent = options.agent ?? stamp.agent;
+  const resolvedComm = options.comm ?? stamp.comm;
+  if (typeof resolvedAgent !== "string" || resolvedAgent.length === 0 || typeof resolvedComm !== "string" || resolvedComm.length === 0) {
+    throw new Error(
+      `central install (production mode): install stamp resolved an invalid actor identity (agent=${JSON.stringify(resolvedAgent)}, comm=${JSON.stringify(resolvedComm)}). The stamp must carry agent + comm, or the caller must supply them.`
+    );
+  }
+  const actor = {
+    agent: (
+      /** @type {any} */
+      resolvedAgent
+    ),
+    comm: resolvedComm,
+    pluginVersion: stamp.plugin_version,
+    daemonBundleVersion: stamp.daemon_bundle_version,
+    adapterBundleVersion: stamp.adapter_bundle_version,
+    pluginInstallDir: options.pluginInstallDir,
+    installedAt: options.installedAt ?? (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const run = options.deps?.runCentralInstall ?? runCentralInstall;
+  const outcome = await run(options.stateRoot, actor, {
+    fs: options.deps?.fs,
+    lock: options.lock,
+    daemonRunning: options.daemonRunning ?? false
+  });
+  return { mode: "production", actor, ...outcome };
+}
+
+// common/install/dev-config-resolver.js
+import { readFileSync, existsSync } from "node:fs";
+import path8 from "node:path";
+var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
+function resolveDevConfig(projectRoot, deps = {}) {
+  const exists = deps.exists ?? existsSync;
+  const readFile6 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
+  const markerPath = path8.join(projectRoot, DEV_MARKER_NAME);
+  if (!exists(markerPath)) {
+    return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(readFile6(markerPath));
+  } catch (error2) {
+    return {
+      env: {},
+      status: "rejected",
+      reasons: [`dev marker unparseable: ${error2 instanceof Error ? error2.message : String(error2)}`]
+    };
+  }
+  const daemonBinRaw = parsed && typeof parsed.daemonBin === "string" ? parsed.daemonBin : null;
+  if (!daemonBinRaw) {
+    return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
+  }
+  const daemonBin = path8.resolve(projectRoot, daemonBinRaw);
+  if (!isInside(projectRoot, daemonBin)) {
+    return { env: {}, status: "rejected", reasons: [`dev marker daemonBin escapes project root: ${daemonBinRaw}`] };
+  }
+  if (!exists(daemonBin)) {
+    return { env: {}, status: "rejected", reasons: [`dev marker daemonBin does not exist: ${daemonBin}`] };
+  }
+  const env = { AGENTS_COMM_BUS_BIN: daemonBin };
+  const reasons = [`dev marker applied from ${markerPath}`];
+  if (typeof parsed.stateRoot === "string" && parsed.stateRoot.length > 0) {
+    const stateRoot2 = path8.resolve(projectRoot, parsed.stateRoot);
+    if (isInside(projectRoot, stateRoot2)) env.AGENTS_COMM_BUS_ROOT = stateRoot2;
+    else reasons.push(`ignoring stateRoot outside project root: ${parsed.stateRoot}`);
+  }
+  if (typeof parsed.adaptersDir === "string" && parsed.adaptersDir.length > 0) {
+    const adaptersDir = path8.resolve(projectRoot, parsed.adaptersDir);
+    if (isInside(projectRoot, adaptersDir)) env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
+    else reasons.push(`ignoring adaptersDir outside project root: ${parsed.adaptersDir}`);
+  }
+  return { env, status: "applied", reasons };
+}
+function applyDevConfig(baseEnv, projectRoot, deps = {}) {
+  const devConfig = resolveDevConfig(projectRoot, deps);
+  return { env: { ...baseEnv, ...devConfig.env }, devConfig };
+}
+function isInside(root, candidate) {
+  const rel = path8.relative(root, candidate);
+  if (rel === "") return true;
+  return !rel.startsWith("..") && !path8.isAbsolute(rel);
+}
+
+// common/install/entry-ensures.js
+function resolveEntryContext(fromDir, deps = {}) {
+  const exists = deps.exists ?? existsSync2;
+  return {
+    projectRoot: findAncestorContaining(fromDir, DEV_MARKER_NAME, exists),
+    pluginInstallDir: findAncestorContaining(fromDir, INSTALL_STAMP_NAME, exists)
+  };
+}
+function findAncestorContaining(dir, name, exists) {
+  let current = path9.resolve(dir);
+  for (; ; ) {
+    if (exists(path9.join(current, name))) return current;
+    const parent = path9.dirname(current);
+    if (parent === current) return void 0;
+    current = parent;
+  }
+}
+async function entryEnsures(options) {
+  const {
+    agent,
+    comm,
+    stateRoot: stateRoot2,
+    fromDir,
+    projectRoot,
+    pluginInstallDir,
+    env = process.env,
+    ensureDaemonOptions = {},
+    daemonRunning = false,
+    deps = {}
+  } = options ?? {};
+  const ensureDaemonFn = deps.ensureDaemon ?? ensureDaemon;
+  const ensureCentralInstallFn = deps.ensureCentralInstall ?? ensureCentralInstall;
+  let resolvedProjectRoot = projectRoot;
+  let resolvedPluginInstallDir = pluginInstallDir;
+  if (fromDir && (resolvedProjectRoot === void 0 || resolvedPluginInstallDir === void 0)) {
+    const ctx = resolveEntryContext(fromDir, deps.entryContextDeps);
+    resolvedProjectRoot = resolvedProjectRoot ?? ctx.projectRoot;
+    resolvedPluginInstallDir = resolvedPluginInstallDir ?? ctx.pluginInstallDir;
+  }
+  const resolvedEnv = resolvedProjectRoot ? applyDevConfig(env, resolvedProjectRoot, deps.devConfigDeps).env : env;
+  const resolveStatePathsFn = deps.resolveStatePaths ?? resolveStatePaths;
+  const canonicalStateRoot = stateRoot2 ?? resolvedEnv.AGENTS_COMM_BUS_ROOT ?? resolveStatePathsFn({ stateRoot: resolvedEnv.AGENTS_COMM_BUS_STATE_ROOT }).root;
+  const centralInstall = await ensureCentralInstallFn({
+    stateRoot: canonicalStateRoot,
+    agent,
+    comm,
+    pluginInstallDir: resolvedPluginInstallDir,
+    env: resolvedEnv,
+    daemonRunning,
+    deps: deps.centralInstallDeps
+  });
+  const daemon = await ensureDaemonFn({ ...ensureDaemonOptions, stateRoot: canonicalStateRoot });
+  return { ...daemon, centralInstall };
+}
+
 // common/mcp-shim-shared.js
 function log(message) {
   console.error(`[acb-mcp] ${message}`);
@@ -25177,7 +25679,7 @@ function resolveDaemonEntry() {
     // Compatibility fallback for older mcp-server/source layouts.
     new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url)
   ].map((url) => fileURLToPath2(url));
-  const found = candidates.find((candidate) => existsSync(candidate));
+  const found = candidates.find((candidate) => existsSync3(candidate));
   if (!found) {
     throw new Error(`agents-comm-bus daemon entry not found from ${here}; checked ${candidates.join(", ")}`);
   }
@@ -25192,10 +25694,15 @@ function createDaemonRequester(options) {
       agent,
       project: process.cwd()
     };
-    const ensured = await ensureDaemon({
-      clientVersion: DAEMON_VERSION,
-      metadata,
-      spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim
+    const ensured = await entryEnsures({
+      fromDir: import.meta.dirname,
+      agent,
+      env: process.env,
+      ensureDaemonOptions: {
+        clientVersion: DAEMON_VERSION,
+        metadata,
+        spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim
+      }
     });
     const connection = await connectIpc({
       port: ensured.port,
@@ -25321,7 +25828,7 @@ async function handleSendMessage(daemonRequest, args) {
 async function handleSendAttachment(daemonRequest, args) {
   if (!args.comm) return toolError("Error: comm is required");
   if (!args.path) return toolError("Error: path is required");
-  if (!existsSync(args.path)) return toolError(`Error: File not found: ${args.path}`);
+  if (!existsSync3(args.path)) return toolError(`Error: File not found: ${args.path}`);
   const params = {
     path: args.path,
     caption: args.caption,

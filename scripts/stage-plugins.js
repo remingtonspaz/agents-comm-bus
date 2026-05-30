@@ -43,7 +43,15 @@ function stripTrailingWhitespace(text) {
 }
 
 function isTextArtifactPath(filePath) {
-  return /\.(js|json|md|ps1|ts|map)$/.test(filePath) || filePath.endsWith(".d.ts");
+  return /\.(js|json|md|ps1|ts|map|sql)$/.test(filePath) || filePath.endsWith(".d.ts");
+}
+
+function repoRelative(p) {
+  return relative(REPO_ROOT, p).replace(/\\/g, "/");
+}
+
+function sortDirents(entries) {
+  return entries.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 const OUTPUT_BASE =
   outputDirFlag !== -1 && args[outputDirFlag + 1]
@@ -76,7 +84,7 @@ async function ensureDir(p) {
 
 async function copyFileAtomic(src, dst) {
   if (dryRun) {
-    log(`  [dry-run] would copy ${relative(REPO_ROOT, src)} → ${relative(REPO_ROOT, dst)}`);
+    log(`  [dry-run] would copy ${repoRelative(src)} → ${repoRelative(dst)}`);
     return;
   }
   await ensureDir(dirname(dst));
@@ -89,7 +97,7 @@ async function copyTextFileAtomic(src, dst, transform = normalizeEol) {
 }
 
 async function copyTree(srcDir, dstDir, recordFn, type) {
-  const entries = await readdir(srcDir, { withFileTypes: true });
+  const entries = sortDirents(await readdir(srcDir, { withFileTypes: true }));
   for (const entry of entries) {
     const src = resolve(srcDir, entry.name);
     const dst = resolve(dstDir, entry.name);
@@ -112,7 +120,7 @@ async function readText(p) {
 
 async function writeText(p, text) {
   if (dryRun) {
-    log(`  [dry-run] would write ${relative(REPO_ROOT, p)} (${text.length} chars)`);
+    log(`  [dry-run] would write ${repoRelative(p)} (${text.length} chars)`);
     return;
   }
   await ensureDir(dirname(p));
@@ -222,7 +230,7 @@ async function assembleSkill(agent, comm) {
 async function discoverPairs() {
   const hostsRoot = resolve(REPO_ROOT, "hosts");
   const entries = await readdir(hostsRoot, { withFileTypes: true });
-  const agents = entries
+  const agents = sortDirents(entries)
     .filter(
       (e) =>
         e.isDirectory() &&
@@ -236,7 +244,7 @@ async function discoverPairs() {
   for (const agent of agents) {
     const skillsRoot = resolve(hostsRoot, agent, "skills");
     try {
-      const comms = await readdir(skillsRoot, { withFileTypes: true });
+      const comms = sortDirents(await readdir(skillsRoot, { withFileTypes: true }));
       for (const comm of comms) {
         if (comm.isDirectory()) {
           pairs.push({ agent, comm: comm.name });
@@ -291,6 +299,7 @@ function transformHookSource(content, agent) {
     /\.\.\/\.\.\/\.\.\/agents-comm-bus\/dist\//g,
     "../agents-comm-bus/dist/"
   );
+  content = content.replace(/\.\.\/\.\.\/common\/install\//g, "../common/install/");
   // Replace bootstrapperPath / watcherScript repo-root references with artifact-local paths
   content = content.replace(
     /bootstrapperPath = path\.join\(repoRoot, 'scripts', 'bootstrap-codex-session\.ps1'\)/g,
@@ -303,22 +312,29 @@ function transformHookSource(content, agent) {
   return content;
 }
 
+function transformCommonInstallSource(content) {
+  return content.replace(
+    /\.\.\/\.\.\/\.\.\/agents-comm-bus\/dist\//g,
+    "../../agents-comm-bus/dist/"
+  );
+}
+
 /**
  * Build the complete artifact tree for one (agent, comm) pair.
  */
 async function stagePair(agent, comm) {
   const outDir = resolve(OUTPUT_BASE, agent, comm);
   const mapping = {
+    schema_version: 1,
     agent,
     comm,
-    staged_at: new Date().toISOString(),
     artifacts: [],
   };
 
   function record(src, dst, type) {
     mapping.artifacts.push({
-      source: relative(REPO_ROOT, src),
-      artifact: relative(REPO_ROOT, dst),
+      source: repoRelative(src),
+      artifact: repoRelative(dst),
       type,
     });
   }
@@ -340,8 +356,8 @@ async function stagePair(agent, comm) {
     for (const e of fragEntries) {
       if (e.isFile() && extname(e.name) === ".md") {
         mapping.artifacts.push({
-          source: relative(REPO_ROOT, resolve(fragmentDir, e.name)),
-          artifact: relative(REPO_ROOT, skillOutPath),
+          source: repoRelative(resolve(fragmentDir, e.name)),
+          artifact: repoRelative(skillOutPath),
           type: "skill-fragment",
         });
       }
@@ -369,6 +385,18 @@ async function stagePair(agent, comm) {
   const daemonPackageDst = resolve(outDir, "agents-comm-bus", "package.json");
   await copyFileAtomic(daemonPackageSrc, daemonPackageDst);
   record(daemonPackageSrc, daemonPackageDst, "daemon-runtime");
+
+  /* 3b. Shared install helpers used by staged hooks */
+  const commonInstallSrcDir = resolve(REPO_ROOT, "hosts", "common", "install");
+  const commonInstallDstDir = resolve(outDir, "common", "install");
+  const commonEntries = sortDirents(await readdir(commonInstallSrcDir, { withFileTypes: true }));
+  for (const e of commonEntries) {
+    if (!e.isFile() || !e.name.endsWith(".js")) continue;
+    const src = resolve(commonInstallSrcDir, e.name);
+    const dst = resolve(commonInstallDstDir, e.name);
+    await copyTextFileAtomic(src, dst, transformCommonInstallSource);
+    record(src, dst, "common-install");
+  }
 
   /* 4. Hook files */
   const hooksSrcDir = resolve(REPO_ROOT, "hosts", agent, "hooks");
@@ -438,7 +466,7 @@ async function stagePair(agent, comm) {
   );
   mapping.artifacts.push({
     source: `core-daemon/config.ts (DAEMON_VERSION) + adapters/${comm}/version.ts (ADAPTER_VERSION) + ${manifestName}/plugin.json (version)`,
-    artifact: relative(REPO_ROOT, stampDst),
+    artifact: repoRelative(stampDst),
     type: "install-stamp",
   });
 
@@ -588,7 +616,7 @@ async function main() {
       console.log(`[${status}] ${r.agent}/${r.comm}${detail ? "\n" + detail : ""}`);
     } else {
       const status = r.ok ? "OK" : "FAIL";
-      const detail = r.outDir ? ` -> ${relative(REPO_ROOT, r.outDir)}` : "";
+      const detail = r.outDir ? ` -> ${repoRelative(r.outDir)}` : "";
       const reason = r.reason ? ` (${r.reason})` : "";
       console.log(`[${status}] ${r.agent}/${r.comm}${detail}${reason}`);
     }

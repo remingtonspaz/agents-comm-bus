@@ -108,8 +108,18 @@ export declare function reloadAdapters(input: {
  * would destructively drain ALL comms and the caller would merely filter
  * client-side, losing the other comms' pending entries as collateral.
  *
- * When `comm` is omitted (or empty / non-string), the behavior is the
- * historical global drain: the entire queue is spliced.
+ * When `ownedAccountKeys` is supplied (a Set of `${comm}:${account}` keys),
+ * the drain is additionally scoped to those accounts â€” only entries the caller
+ * actually owns are removed. This is essential in a multi-bot setup where two
+ * agents share a comm (Claude + Codex both on telegram with different bot
+ * accounts): without account scoping a `comm_check_messages` from one agent
+ * destructively drains the OTHER agent's pending inbound as collateral, so the
+ * other agent's wake-driven drain then finds an empty queue and never injects
+ * the message. An empty Set drains nothing.
+ *
+ * When neither `comm` nor `ownedAccountKeys` is supplied, the behavior is the
+ * historical global drain: the entire queue is spliced (internal/legacy callers
+ * without a session).
  *
  * Returned entries preserve queue order (oldest first).
  */

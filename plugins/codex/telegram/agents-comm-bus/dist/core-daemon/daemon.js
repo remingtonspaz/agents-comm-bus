@@ -3,6 +3,7 @@ import { DAEMON_VERSION } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { startDaemonPidWatchdog } from "./bootstrap/pid-watchdog.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
@@ -55,19 +56,69 @@ export async function runDaemon(options) {
         blobs,
         comms,
     });
-    const bridges = options.agentBridgeFactories.map((factory) => factory.create({ storage, bus, pendingInbound }));
+    const bridges = options.agentBridgeFactories.map((factory) => factory.create({ storage, bus, audit, pendingInbound }));
     bus.setDispatchSink({
         enqueueInbound: async (message, conversation) => {
             pendingInbound.push({ message, conversation });
             if (pendingInbound.length > 100) {
                 pendingInbound.splice(0, pendingInbound.length - 100);
             }
+            await audit.append({
+                timestamp: Date.now(),
+                kind: "inbound_dispatch_enqueued",
+                agent: conversation.agent,
+                conversation_id: conversation.conversation_id,
+                detail: {
+                    comm: message.chat.comm,
+                    account: message.chat.account,
+                    account_label: conversation.account_label,
+                    platform_message_id: message.platform_message_id,
+                    message_id: message.message_id,
+                    queue_length: pendingInbound.length,
+                },
+            });
             for (const bridge of bridges) {
                 if (bridge.onInboundConversation) {
                     try {
+                        await audit.append({
+                            timestamp: Date.now(),
+                            kind: "inbound_dispatch_bridge_invoked",
+                            agent: bridge.agentId,
+                            conversation_id: conversation.conversation_id,
+                            detail: {
+                                conversation_agent: conversation.agent,
+                                platform_message_id: message.platform_message_id,
+                                message_id: message.message_id,
+                                queue_length: pendingInbound.length,
+                            },
+                        });
                         await bridge.onInboundConversation(conversation);
+                        await audit.append({
+                            timestamp: Date.now(),
+                            kind: "inbound_dispatch_bridge_completed",
+                            agent: bridge.agentId,
+                            conversation_id: conversation.conversation_id,
+                            detail: {
+                                conversation_agent: conversation.agent,
+                                platform_message_id: message.platform_message_id,
+                                message_id: message.message_id,
+                                queue_length: pendingInbound.length,
+                            },
+                        });
                     }
                     catch (error) {
+                        await audit.append({
+                            timestamp: Date.now(),
+                            kind: "inbound_dispatch_bridge_failed",
+                            agent: bridge.agentId,
+                            conversation_id: conversation.conversation_id,
+                            detail: {
+                                conversation_agent: conversation.agent,
+                                platform_message_id: message.platform_message_id,
+                                message_id: message.message_id,
+                                error: error instanceof Error ? error.message : String(error),
+                            },
+                        });
                         console.error(`agents-comm-bus: bridge ${bridge.agentId} onInboundConversation failed: ` +
                             `${error instanceof Error ? error.message : String(error)}`);
                     }
@@ -89,7 +140,14 @@ export async function runDaemon(options) {
     // Generic drain of the shared pendingInbound queue. Used by the MCP shim's
     // `comm_check_messages` tool so the shim doesn't have to know any per-comm
     // IPC method names.
-    ipcMethods.set("drain_pending_inbound", async (params) => drainPendingInbound(pendingInbound, params));
+    ipcMethods.set("drain_pending_inbound", async (params) => {
+        const base = params ?? {};
+        // Scope the drain to the calling session's owned bot accounts so one
+        // agent's `comm_check_messages` cannot cannibalize another agent's pending
+        // inbound (Claude + Codex share comm="telegram" with different bots).
+        const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
+        return drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+    });
     const bridgesByMethod = new Map();
     for (const bridge of bridges) {
         for (const method of bridge.ipcMethods) {
@@ -123,7 +181,43 @@ export async function runDaemon(options) {
         throw error;
     }
     await bus.start();
+    startDaemonPidWatchdog({
+        stateRoot: paths.root,
+        pidFile: paths.pidFile,
+        port: server.port,
+        audit,
+        stopDaemon: async () => {
+            await bestEffortWithTimeout(() => bus.stop(), 5_000, "stop comm adapters during daemon retirement");
+            await bestEffortWithTimeout(() => server.close(), 1_000, "close IPC server during daemon retirement");
+        },
+    });
     console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
+}
+async function bestEffortWithTimeout(action, timeoutMs, label) {
+    let timeout;
+    let timedOut = false;
+    try {
+        await Promise.race([
+            action(),
+            new Promise((resolve) => {
+                timeout = setTimeout(() => {
+                    timedOut = true;
+                    resolve();
+                }, timeoutMs);
+            }),
+        ]);
+        if (timedOut) {
+            console.error(`agents-comm-bus: timed out trying to ${label}`);
+        }
+    }
+    catch (error) {
+        console.error(`agents-comm-bus: failed to ${label}: ` +
+            `${error instanceof Error ? error.message : String(error)}`);
+    }
+    finally {
+        if (timeout)
+            clearTimeout(timeout);
+    }
 }
 async function loadCommAdapters(input) {
     const comms = [];
@@ -328,25 +422,60 @@ export async function reloadAdapters(input) {
  * would destructively drain ALL comms and the caller would merely filter
  * client-side, losing the other comms' pending entries as collateral.
  *
- * When `comm` is omitted (or empty / non-string), the behavior is the
- * historical global drain: the entire queue is spliced.
+ * When `ownedAccountKeys` is supplied (a Set of `${comm}:${account}` keys),
+ * the drain is additionally scoped to those accounts â€” only entries the caller
+ * actually owns are removed. This is essential in a multi-bot setup where two
+ * agents share a comm (Claude + Codex both on telegram with different bot
+ * accounts): without account scoping a `comm_check_messages` from one agent
+ * destructively drains the OTHER agent's pending inbound as collateral, so the
+ * other agent's wake-driven drain then finds an empty queue and never injects
+ * the message. An empty Set drains nothing.
+ *
+ * When neither `comm` nor `ownedAccountKeys` is supplied, the behavior is the
+ * historical global drain: the entire queue is spliced (internal/legacy callers
+ * without a session).
  *
  * Returned entries preserve queue order (oldest first).
  */
 export function drainPendingInbound(queue, params = {}) {
     const raw = params?.comm;
     const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
-    if (!commFilter) {
+    const owned = params?.ownedAccountKeys instanceof Set
+        ? params.ownedAccountKeys
+        : null;
+    if (!commFilter && owned === null) {
         return queue.splice(0);
     }
     const drained = [];
     for (let i = queue.length - 1; i >= 0; i -= 1) {
-        if (queue[i].message.chat.comm === commFilter) {
-            drained.unshift(queue[i]);
-            queue.splice(i, 1);
-        }
+        const entry = queue[i];
+        if (commFilter && entry.message.chat.comm !== commFilter)
+            continue;
+        if (owned !== null && !owned.has(pendingAccountKey(entry)))
+            continue;
+        drained.unshift(entry);
+        queue.splice(i, 1);
     }
     return drained;
+}
+function pendingAccountKey(entry) {
+    return `${entry.message.chat.comm}:${entry.message.chat.account}`;
+}
+/**
+ * Resolve the bot accounts a calling session owns, as `${comm}:${account}`
+ * keys, for scoping a generic drain. Mirrors the per-agent ownership the
+ * bridges use. Returns undefined when there is no session (legacy caller â†’
+ * fall back to comm/global), and an empty Set when the session is unknown
+ * (scope to nothing rather than global-wipe).
+ */
+async function resolveOwnedAccountKeys(storage, session) {
+    if (typeof session !== "string" || session.length === 0)
+        return undefined;
+    const sess = await storage.getSession(session);
+    if (!sess)
+        return new Set();
+    const regs = await storage.listAccountRegistrations({ agent: sess.agent });
+    return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 function sameStringSet(a, b) {
     if (a.length !== b.length)
