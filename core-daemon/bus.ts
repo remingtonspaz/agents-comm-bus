@@ -253,8 +253,8 @@ export class MessageBus {
     if (target.comm !== request.comm) {
       throw new Error(`target comm ${target.comm} does not match requested comm ${request.comm}`);
     }
-    // target.account may carry either the bot_user_id directly OR the
-    // account_label (e.g. "main"). registrationFor normalizes both.
+    // target.account MUST be a concrete bot_user_id (AGE-15). registrationFor
+    // rejects account labels — they are ambiguous across agents.
     const registration = await this.registrationFor(target);
     const comm = this.comms.get(adapterKey(target.comm, registration.bot_user_id as AccountId));
     if (!comm) {
@@ -286,8 +286,22 @@ export class MessageBus {
     await this.options.audit.append({
       timestamp: this.now(),
       kind: "outbound_sent",
+      agent: registration.agent,
+      session: request.session,
       conversation_id: conversation.conversation_id,
-      detail: { comm: request.comm, platform_message_id: sent.platform_message_id },
+      // Record the RESOLVED sending account so the audit can confirm which bot
+      // a message went out on (AGE-15: this was `account=-`, making the
+      // 2026-05-30 misroute undiagnosable from the audit alone). Also keep the
+      // caller's original requested account to spot label-vs-id mismatches.
+      detail: {
+        comm: request.comm,
+        platform_message_id: sent.platform_message_id,
+        account: registration.bot_user_id,
+        account_label: registration.account_label,
+        chat_native_id: target.chat_native_id,
+        thread_native_id: target.thread_native_id ?? null,
+        requested_account: request.target?.account ?? null,
+      },
     });
 
     return messageId;
@@ -445,14 +459,48 @@ export class MessageBus {
   async listConversations(filter?: {
     comm?: CommId;
     limit?: number;
-  }): Promise<Conversation[]> {
-    return this.options.storage.listConversations({
+  }): Promise<(Conversation & { bot_user_id: string | null })[]> {
+    const conversations = await this.options.storage.listConversations({
       project: this.options.project,
       comm: filter?.comm,
       limit: filter?.limit,
     });
+    if (conversations.length === 0) return [];
+    // Conversations are keyed by account_label and do NOT store bot_user_id;
+    // resolve it from the registration so the listing surfaces the concrete
+    // routing id an agent must pass to comm_send_message (AGE-15 — labels are
+    // no longer accepted as send targets, so the id has to be discoverable).
+    const registrations = await this.options.storage.listAccountRegistrations();
+    const botByKey = new Map<string, string>();
+    for (const r of registrations) {
+      botByKey.set(registrationKey(r.project, r.comm, r.agent, r.account_label), r.bot_user_id);
+    }
+    return conversations.map((conversation) => ({
+      ...conversation,
+      bot_user_id:
+        botByKey.get(
+          registrationKey(
+            conversation.project,
+            conversation.comm,
+            conversation.agent,
+            conversation.account_label,
+          ),
+        ) ?? null,
+    }));
   }
 
+  /**
+   * Resolve a routing target to its registration by the concrete
+   * `bot_user_id` ONLY (AGE-15). Account labels (e.g. `"main"`) are human
+   * metadata, not durable routing keys: Claude and Codex both register
+   * `account_label="main"`, so resolving a label is inherently ambiguous and
+   * can surface one agent's outbound on the other's bot (`cbc4a43`, the
+   * 2026-05-30 misroute). The prior cross-project label fallback was the bug;
+   * it is removed. Every legitimate caller already passes a concrete bot id:
+   * inbound carries it from the adapter, session-derived sends resolve it via
+   * `targetFromSession`, and `origin_chat` is built by `chatRefForConversation`
+   * (which returns `bot_user_id`). A label reaching here now fails loud.
+   */
   private async registrationFor(chat: ChatRef): Promise<AccountRegistration> {
     const byBot = await this.options.storage.getAccountByBot(
       chat.comm,
@@ -460,25 +508,12 @@ export class MessageBus {
     );
     if (byBot) return byBot;
 
-    // Label fallback: try this daemon's project first; if nothing matches,
-    // widen to any project on the box. The daemon is per-user, not
-    // per-project, and `bus.options.project = process.cwd()` is just the
-    // hint of the project that spawned the daemon — the same comm/label
-    // can legitimately resolve to a registration whose project differs
-    // from the daemon's cwd (e.g. when the daemon was started manually,
-    // or when a hook spawned it from a subdirectory).
-    const byLabelHere = (await this.options.storage.listAccountRegistrations({
-      project: this.options.project,
-      comm: chat.comm,
-    })).find((registration) => registration.account_label === String(chat.account));
-    if (byLabelHere) return byLabelHere;
-
-    const byLabelAny = (await this.options.storage.listAccountRegistrations({
-      comm: chat.comm,
-    })).find((registration) => registration.account_label === String(chat.account));
-    if (byLabelAny) return byLabelAny;
-
-    throw new Error(`no account registration for ${chat.comm}/${chat.account}`);
+    throw new Error(
+      `Cannot route to ${chat.comm} account "${chat.account}": not a registered bot id. ` +
+        `Routing requires a concrete bot_user_id (shown as account=<id> in your inbound block); ` +
+        `account labels like "main" are not accepted as routing targets. ` +
+        `Omit target to reply to your most-recent inbound conversation.`,
+    );
   }
 
   private async upsertConversation(
@@ -724,4 +759,14 @@ function decisionFromCallbackValue(
 
 function adapterKey(commId: CommId, accountId: AccountId): string {
   return `${commId}:${accountId}`;
+}
+
+/** Composite key over the account-registration PK (project, comm, agent, account_label). */
+function registrationKey(
+  project: string,
+  comm: CommId,
+  agent: AgentId,
+  accountLabel: string,
+): string {
+  return `${project} ${comm} ${agent} ${accountLabel}`;
 }

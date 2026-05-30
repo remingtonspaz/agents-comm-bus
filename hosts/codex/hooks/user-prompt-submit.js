@@ -91,7 +91,11 @@ function formatInboundMessages(items) {
     const senderName = sender.display_name || sender.id || 'unknown sender';
     const envelope = {
       comm: chat.comm || conversation.comm,
-      account: chat.account || conversation.account_label,
+      // `account` is the concrete bot_user_id — the routing key to echo back on
+      // sends (AGE-15). Do NOT fall back to account_label here: the label is
+      // human metadata, ambiguous across agents, and rejected as a send target.
+      account: chat.account,
+      account_label: conversation.account_label,
       chat_native_id: chat.chat_native_id || conversation.chat_native_id,
       thread_native_id: chat.thread_native_id || conversation.thread_native_id || undefined,
       conversation_id: conversation.conversation_id,

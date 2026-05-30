@@ -96,7 +96,21 @@ export declare class MessageBus {
     listConversations(filter?: {
         comm?: CommId;
         limit?: number;
-    }): Promise<Conversation[]>;
+    }): Promise<(Conversation & {
+        bot_user_id: string | null;
+    })[]>;
+    /**
+     * Resolve a routing target to its registration by the concrete
+     * `bot_user_id` ONLY (AGE-15). Account labels (e.g. `"main"`) are human
+     * metadata, not durable routing keys: Claude and Codex both register
+     * `account_label="main"`, so resolving a label is inherently ambiguous and
+     * can surface one agent's outbound on the other's bot (`cbc4a43`, the
+     * 2026-05-30 misroute). The prior cross-project label fallback was the bug;
+     * it is removed. Every legitimate caller already passes a concrete bot id:
+     * inbound carries it from the adapter, session-derived sends resolve it via
+     * `targetFromSession`, and `origin_chat` is built by `chatRefForConversation`
+     * (which returns `bot_user_id`). A label reaching here now fails loud.
+     */
     private registrationFor;
     private upsertConversation;
     private targetFromSession;

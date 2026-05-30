@@ -25976,7 +25976,7 @@ function createMcpServer({ daemonRequest }) {
     tools: [
       {
         name: "comm_send_message",
-        description: "Send a text message via the agents-comm-bus daemon. `comm` selects which platform adapter delivers the message. Target via the nested `target` object; omit to fall back to the session's most-recent-inbound conversation.",
+        description: "Send a text message via the agents-comm-bus daemon. `comm` selects which platform adapter delivers the message. Best practice: OMIT `target` to reply to the session's most-recent-inbound conversation \u2014 that routes by concrete identity automatically. Only set `target` to send somewhere else.",
         inputSchema: {
           type: "object",
           properties: {
@@ -25984,11 +25984,11 @@ function createMcpServer({ daemonRequest }) {
             message: { type: "string", description: "The message text to send" },
             target: {
               type: "object",
-              description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
+              description: 'Optional explicit target. Shape: { chat_native_id, thread_native_id?, account? }. `account` MUST be a concrete bot id (the `account=<id>` value in your inbound block, or `bot=<id>` from list_conversations) \u2014 account LABELS like "main" are rejected, they are ambiguous across agents. Omit `target` entirely to reply to your most-recent inbound.',
               properties: {
                 chat_native_id: { type: ["string", "number"] },
                 thread_native_id: { type: ["string", "number"] },
-                account: { type: ["string", "number"] }
+                account: { type: ["string", "number"], description: "Concrete bot id only (not an account label)." }
               }
             }
           },
@@ -26006,11 +26006,11 @@ function createMcpServer({ daemonRequest }) {
             caption: { type: "string", description: "Optional caption rendered alongside the attachment (mapping is comm-specific)." },
             target: {
               type: "object",
-              description: "Optional target chat ref. Shape: { chat_native_id, thread_native_id?, account? }.",
+              description: 'Optional explicit target. Shape: { chat_native_id, thread_native_id?, account? }. `account` MUST be a concrete bot id (not an account label like "main" \u2014 labels are rejected). Omit `target` to reply to your most-recent inbound.',
               properties: {
                 chat_native_id: { type: ["string", "number"] },
                 thread_native_id: { type: ["string", "number"] },
-                account: { type: ["string", "number"] }
+                account: { type: ["string", "number"], description: "Concrete bot id only (not an account label)." }
               }
             }
           },
@@ -26116,7 +26116,8 @@ function formatConversations(conversations) {
     const thread = conversation.thread_native_id ? `:${conversation.thread_native_id}` : "";
     const last = conversation.last_inbound_at ?? conversation.last_outbound_at;
     const lastText = last ? new Date(last).toISOString() : "no activity";
-    return `${conversation.comm}/${conversation.account_label} ${conversation.chat_native_id}${thread} agent=${conversation.agent} last=${lastText}`;
+    const botId = conversation.bot_user_id ?? "unknown";
+    return `${conversation.comm} bot=${botId} chat_native_id=${conversation.chat_native_id}${thread} agent=${conversation.agent} account_label=${conversation.account_label} last=${lastText}`;
   }).join("\n");
 }
 async function runMcpShim(options) {

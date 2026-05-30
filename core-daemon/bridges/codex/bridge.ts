@@ -718,7 +718,12 @@ function formatInboundMessagesForTurn(entries: PendingInboundEntry[]): string {
     const text = textParts.join(" ").trim() || "[no text]";
     const envelope = [
       `comm=${conversation.comm}`,
-      `account=${conversation.account_label}`,
+      // `account` is the concrete bot_user_id — the routing key to echo back on
+      // sends (AGE-15). account_label is human metadata only and must NOT be
+      // used as a send target; surfacing the label here previously taught the
+      // agent to route by it, which cross-resolved to the other agent's bot.
+      `account=${message.chat.account}`,
+      `account_label=${conversation.account_label}`,
       `chat_native_id=${conversation.chat_native_id}`,
       conversation.thread_native_id ? `thread_native_id=${conversation.thread_native_id}` : null,
       `conversation_id=${conversation.conversation_id}`,
