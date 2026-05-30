@@ -379,6 +379,26 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-selector.d.ts",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-selector.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-selector.d.ts.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-selector.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-selector.js",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-selector.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-selector.js.map",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/account-selector.js.map",
+      "type": "daemon-runtime"
+    },
+    {
       "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts",
       "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts",
       "type": "daemon-runtime"

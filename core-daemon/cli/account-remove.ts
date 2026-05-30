@@ -1,6 +1,7 @@
-import type { AgentId, CommId } from "agents-comm-bus-core";
+import type { CommId } from "agents-comm-bus-core";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
+import { resolveAccountByLabel } from "./account-selector.js";
 
 export interface AccountRemoveOptions {
   project?: string;
@@ -34,29 +35,12 @@ export async function accountRemove(options: AccountRemoveOptions): Promise<void
       );
     }
 
-    const candidates = await storage.listAccountRegistrations({
-      project: options.project,
+    const row = await resolveAccountByLabel(storage, {
       comm,
-      agent: options.agent as AgentId | undefined,
+      accountLabel: options.accountLabel,
+      agent: options.agent,
+      project: options.project,
     });
-    const matches = candidates.filter((row) => row.account_label === options.accountLabel);
-    if (matches.length === 0) {
-      throw new Error(
-        `no account registration found for ` +
-          `(comm=${comm}, account-label=${options.accountLabel}` +
-          `${options.agent ? `, agent=${options.agent}` : ""}` +
-          `${options.project ? `, project=${options.project}` : ""}); ` +
-          "use --bot-id, or run `agents-comm account-list` to inspect registered accounts",
-      );
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        `account label "${options.accountLabel}" is ambiguous for ${comm}; ` +
-          `matched bot ids: ${matches.map((row) => row.bot_user_id).join(", ")}. ` +
-          "Narrow with --agent/--project or use --bot-id.",
-      );
-    }
-    const [row] = matches;
     await storage.deleteAccountRegistration(row.project, row.comm, row.agent, row.account_label);
   } finally {
     await storage.close();

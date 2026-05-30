@@ -1,3 +1,4 @@
+import { resolveAccountByLabel } from "./account-selector.js";
 /**
  * Resolve a per-bot selector to a `bot_user_id`.
  *
@@ -12,24 +13,12 @@ export async function resolvePerBotSelector(storage, selector) {
         throw new Error(`per-bot allowlist scope requires --bot-id or --account-label for ${selector.comm}; ` +
             `run \`agents-comm account-list\` to find the bot_user_id.`);
     }
-    const candidates = await storage.listAccountRegistrations({
-        project: selector.project,
+    const matched = await resolveAccountByLabel(storage, {
         comm: selector.comm,
+        accountLabel: selector.accountLabel,
         agent: selector.agent,
+        project: selector.project,
     });
-    const matches = candidates.filter((row) => row.account_label === selector.accountLabel);
-    if (matches.length === 0) {
-        throw new Error(`no account registration found for ` +
-            `(comm=${selector.comm}, account-label=${selector.accountLabel}` +
-            `${selector.agent ? `, agent=${selector.agent}` : ""}` +
-            `${selector.project ? `, project=${selector.project}` : ""}); ` +
-            `use --bot-id, or run \`agents-comm account-list\` to inspect registered accounts`);
-    }
-    if (matches.length > 1) {
-        throw new Error(`account label "${selector.accountLabel}" is ambiguous for ${selector.comm}; ` +
-            `matched bot ids: ${matches.map((m) => m.bot_user_id).join(", ")}. ` +
-            `Narrow with --agent/--project or use --bot-id.`);
-    }
-    return { bot_user_id: matches[0].bot_user_id, matched: matches[0] };
+    return { bot_user_id: matched.bot_user_id, matched };
 }
 //# sourceMappingURL=allowlist-shared.js.map
