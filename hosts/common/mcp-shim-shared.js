@@ -8,7 +8,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { ensureDaemon } from "../../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js";
+import { entryEnsures } from "./install/entry-ensures.js";
 import { connectIpc } from "../../agents-comm-bus/dist/core-daemon/ipc/client.js";
 import { PersistentIpcClient } from "../../agents-comm-bus/dist/core-daemon/ipc/persistent-client.js";
 import { DAEMON_VERSION } from "../../agents-comm-bus/dist/core-daemon/config.js";
@@ -58,10 +58,15 @@ export function createDaemonRequester(options) {
       agent,
       project: process.cwd(),
     };
-    const ensured = await ensureDaemon({
-      clientVersion: DAEMON_VERSION,
-      metadata,
-      spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim,
+    const ensured = await entryEnsures({
+      fromDir: import.meta.dirname,
+      agent,
+      env: process.env,
+      ensureDaemonOptions: {
+        clientVersion: DAEMON_VERSION,
+        metadata,
+        spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim,
+      },
     });
     const connection = await connectIpc({
       port: ensured.port,
