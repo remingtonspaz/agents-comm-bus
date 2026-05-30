@@ -76,6 +76,7 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     project: "project-a",
     comm: "telegram" as CommId,
     account_label: "main",
+    bot_user_id: "bot-1",
     chat_native_id: "chat-1",
     thread_native_id: null,
     conversation_id: "conversation-1" as ConversationId,
@@ -149,6 +150,7 @@ describe("SQLite storage schema", () => {
       await storage.upsertConversation(conversation({
         conversation_id: "conversation-2" as ConversationId,
         agent: "codex" as AgentId,
+        bot_user_id: "bot-2",
         last_message_id: "telegram:2" as MessageId,
       }));
 
@@ -157,6 +159,7 @@ describe("SQLite storage schema", () => {
         agent: "claude" as AgentId,
         comm: "telegram" as CommId,
         account_label: "main",
+        bot_user_id: "bot-1",
         chat_native_id: "chat-1",
         thread_native_id: null,
       });
@@ -165,12 +168,41 @@ describe("SQLite storage schema", () => {
         agent: "codex" as AgentId,
         comm: "telegram" as CommId,
         account_label: "main",
+        bot_user_id: "bot-2",
         chat_native_id: "chat-1",
         thread_native_id: null,
       });
 
       assert.equal(claude?.conversation_id, "conversation-1");
       assert.equal(codex?.conversation_id, "conversation-2");
+      assert.equal(claude?.bot_user_id, "bot-1");
+      assert.equal(codex?.bot_user_id, "bot-2");
+
+      await storage.close();
+    });
+  });
+
+  it("falls back to label lookup for legacy conversations without bot_user_id", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertConversation(conversation());
+      (storage as unknown as { db: { prepare(sql: string): { run(): unknown } } })
+        .db
+        .prepare("UPDATE conversations SET bot_user_id = NULL")
+        .run();
+
+      const found = await storage.findConversation({
+        project: "project-a",
+        agent: "claude" as AgentId,
+        comm: "telegram" as CommId,
+        account_label: "main",
+        bot_user_id: "bot-1",
+        chat_native_id: "chat-1",
+        thread_native_id: null,
+      });
+
+      assert.equal(found?.conversation_id, "conversation-1");
+      assert.equal(found?.bot_user_id, null);
 
       await storage.close();
     });

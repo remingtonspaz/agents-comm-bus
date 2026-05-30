@@ -139,12 +139,13 @@ export class SqliteStorage implements Storage {
     this.db
       .prepare(`
         INSERT INTO conversations (
-          schema_version, project, comm, account_label, chat_native_id,
+          schema_version, project, comm, account_label, bot_user_id, chat_native_id,
           thread_native_id, conversation_id, agent, last_inbound_at,
           last_outbound_at, last_message_id, created_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
           conversation_id = excluded.conversation_id,
+          bot_user_id = excluded.bot_user_id,
           last_inbound_at = excluded.last_inbound_at,
           last_outbound_at = excluded.last_outbound_at,
           last_message_id = excluded.last_message_id,
@@ -155,6 +156,7 @@ export class SqliteStorage implements Storage {
         rec.project,
         rec.comm,
         rec.account_label,
+        rec.bot_user_id,
         rec.chat_native_id,
         dbThreadId(rec.thread_native_id),
         rec.conversation_id,
@@ -180,9 +182,28 @@ export class SqliteStorage implements Storage {
     agent: AgentId;
     comm: CommId;
     account_label: string;
+    bot_user_id?: string | null;
     chat_native_id: string;
     thread_native_id: string | null;
   }): Promise<Conversation | null> {
+    if (pk.bot_user_id) {
+      const byBot = this.db
+        .prepare(`
+          SELECT * FROM conversations
+          WHERE project = ? AND agent = ? AND comm = ? AND bot_user_id = ?
+            AND chat_native_id = ? AND thread_native_id = ?
+        `)
+        .get(
+          pk.project,
+          pk.agent,
+          pk.comm,
+          pk.bot_user_id,
+          pk.chat_native_id,
+          dbThreadId(pk.thread_native_id),
+        );
+      if (byBot) return this.conversationFromRow(byBot);
+    }
+
     const row = this.db
       .prepare(`
         SELECT * FROM conversations
@@ -616,6 +637,7 @@ export class SqliteStorage implements Storage {
       project: r.project as string,
       comm: r.comm as CommId,
       account_label: r.account_label as string,
+      bot_user_id: (r.bot_user_id as string | null) ?? null,
       chat_native_id: r.chat_native_id as string,
       thread_native_id: recordThreadId(r.thread_native_id),
       conversation_id: r.conversation_id as ConversationId,

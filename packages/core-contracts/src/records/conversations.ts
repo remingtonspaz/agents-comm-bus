@@ -24,6 +24,7 @@ export interface Conversation {
   project: string;
   comm: CommId;
   account_label: string;
+  bot_user_id: string | null;
   chat_native_id: string;
   thread_native_id: string | null;
 

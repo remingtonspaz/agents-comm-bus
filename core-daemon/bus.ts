@@ -76,9 +76,8 @@ export class MessageBus {
   /**
    * Adapter map keyed by `${commId}:${accountId}` so multiple bots can share
    * `comm.id` (e.g. one Telegram adapter per agent, each bound to a different
-   * `bot_user_id`). `bus.send` resolves `target.account` to a bot_user_id via
-   * `registrationFor` before lookup, so callers can pass either the
-   * `account_label` (e.g. `"main"`) or the bot id directly.
+   * `bot_user_id`). `bus.send` resolves `target.account` by concrete bot id
+   * only; account labels are display metadata and are rejected as send targets.
    */
   private readonly comms = new Map<string, CommAdapter>();
   private readonly seen = new RecentSeenCache();
@@ -233,6 +232,7 @@ export class MessageBus {
       conversation_id: conversation.conversation_id,
       detail: {
         comm: registration.comm,
+        account: message.chat.account,
         account_label: registration.account_label,
         platform_message_id: message.platform_message_id,
       },
@@ -317,6 +317,7 @@ export class MessageBus {
           agent: registration.agent,
           comm: query.origin_chat.comm,
           account_label: registration.account_label,
+          bot_user_id: registration.bot_user_id,
           chat_native_id: query.origin_chat.chat_native_id,
           thread_native_id: query.origin_chat.thread_native_id ?? null,
         });
@@ -459,34 +460,12 @@ export class MessageBus {
   async listConversations(filter?: {
     comm?: CommId;
     limit?: number;
-  }): Promise<(Conversation & { bot_user_id: string | null })[]> {
-    const conversations = await this.options.storage.listConversations({
+  }): Promise<Conversation[]> {
+    return this.options.storage.listConversations({
       project: this.options.project,
       comm: filter?.comm,
       limit: filter?.limit,
     });
-    if (conversations.length === 0) return [];
-    // Conversations are keyed by account_label and do NOT store bot_user_id;
-    // resolve it from the registration so the listing surfaces the concrete
-    // routing id an agent must pass to comm_send_message (AGE-15 — labels are
-    // no longer accepted as send targets, so the id has to be discoverable).
-    const registrations = await this.options.storage.listAccountRegistrations();
-    const botByKey = new Map<string, string>();
-    for (const r of registrations) {
-      botByKey.set(registrationKey(r.project, r.comm, r.agent, r.account_label), r.bot_user_id);
-    }
-    return conversations.map((conversation) => ({
-      ...conversation,
-      bot_user_id:
-        botByKey.get(
-          registrationKey(
-            conversation.project,
-            conversation.comm,
-            conversation.agent,
-            conversation.account_label,
-          ),
-        ) ?? null,
-    }));
   }
 
   /**
@@ -525,6 +504,7 @@ export class MessageBus {
       project: registration.project,
       comm: registration.comm,
       account_label: registration.account_label,
+      bot_user_id: registration.bot_user_id,
       chat_native_id: message.chat.chat_native_id,
       thread_native_id: message.chat.thread_native_id ?? null,
       conversation_id: conversationIdForPk({
@@ -559,20 +539,10 @@ export class MessageBus {
     }
     const conversation = await this.options.storage.getConversation(conversationId);
     if (!conversation) throw new Error(`conversation not found: ${conversationId}`);
-    const registration = (await this.options.storage.listAccountRegistrations({
-      project: conversation.project,
-      comm: conversation.comm,
-      agent: conversation.agent,
-    })).find((candidate) => candidate.account_label === conversation.account_label);
-    if (!registration) {
-      throw new Error(
-        `no account registration for session ${session} conversation ${conversationId} ` +
-          `(${conversation.agent}/${conversation.comm}/${conversation.account_label})`,
-      );
-    }
+    const botUserId = await this.botUserIdForConversation(conversation);
     return {
       ...chatRefFromConversation(conversation),
-      account: registration.bot_user_id as ChatRef["account"],
+      account: botUserId as ChatRef["account"],
     };
   }
 
@@ -583,6 +553,7 @@ export class MessageBus {
       agent: registration.agent,
       comm: target.comm,
       account_label: registration.account_label,
+      bot_user_id: registration.bot_user_id,
       chat_native_id: target.chat_native_id,
       thread_native_id: target.thread_native_id ?? null,
     });
@@ -592,6 +563,7 @@ export class MessageBus {
         project: registration.project,
         comm: registration.comm,
         account_label: registration.account_label,
+        bot_user_id: registration.bot_user_id,
         chat_native_id: target.chat_native_id,
         thread_native_id: target.thread_native_id ?? null,
         conversation_id: conversationIdForPk({
@@ -613,6 +585,23 @@ export class MessageBus {
       return created;
     }
     return conversation;
+  }
+
+  private async botUserIdForConversation(conversation: Conversation): Promise<string> {
+    if (conversation.bot_user_id) return conversation.bot_user_id;
+
+    const registration = (await this.options.storage.listAccountRegistrations({
+      project: conversation.project,
+      comm: conversation.comm,
+      agent: conversation.agent,
+    })).find((candidate) => candidate.account_label === conversation.account_label);
+    if (!registration) {
+      throw new Error(
+        `no account registration for conversation ${conversation.conversation_id} ` +
+          `(${conversation.agent}/${conversation.comm}/${conversation.account_label})`,
+      );
+    }
+    return registration.bot_user_id;
   }
 
   private async notifyResolveSinks(
@@ -670,7 +659,7 @@ export function conversationIdForChat(chat: ChatRef): ConversationId {
 export function chatRefFromConversation(conversation: Conversation): ChatRef {
   return {
     comm: conversation.comm,
-    account: conversation.account_label as ChatRef["account"],
+    account: (conversation.bot_user_id ?? conversation.account_label) as ChatRef["account"],
     chat_native_id: conversation.chat_native_id,
     thread_native_id: conversation.thread_native_id ?? undefined,
   };
@@ -759,14 +748,4 @@ function decisionFromCallbackValue(
 
 function adapterKey(commId: CommId, accountId: AccountId): string {
   return `${commId}:${accountId}`;
-}
-
-/** Composite key over the account-registration PK (project, comm, agent, account_label). */
-function registrationKey(
-  project: string,
-  comm: CommId,
-  agent: AgentId,
-  accountLabel: string,
-): string {
-  return JSON.stringify([project, comm, agent, accountLabel]);
 }

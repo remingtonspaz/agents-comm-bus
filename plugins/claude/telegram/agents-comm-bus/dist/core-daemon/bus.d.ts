@@ -48,9 +48,8 @@ export declare class MessageBus {
     /**
      * Adapter map keyed by `${commId}:${accountId}` so multiple bots can share
      * `comm.id` (e.g. one Telegram adapter per agent, each bound to a different
-     * `bot_user_id`). `bus.send` resolves `target.account` to a bot_user_id via
-     * `registrationFor` before lookup, so callers can pass either the
-     * `account_label` (e.g. `"main"`) or the bot id directly.
+     * `bot_user_id`). `bus.send` resolves `target.account` by concrete bot id
+     * only; account labels are display metadata and are rejected as send targets.
      */
     private readonly comms;
     private readonly seen;
@@ -96,9 +95,7 @@ export declare class MessageBus {
     listConversations(filter?: {
         comm?: CommId;
         limit?: number;
-    }): Promise<(Conversation & {
-        bot_user_id: string | null;
-    })[]>;
+    }): Promise<Conversation[]>;
     /**
      * Resolve a routing target to its registration by the concrete
      * `bot_user_id` ONLY (AGE-15). Account labels (e.g. `"main"`) are human
@@ -115,6 +112,7 @@ export declare class MessageBus {
     private upsertConversation;
     private targetFromSession;
     private findConversationForTarget;
+    private botUserIdForConversation;
     private notifyResolveSinks;
 }
 export declare function conversationIdForPk(pk: {

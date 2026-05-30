@@ -453,6 +453,14 @@ export class CodexBridge {
         }
     }
     async chatRefForConversation(conversation) {
+        if (conversation.bot_user_id) {
+            return {
+                comm: conversation.comm,
+                account: conversation.bot_user_id,
+                chat_native_id: conversation.chat_native_id,
+                thread_native_id: conversation.thread_native_id ?? undefined,
+            };
+        }
         const registration = (await this.options.storage.listAccountRegistrations({
             project: conversation.project,
             comm: conversation.comm,

@@ -98,11 +98,12 @@ describe("MessageBus phase 1 invariants", () => {
       },
     ]);
     const transcripts = new MemoryTranscriptStore();
+    const audit = new MemoryAuditStore();
     const bus = new MessageBus({
       project: "/repo",
       storage,
       transcripts,
-      audit: new MemoryAuditStore(),
+      audit,
       now: () => 2000,
     });
 
@@ -110,7 +111,12 @@ describe("MessageBus phase 1 invariants", () => {
 
     assert.equal(conversation.agent, CLAUDE);
     assert.equal(conversation.account_label, "main");
+    assert.equal(conversation.bot_user_id, String(ACCOUNT));
     assert.equal(storage.conversations.size, 1);
+    const inbound = audit.entries.find((e) => e.kind === "inbound_received");
+    assert.ok(inbound);
+    assert.equal(inbound.detail?.account, String(ACCOUNT));
+    assert.equal(inbound.detail?.account_label, "main");
   });
 
   it("records transcript before dispatching inbound wake work", async () => {
@@ -174,11 +180,12 @@ describe("MessageBus phase 1 invariants", () => {
         updated_at: 2,
       },
     ]);
+    const audit = new MemoryAuditStore();
     const bus = new MessageBus({
       project: "/repo",
       storage,
       transcripts: new MemoryTranscriptStore(),
-      audit: new MemoryAuditStore(),
+      audit,
       now: () => 2000,
     });
 
@@ -195,8 +202,15 @@ describe("MessageBus phase 1 invariants", () => {
 
     assert.equal(claudeConversation.agent, CLAUDE);
     assert.equal(codexConversation.agent, CODEX);
+    assert.equal(claudeConversation.bot_user_id, String(ACCOUNT));
+    assert.equal(codexConversation.bot_user_id, String(codexAccount));
     assert.notEqual(claudeConversation.conversation_id, codexConversation.conversation_id);
     assert.equal(storage.conversations.size, 2);
+    const inboundAccounts = audit.entries
+      .filter((e) => e.kind === "inbound_received")
+      .map((e) => e.detail?.account)
+      .sort();
+    assert.deepEqual(inboundAccounts, [String(ACCOUNT), String(codexAccount)].sort());
   });
 });
 
@@ -262,6 +276,7 @@ class MemoryStorage implements Storage {
     agent: AgentId;
     comm: CommId;
     account_label: string;
+    bot_user_id?: string | null;
     chat_native_id: string;
     thread_native_id: string | null;
   }): Promise<Conversation | null> {
@@ -270,6 +285,7 @@ class MemoryStorage implements Storage {
       c.agent === pk.agent &&
       c.comm === pk.comm &&
       c.account_label === pk.account_label &&
+      (pk.bot_user_id == null || c.bot_user_id === pk.bot_user_id) &&
       c.chat_native_id === pk.chat_native_id &&
       c.thread_native_id === pk.thread_native_id) ?? null;
   }

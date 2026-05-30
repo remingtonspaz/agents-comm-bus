@@ -919,6 +919,11 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/005_conversation_bot_identity.sql",
+      "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/005_conversation_bot_identity.sql",
+      "type": "daemon-runtime"
+    },
+    {
       "source": "agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts",
       "artifact": "plugins/codex/telegram/agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts",
       "type": "daemon-runtime"

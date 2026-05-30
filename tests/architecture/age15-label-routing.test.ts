@@ -117,14 +117,18 @@ describe("AGE-15 outbound routes by bot id, not account label", () => {
     assert.equal(outbound!.agent, CODEX);
   });
 
-  it("omitted target falls back to the session's most-recent inbound and resolves a bot id", async () => {
-    const storage = new FakeStorage([reg({ agent: CODEX, bot_user_id: CODEX_BOT })]);
+  it("omitted target uses the conversation bot_user_id even when the label is stale", async () => {
+    const storage = new FakeStorage([
+      reg({ agent: CODEX, account_label: "renamed", bot_user_id: CODEX_BOT }),
+    ]);
+    storage.failListAccountRegistrations = true;
     const conversationId = "conv-1" as ConversationId;
     storage.conversations.set(conversationId, {
       schema_version: SCHEMA_VERSION_CONVERSATION,
       project: PROJECT,
       comm: TELEGRAM,
       account_label: "main",
+      bot_user_id: CODEX_BOT,
       chat_native_id: "chat-1",
       thread_native_id: null,
       conversation_id: conversationId,
@@ -156,6 +160,7 @@ describe("AGE-15 outbound routes by bot id, not account label", () => {
     await bus.send({ session: "s" as SessionId, comm: TELEGRAM, payload: { text: "hi" } });
 
     assert.equal(comm.sent.length, 1);
+    assert.equal(comm.sent[0].account, CODEX_BOT);
     const outbound = audit.find((e) => e.kind === "outbound_sent");
     assert.equal(outbound!.detail?.account, CODEX_BOT);
     assert.equal(outbound!.detail?.requested_account, null, "no explicit target → requested_account null");
@@ -169,6 +174,7 @@ describe("AGE-15 outbound routes by bot id, not account label", () => {
       project: PROJECT,
       comm: TELEGRAM,
       account_label: "main",
+      bot_user_id: CODEX_BOT,
       chat_native_id: "chat-1",
       thread_native_id: null,
       conversation_id: conversationId,
@@ -210,6 +216,7 @@ class FakeStorage implements Partial<Storage> {
   readonly registrations: AccountRegistration[];
   readonly conversations = new Map<ConversationId, Conversation>();
   readonly sessions = new Map<SessionId, Session>();
+  failListAccountRegistrations = false;
 
   constructor(registrations: AccountRegistration[]) {
     this.registrations = registrations;
@@ -226,6 +233,9 @@ class FakeStorage implements Partial<Storage> {
     comm?: CommId;
     agent?: AgentId;
   }): Promise<AccountRegistration[]> {
+    if (this.failListAccountRegistrations) {
+      throw new Error("listAccountRegistrations should not be needed when conversation.bot_user_id is present");
+    }
     return this.registrations.filter(
       (r) =>
         (filter?.project === undefined || r.project === filter.project) &&
@@ -239,6 +249,7 @@ class FakeStorage implements Partial<Storage> {
     agent: AgentId;
     comm: CommId;
     account_label: string;
+    bot_user_id?: string | null;
     chat_native_id: string;
     thread_native_id: string | null;
   }): Promise<Conversation | null> {
@@ -249,6 +260,7 @@ class FakeStorage implements Partial<Storage> {
           c.agent === pk.agent &&
           c.comm === pk.comm &&
           c.account_label === pk.account_label &&
+          (pk.bot_user_id == null || c.bot_user_id === pk.bot_user_id) &&
           c.chat_native_id === pk.chat_native_id &&
           c.thread_native_id === pk.thread_native_id,
       ) ?? null

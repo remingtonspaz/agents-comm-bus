@@ -164,6 +164,7 @@ function conversationRecord(): Conversation {
     agent: "codex" as AgentId,
     comm: "telegram" as CommId,
     account_label: "main",
+    bot_user_id: "bot-1",
     chat_native_id: "-100group",
     thread_native_id: null,
     conversation_id: "conv-test" as ConversationId,

@@ -57,12 +57,21 @@ export const sessionOwnerProcessMigration = {
         await ctx.exec(sql);
     },
 };
+export const conversationBotIdentityMigration = {
+    version: 5,
+    description: "store receiving bot identity on conversations",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
         conversationAgentIdentityMigration,
         allowlistMigration,
         sessionOwnerProcessMigration,
+        conversationBotIdentityMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

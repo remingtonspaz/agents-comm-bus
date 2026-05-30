@@ -46,6 +46,7 @@ function entry(
       project: "p",
       comm,
       account_label: "main",
+      bot_user_id: "bot-account",
       chat_native_id: "chat-1",
       thread_native_id: null,
       conversation_id: `conv-${comm}-${id}` as ConversationId,

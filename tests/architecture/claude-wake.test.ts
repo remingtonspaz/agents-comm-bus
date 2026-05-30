@@ -69,6 +69,7 @@ function conversation(overrides: Partial<Conversation> = {}): Conversation {
     project: "project-a",
     comm: "telegram" as CommId,
     account_label: "main",
+    bot_user_id: "bot-1",
     chat_native_id: "chat-1",
     thread_native_id: null,
     conversation_id: "conversation-1" as ConversationId,
