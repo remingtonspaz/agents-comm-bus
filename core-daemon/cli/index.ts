@@ -40,10 +40,11 @@ async function main(): Promise<void> {
     }
     case "account-remove": {
       await accountRemove({
-        project: required(args.project, "--project"),
-        agent: required(args.agent, "--agent"),
+        project: args.project,
+        agent: args.agent,
         comm: args.comm,
-        accountLabel: required(args.accountLabel ?? args["account-label"], "--account-label"),
+        accountLabel: args.accountLabel ?? args["account-label"],
+        botId: args.botId ?? args["bot-id"],
       });
       const reload = await reloadDaemonRegistrations();
       console.log(JSON.stringify({ ok: true, reload }, null, 2));
@@ -169,17 +170,17 @@ function printHelp(): void {
 Account commands:
   agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>] [--credentials-ref <ref>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
-  agents-comm-bus account-remove --project <path> --agent <agent> --account-label <label> [--comm telegram]
+  agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
 
 Allowlist commands:
-  agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                            # global
-  agents-comm-bus allowlist add    --comm <c> --user <id> --bot-id <id>                             # per-bot (canonical)
-  agents-comm-bus allowlist remove --comm <c> --user <id> --bot-id <id>
-  agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id>]
+  agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                                                      # global
+  agents-comm-bus allowlist add    --comm <c> --user <id> (--bot-id <id> | --account-label <label> [--agent <a>] [--project <p>])
+  agents-comm-bus allowlist remove --comm <c> --user <id> (--bot-id <id> | --account-label <label> [--agent <a>] [--project <p>])
+  agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id> | --account-label <label> [--agent <a>] [--project <p>]]
   agents-comm-bus allowlist import-from-env   [--comm telegram]
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
 
-Per-bot allowlist selectors require --bot-id. Account labels are display metadata and are not accepted.
+--bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
 account-add stores --bot-token in a daemon-owned file ref by default; explicit --credentials-ref values are honored.
 `);
 }

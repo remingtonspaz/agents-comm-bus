@@ -11,7 +11,7 @@ export async function allowlistList(options = {}) {
             return { global, per_bot: [] };
         }
         let per_bot;
-        const hasPerBotSelector = Boolean(options.botId || options.agent || options.project);
+        const hasPerBotSelector = Boolean(options.botId || options.agent || options.project || options.accountLabel);
         if (hasPerBotSelector) {
             if (!comm) {
                 throw new Error("--comm is required when selecting per-bot rows");

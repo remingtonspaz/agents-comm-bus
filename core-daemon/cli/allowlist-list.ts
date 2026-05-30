@@ -40,7 +40,7 @@ export async function allowlistList(
 
     let per_bot: AllowlistPerBotEntry[];
     const hasPerBotSelector = Boolean(
-      options.botId || options.agent || options.project,
+      options.botId || options.agent || options.project || options.accountLabel,
     );
     if (hasPerBotSelector) {
       if (!comm) {
