@@ -43,6 +43,10 @@ watching from their phone.
 - `comm_send_attachment` -- send a file or image when a report needs an artifact
   rather than text.
 
-Use the nested target shape to send to a specific chat or topic:
-`{ chat_native_id, thread_native_id?, account? }`. With no target, the daemon
-routes to the session's most-recent inbound conversation.
+Prefer sending with **no target** — the daemon routes to the session's
+most-recent inbound conversation by concrete identity automatically. Only set
+a target to reach a different chat: `{ chat_native_id, thread_native_id?,
+account? }`. When you do, `account` must be the concrete **bot id** (the
+`account=<id>` value in your inbound block, or `bot=<id>` from
+`list_conversations`) — account *labels* like `"main"` are rejected as
+routing targets because they are ambiguous across agents.

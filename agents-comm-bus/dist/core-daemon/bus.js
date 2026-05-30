@@ -589,6 +589,6 @@ function adapterKey(commId, accountId) {
 }
 /** Composite key over the account-registration PK (project, comm, agent, account_label). */
 function registrationKey(project, comm, agent, accountLabel) {
-    return `${project} ${comm} ${agent} ${accountLabel}`;
+    return JSON.stringify([project, comm, agent, accountLabel]);
 }
 //# sourceMappingURL=bus.js.map

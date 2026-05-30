@@ -305,10 +305,12 @@ version-compatible handshake before deciding whether to reuse or respawn.
   with `comm.id="telegram"`) without collision. Every `CommAdapter` is
   required to expose `readonly accountId` (e.g. Telegram `bot_user_id`)
   and `CommAdapterFactory.create(credentials, accountId)` takes it from
-  the registration. `bus.send` resolves `target.account` (which may be
-  either the `account_label` like `"main"` or the bot id directly) to a
-  `bot_user_id` via the tolerant `registrationFor` lookup before keying
-  the map.
+  the registration. `bus.send` requires `target.account` to be a concrete
+  `bot_user_id` (AGE-15): `registrationFor` resolves it via `getAccountByBot`
+  only and rejects account labels — labels like `"main"` are ambiguous across
+  agents (Claude and Codex both register `"main"`). The inbound block surfaces
+  the bot id as `account=<id>`; omit `target` entirely to reply to the
+  session's most-recent inbound.
 - **Conversation identity includes `agent`.** `conversation_id` and the
   SQLite conversations primary key include `project + agent + comm +
   account_label + chat_native_id + thread_native_id`. Claude and Codex may
@@ -417,15 +419,17 @@ version-compatible handshake before deciding whether to reuse or respawn.
   daemon with no `main()`). In a lab with an always-running daemon this
   hides because the bundle's discovery probe finds the live daemon and
   skips the spawn. See commit `438f48b`.
-- **Don't over-constrain account lookups by `bus.options.project`.** The
-  daemon is per-user; `bus.options.project = process.cwd()` is just a
-  hint, not a hard scope. `registrationFor`'s label-fallback first tries
-  the daemon's cwd-project but then widens to all projects when nothing
-  matches — otherwise manually-started daemons (cwd ≠ project) or
-  daemons spawned from a subdirectory fail to resolve common labels like
-  `"main"` and silently break outbound from `openClaudeQuery`. The
-  bot-id path (`getAccountByBot`) is already project-independent. See
-  commit `081b550`.
+- **Route outbound by `bot_user_id`, never by `account_label` (AGE-15).**
+  `registrationFor` resolves `target.account` via `getAccountByBot` ONLY; an
+  account label fails loud with an actionable error. The old label fallback
+  (try the daemon's cwd-project, then widen to all projects) was the source of
+  the 2026-05-30 cross-agent misroute — `"main"` resolved to whichever
+  registration was found first — so it has been removed. `getAccountByBot` is
+  already project-independent, so the daemon-is-per-user concern that once
+  motivated the project-widening (`081b550`) no longer applies to routing:
+  there is no label resolution left to widen. Agents must send a concrete bot
+  id (surfaced as `account=<id>` in the inbound block / `bot=<id>` from
+  `list_conversations`) or omit `target` to reply to the most-recent inbound.
 - **Don't use account labels when sending session-derived targets.** When a
   session has a recent conversation, resolve it back to the concrete
   `(project, agent, comm, account_label)` registration and send with

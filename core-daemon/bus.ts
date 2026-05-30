@@ -768,5 +768,5 @@ function registrationKey(
   agent: AgentId,
   accountLabel: string,
 ): string {
-  return `${project} ${comm} ${agent} ${accountLabel}`;
+  return JSON.stringify([project, comm, agent, accountLabel]);
 }
