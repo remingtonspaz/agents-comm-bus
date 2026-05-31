@@ -40,3 +40,6 @@ npm-debug.log*
 .env
 
 tests/automated_e2e/
+
+# AGE-23: intermediate esbuild daemon bundle output (staged into plugins/ by stage-plugins)
+agents-comm-bus/dist-bundle/
