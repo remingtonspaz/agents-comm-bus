@@ -43,6 +43,14 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: npm run check:version-bump
 
+      # AGE-34 gate: agent surfaces can reuse any daemon with a compatible IPC
+      # protocol major, so protocol.ts wire/schema changes must make an explicit
+      # IPC_PROTOCOL_VERSION decision (or carry an IPC_COMPAT_NOTE).
+      - name: IPC protocol-version gate
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run check:ipc-protocol
+
       - name: Typecheck (agents-comm-bus)
         run: npm --workspace agents-comm-bus run typecheck
 

@@ -309,6 +309,10 @@ version-compatible handshake before deciding whether to reuse or respawn.
   backward-incompatible way. The earlier exact-`DAEMON_VERSION`-equality reuse
   check (in both directions) is what let two shims at different patch versions
   terminate each other's daemon forever; see `bootstrap/ensure-daemon.ts`.
+  `npm run check:ipc-protocol` (AGE-34) enforces the same distinction in CI:
+  it fingerprints the exported IPC protocol type/signature surface, ignores
+  function bodies, and fails when that contract changes without an
+  `IPC_PROTOCOL_VERSION` bump or explicit `IPC_COMPAT_NOTE`.
 - **IPC method namespacing.** Bridges own `<agent>_*` methods (e.g.
   `claude_register_session`). Comm factories own `<comm>_*` methods (e.g.
   `telegram_send` on the daemon IPC side). The MCP shim exposes generic
