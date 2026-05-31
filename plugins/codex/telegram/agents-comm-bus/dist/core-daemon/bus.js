@@ -209,7 +209,6 @@ export class MessageBus {
                     project: registration.project,
                     agent: registration.agent,
                     comm: query.origin_chat.comm,
-                    account_label: registration.account_label,
                     bot_user_id: registration.bot_user_id,
                     registration_id: registration.registration_id,
                     chat_native_id: query.origin_chat.chat_native_id,
@@ -410,7 +409,6 @@ export class MessageBus {
             project: registration.project,
             agent: registration.agent,
             comm: target.comm,
-            account_label: registration.account_label,
             bot_user_id: registration.bot_user_id,
             registration_id: registration.registration_id,
             chat_native_id: target.chat_native_id,
@@ -442,21 +440,19 @@ export class MessageBus {
     async botUserIdForConversation(conversation) {
         if (conversation.bot_user_id)
             return conversation.bot_user_id;
-        // AGE-20 Phase 3b: resolve the owning registration by its stable
-        // registration_id, NOT the mutable account_label. The label match is only a
-        // legacy fallback for rows whose registration_id was never backfilled.
+        // AGE-22: resolve the owning registration by its stable registration_id
+        // (NOT NULL on conversations as of migration 008). There is no account_label
+        // fallback anymore — label is never identity. An orphan/retired registration
+        // simply has no live bot to route to.
         const registrations = await this.options.storage.listAccountRegistrations({
             project: conversation.project,
             comm: conversation.comm,
             agent: conversation.agent,
         });
-        const registration = (conversation.registration_id != null
-            ? registrations.find((candidate) => candidate.registration_id === conversation.registration_id)
-            : undefined) ??
-            registrations.find((candidate) => candidate.account_label === conversation.account_label);
+        const registration = registrations.find((candidate) => candidate.registration_id === conversation.registration_id);
         if (!registration) {
             throw new Error(`no account registration for conversation ${conversation.conversation_id} ` +
-                `(${conversation.agent}/${conversation.comm}/${conversation.account_label})`);
+                `(${conversation.agent}/${conversation.comm}/registration_id=${conversation.registration_id})`);
         }
         return registration.bot_user_id;
     }

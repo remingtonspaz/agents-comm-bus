@@ -21,5 +21,6 @@ export declare const sessionOwnerProcessMigration: Migration;
 export declare const conversationBotIdentityMigration: Migration;
 export declare const registrationIdentityMigration: Migration;
 export declare const registrationPkMigration: Migration;
+export declare const conversationRegistrationKeyMigration: Migration;
 export declare function runStorageMigrations(db: SqliteLike): Promise<void>;
 //# sourceMappingURL=runner.d.ts.map

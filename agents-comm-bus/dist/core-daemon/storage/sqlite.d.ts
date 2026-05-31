@@ -20,10 +20,11 @@ export declare class SqliteStorage implements Storage {
     updateAccountRegistrationToken(input: AccountTokenUpdateInput): Promise<AccountTokenUpdateResult>;
     upsertConversation(rec: Conversation): Promise<ConversationId>;
     /**
-     * Resolve an existing conversation's stable conversation_id by the immutable
-     * (registration_id, chat, thread) key, falling back to the legacy
-     * (project, agent, comm, account_label, chat, thread) tuple for rows that
-     * predate registration_id. Returns null when no conversation exists yet.
+     * Resolve an existing conversation's stable conversation_id by its immutable
+     * (registration_id, chat, thread) key — the conversations primary key as of
+     * AGE-22. Returns null when no conversation exists yet (or, defensively, when
+     * the record has no registration_id, which should not happen now that the
+     * column is NOT NULL).
      */
     private findExistingConversationId;
     private readonly conversationSelect;
@@ -32,7 +33,6 @@ export declare class SqliteStorage implements Storage {
         project: string;
         agent: AgentId;
         comm: CommId;
-        account_label: string;
         bot_user_id?: string | null;
         registration_id?: string | null;
         chat_native_id: string;

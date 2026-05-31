@@ -68,11 +68,12 @@ export interface Storage {
   // conversations
   upsertConversation(rec: Conversation): Promise<ConversationId>;
   getConversation(id: ConversationId): Promise<Conversation | null>;
+  // AGE-22: resolved by the stable surrogate key (registration_id) or the
+  // receiving bot (bot_user_id) — never by account_label (no longer identity).
   findConversation(pk: {
     project: string;
     agent: AgentId;
     comm: CommId;
-    account_label: string;
     bot_user_id?: string | null;
     registration_id?: string | null;
     chat_native_id: string;

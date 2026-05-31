@@ -2,8 +2,20 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
+import {
+  SqliteMigrationRunner,
+  initialMigration,
+  conversationAgentIdentityMigration,
+  allowlistMigration,
+  sessionOwnerProcessMigration,
+  conversationBotIdentityMigration,
+  registrationIdentityMigration,
+  registrationPkMigration,
+  conversationRegistrationKeyMigration,
+} from "../../core-daemon/storage/schema/runner.js";
 import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 import type { AccountRegistration, Conversation, QueryRecord, Session } from "../../packages/core-contracts/src/records/index.js";
 import type { AccountId, AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../packages/core-contracts/src/types.js";
@@ -73,12 +85,16 @@ function query(overrides: Partial<QueryRecord> = {}): QueryRecord {
 }
 
 function conversation(overrides: Partial<Conversation> = {}): Conversation {
+  const bot_user_id = overrides.bot_user_id === undefined ? "bot-1" : overrides.bot_user_id;
   return {
     schema_version: 1,
     project: "project-a",
     comm: "telegram" as CommId,
     account_label: "main",
-    bot_user_id: "bot-1",
+    bot_user_id,
+    // registration_id is NOT NULL and the conversation identity as of migration
+    // 008; default a unique-per-bot value so fixtures that omit it still insert.
+    registration_id: `reg-${bot_user_id ?? "none"}`,
     chat_native_id: "chat-1",
     thread_native_id: null,
     conversation_id: "conversation-1" as ConversationId,
@@ -160,7 +176,6 @@ describe("SQLite storage schema", () => {
         project: "project-a",
         agent: "claude" as AgentId,
         comm: "telegram" as CommId,
-        account_label: "main",
         bot_user_id: "bot-1",
         chat_native_id: "chat-1",
         thread_native_id: null,
@@ -169,7 +184,6 @@ describe("SQLite storage schema", () => {
         project: "project-a",
         agent: "codex" as AgentId,
         comm: "telegram" as CommId,
-        account_label: "main",
         bot_user_id: "bot-2",
         chat_native_id: "chat-1",
         thread_native_id: null,
@@ -184,21 +198,22 @@ describe("SQLite storage schema", () => {
     });
   });
 
-  it("falls back to label lookup for legacy conversations without bot_user_id", async () => {
+  it("resolves by registration_id even when bot_user_id is null", async () => {
     await withStorage(async (dbPath) => {
       const storage = await openSqliteStorage(dbPath);
-      await storage.upsertConversation(conversation());
+      await storage.upsertConversation(conversation({ registration_id: "RX" }));
       (storage as unknown as { db: { prepare(sql: string): { run(): unknown } } })
         .db
         .prepare("UPDATE conversations SET bot_user_id = NULL")
         .run();
 
+      // AGE-22: the stable surrogate key resolves the row regardless of
+      // bot_user_id (there is no account_label lookup anymore).
       const found = await storage.findConversation({
         project: "project-a",
         agent: "claude" as AgentId,
         comm: "telegram" as CommId,
-        account_label: "main",
-        bot_user_id: "bot-1",
+        registration_id: "RX",
         chat_native_id: "chat-1",
         thread_native_id: null,
       });
@@ -467,10 +482,9 @@ describe("AGE-20 conversation identity stability (phase 2)", () => {
           last_inbound_at: 99,
         }),
       );
-      // The stable id is reused — NOT re-keyed to the label-derived C2.
+      // The stable id is reused — NOT re-keyed to the fresh candidate C2.
       assert.equal(returnedId, "C1");
       const c1 = await storage.getConversation("C1" as ConversationId);
-      assert.equal(c1?.account_label, "new"); // display updated in place
       assert.equal(c1?.last_inbound_at, 99);
       // No new/duplicate row, no transcript-id split.
       assert.equal(await storage.getConversation("C2" as ConversationId), null);
@@ -495,8 +509,7 @@ describe("AGE-20 conversation identity stability (phase 2)", () => {
         project: "project-a",
         agent: "claude" as AgentId,
         comm: "telegram" as CommId,
-        account_label: "after", // label no longer matches
-        registration_id: "R9", // but the stable key does
+        registration_id: "R9", // the stable key resolves it
         chat_native_id: "chat-9",
         thread_native_id: null,
       });
@@ -571,32 +584,21 @@ describe("AGE-20 conversation surrogate identity + race (phase 3a)", () => {
   });
 });
 
-describe("AGE-20 registration-resolved account_label (phase 3b)", () => {
-  function rawConversationLabel(storage: unknown, id: string): string {
-    return (
-      (storage as { db: { prepare(sql: string): { get(p: string): { account_label: string } } } })
-        .db.prepare("SELECT account_label FROM conversations WHERE conversation_id = ?").get(id)
-    ).account_label;
-  }
+describe("AGE-22 registration-resolved account_label (no stored column)", () => {
   function relabelRegistration(storage: unknown, registrationId: string, label: string): void {
     (storage as { db: { prepare(sql: string): { run(...p: string[]): unknown } } })
       .db.prepare("UPDATE account_registrations SET account_label = ? WHERE registration_id = ?")
       .run(label, registrationId);
   }
 
-  it("surfaces the registration's CURRENT label on reads after a relabel, without re-keying conversation_id or touching the conversation", async () => {
+  it("surfaces the registration's CURRENT label on reads after a relabel, without re-keying conversation_id", async () => {
     await withStorage(async (dbPath) => {
       const storage = await openSqliteStorage(dbPath);
       await storage.putAccountRegistration(
         account({ registration_id: "R1", account_label: "old", bot_user_id: "bot-1" }),
       );
       await storage.upsertConversation(
-        conversation({
-          registration_id: "R1",
-          account_label: "old",
-          bot_user_id: "bot-1",
-          conversation_id: "C1" as ConversationId,
-        }),
+        conversation({ registration_id: "R1", bot_user_id: "bot-1", conversation_id: "C1" as ConversationId }),
       );
 
       // Relabel the registration directly (what account-relabel will do) — NO
@@ -614,59 +616,49 @@ describe("AGE-20 registration-resolved account_label (phase 3b)", () => {
         project: "project-a",
         agent: "claude" as AgentId,
         comm: "telegram" as CommId,
-        account_label: "anything", // label no longer needs to match
         registration_id: "R1",
         chat_native_id: "chat-1",
         thread_native_id: null,
       });
       assert.equal(found?.account_label, "new", "findConversation resolves it too");
-
-      // Proof we resolve via the join, not by writing: the stored column is stale.
-      assert.equal(rawConversationLabel(storage, "C1"), "old");
       await storage.close();
     });
   });
 
-  it("falls back to the stored account_label when registration_id is null (legacy row)", async () => {
+  it("resolves account_label to \"\" for an orphan/retired registration (join miss)", async () => {
     await withStorage(async (dbPath) => {
       const storage = await openSqliteStorage(dbPath);
+      // conversation references a registration_id with no matching registration
+      // (e.g. the registration was account-remove'd, or an orphan sentinel).
       await storage.upsertConversation(
-        conversation({
-          registration_id: undefined,
-          account_label: "legacy",
-          bot_user_id: "bot-x",
-          conversation_id: "CN" as ConversationId,
-        }),
-      );
-      const got = await storage.getConversation("CN" as ConversationId);
-      assert.equal(got?.account_label, "legacy");
-      await storage.close();
-    });
-  });
-
-  it("falls back to the stored account_label when registration_id has no matching registration", async () => {
-    await withStorage(async (dbPath) => {
-      const storage = await openSqliteStorage(dbPath);
-      await storage.upsertConversation(
-        conversation({
-          registration_id: "ghost",
-          account_label: "orphan",
-          bot_user_id: "bot-y",
-          conversation_id: "CO" as ConversationId,
-        }),
+        conversation({ registration_id: "orphan_CO", bot_user_id: "bot-y", conversation_id: "CO" as ConversationId }),
       );
       const got = await storage.getConversation("CO" as ConversationId);
-      assert.equal(got?.account_label, "orphan");
+      assert.equal(got?.account_label, "");
+      assert.equal(got?.registration_id, "orphan_CO");
       await storage.close();
     });
   });
 
-  it("no non-fallback behavior path keys off the stored conversations.account_label (source invariant)", async () => {
+  it("no behavior path keys off account_label — bus + both bridges resolve by registration_id (source invariant)", async () => {
     const repoRoot = resolve(import.meta.dirname, "../..");
-    const bus = await readFile(resolve(repoRoot, "core-daemon/bus.ts"), "utf8");
-    // botUserIdForConversation must prefer the stable registration_id; the label
-    // match survives only as the explicit legacy fallback.
-    assert.match(bus, /candidate\.registration_id === conversation\.registration_id/);
+    for (const f of [
+      "core-daemon/bus.ts",
+      "core-daemon/bridges/claude/bridge.ts",
+      "core-daemon/bridges/codex/bridge.ts",
+    ]) {
+      const src = await readFile(resolve(repoRoot, f), "utf8");
+      assert.match(
+        src,
+        /candidate\.registration_id === conversation\.registration_id/,
+        `${f} resolves the owning registration by registration_id`,
+      );
+      assert.doesNotMatch(
+        src,
+        /candidate\.account_label === conversation\.account_label/,
+        `${f} has no account_label fallback`,
+      );
+    }
   });
 });
 
@@ -719,5 +711,77 @@ describe("AGE-22 account_registrations PK rebuild (migration 007)", () => {
       );
       await storage.close();
     });
+  });
+});
+
+describe("AGE-22 conversations rebuild (migration 008)", () => {
+  const migrationsThrough007 = [
+    initialMigration,
+    conversationAgentIdentityMigration,
+    allowlistMigration,
+    sessionOwnerProcessMigration,
+    conversationBotIdentityMigration,
+    registrationIdentityMigration,
+    registrationPkMigration,
+  ];
+
+  it("re-keys conversations on (registration_id, chat, thread) and drops account_label", async () => {
+    const dir = await makeTempDir("acb-008-");
+    const db = new DatabaseSync(join(dir, "s.db"));
+    try {
+      const runner = new SqliteMigrationRunner(db);
+      await runner.apply(migrationsThrough007);
+      await runner.apply([conversationRegistrationKeyMigration]);
+
+      const cols = db.prepare("PRAGMA table_info(conversations)").all() as Array<{ name: string; pk: number; notnull: number }>;
+      assert.ok(!cols.some((c) => c.name === "account_label"), "account_label column is dropped");
+      assert.deepEqual(
+        cols.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name),
+        ["registration_id", "chat_native_id", "thread_native_id"],
+      );
+      assert.equal(cols.find((c) => c.name === "registration_id")?.notnull, 1, "registration_id is NOT NULL");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves a null-registration_id orphan through the rebuild with a deterministic sentinel id (no history loss)", async () => {
+    const dir = await makeTempDir("acb-008-orphan-");
+    const db = new DatabaseSync(join(dir, "s.db"));
+    try {
+      const runner = new SqliteMigrationRunner(db);
+      await runner.apply(migrationsThrough007);
+
+      // A legacy orphan: null registration_id and no bot_user_id to backfill from.
+      db.prepare(`
+        INSERT INTO conversations
+          (schema_version, project, comm, account_label, bot_user_id, registration_id,
+           chat_native_id, thread_native_id, conversation_id, agent, created_at)
+        VALUES (1, 'p', 'telegram', 'lbl', NULL, NULL, 'chat-1', '', 'conv-orphan', 'claude', 1)
+      `).run();
+      // A normal row whose registration_id backfills from (comm, bot_user_id).
+      db.prepare(`
+        INSERT INTO account_registrations
+          (schema_version, registration_id, project, comm, agent, account_label, bot_user_id, credentials_ref, created_at, updated_at)
+        VALUES (1, 'reg-ok', 'p', 'telegram', 'claude', 'main', 'bot-ok', 'ref', 1, 1)
+      `).run();
+      db.prepare(`
+        INSERT INTO conversations
+          (schema_version, project, comm, account_label, bot_user_id, registration_id,
+           chat_native_id, thread_native_id, conversation_id, agent, created_at)
+        VALUES (1, 'p', 'telegram', 'main', 'bot-ok', NULL, 'chat-2', '', 'conv-ok', 'claude', 1)
+      `).run();
+
+      await runner.apply([conversationRegistrationKeyMigration]);
+
+      const orphan = db.prepare("SELECT registration_id FROM conversations WHERE conversation_id = 'conv-orphan'").get() as { registration_id: string } | undefined;
+      assert.equal(orphan?.registration_id, "orphan_conv-orphan", "orphan preserved with deterministic sentinel");
+      const ok = db.prepare("SELECT registration_id FROM conversations WHERE conversation_id = 'conv-ok'").get() as { registration_id: string } | undefined;
+      assert.equal(ok?.registration_id, "reg-ok", "backfilled from (comm, bot_user_id)");
+      const count = db.prepare("SELECT COUNT(*) AS n FROM conversations").get() as { n: number };
+      assert.equal(count.n, 2, "no rows deleted");
+    } finally {
+      db.close();
+    }
   });
 });

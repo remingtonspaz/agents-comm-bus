@@ -433,21 +433,16 @@ export class ClaudeBridge implements AgentBridge {
       };
     }
 
-    // AGE-20 Phase 3b: prefer the stable registration_id; the account_label
-    // match is only a legacy fallback for un-backfilled (null registration_id)
-    // rows. The label here is itself registration-resolved on read.
+    // AGE-22: resolve the owning registration by its stable registration_id
+    // (NOT NULL on conversations as of migration 008). No account_label fallback.
     const registrations = await this.options.storage.listAccountRegistrations({
       project: conversation.project,
       comm: conversation.comm,
       agent: conversation.agent,
     });
-    const registration =
-      (conversation.registration_id != null
-        ? registrations.find(
-            (candidate) => candidate.registration_id === conversation.registration_id,
-          )
-        : undefined) ??
-      registrations.find((candidate) => candidate.account_label === conversation.account_label);
+    const registration = registrations.find(
+      (candidate) => candidate.registration_id === conversation.registration_id,
+    );
     if (!registration) return undefined;
     return {
       comm: conversation.comm,

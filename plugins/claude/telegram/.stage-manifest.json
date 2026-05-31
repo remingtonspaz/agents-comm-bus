@@ -994,6 +994,11 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "agents-comm-bus/dist/core-daemon/storage/schema/008_conversation_registration_key.sql",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/storage/schema/008_conversation_registration_key.sql",
+      "type": "daemon-runtime"
+    },
+    {
       "source": "agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts",
       "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/storage/schema/runner.d.ts",
       "type": "daemon-runtime"

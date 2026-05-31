@@ -269,10 +269,11 @@ export class SqliteStorage implements Storage {
       const existingId = this.findExistingConversationId(rec);
       let result: ConversationId;
       if (existingId) {
+        // AGE-22: conversations no longer store account_label (it is resolved on
+        // read from the owning registration).
         this.db
           .prepare(`
             UPDATE conversations SET
-              account_label = ?,
               bot_user_id = ?,
               registration_id = ?,
               last_inbound_at = ?,
@@ -282,7 +283,6 @@ export class SqliteStorage implements Storage {
             WHERE conversation_id = ?
           `)
           .run(
-            rec.account_label,
             rec.bot_user_id,
             rec.registration_id ?? null,
             rec.last_inbound_at,
@@ -296,13 +296,12 @@ export class SqliteStorage implements Storage {
         this.db
           .prepare(`
             INSERT INTO conversations (
-              schema_version, project, comm, account_label, bot_user_id, registration_id,
+              schema_version, project, comm, bot_user_id, registration_id,
               chat_native_id, thread_native_id, conversation_id, agent, last_inbound_at,
               last_outbound_at, last_message_id, created_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(registration_id, chat_native_id, thread_native_id) DO UPDATE SET
               bot_user_id = excluded.bot_user_id,
-              registration_id = excluded.registration_id,
               last_inbound_at = excluded.last_inbound_at,
               last_outbound_at = excluded.last_outbound_at,
               last_message_id = excluded.last_message_id,
@@ -312,7 +311,6 @@ export class SqliteStorage implements Storage {
             rec.schema_version,
             rec.project,
             rec.comm,
-            rec.account_label,
             rec.bot_user_id,
             rec.registration_id ?? null,
             rec.chat_native_id,
@@ -336,50 +334,33 @@ export class SqliteStorage implements Storage {
   }
 
   /**
-   * Resolve an existing conversation's stable conversation_id by the immutable
-   * (registration_id, chat, thread) key, falling back to the legacy
-   * (project, agent, comm, account_label, chat, thread) tuple for rows that
-   * predate registration_id. Returns null when no conversation exists yet.
+   * Resolve an existing conversation's stable conversation_id by its immutable
+   * (registration_id, chat, thread) key — the conversations primary key as of
+   * AGE-22. Returns null when no conversation exists yet (or, defensively, when
+   * the record has no registration_id, which should not happen now that the
+   * column is NOT NULL).
    */
   private findExistingConversationId(rec: Conversation): string | null {
-    if (rec.registration_id != null) {
-      const byReg = this.db
-        .prepare(`
-          SELECT conversation_id FROM conversations
-          WHERE registration_id = ? AND chat_native_id = ? AND thread_native_id = ?
-        `)
-        .get(rec.registration_id, rec.chat_native_id, dbThreadId(rec.thread_native_id)) as
-        | { conversation_id?: string }
-        | undefined;
-      if (byReg?.conversation_id) return byReg.conversation_id;
-    }
-    const byTuple = this.db
+    if (rec.registration_id == null) return null;
+    const byReg = this.db
       .prepare(`
         SELECT conversation_id FROM conversations
-        WHERE project = ? AND agent = ? AND comm = ? AND account_label = ?
-          AND chat_native_id = ? AND thread_native_id = ?
+        WHERE registration_id = ? AND chat_native_id = ? AND thread_native_id = ?
       `)
-      .get(
-        rec.project,
-        rec.agent,
-        rec.comm,
-        rec.account_label,
-        rec.chat_native_id,
-        dbThreadId(rec.thread_native_id),
-      ) as { conversation_id?: string } | undefined;
-    return byTuple?.conversation_id ?? null;
+      .get(rec.registration_id, rec.chat_native_id, dbThreadId(rec.thread_native_id)) as
+      | { conversation_id?: string }
+      | undefined;
+    return byReg?.conversation_id ?? null;
   }
 
-  // AGE-20 Phase 3b: surface a conversation's CURRENT account_label by resolving
-  // it from the owning registration (registration_id -> account_registrations),
-  // not from the stored conversations.account_label column. The stored column is
-  // only an explicit fallback for legacy rows whose registration_id is null (or
-  // whose registration no longer exists). This makes a registration relabel
-  // visible immediately on every read, with no conversation upsert required, and
-  // means no normal behavior path keys off the mutable stored label. The literal
-  // column drop is harness-gated and tracked in AGE-22.
+  // AGE-22: a conversation's account_label is resolved purely from its owning
+  // registration (registration_id -> account_registrations). conversations no
+  // longer stores account_label (the column was dropped in migration 008), so a
+  // relabel is visible immediately on every read and no behavior path keys off a
+  // mutable stored label. The join misses only for an orphan/retired
+  // registration; the row mapper surfaces "" in that case.
   private readonly conversationSelect = `
-    SELECT c.*, COALESCE(ar.account_label, c.account_label) AS effective_account_label
+    SELECT c.*, ar.account_label AS effective_account_label
     FROM conversations c
     LEFT JOIN account_registrations ar ON ar.registration_id = c.registration_id
   `;
@@ -395,14 +376,15 @@ export class SqliteStorage implements Storage {
     project: string;
     agent: AgentId;
     comm: CommId;
-    account_label: string;
     bot_user_id?: string | null;
     registration_id?: string | null;
     chat_native_id: string;
     thread_native_id: string | null;
   }): Promise<Conversation | null> {
-    // Stable identity first (AGE-20): a relabel changes account_label but not
-    // registration_id, so this still resolves the same conversation.
+    // AGE-22: resolve by the stable surrogate key (registration_id, chat,
+    // thread) first; fall back to (bot_user_id, chat, thread) for callers that
+    // only know the receiving bot. There is no account_label lookup anymore —
+    // the column is gone and label is never identity.
     if (pk.registration_id) {
       const byReg = this.db
         .prepare(`
@@ -430,21 +412,7 @@ export class SqliteStorage implements Storage {
       if (byBot) return this.conversationFromRow(byBot);
     }
 
-    const row = this.db
-      .prepare(`
-        ${this.conversationSelect}
-        WHERE c.project = ? AND c.agent = ? AND c.comm = ? AND c.account_label = ?
-          AND c.chat_native_id = ? AND c.thread_native_id = ?
-      `)
-      .get(
-        pk.project,
-        pk.agent,
-        pk.comm,
-        pk.account_label,
-        pk.chat_native_id,
-        dbThreadId(pk.thread_native_id),
-      );
-    return row ? this.conversationFromRow(row) : null;
+    return null;
   }
 
   async listConversations(filter: {
@@ -863,9 +831,9 @@ export class SqliteStorage implements Storage {
       schema_version: r.schema_version as Conversation["schema_version"],
       project: r.project as string,
       comm: r.comm as CommId,
-      // AGE-20 Phase 3b: registration-resolved current label (see conversationSelect).
-      // Falls back to the stored column for legacy/null-registration rows.
-      account_label: (r.effective_account_label ?? r.account_label) as string,
+      // AGE-22: registration-resolved current label (see conversationSelect).
+      // "" when the join misses (orphan / retired registration).
+      account_label: (r.effective_account_label ?? "") as string,
       bot_user_id: (r.bot_user_id as string | null) ?? null,
       registration_id: (r.registration_id as string | null) ?? null,
       chat_native_id: r.chat_native_id as string,

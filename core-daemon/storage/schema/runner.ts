@@ -108,6 +108,15 @@ export const registrationPkMigration: Migration = {
   },
 };
 
+export const conversationRegistrationKeyMigration: Migration = {
+  version: 8,
+  description: "re-key conversations on (registration_id, chat, thread) + drop account_label",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "008_conversation_registration_key.sql"), "utf8");
+    await ctx.exec(sql);
+  },
+};
+
 export async function runStorageMigrations(db: SqliteLike): Promise<void> {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -117,5 +126,6 @@ export async function runStorageMigrations(db: SqliteLike): Promise<void> {
     conversationBotIdentityMigration,
     registrationIdentityMigration,
     registrationPkMigration,
+    conversationRegistrationKeyMigration,
   ]);
 }

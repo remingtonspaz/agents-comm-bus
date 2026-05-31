@@ -344,6 +344,7 @@ describe("account registration CLI contract", () => {
         comm: "telegram",
         account_label: "main",
         bot_user_id: "8988792099",
+        registration_id: initial.registration_id,
         chat_native_id: "-100",
         thread_native_id: null,
         conversation_id: conversationId,
