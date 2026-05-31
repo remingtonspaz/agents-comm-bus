@@ -8103,7 +8103,12 @@ var CodexBridgeFactory = class {
 import { readdir, stat as stat3 } from "node:fs/promises";
 import path4 from "node:path";
 import { pathToFileURL } from "node:url";
+function defaultOnError({ modulePath, error }) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`[agents-comm-bus] comm adapter not loaded (${modulePath}): ${message}`);
+}
 async function loadCommAdapterFactories(options) {
+  const onError = options.onError ?? defaultOnError;
   let entries;
   try {
     entries = await readdir(options.adaptersDir);
@@ -8112,11 +8117,24 @@ async function loadCommAdapterFactories(options) {
     throw error;
   }
   const factories = [];
+  let resolved = 0;
   for (const entry of entries.sort()) {
     const modulePath = await resolveAdapterModulePath(options.adaptersDir, entry);
     if (!modulePath) continue;
-    const factory = await loadCommAdapterFactory(modulePath);
-    factories.push(factory);
+    resolved += 1;
+    try {
+      factories.push(await loadCommAdapterFactory(modulePath));
+    } catch (error) {
+      onError({ modulePath, error });
+    }
+  }
+  if (resolved > 0 && factories.length === 0) {
+    onError({
+      modulePath: options.adaptersDir,
+      error: new Error(
+        `no comm adapters loaded: ${resolved} present but all failed \u2014 daemon starting with no comm channels`
+      )
+    });
   }
   return factories;
 }
