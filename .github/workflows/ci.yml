@@ -20,7 +20,7 @@ jobs:
           node-version: 22
 
       - name: Install (workspaces)
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # AGE-29 guard: rebuilds every tracked generated artifact (daemon dist,
       # bundles, MCP shims, staged plugins) and fails if any drifted from
