@@ -784,4 +784,68 @@ describe("AGE-22 conversations rebuild (migration 008)", () => {
       db.close();
     }
   });
+
+  it("FAILS LOUD on a (registration_id, chat, thread) collision instead of silently dropping a row", async () => {
+    const dir = await makeTempDir("acb-008-collide-");
+    const db = new DatabaseSync(join(dir, "s.db"));
+    try {
+      const runner = new SqliteMigrationRunner(db);
+      await runner.apply(migrationsThrough007);
+
+      // Two legacy rows the OLD PK (…, account_label, …) allowed but which
+      // collide on the new (registration_id, chat, thread) surrogate key. The
+      // rebuild must reject (plain INSERT), NOT silently skip the second row.
+      for (const [conv, label] of [["cv1", "a"], ["cv2", "b"]] as const) {
+        db.prepare(`
+          INSERT INTO conversations
+            (schema_version, project, comm, account_label, bot_user_id, registration_id,
+             chat_native_id, thread_native_id, conversation_id, agent, created_at)
+          VALUES (1, 'p', 'telegram', ?, 'bot-z', 'Rdup', 'cc', '', ?, 'claude', 1)
+        `).run(label, conv);
+      }
+
+      await assert.rejects(runner.apply([conversationRegistrationKeyMigration]));
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves conversation_id so dependent FKs (transcript_refs/sessions/queries) stay valid (foreign_key_check)", async () => {
+    const dir = await makeTempDir("acb-008-fk-");
+    const db = new DatabaseSync(join(dir, "s.db"));
+    try {
+      const runner = new SqliteMigrationRunner(db);
+      await runner.apply(migrationsThrough007);
+
+      db.prepare(`
+        INSERT INTO account_registrations
+          (schema_version, registration_id, project, comm, agent, account_label, bot_user_id, credentials_ref, created_at, updated_at)
+        VALUES (1, 'reg-fk', 'p', 'telegram', 'claude', 'main', 'bot-fk', 'ref', 1, 1)
+      `).run();
+      db.prepare(`
+        INSERT INTO conversations
+          (schema_version, project, comm, account_label, bot_user_id, registration_id,
+           chat_native_id, thread_native_id, conversation_id, agent, created_at)
+        VALUES (1, 'p', 'telegram', 'main', 'bot-fk', 'reg-fk', 'chat-fk', '', 'conv-fk', 'claude', 1)
+      `).run();
+      // A dependent row that FK-references the conversation by conversation_id.
+      db.prepare(`
+        INSERT INTO transcript_refs
+          (conversation_id, message_id, direction, transcript_path, line_number, created_at)
+        VALUES ('conv-fk', 'telegram:1', 'inbound', '/tmp/t.jsonl', 0, 1)
+      `).run();
+
+      await runner.apply([conversationRegistrationKeyMigration]);
+
+      // conversation_id is preserved by the rebuild, so no dependent dangles.
+      const violations = db.prepare("PRAGMA foreign_key_check").all();
+      assert.equal(violations.length, 0, "no dangling foreign-key references after the rebuild");
+      const surviving = db.prepare("SELECT registration_id FROM conversations WHERE conversation_id = 'conv-fk'").get() as { registration_id: string } | undefined;
+      assert.equal(surviving?.registration_id, "reg-fk");
+      const ref = db.prepare("SELECT conversation_id FROM transcript_refs WHERE message_id = 'telegram:1'").get() as { conversation_id: string } | undefined;
+      assert.equal(ref?.conversation_id, "conv-fk");
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -35,7 +35,7 @@ SET registration_id = 'orphan_' || conversation_id
 WHERE registration_id IS NULL;
 
 -- 3. Rebuild without account_label and with the surrogate PK.
-CREATE TABLE conversations_v2 (
+CREATE TABLE IF NOT EXISTS conversations_v2 (
   schema_version INTEGER NOT NULL,
   project TEXT NOT NULL,
   comm TEXT NOT NULL,
@@ -54,7 +54,13 @@ CREATE TABLE conversations_v2 (
   CHECK (metadata_json IS NULL OR json_valid(metadata_json))
 );
 
-INSERT OR IGNORE INTO conversations_v2 (
+-- Plain INSERT (not OR IGNORE): the migration promise is "no history loss", so a
+-- collision on the new (registration_id, chat, thread) PK or the conversation_id
+-- unique key must FAIL LOUD, not silently skip a conversation — a skipped row
+-- would (under foreign_keys = OFF) strand its queries/sessions/transcript refs on
+-- a conversation_id that no longer exists. The backfill + orphan sentinel above
+-- guarantee a non-null, collision-free key for well-formed source data.
+INSERT INTO conversations_v2 (
   schema_version, project, comm, bot_user_id, registration_id, chat_native_id,
   thread_native_id, conversation_id, agent, last_inbound_at, last_outbound_at,
   last_message_id, created_at, metadata_json

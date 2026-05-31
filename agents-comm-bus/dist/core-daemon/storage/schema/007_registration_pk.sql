@@ -30,7 +30,11 @@ CREATE TABLE IF NOT EXISTS account_registrations_v2 (
   CHECK (metadata_json IS NULL OR json_valid(metadata_json))
 );
 
-INSERT OR IGNORE INTO account_registrations_v2 (
+-- Plain INSERT (not OR IGNORE): this is the canonical identity rebuild, so a
+-- malformed source row (duplicate / null registration_id) must fail loud rather
+-- than be silently dropped. Migration 006 backfilled registration_id and its
+-- unique index already guarantees uniqueness, so a valid source never collides.
+INSERT INTO account_registrations_v2 (
   schema_version, registration_id, project, comm, agent, account_label,
   bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
 )
