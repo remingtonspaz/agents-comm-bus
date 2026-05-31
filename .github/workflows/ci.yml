@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [universal-overhaul, main]
+  pull_request:
+
+# Windows runner on purpose: the committed generated artifacts (esbuild/tsc
+# output) are built on Windows, so the clean-build drift check below must run on
+# the same OS to avoid spurious cross-platform byte differences — and the
+# repo's wake/console behaviour is Windows-specific too.
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install (workspaces)
+        run: npm install --no-audit --no-fund
+
+      # AGE-29 guard: rebuilds every tracked generated artifact (daemon dist,
+      # bundles, MCP shims, staged plugins) and fails if any drifted from
+      # source — e.g. the install path changed without rebundling the shims.
+      # This also performs the full build the later steps rely on.
+      - name: Verify clean build (no stale generated artifacts)
+        run: npm run verify:clean-build
+
+      - name: Typecheck (agents-comm-bus)
+        run: npm --workspace agents-comm-bus run typecheck
+
+      - name: Verify staged plugins
+        run: npm run stage:plugins:verify
+
+      - name: Root architecture tests
+        run: npm test

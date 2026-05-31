@@ -421,7 +421,13 @@ version-compatible handshake before deciding whether to reuse or respawn.
   call `ensureDaemon()` will launch the wrong file (or a library-only
   daemon with no `main()`). In a lab with an always-running daemon this
   hides because the bundle's discovery probe finds the live daemon and
-  skips the spawn. See commit `438f48b`.
+  skips the spawn. See commit `438f48b`. The shim also inlines the whole
+  central-install path (`executeInstallPlan` etc.), so the same staleness bit
+  AGE-23 Phase B / AGE-26 (missing schema sidecars + ESM pins). **`npm run
+  verify:clean-build` (AGE-29) now guards this**: it rebuilds every tracked
+  generated artifact and fails if any drifted from source. Run it (and the CI
+  on `windows-latest` runs it) after touching the install path / daemon /
+  adapters; it's the enforcement for this whole anti-pattern.
 - **Route outbound by `bot_user_id`, never by `account_label` (AGE-15).**
   `registrationFor` resolves `target.account` via `getAccountByBot` ONLY; an
   account label fails loud with an actionable error. The old label fallback
