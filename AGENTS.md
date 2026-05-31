@@ -287,6 +287,28 @@ version-compatible handshake before deciding whether to reuse or respawn.
 - **Composition root pattern.** `daemon.ts` is the library; `serve.ts` is
   the only file that wires it to specific adapters. Anything in `daemon.ts`
   with the words "claude" or "telegram" is a smell.
+- **Daemon version vs IPC protocol (these are different axes — don't conflate).**
+  Two version constants live in `core-daemon/config.ts`:
+  - `IPC_PROTOCOL_VERSION` is the **wire/schema contract** between the agent
+    surfaces (MCP shim + hooks) and the daemon. Compatibility is keyed on the
+    **major** component (`isProtocolCompatible` / `protocolMajor`). This is the
+    ONLY thing that decides whether a running daemon can serve a client.
+  - `DAEMON_VERSION` is the **bundle/artifact version**. It governs
+    central-install superseding of `bin/daemon.js` (highest-wins) and the
+    AGE-25 CI version-bump gate. It is **not** a runtime compatibility signal.
+
+  `ensureDaemon` reuse is therefore gated on protocol only: a running daemon at
+  a *different* `DAEMON_VERSION` but the same protocol major is **reused, never
+  terminated** — so a 0.2.1 shim happily talks to a 0.2.2 daemon. Termination
+  happens only on protocol **incompatibility**, and an older-protocol daemon is
+  replaced while a *newer*-protocol daemon is never downgraded (it errors asking
+  for a session restart). Practical consequence: a non-breaking `DAEMON_VERSION`
+  bump (CLI/adapter/daemon patch) does **not** require a coordinated fleet
+  restart; only an `IPC_PROTOCOL_VERSION` **major** bump does — so bump the
+  protocol major (and only then) when you change the wire/schema in a
+  backward-incompatible way. The earlier exact-`DAEMON_VERSION`-equality reuse
+  check (in both directions) is what let two shims at different patch versions
+  terminate each other's daemon forever; see `bootstrap/ensure-daemon.ts`.
 - **IPC method namespacing.** Bridges own `<agent>_*` methods (e.g.
   `claude_register_session`). Comm factories own `<comm>_*` methods (e.g.
   `telegram_send` on the daemon IPC side). The MCP shim exposes generic

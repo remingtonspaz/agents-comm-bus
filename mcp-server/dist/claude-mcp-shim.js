@@ -24783,11 +24783,17 @@ import path3 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.2";
+var DAEMON_VERSION = "0.2.3";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
+function protocolMajor(version2) {
+  return version2.split(".", 1)[0] ?? version2;
+}
+function isProtocolCompatible(daemonProtocolVersion, clientProtocolVersion) {
+  return protocolMajor(daemonProtocolVersion) === protocolMajor(clientProtocolVersion);
+}
 
 // ../agents-comm-bus/dist/core-daemon/paths.js
 import os from "node:os";
@@ -24996,36 +25002,37 @@ async function ensureDaemon(options = {}) {
   await mkdir2(paths.root, { recursive: true });
   const timeoutMs = options.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
-  const desiredDaemonVersion = options.desiredDaemonVersion ?? DAEMON_VERSION;
+  const clientProtocolVersion = options.protocolVersion ?? IPC_PROTOCOL_VERSION;
   const deadline = Date.now() + timeoutMs;
   const probe = options.probeDaemon ?? ((port) => probeDaemon({
     port,
     clientVersion: options.clientVersion ?? DAEMON_VERSION,
-    protocolVersion: options.protocolVersion ?? IPC_PROTOCOL_VERSION,
+    protocolVersion: clientProtocolVersion,
     metadata: options.metadata,
     timeoutMs: Math.min(1e3, retryMs * 4)
   }));
   const existing = await probeFromPortFile(paths.portFile, probe);
   if (existing) {
-    if (existing.hello.daemonVersion !== desiredDaemonVersion) {
-      await terminateMismatchedDaemon({
-        paths,
-        livePort: existing.port,
-        liveVersion: existing.hello.daemonVersion,
-        desiredVersion: desiredDaemonVersion,
-        terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
-        isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
-        retryMs
-      });
-    } else {
+    const reuse = classifyDaemonReuse(existing.hello.protocolVersion, clientProtocolVersion);
+    if (reuse === "compatible") {
       return { ...existing, spawned: false };
     }
-  }
-  const matchingAfterRestart = await probeFromPortFile(paths.portFile, probe);
-  if (matchingAfterRestart) {
-    if (matchingAfterRestart.hello.daemonVersion === desiredDaemonVersion) {
-      return { ...matchingAfterRestart, spawned: false };
+    if (reuse === "daemon_newer") {
+      throw new Error(`agents-comm-bus daemon protocol ${existing.hello.protocolVersion} is newer than this client's ${clientProtocolVersion}; restart this session to pick up the newer agent surface`);
     }
+    await terminateMismatchedDaemon({
+      paths,
+      livePort: existing.port,
+      liveProtocol: existing.hello.protocolVersion,
+      clientProtocol: clientProtocolVersion,
+      terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
+      isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+      retryMs
+    });
+  }
+  const afterTerminate = await probeFromPortFile(paths.portFile, probe);
+  if (afterTerminate && classifyDaemonReuse(afterTerminate.hello.protocolVersion, clientProtocolVersion) === "compatible") {
+    return { ...afterTerminate, spawned: false };
   }
   await cleanupStalePidAndPort({
     pidFile: paths.pidFile,
@@ -25060,17 +25067,22 @@ async function ensureDaemon(options = {}) {
   }
   throw new Error(`Timed out starting agents-comm-bus daemon under ${paths.root}.`);
 }
+function classifyDaemonReuse(daemonProtocol, clientProtocol) {
+  if (isProtocolCompatible(daemonProtocol, clientProtocol))
+    return "compatible";
+  return Number(protocolMajor(daemonProtocol)) > Number(protocolMajor(clientProtocol)) ? "daemon_newer" : "daemon_older";
+}
 async function terminateMismatchedDaemon(input) {
   const pid = await readPidFile(input.paths.pidFile);
   if (pid === void 0) {
-    throw new Error(`agents-comm-bus daemon on port ${input.livePort} is version ${input.liveVersion}, but ${input.desiredVersion} is required; cannot restart because ${input.paths.pidFile} is missing`);
+    throw new Error(`agents-comm-bus daemon on port ${input.livePort} speaks incompatible IPC protocol ${input.liveProtocol} (client ${input.clientProtocol}); cannot restart because ${input.paths.pidFile} is missing`);
   }
   await input.terminateDaemon(pid);
   for (let attempt = 0; attempt < 20 && input.isPidAlive(pid); attempt += 1) {
     await sleep(input.retryMs);
   }
   if (input.isPidAlive(pid)) {
-    throw new Error(`agents-comm-bus daemon pid ${pid} is version ${input.liveVersion}, but ${input.desiredVersion} is required; failed to terminate old daemon`);
+    throw new Error(`agents-comm-bus daemon pid ${pid} speaks incompatible IPC protocol ${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
   }
   await rm2(input.paths.pidFile, { force: true });
   await rm2(input.paths.portFile, { force: true });

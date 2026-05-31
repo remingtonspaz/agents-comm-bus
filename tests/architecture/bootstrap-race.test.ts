@@ -114,7 +114,44 @@ describe("ensureDaemon", () => {
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(port));
   });
 
-  it("terminates and replaces a daemon with an older daemon version", async () => {
+  it("reuses a daemon with a different bundle version when the IPC protocol is compatible", async () => {
+    // The whole point of the protocol-only reuse contract: a daemon at a
+    // different DAEMON_VERSION (here, NEWER) but the SAME IPC protocol must be
+    // talked to, never terminated. Keying reuse on daemon-version equality is
+    // what made two shims at different patch versions respawn-fight forever.
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.pidFile, "12345\n", "utf8");
+    await writeFile(paths.portFile, "41117\n", "utf8");
+
+    let terminated = false;
+    let spawned = false;
+
+    const result = await ensureDaemon({
+      stateRoot,
+      isPidAlive: () => true,
+      terminateDaemon: () => {
+        terminated = true;
+      },
+      probeDaemon: async (candidatePort) => {
+        assert.equal(candidatePort, 41_117);
+        return { ...daemonHello(), daemonVersion: "999.0.0" };
+      },
+      spawnDaemon: async () => {
+        spawned = true;
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.equal(terminated, false, "a protocol-compatible daemon must not be terminated");
+    assert.equal(spawned, false, "no respawn for a protocol-compatible daemon");
+    assert.equal(result.spawned, false);
+    assert.equal(result.port, 41_117);
+  });
+
+  it("terminates and replaces a daemon speaking an older incompatible IPC protocol", async () => {
     const stateRoot = await tempStateRoot();
     const paths = resolveStatePaths({ stateRoot });
     await mkdir(paths.root, { recursive: true });
@@ -128,7 +165,6 @@ describe("ensureDaemon", () => {
 
     const result = await ensureDaemon({
       stateRoot,
-      desiredDaemonVersion: DAEMON_VERSION,
       isPidAlive: (pid) => pid === 12_345 && oldPidAlive,
       terminateDaemon: (pid) => {
         terminatedPid = pid;
@@ -136,7 +172,7 @@ describe("ensureDaemon", () => {
       },
       probeDaemon: async (candidatePort) => {
         if (candidatePort === 41_117) {
-          return { ...daemonHello(), daemonVersion: "0.0.1" };
+          return { ...daemonHello(), protocolVersion: "0.9.0" };
         }
         assert.equal(candidatePort, newPort);
         return daemonHello();
@@ -156,7 +192,34 @@ describe("ensureDaemon", () => {
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(newPort));
   });
 
-  it("refuses a version-mismatched daemon when its pid is missing", async () => {
+  it("refuses to downgrade a daemon speaking a newer IPC protocol", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.pidFile, "12345\n", "utf8");
+    await writeFile(paths.portFile, "41121\n", "utf8");
+
+    let terminated = false;
+    await assert.rejects(
+      ensureDaemon({
+        stateRoot,
+        isPidAlive: () => true,
+        terminateDaemon: () => {
+          terminated = true;
+        },
+        probeDaemon: async (candidatePort) => {
+          assert.equal(candidatePort, 41_121);
+          return { ...daemonHello(), protocolVersion: "2.0.0" };
+        },
+        timeoutMs: 100,
+        retryMs: 5,
+      }),
+      /protocol 2\.0\.0 is newer than this client/,
+    );
+    assert.equal(terminated, false, "must not terminate (downgrade) a newer-protocol daemon");
+  });
+
+  it("refuses a protocol-incompatible daemon when its pid is missing", async () => {
     const stateRoot = await tempStateRoot();
     const paths = resolveStatePaths({ stateRoot });
     await mkdir(paths.root, { recursive: true });
@@ -167,7 +230,7 @@ describe("ensureDaemon", () => {
         stateRoot,
         probeDaemon: async (candidatePort) => {
           assert.equal(candidatePort, 41_119);
-          return { ...daemonHello(), daemonVersion: "0.0.1" };
+          return { ...daemonHello(), protocolVersion: "0.9.0" };
         },
         timeoutMs: 100,
         retryMs: 5,

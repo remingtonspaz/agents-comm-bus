@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, } from "../config.js";
+import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, isProtocolCompatible, protocolMajor, } from "../config.js";
 import { resolveStatePaths } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
 import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
@@ -10,37 +10,47 @@ export async function ensureDaemon(options = {}) {
     await mkdir(paths.root, { recursive: true });
     const timeoutMs = options.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
     const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
-    const desiredDaemonVersion = options.desiredDaemonVersion ?? DAEMON_VERSION;
+    const clientProtocolVersion = options.protocolVersion ?? IPC_PROTOCOL_VERSION;
     const deadline = Date.now() + timeoutMs;
     const probe = options.probeDaemon ?? ((port) => defaultProbeDaemon({
         port,
         clientVersion: options.clientVersion ?? DAEMON_VERSION,
-        protocolVersion: options.protocolVersion ?? IPC_PROTOCOL_VERSION,
+        protocolVersion: clientProtocolVersion,
         metadata: options.metadata,
         timeoutMs: Math.min(1_000, retryMs * 4),
     }));
+    // Reuse is gated on the IPC PROTOCOL, never on DAEMON_VERSION. A running
+    // daemon whose wire/schema contract is compatible can serve this client
+    // regardless of its bundle version: DAEMON_VERSION governs central-install
+    // superseding + CI, not whether an already-running daemon can be talked to.
+    // The old exact daemon-version equality (in BOTH directions) is what let two
+    // shims at different patch versions terminate each other's daemon forever.
+    // See AGENTS.md "Daemon version vs IPC protocol".
     const existing = await probeFromPortFile(paths.portFile, probe);
     if (existing) {
-        if (existing.hello.daemonVersion !== desiredDaemonVersion) {
-            await terminateMismatchedDaemon({
-                paths,
-                livePort: existing.port,
-                liveVersion: existing.hello.daemonVersion,
-                desiredVersion: desiredDaemonVersion,
-                terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
-                isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
-                retryMs,
-            });
-        }
-        else {
+        const reuse = classifyDaemonReuse(existing.hello.protocolVersion, clientProtocolVersion);
+        if (reuse === "compatible") {
             return { ...existing, spawned: false };
         }
-    }
-    const matchingAfterRestart = await probeFromPortFile(paths.portFile, probe);
-    if (matchingAfterRestart) {
-        if (matchingAfterRestart.hello.daemonVersion === desiredDaemonVersion) {
-            return { ...matchingAfterRestart, spawned: false };
+        if (reuse === "daemon_newer") {
+            throw new Error(`agents-comm-bus daemon protocol ${existing.hello.protocolVersion} is newer than this ` +
+                `client's ${clientProtocolVersion}; restart this session to pick up the newer agent surface`);
         }
+        // reuse === "daemon_older": incompatible OLDER protocol — terminate + respawn.
+        await terminateMismatchedDaemon({
+            paths,
+            livePort: existing.port,
+            liveProtocol: existing.hello.protocolVersion,
+            clientProtocol: clientProtocolVersion,
+            terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
+            isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+            retryMs,
+        });
+    }
+    const afterTerminate = await probeFromPortFile(paths.portFile, probe);
+    if (afterTerminate &&
+        classifyDaemonReuse(afterTerminate.hello.protocolVersion, clientProtocolVersion) === "compatible") {
+        return { ...afterTerminate, spawned: false };
     }
     await cleanupStalePidAndPort({
         pidFile: paths.pidFile,
@@ -76,20 +86,36 @@ export async function ensureDaemon(options = {}) {
     }
     throw new Error(`Timed out starting agents-comm-bus daemon under ${paths.root}.`);
 }
+/**
+ * Classify a running daemon's IPC protocol against this client's, for the reuse
+ * decision. Keys on protocol MAJOR only — DAEMON_VERSION is irrelevant here (it
+ * gates central-install supersede + CI, not live reuse).
+ *   - "compatible"  : same protocol major → reuse the running daemon as-is.
+ *   - "daemon_older": daemon's protocol major is older → terminate + respawn.
+ *   - "daemon_newer": daemon's protocol major is newer → do NOT downgrade it;
+ *                     the session must restart to pick up the newer surface.
+ */
+function classifyDaemonReuse(daemonProtocol, clientProtocol) {
+    if (isProtocolCompatible(daemonProtocol, clientProtocol))
+        return "compatible";
+    return Number(protocolMajor(daemonProtocol)) > Number(protocolMajor(clientProtocol))
+        ? "daemon_newer"
+        : "daemon_older";
+}
 async function terminateMismatchedDaemon(input) {
     const pid = await readPidFile(input.paths.pidFile);
     if (pid === undefined) {
-        throw new Error(`agents-comm-bus daemon on port ${input.livePort} is version ` +
-            `${input.liveVersion}, but ${input.desiredVersion} is required; ` +
-            `cannot restart because ${input.paths.pidFile} is missing`);
+        throw new Error(`agents-comm-bus daemon on port ${input.livePort} speaks incompatible IPC ` +
+            `protocol ${input.liveProtocol} (client ${input.clientProtocol}); cannot ` +
+            `restart because ${input.paths.pidFile} is missing`);
     }
     await input.terminateDaemon(pid);
     for (let attempt = 0; attempt < 20 && input.isPidAlive(pid); attempt += 1) {
         await sleep(input.retryMs);
     }
     if (input.isPidAlive(pid)) {
-        throw new Error(`agents-comm-bus daemon pid ${pid} is version ${input.liveVersion}, ` +
-            `but ${input.desiredVersion} is required; failed to terminate old daemon`);
+        throw new Error(`agents-comm-bus daemon pid ${pid} speaks incompatible IPC protocol ` +
+            `${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
     }
     await rm(input.paths.pidFile, { force: true });
     await rm(input.paths.portFile, { force: true });
