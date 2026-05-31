@@ -74,6 +74,20 @@ describe("resolveDevConfig — valid marker", () => {
     assert.ok(r.env.AGENTS_COMM_BUS_BIN);
     assert.equal(r.env.AGENTS_COMM_BUS_ROOT, undefined, "escaping stateRoot must be dropped");
   });
+
+  it("tolerates a leading UTF-8 BOM (Windows editors / PowerShell write one)", async () => {
+    // A BOM made JSON.parse throw -> resolveDevConfig rejected a valid marker,
+    // silently dropping a dev checkout back to production-mode resolution.
+    const root = await project(
+      String.fromCharCode(0xfeff) + JSON.stringify({ daemonBin: "agents-comm-bus/dist/core-daemon/serve.js" }),
+    );
+    const r = resolveDevConfig(root);
+    assert.equal(r.status, "applied", "a BOM must not reject an otherwise-valid marker");
+    assert.equal(
+      r.env.AGENTS_COMM_BUS_BIN,
+      path.join(root, "agents-comm-bus/dist/core-daemon/serve.js"),
+    );
+  });
 });
 
 describe("resolveDevConfig — rejected (negative cases)", () => {

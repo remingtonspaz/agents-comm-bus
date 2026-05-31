@@ -31,6 +31,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { runCentralInstall as defaultRunCentralInstall } from "./run-central-install.js";
+import { stripBom } from "./strip-bom.js";
 
 export const INSTALL_STAMP_NAME = "install-stamp.json";
 
@@ -101,7 +102,7 @@ export async function readInstallStamp(pluginInstallDir, deps = {}) {
   const read = deps.readFile ?? readFile;
   try {
     const raw = await read(path.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stripBom(raw));
     if (
       !parsed ||
       parsed.schema_version !== 1 ||

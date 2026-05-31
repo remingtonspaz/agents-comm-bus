@@ -3662,7 +3662,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.1";
+var DAEMON_VERSION = "0.2.2";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 
@@ -4635,7 +4635,7 @@ import path4 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.1";
+var DAEMON_VERSION2 = "0.2.2";
 var IPC_PROTOCOL_VERSION2 = "1.0.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -5209,6 +5209,13 @@ function join2(dir, name) {
 // ../hosts/common/install/node-fs-seam.js
 import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile4, chmod } from "node:fs/promises";
 import path5 from "node:path";
+
+// ../hosts/common/install/strip-bom.js
+function stripBom(text) {
+  return typeof text === "string" && text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+}
+
+// ../hosts/common/install/node-fs-seam.js
 function createAtomicNodeFsSeam() {
   return {
     mkdirp: async (dir) => {
@@ -5249,7 +5256,7 @@ async function pathExists(p) {
 }
 async function readJsonOrNull(p) {
   try {
-    return JSON.parse(await readFile4(p, "utf8"));
+    return JSON.parse(stripBom(await readFile4(p, "utf8")));
   } catch {
     return null;
   }
@@ -5370,7 +5377,7 @@ async function readInstallStamp(pluginInstallDir, deps = {}) {
   const read = deps.readFile ?? readFile6;
   try {
     const raw = await read(path8.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stripBom(raw));
     if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string") {
       return null;
     }
@@ -5441,7 +5448,7 @@ function resolveDevConfig(projectRoot, deps = {}) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(readFile9(markerPath));
+    parsed = JSON.parse(stripBom(readFile9(markerPath)));
   } catch (error) {
     return {
       env: {},

@@ -3657,7 +3657,7 @@ import { mkdir as mkdir5 } from "node:fs/promises";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.1";
+var DAEMON_VERSION = "0.2.2";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {

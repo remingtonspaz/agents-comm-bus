@@ -27,6 +27,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
+import { stripBom } from "./strip-bom.js";
+
 export const DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 
 /**
@@ -56,7 +58,9 @@ export function resolveDevConfig(projectRoot, deps = {}) {
 
   let parsed;
   try {
-    parsed = JSON.parse(readFile(markerPath));
+    // stripBom: a UTF-8 BOM (common from Windows editors / PowerShell) would
+    // otherwise make JSON.parse throw and wrongly reject a valid dev marker.
+    parsed = JSON.parse(stripBom(readFile(markerPath)));
   } catch (error) {
     // Present but unparseable: reject — never enable dev mode on a broken marker.
     return {

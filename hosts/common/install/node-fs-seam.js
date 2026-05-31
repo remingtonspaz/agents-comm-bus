@@ -8,6 +8,8 @@
 import { mkdir, copyFile, writeFile, rename, access, readFile, chmod } from "node:fs/promises";
 import path from "node:path";
 
+import { stripBom } from "./strip-bom.js";
+
 /**
  * Real filesystem seam backed by node:fs/promises.
  * @returns {import("./reconcile-central-install.js").FsSeam}
@@ -97,7 +99,7 @@ async function pathExists(p) {
 /** @param {string} p */
 async function readJsonOrNull(p) {
   try {
-    return JSON.parse(await readFile(p, "utf8"));
+    return JSON.parse(stripBom(await readFile(p, "utf8")));
   } catch {
     return null;
   }
