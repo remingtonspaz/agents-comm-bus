@@ -14,6 +14,10 @@ export declare class TelegramCommAdapterFactory implements CommAdapterFactory {
         credentials: Record<string, unknown>;
         accountId: AccountId;
     } | undefined>;
+    probeIdentity(credentials: Record<string, unknown>): Promise<{
+        accountId: AccountId;
+        accountUsername?: string | null;
+    }>;
     create(credentials: Record<string, unknown>, accountId: AccountId, context?: CommAdapterCreateContext): CommAdapter;
     ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }

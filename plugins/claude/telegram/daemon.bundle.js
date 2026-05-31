@@ -5848,6 +5848,8 @@ async function runDaemon(options) {
       bus,
       ipcMethods,
       bridgesByMethod,
+      commAdapterFactories: options.commAdapterFactories,
+      env,
       socket,
       reloadRegistrations
     })
@@ -6201,6 +6203,9 @@ async function dispatchIpc(request, context) {
   if (request.method === "reload_registrations") {
     return context.reloadRegistrations(parseReloadOptions(params));
   }
+  if (request.method === "probe_comm_identity") {
+    return probeCommIdentity(params, context.commAdapterFactories, context.env);
+  }
   const bridge = context.bridgesByMethod.get(request.method);
   if (bridge) {
     return bridge.handleIpcMethod(request.method, params, { socket: context.socket });
@@ -6210,6 +6215,29 @@ async function dispatchIpc(request, context) {
     return commHandler(params, { socket: context.socket });
   }
   throw new Error(`unknown IPC method: ${request.method}`);
+}
+async function probeCommIdentity(params, factories, env) {
+  const comm = typeof params.comm === "string" ? params.comm : null;
+  if (!comm) {
+    throw new Error("probe_comm_identity requires params.comm");
+  }
+  const credentials = params.credentials && typeof params.credentials === "object" ? params.credentials : null;
+  if (!credentials) {
+    throw new Error("probe_comm_identity requires params.credentials");
+  }
+  const factory = factories.find((candidate) => candidate.commId === comm);
+  if (!factory) {
+    throw new Error(`no comm adapter factory is loaded for ${comm}`);
+  }
+  if (!factory.probeIdentity) {
+    throw new Error(`comm adapter ${comm} does not support identity probing`);
+  }
+  const identity = await factory.probeIdentity(credentials, env);
+  return {
+    comm,
+    account_id: String(identity.accountId),
+    account_username: identity.accountUsername ?? null
+  };
 }
 function parseReloadOptions(params) {
   const raw = params.forceCredentialRefresh;

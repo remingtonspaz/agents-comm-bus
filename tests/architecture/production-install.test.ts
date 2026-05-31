@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, readFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -212,6 +212,12 @@ describe("production marketplace install (release gate)", () => {
       const isolated = await isolatedCopy(agent, comm);
       const cli = path.join(isolated, "cli.bundle.js");
       assert.ok(existsSync(cli), "staged plugin must contain cli.bundle.js");
+      const cliText = await readFile(cli, "utf8");
+      assert.doesNotMatch(
+        cliText,
+        /node-telegram-bot-api|TelegramCommAdapterFactory/,
+        "CLI bundle must be comm-neutral; token identity probing belongs behind daemon IPC",
+      );
 
       // The CLI is the first user action (account-add). Run it with NO args: it
       // links the whole graph, then prints help and exits 0 — no daemon/DB.
@@ -329,6 +335,165 @@ describe("production marketplace install (release gate)", () => {
       }
     } finally {
       child.kill("SIGTERM");
+    }
+  });
+
+  it("probe_comm_identity dispatches through loaded comm adapter factories", async () => {
+    const stateRoot = await tempDir("acb-probe-identity-state-");
+    const adaptersDir = await tempDir("acb-probe-identity-adapters-");
+    await writeFile(path.join(adaptersDir, "package.json"), '{ "type": "module" }\n', "utf8");
+    await writeFile(
+      path.join(adaptersDir, "fake.js"),
+      `export function createCommAdapterFactory() {
+        return {
+          commId: "fake",
+          async resolveCredentials() { return undefined; },
+          create() { throw new Error("not used"); },
+          async probeIdentity(credentials) {
+            return {
+              accountId: "acct-" + String(credentials.botToken),
+              accountUsername: "user-" + String(credentials.botToken),
+            };
+          },
+        };
+      }\n`,
+      "utf8",
+    );
+    await writeFile(
+      path.join(adaptersDir, "noprobe.js"),
+      `export function createCommAdapterFactory() {
+        return {
+          commId: "noprobe",
+          async resolveCredentials() { return undefined; },
+          create() { throw new Error("not used"); },
+        };
+      }\n`,
+      "utf8",
+    );
+
+    const daemonEntry = path.join(
+      repoRoot,
+      "agents-comm-bus",
+      "dist",
+      "core-daemon",
+      "serve.js",
+    );
+    const child = spawn(process.execPath, [daemonEntry, "serve"], {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        AGENTS_COMM_BUS_BIN: daemonEntry,
+        AGENTS_COMM_BUS_ADAPTERS_DIR: adaptersDir,
+        AGENTS_COMM_BUS_STATE_ROOT: stateRoot,
+      },
+    });
+    try {
+      const port = await waitForPortFile(stateRoot);
+      const client = await connectIpc({
+        port,
+        clientVersion: DAEMON_VERSION,
+        timeoutMs: 2_000,
+        metadata: { test: "probe-comm-identity" },
+      });
+      try {
+        const probed = await client.request("probe_comm_identity", {
+          comm: "fake",
+          credentials: { botToken: "token-1" },
+        });
+        assert.deepEqual(probed, {
+          comm: "fake",
+          account_id: "acct-token-1",
+          account_username: "user-token-1",
+        });
+        await assert.rejects(
+          () => client.request("probe_comm_identity", {
+            comm: "missing",
+            credentials: { botToken: "token-1" },
+          }),
+          /no comm adapter factory is loaded for missing/,
+        );
+        await assert.rejects(
+          () => client.request("probe_comm_identity", {
+            comm: "noprobe",
+            credentials: { botToken: "token-1" },
+          }),
+          /comm adapter noprobe does not support identity probing/,
+        );
+      } finally {
+        client.close();
+      }
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
+
+  it("staged CLI can bootstrap a fresh production central install before probing", async () => {
+    const isolated = await isolatedCopy("claude", "telegram");
+    const homeRoot = await tempDir("acb-cli-bootstrap-home-");
+    const stateRoot = path.join(homeRoot, ".agents-comm-bus");
+    const fakeAdapter = path.join(isolated, "telegram.adapter.bundle.js");
+    const cli = path.join(isolated, "cli.bundle.js");
+    assert.ok(existsSync(cli), "staged plugin must contain cli.bundle.js");
+
+    // Replace only the staged adapter with a tiny no-network factory. The CLI
+    // must still central-install and spawn the real daemon bundle before probing.
+    await writeFile(
+      fakeAdapter,
+      `export function createCommAdapterFactory() {
+        return {
+          commId: "telegram",
+          async resolveCredentials() { return undefined; },
+          fallbackFromEnv() { return undefined; },
+          create() { throw new Error("not used by this test"); },
+          async probeIdentity(credentials) {
+            return {
+              accountId: "bot-from-" + String(credentials.botToken),
+              accountUsername: "bootstrap_bot",
+            };
+          },
+          ipcMethods() { return new Map(); },
+        };
+      }\n`,
+      "utf8",
+    );
+
+    try {
+      const result = await run(
+        process.execPath,
+        [
+          cli,
+          "account-add",
+          "--project",
+          isolated,
+          "--agent",
+          "claude",
+          "--account-label",
+          "main",
+          "--bot-token",
+          "fake-token",
+        ],
+        {
+          cwd: isolated,
+          timeout: 30000,
+          env: {
+            ...process.env,
+            AGENTS_COMM_BUS_ROOT: stateRoot,
+            HOME: homeRoot,
+            USERPROFILE: homeRoot,
+          },
+        },
+      );
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.bot_user_id, "bot-from-fake-token");
+      assert.equal(output.bot_username, "bootstrap_bot");
+      assert.ok(existsSync(path.join(stateRoot, "bin", "daemon.js")), "CLI central-installed daemon");
+    } finally {
+      try {
+        const pid = Number((await readFile(path.join(stateRoot, "daemon.pid"), "utf8")).trim());
+        if (Number.isInteger(pid) && pid > 0) process.kill(pid, "SIGTERM");
+      } catch {
+        // The assertion failure already carries the useful signal.
+      }
     }
   });
 });

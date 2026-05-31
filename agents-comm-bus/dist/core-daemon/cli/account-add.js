@@ -1,20 +1,22 @@
 import { randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { SCHEMA_VERSION_ACCOUNT, } from "agents-comm-bus-core";
-import { probeTelegramIdentity } from "../../adapters/telegram/adapter.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
+import { probeIdentityViaDaemon } from "./identity-probe.js";
 import { writeTokenFile } from "./token-file.js";
 export async function accountAdd(options) {
     const comm = (options.comm ?? "telegram");
-    if (comm !== "telegram") {
-        throw new Error(`unsupported comm for phase 1 account-add: ${comm}`);
-    }
-    const botToken = options.botToken ?? process.env.TELEGRAM_BOT_TOKEN;
+    const botToken = options.botToken ?? (comm === "telegram" ? process.env.TELEGRAM_BOT_TOKEN : undefined);
     if (!botToken) {
-        throw new Error("TELEGRAM_BOT_TOKEN or --bot-token is required for telegram account-add");
+        throw new Error("--bot-token is required for account-add (or TELEGRAM_BOT_TOKEN for telegram)");
     }
-    const identity = await (options.probeIdentity ?? probeTelegramIdentity)(botToken);
+    const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
+        comm,
+        botToken: token,
+        agent: options.agent,
+        stateRoot: options.stateRoot,
+    })))(botToken);
     const paths = resolveStatePaths({ stateRoot: options.stateRoot });
     await mkdir(paths.root, { recursive: true });
     const storage = await openSqliteStorage(paths.database);
@@ -55,7 +57,7 @@ export async function accountAdd(options) {
             agent: options.agent,
             account_label: options.accountLabel,
             bot_user_id: identity.bot_user_id,
-            bot_username: identity.bot_username,
+            bot_username: identity.bot_username ?? undefined,
             credentials_ref: credentialsRef,
             created_at: now,
             updated_at: now,

@@ -1,18 +1,20 @@
 import { rm } from "node:fs/promises";
-import { probeTelegramIdentity } from "../../adapters/telegram/adapter.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 import { resolveAccountByLabel } from "./account-selector.js";
+import { probeIdentityViaDaemon } from "./identity-probe.js";
 import { writeTokenFile } from "./token-file.js";
 export async function accountUpdateToken(options) {
     const comm = (options.comm ?? "telegram");
-    if (comm !== "telegram") {
-        throw new Error(`unsupported comm for phase 1 account-update-token: ${comm}`);
-    }
     if (!options.botToken) {
         throw new Error("--bot-token is required for account-update-token");
     }
-    const identity = await (options.probeIdentity ?? probeTelegramIdentity)(options.botToken);
+    const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
+        comm,
+        botToken: token,
+        agent: options.agent,
+        stateRoot: options.stateRoot,
+    })))(options.botToken);
     const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
     let wroteTokenRef = null;
     let wroteReplacementToken = false;
@@ -54,7 +56,7 @@ export async function accountUpdateToken(options) {
             current_bot_user_id: current.bot_user_id,
             new_bot_user_id: identity.bot_user_id,
             credentials_ref: credentialsRef,
-            bot_username: identity.bot_username,
+            bot_username: identity.bot_username ?? undefined,
             updated_at: Date.now(),
         });
         if (botChanged) {

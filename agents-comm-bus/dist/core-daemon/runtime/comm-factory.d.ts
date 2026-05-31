@@ -36,6 +36,14 @@ export interface CommAdapterFactory {
         accountId: AccountId;
     } | undefined>;
     /**
+     * Optional identity probe used by comm-agnostic admin surfaces. For example,
+     * Telegram maps `{ botToken }` to the bot's native account id via `getMe()`.
+     */
+    probeIdentity?(credentials: Record<string, unknown>, env: CommAdapterFactoryEnv): Promise<{
+        accountId: AccountId;
+        accountUsername?: string | null;
+    }>;
+    /**
      * Construct an adapter instance. `accountId` is the comm-native account id
      * (e.g. Telegram `bot_user_id`) that this adapter is bound to. The bus
      * keys its adapter map by `(commId, accountId)` so a daemon can host

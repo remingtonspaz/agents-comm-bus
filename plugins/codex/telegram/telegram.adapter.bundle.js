@@ -52993,6 +52993,17 @@ var TelegramCommAdapterFactory = class {
       accountId: identity.bot_user_id
     };
   }
+  async probeIdentity(credentials) {
+    const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
+    if (!botToken) {
+      throw new Error("TelegramCommAdapterFactory.probeIdentity: credentials.botToken is required");
+    }
+    const identity = await probeTelegramIdentity(botToken);
+    return {
+      accountId: identity.bot_user_id,
+      accountUsername: identity.bot_username ?? null
+    };
+  }
   create(credentials, accountId, context) {
     const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
     if (!botToken) {

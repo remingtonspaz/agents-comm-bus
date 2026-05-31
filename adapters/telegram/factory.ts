@@ -110,6 +110,20 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
     };
   }
 
+  async probeIdentity(
+    credentials: Record<string, unknown>,
+  ): Promise<{ accountId: AccountId; accountUsername?: string | null }> {
+    const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
+    if (!botToken) {
+      throw new Error("TelegramCommAdapterFactory.probeIdentity: credentials.botToken is required");
+    }
+    const identity = await probeTelegramIdentity(botToken);
+    return {
+      accountId: identity.bot_user_id as AccountId,
+      accountUsername: identity.bot_username ?? null,
+    };
+  }
+
   create(
     credentials: Record<string, unknown>,
     accountId: AccountId,
