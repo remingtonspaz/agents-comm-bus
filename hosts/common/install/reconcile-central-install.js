@@ -38,6 +38,7 @@
  * @property {string} daemonBundleVersion   replace key for bin/daemon.js
  * @property {string} adapterBundleVersion  replace key for adapters/<comm>.js
  * @property {string} [pluginInstallDir]    source dir for bundle bytes (used by execute)
+ * @property {string[]} [daemonSidecars]    basenames copied next to bin/daemon.js (e.g. migration *.sql); execute-only, ignored by reconcile
  * @property {string} installedAt           ISO timestamp, injected (keeps reconcile pure)
  *
  * @typedef {Object} ProvenanceEntry
@@ -328,9 +329,21 @@ export async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteVersionFiles = [];
 
   if (plan.daemon.writeBundle) {
-    await fs.mkdirp(dirname(paths.daemonBundle));
+    const binDir = dirname(paths.daemonBundle);
+    await fs.mkdirp(binDir);
     await fs.copyFile(/** @type {string} */ (daemonSrc), paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
+    // Copy the daemon's schema sidecars (migration *.sql) next to the bundle.
+    // The migration runner reads schema relative to its own module dir, which —
+    // for the copied single-file bundle — is bin/. Without these the daemon
+    // loads but cannot migrate the DB.
+    for (const name of actor.daemonSidecars ?? []) {
+      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join(binDir, name));
+    }
+    // node resolves a bare ".js" module's type from the nearest package.json;
+    // bin/ has none, so the ESM daemon bundle would be parsed as CommonJS and
+    // crash on its first `import`. Pin ESM for everything under bin/.
+    await fs.writeFile(join(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
     await fs.mkdirp(dirname(paths.daemonVersionFile));
@@ -360,4 +373,9 @@ function serialize(record) {
 function dirname(p) {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return i === -1 ? "." : p.slice(0, i);
+}
+
+/** Join a dir and a basename with a forward slash (node fs accepts mixed seps on Windows). @param {string} dir @param {string} name */
+function join(dir, name) {
+  return `${dir}/${name}`;
 }

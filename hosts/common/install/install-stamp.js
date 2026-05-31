@@ -25,16 +25,21 @@ export const INSTALL_STAMP_SCHEMA = 1;
  * @param {string} fields.pluginVersion        provenance (from the plugin manifest)
  * @param {string} fields.daemonBundleVersion   content key (DAEMON_VERSION)
  * @param {string} fields.adapterBundleVersion  content key (per-comm ADAPTER_VERSION)
- * @returns {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string}}
+ * @param {string[]} [fields.daemonSidecars]    basenames of files that must be
+ *   copied next to bin/daemon.js (e.g. the migration *.sql the runner reads
+ *   relative to its own module dir). Optional; defaults to none.
+ * @returns {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string, daemon_sidecars?:string[]}}
  */
 export function buildInstallStamp(fields) {
-  const { agent, comm, pluginVersion, daemonBundleVersion, adapterBundleVersion } = fields ?? {};
+  const { agent, comm, pluginVersion, daemonBundleVersion, adapterBundleVersion, daemonSidecars } =
+    fields ?? {};
   requireString("agent", agent);
   requireString("comm", comm);
   requireString("pluginVersion", pluginVersion);
   requireString("daemonBundleVersion", daemonBundleVersion);
   requireString("adapterBundleVersion", adapterBundleVersion);
-  return {
+  /** @type {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string, daemon_sidecars?:string[]}} */
+  const stamp = {
     schema_version: INSTALL_STAMP_SCHEMA,
     agent,
     comm,
@@ -42,6 +47,13 @@ export function buildInstallStamp(fields) {
     daemon_bundle_version: daemonBundleVersion,
     adapter_bundle_version: adapterBundleVersion,
   };
+  if (daemonSidecars !== undefined) {
+    if (!Array.isArray(daemonSidecars) || daemonSidecars.some((s) => typeof s !== "string")) {
+      throw new Error("buildInstallStamp: daemonSidecars must be an array of strings");
+    }
+    stamp.daemon_sidecars = [...daemonSidecars];
+  }
+  return stamp;
 }
 
 /** @param {string} name @param {unknown} value */

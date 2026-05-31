@@ -46,6 +46,7 @@ export const INSTALL_STAMP_NAME = "install-stamp.json";
  * @property {string} plugin_version          provenance only
  * @property {string} daemon_bundle_version   bin/daemon.js replace key
  * @property {string} adapter_bundle_version  adapters/<comm>.js replace key
+ * @property {string[]} [daemon_sidecars]     basenames copied next to bin/daemon.js (e.g. migration *.sql)
  *
  * @typedef {"source" | "production"} InstallMode
  *
@@ -173,6 +174,7 @@ export async function ensureCentralInstall(options) {
     adapterBundleVersion: stamp.adapter_bundle_version,
     pluginInstallDir: options.pluginInstallDir,
     installedAt: options.installedAt ?? new Date().toISOString(),
+    ...(Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}),
   };
 
   const run = options.deps?.runCentralInstall ?? defaultRunCentralInstall;
