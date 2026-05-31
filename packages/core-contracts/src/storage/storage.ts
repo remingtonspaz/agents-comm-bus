@@ -74,6 +74,7 @@ export interface Storage {
     comm: CommId;
     account_label: string;
     bot_user_id?: string | null;
+    registration_id?: string | null;
     chat_native_id: string;
     thread_native_id: string | null;
   }): Promise<Conversation | null>;

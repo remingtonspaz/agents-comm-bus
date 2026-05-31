@@ -1,5 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -438,5 +438,74 @@ describe("AGE-20 registration identity (phase 1)", () => {
       assert.equal(found?.registration_id, "reg-conv");
       await storage.close();
     });
+  });
+});
+
+describe("AGE-20 conversation identity stability (phase 2)", () => {
+  it("a relabel does not re-key conversation_id (stable identity, updated in place)", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      // Existing conversation owned by registration R1, label "old".
+      await storage.upsertConversation(
+        conversation({
+          registration_id: "R1",
+          account_label: "old",
+          conversation_id: "C1" as ConversationId,
+          chat_native_id: "chat-1",
+        }),
+      );
+      // Simulate the post-relabel inbound: SAME (registration_id, chat, thread),
+      // new label, and a freshly-derived (different) conversation_id as bus builds.
+      const returnedId = await storage.upsertConversation(
+        conversation({
+          registration_id: "R1",
+          account_label: "new",
+          conversation_id: "C2" as ConversationId,
+          chat_native_id: "chat-1",
+          last_inbound_at: 99,
+        }),
+      );
+      // The stable id is reused — NOT re-keyed to the label-derived C2.
+      assert.equal(returnedId, "C1");
+      const c1 = await storage.getConversation("C1" as ConversationId);
+      assert.equal(c1?.account_label, "new"); // display updated in place
+      assert.equal(c1?.last_inbound_at, 99);
+      // No new/duplicate row, no transcript-id split.
+      assert.equal(await storage.getConversation("C2" as ConversationId), null);
+      const all = await storage.listConversations({});
+      assert.equal(all.length, 1);
+      await storage.close();
+    });
+  });
+
+  it("finds a conversation by stable registration_id even after its label changed", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertConversation(
+        conversation({
+          registration_id: "R9",
+          account_label: "before",
+          conversation_id: "CC" as ConversationId,
+          chat_native_id: "chat-9",
+        }),
+      );
+      const found = await storage.findConversation({
+        project: "project-a",
+        agent: "claude" as AgentId,
+        comm: "telegram" as CommId,
+        account_label: "after", // label no longer matches
+        registration_id: "R9", // but the stable key does
+        chat_native_id: "chat-9",
+        thread_native_id: null,
+      });
+      assert.equal(found?.conversation_id, "CC");
+      await storage.close();
+    });
+  });
+
+  it("the conversation upsert never overwrites conversation_id (invariant)", async () => {
+    const repoRoot = resolve(import.meta.dirname, "../..");
+    const src = await readFile(resolve(repoRoot, "core-daemon/storage/sqlite.ts"), "utf8");
+    assert.doesNotMatch(src, /conversation_id = excluded\.conversation_id/);
   });
 });

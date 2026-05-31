@@ -318,6 +318,7 @@ export class MessageBus {
           comm: query.origin_chat.comm,
           account_label: registration.account_label,
           bot_user_id: registration.bot_user_id,
+          registration_id: registration.registration_id,
           chat_native_id: query.origin_chat.chat_native_id,
           thread_native_id: query.origin_chat.thread_native_id ?? null,
         });
@@ -526,8 +527,10 @@ export class MessageBus {
         sender_display_name: message.sender.display_name,
       },
     };
-    await this.options.storage.upsertConversation(conversation);
-    return conversation;
+    // Storage returns the canonical conversation_id — the existing stable id when
+    // the conversation already exists, so a relabel reuses it instead of drifting.
+    const conversationId = await this.options.storage.upsertConversation(conversation);
+    return { ...conversation, conversation_id: conversationId };
   }
 
   private async targetFromSession(session: SessionId): Promise<ChatRef> {
@@ -555,6 +558,7 @@ export class MessageBus {
       comm: target.comm,
       account_label: registration.account_label,
       bot_user_id: registration.bot_user_id,
+      registration_id: registration.registration_id,
       chat_native_id: target.chat_native_id,
       thread_native_id: target.thread_native_id ?? null,
     });
@@ -583,8 +587,8 @@ export class MessageBus {
         created_at: this.now(),
         metadata: { created_from_explicit_target: true },
       };
-      await this.options.storage.upsertConversation(created);
-      return created;
+      const conversationId = await this.options.storage.upsertConversation(created);
+      return { ...created, conversation_id: conversationId };
     }
     return conversation;
   }

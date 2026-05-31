@@ -19,6 +19,13 @@ export declare class SqliteStorage implements Storage {
     deleteAccountRegistration(project: string, comm: CommId, agent: AgentId, account_label: string): Promise<void>;
     updateAccountRegistrationToken(input: AccountTokenUpdateInput): Promise<AccountTokenUpdateResult>;
     upsertConversation(rec: Conversation): Promise<ConversationId>;
+    /**
+     * Resolve an existing conversation's stable conversation_id by the immutable
+     * (registration_id, chat, thread) key, falling back to the legacy
+     * (project, agent, comm, account_label, chat, thread) tuple for rows that
+     * predate registration_id. Returns null when no conversation exists yet.
+     */
+    private findExistingConversationId;
     getConversation(id: ConversationId): Promise<Conversation | null>;
     findConversation(pk: {
         project: string;
@@ -26,6 +33,7 @@ export declare class SqliteStorage implements Storage {
         comm: CommId;
         account_label: string;
         bot_user_id?: string | null;
+        registration_id?: string | null;
         chat_native_id: string;
         thread_native_id: string | null;
     }): Promise<Conversation | null>;

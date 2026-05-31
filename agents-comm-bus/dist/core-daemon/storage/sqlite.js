@@ -170,6 +170,28 @@ export class SqliteStorage {
         }
     }
     async upsertConversation(rec) {
+        // AGE-20 Phase 2: resolve the existing conversation by its STABLE identity
+        // (registration_id, chat, thread) and update it in place, PRESERVING its
+        // conversation_id. This stops the drift: a registration field change (e.g.
+        // relabel) no longer re-keys the conversation_id or duplicates the row. We
+        // never overwrite conversation_id on conflict anymore.
+        const existingId = this.findExistingConversationId(rec);
+        if (existingId) {
+            this.db
+                .prepare(`
+          UPDATE conversations SET
+            account_label = ?,
+            bot_user_id = ?,
+            registration_id = ?,
+            last_inbound_at = ?,
+            last_outbound_at = ?,
+            last_message_id = ?,
+            metadata_json = ?
+          WHERE conversation_id = ?
+        `)
+                .run(rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, encodeJson(rec.metadata), existingId);
+            return existingId;
+        }
         this.db
             .prepare(`
         INSERT INTO conversations (
@@ -178,7 +200,6 @@ export class SqliteStorage {
           last_outbound_at, last_message_id, created_at, metadata_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
-          conversation_id = excluded.conversation_id,
           bot_user_id = excluded.bot_user_id,
           registration_id = excluded.registration_id,
           last_inbound_at = excluded.last_inbound_at,
@@ -189,6 +210,32 @@ export class SqliteStorage {
             .run(rec.schema_version, rec.project, rec.comm, rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.chat_native_id, dbThreadId(rec.thread_native_id), rec.conversation_id, rec.agent, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, rec.created_at, encodeJson(rec.metadata));
         return rec.conversation_id;
     }
+    /**
+     * Resolve an existing conversation's stable conversation_id by the immutable
+     * (registration_id, chat, thread) key, falling back to the legacy
+     * (project, agent, comm, account_label, chat, thread) tuple for rows that
+     * predate registration_id. Returns null when no conversation exists yet.
+     */
+    findExistingConversationId(rec) {
+        if (rec.registration_id != null) {
+            const byReg = this.db
+                .prepare(`
+          SELECT conversation_id FROM conversations
+          WHERE registration_id = ? AND chat_native_id = ? AND thread_native_id = ?
+        `)
+                .get(rec.registration_id, rec.chat_native_id, dbThreadId(rec.thread_native_id));
+            if (byReg?.conversation_id)
+                return byReg.conversation_id;
+        }
+        const byTuple = this.db
+            .prepare(`
+        SELECT conversation_id FROM conversations
+        WHERE project = ? AND agent = ? AND comm = ? AND account_label = ?
+          AND chat_native_id = ? AND thread_native_id = ?
+      `)
+            .get(rec.project, rec.agent, rec.comm, rec.account_label, rec.chat_native_id, dbThreadId(rec.thread_native_id));
+        return byTuple?.conversation_id ?? null;
+    }
     async getConversation(id) {
         const row = this.db
             .prepare("SELECT * FROM conversations WHERE conversation_id = ?")
@@ -196,6 +243,18 @@ export class SqliteStorage {
         return row ? this.conversationFromRow(row) : null;
     }
     async findConversation(pk) {
+        // Stable identity first (AGE-20): a relabel changes account_label but not
+        // registration_id, so this still resolves the same conversation.
+        if (pk.registration_id) {
+            const byReg = this.db
+                .prepare(`
+          SELECT * FROM conversations
+          WHERE registration_id = ? AND chat_native_id = ? AND thread_native_id = ?
+        `)
+                .get(pk.registration_id, pk.chat_native_id, dbThreadId(pk.thread_native_id));
+            if (byReg)
+                return this.conversationFromRow(byReg);
+        }
         if (pk.bot_user_id) {
             const byBot = this.db
                 .prepare(`
