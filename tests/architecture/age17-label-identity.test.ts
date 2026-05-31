@@ -33,17 +33,23 @@ describe("AGE-17 account identity surfaces", () => {
     assert.doesNotMatch(text, /`account=\$\{conversation\.account_label\}`/);
   });
 
-  it("bridge origin chats prefer stored conversation.bot_user_id before label lookup", async () => {
+  it("bridge origin chats prefer stored bot_user_id, then resolve by registration_id (no account_label fallback)", async () => {
     for (const bridge of [
       "core-daemon/bridges/claude/bridge.ts",
       "core-daemon/bridges/codex/bridge.ts",
     ]) {
       const text = await source(bridge);
       const botUserIdBranch = text.indexOf("if (conversation.bot_user_id)");
-      const labelLookup = text.indexOf("candidate.account_label === conversation.account_label");
+      const registrationLookup = text.indexOf("candidate.registration_id === conversation.registration_id");
       assert.notEqual(botUserIdBranch, -1, `${bridge} must check conversation.bot_user_id`);
-      assert.notEqual(labelLookup, -1, `${bridge} must keep a legacy label fallback`);
-      assert.ok(botUserIdBranch < labelLookup, `${bridge} must prefer bot_user_id before label fallback`);
+      assert.notEqual(registrationLookup, -1, `${bridge} must resolve the registration by registration_id`);
+      assert.ok(botUserIdBranch < registrationLookup, `${bridge} must prefer bot_user_id before the registration lookup`);
+      // AGE-22: the legacy account_label fallback is gone — label is never identity.
+      assert.doesNotMatch(
+        text,
+        /candidate\.account_label === conversation\.account_label/,
+        `${bridge} must not fall back to account_label`,
+      );
     }
   });
 });
