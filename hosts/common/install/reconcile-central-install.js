@@ -280,10 +280,12 @@ function parseVersion(v) {
  * @property {(dir: string) => Promise<void>} mkdirp
  * @property {(from: string, to: string) => Promise<void>} copyFile
  * @property {(file: string, data: string) => Promise<void>} writeFile
+ * @property {(file: string, mode: number) => Promise<void>} [chmod]   optional; sets POSIX exec bit on launcher shims (no-op on Windows / fakes)
  *
  * @typedef {Object} CentralPaths
  * @property {string} daemonBundle        target path for bin/daemon.js
  * @property {string} daemonVersionFile   target path for bin/version.json
+ * @property {string} cliBundle           target path for bin/cli.js (admin CLI, rides under the daemon version)
  * @property {string} adapterBundle       target path for adapters/<comm>.js
  * @property {string} adapterVersionFile  target path for adapters/<comm>.version.json
  *
@@ -372,6 +374,36 @@ export async function executeInstallPlan(plan, actor, paths, fs) {
 /** @param {VersionRecord} record */
 function serialize(record) {
   return `${JSON.stringify(record, null, 2)}\n`;
+}
+
+/** Command aliases installed for the admin CLI. */
+const CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
+
+/**
+ * Central-install the admin CLI (AGE-30): copy `cli.bundle.js` -> `bin/cli.js`
+ * and write stable `agents-comm` / `agents-comm-bus` launcher shims next to it,
+ * so the command works from a marketplace install without npm link / global npm
+ * bin — the user just adds `<stateRoot>/bin` to PATH once. The CLI rides under
+ * the daemon version, so the orchestrator calls this only when the daemon bundle
+ * was (re)written and the plugin actually ships a `cli.bundle.js`.
+ *
+ * @param {CentralPaths} paths
+ * @param {string} cliSrc   absolute path to the staged cli.bundle.js
+ * @param {FsSeam} fs
+ */
+export async function installCliLaunchers(paths, cliSrc, fs) {
+  const binDir = dirname(paths.cliBundle);
+  await fs.mkdirp(binDir);
+  await fs.copyFile(cliSrc, paths.cliBundle);
+  for (const name of CLI_LAUNCHER_NAMES) {
+    // Windows: a .cmd (node resolved from PATH). %~dp0 is this dir incl. trailing sep.
+    await fs.writeFile(join(binDir, `${name}.cmd`), `@echo off\r\nnode "%~dp0cli.js" %*\r\n`);
+    // POSIX: an executable sh shim.
+    const posix = join(binDir, name);
+    await fs.writeFile(posix, `#!/bin/sh\nexec node "$(dirname "$0")/cli.js" "$@"\n`);
+    // Best-effort exec bit (no-op on Windows / on fake seams without chmod).
+    await fs.chmod?.(posix, 0o755);
+  }
 }
 
 /** @param {string} p */

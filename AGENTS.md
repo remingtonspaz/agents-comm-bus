@@ -181,14 +181,27 @@ npm install
 npm run build
 ```
 
-**Optional: install the CLI on PATH.** From the `agents-comm-bus` folder
-after building, `npm link` exposes three bin commands globally:
-`agents-comm` (short alias), `agents-comm-bus` (long alias), and
-`agents-comm-bus-daemon` (the daemon serve entry, normally spawned via
-hooks). After linking, you can run `agents-comm account-list` from any
-directory instead of `node agents-comm-bus\dist\cli\index.js account-list`.
-On Windows the wrappers land as `.cmd` files under `%APPDATA%\npm\`; on
-macOS/Linux they're shebang scripts in the npm global bin dir.
+**The `agents-comm` / `agents-comm-bus` command (AGE-30).** In a
+production/marketplace install, central install lays the admin CLI down at
+`~/.agents-comm-bus/bin/cli.js` and writes `agents-comm` / `agents-comm-bus`
+launcher shims next to it (Windows `.cmd` + POSIX). Add `~/.agents-comm-bus/bin`
+to PATH **once** and the command works from anywhere — no `npm link`, no npm
+global state:
+
+```powershell
+# one-time (PowerShell, current user):
+[Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:USERPROFILE\.agents-comm-bus\bin", "User")
+# then, from a new shell:
+agents-comm account-list
+```
+
+The shims just run `node ~/.agents-comm-bus/bin/cli.js`, so a `node` on PATH is
+the only prerequisite. The CLI rides under the daemon version (a `cli.bundle.js`
+change bumps `DAEMON_VERSION`; no separate CLI version). For **source/dev** work
+you can instead `npm link` from `agents-comm-bus/` to expose the bin commands
+from the source dist — a dev convenience, not how marketplace installs get the
+command.
+
 Use `agents-comm account-update-token` to rotate a bot token; replacing the
 bot identity requires `--allow-bot-change` and remaps per-bot allowlist rows
 plus conversation `bot_user_id` references.
@@ -458,6 +471,10 @@ All state under `~/.agents-comm-bus/` (per-user, never per-project):
 | `port` | Daemon's listening WebSocket port |
 | `daemon.pid` | Daemon process id |
 | `spawn-lock*` | Bootstrap-race lock file |
+| `bin/daemon.js` (+ `package.json`, `*.sql`) | Central-installed self-contained daemon bundle + ESM pin + migration sidecars (AGE-23) |
+| `bin/cli.js` + `agents-comm` / `agents-comm-bus` (`.cmd`) | Central-installed admin CLI bundle + launcher shims; add `bin/` to PATH (AGE-30) |
+| `bin/version.json` | Daemon (incl. CLI) bundle version + ref-count provenance |
+| `adapters/<comm>.js` (+ `package.json`, `<comm>.version.json`) | Central-installed comm adapter bundle, dynamically loaded by the daemon (AGE-26) |
 | `audit/<date>.jsonl` | Append-only audit log: query_opened, query_resolved, inbound_received, outbound_sent, etc. |
 | `chats/<conversation_id>/transcript.jsonl` | Per-conversation inbound + outbound transcript |
 | `blobs/<hash>` | Content-addressed attachment blobs |

@@ -44,10 +44,13 @@ function readConst(content, name) {
 // changed". (The CLI bundle is NOT here — it is not centrally superseded.)
 const SURFACES = [
   {
+    // The admin CLI rides under the daemon version (AGE-30): it ships from the
+    // same core-daemon package and is centrally installed alongside the daemon,
+    // so a cli.bundle.js change requires a DAEMON_VERSION bump too.
     label: "daemon",
     versionFile: "core-daemon/config.ts",
     versionConst: "DAEMON_VERSION",
-    match: (f) => /(^|\/)daemon\.bundle\.js$/.test(f),
+    match: (f) => /(^|\/)(daemon|cli)\.bundle\.js$/.test(f),
     bumpCmd: "npm run bump:daemon",
   },
   {

@@ -525,4 +525,85 @@ describe("production marketplace install (release gate)", () => {
       }
     }
   });
+
+  it("central install lays down agents-comm launchers that run account-add without npm wrappers", async () => {
+    const isolated = await isolatedCopy("claude", "telegram");
+    const homeRoot = await tempDir("acb-cli-launcher-home-");
+    const stateRoot = path.join(homeRoot, ".agents-comm-bus");
+
+    // No-network fake adapter (probeIdentity), same shape as the bootstrap test.
+    await writeFile(
+      path.join(isolated, "telegram.adapter.bundle.js"),
+      `export function createCommAdapterFactory() {
+        return {
+          commId: "telegram",
+          async resolveCredentials() { return undefined; },
+          fallbackFromEnv() { return undefined; },
+          create() { throw new Error("not used by this test"); },
+          async probeIdentity(credentials) {
+            return { accountId: "bot-from-" + String(credentials.botToken), accountUsername: "launcher_bot" };
+          },
+          ipcMethods() { return new Map(); },
+        };
+      }\n`,
+      "utf8",
+    );
+
+    // 1. Run central install (spy daemon) so it lays down bin/cli.js + launchers
+    //    without spawning a daemon yet.
+    const daemon = spyEnsureDaemon();
+    await entryEnsures({
+      agent: "claude",
+      comm: "telegram",
+      stateRoot,
+      pluginInstallDir: isolated,
+      env: {},
+      deps: { ensureDaemon: daemon.fn },
+    });
+
+    const paths = resolveCentralPaths(stateRoot, "telegram");
+    const binDir = path.dirname(paths.daemonBundle);
+    assert.ok(existsSync(paths.cliBundle), "bin/cli.js installed");
+    assert.ok(existsSync(path.join(binDir, "agents-comm.cmd")), "agents-comm.cmd launcher written");
+    assert.ok(existsSync(path.join(binDir, "agents-comm-bus.cmd")), "agents-comm-bus.cmd launcher written");
+    assert.ok(existsSync(path.join(binDir, "agents-comm")), "POSIX agents-comm launcher written");
+
+    // 2. Invoke the LAUNCHER (not cli.bundle.js directly): proves agents-comm ->
+    //    bin/cli.js -> central daemon IPC works with zero npm wrappers.
+    const isWin = process.platform === "win32";
+    const launcher = path.join(binDir, isWin ? "agents-comm.cmd" : "agents-comm");
+    const argv = [
+      "account-add",
+      "--project",
+      isolated,
+      "--agent",
+      "claude",
+      "--account-label",
+      "main",
+      "--bot-token",
+      "fake-token",
+    ];
+    const file = isWin ? "cmd" : "sh";
+    const pre = isWin ? ["/c", launcher] : [launcher];
+    try {
+      const result = await run(file, [...pre, ...argv], {
+        cwd: isolated,
+        timeout: 30000,
+        env: { ...process.env, AGENTS_COMM_BUS_ROOT: stateRoot, HOME: homeRoot, USERPROFILE: homeRoot },
+      });
+      const output = JSON.parse(result.stdout);
+      assert.equal(
+        output.bot_user_id,
+        "bot-from-fake-token",
+        "launcher -> bin/cli.js -> central daemon resolved the bot identity",
+      );
+    } finally {
+      try {
+        const pid = Number((await readFile(path.join(stateRoot, "daemon.pid"), "utf8")).trim());
+        if (Number.isInteger(pid) && pid > 0) process.kill(pid, "SIGTERM");
+      } catch {
+        // assertion failure already carries the signal
+      }
+    }
+  });
 });

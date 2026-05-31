@@ -27,6 +27,7 @@
  * it would hard-fail the current dev loop, which sets none of these vars).
  */
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { runCentralInstall as defaultRunCentralInstall } from "./run-central-install.js";
@@ -134,6 +135,15 @@ export async function ensureCentralInstall(options) {
   // Production mode is strict: a missing/invalid stamp is a hard error.
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
+    // Already-installed fast path (AGE-30): a stampless caller — notably the
+    // centrally installed CLI at <stateRoot>/bin/cli.js, which has no install
+    // stamp adjacent to it — must NOT re-derive central install. If central
+    // install is already present at the state root, it is done: skip it and let
+    // ensureDaemon proceed against the central bin/daemon.js. The genuinely
+    // unconfigured case (no stamp AND no central install) still fails loud below.
+    if (options.stateRoot && existsSync(path.join(options.stateRoot, "bin", "daemon.js"))) {
+      return { mode: "production", skipped: true };
+    }
     throw new Error(
       `central install (production mode): missing or invalid plugin install metadata.\n` +
         `  - no source-mode signal (no AGENTS_COMM_BUS_BIN, no .agents-comm-bus-dev.json marker resolved)\n` +

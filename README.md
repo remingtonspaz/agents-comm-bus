@@ -57,11 +57,19 @@ source install scripts.
 
 3. Restart Claude Code so the MCP server and hooks are loaded.
 
-4. Register the Telegram bot account from a terminal. Use the installed plugin
-   root path for `<plugin-root>`.
+4. Register the Telegram bot account from a terminal. The `agents-comm` command
+   is installed by the daemon's central install at `~/.agents-comm-bus/bin` (it
+   appears after the first session/hook runs). Add that directory to PATH once
+   so the command resolves from any shell — no `npm install`/`npm link` needed:
 
    ```powershell
-   node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-add `
+   [Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:USERPROFILE\.agents-comm-bus\bin", "User")
+   ```
+
+   Then register the account (open a new shell so PATH is refreshed):
+
+   ```powershell
+   agents-comm account-add `
      --project "<absolute project path>" `
      --agent claude `
      --account-label main `
@@ -79,7 +87,7 @@ Install the Codex Telegram plugin through the Codex plugin flow for the staged
 artifact, then register the account with `--agent codex`:
 
 ```powershell
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-add `
+agents-comm account-add `
   --project "<absolute project path>" `
   --agent codex `
   --account-label main `
@@ -99,27 +107,27 @@ Common commands:
 
 ```powershell
 # List registrations.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-list
+agents-comm account-list
 
 # Register a bot.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-add `
+agents-comm account-add `
   --project "<absolute project path>" `
   --agent claude `
   --account-label main `
   --bot-token "<telegram bot token>"
 
 # Rotate the token for the same bot, or intentionally replace the bot.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-update-token `
+agents-comm account-update-token `
   --bot-id "<current bot id>" `
   --bot-token "<new telegram bot token>"
 
 # Relabel a registered account.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-relabel `
+agents-comm account-relabel `
   --bot-id "<bot id>" `
   --new-account-label "<new label>"
 
 # Remove a registered account.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-remove `
+agents-comm account-remove `
   --bot-id "<bot id>"
 ```
 
@@ -133,18 +141,18 @@ daemon records. Manage allowlist rows with:
 
 ```powershell
 # Add a global Telegram sender allowlist row.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js allowlist add `
+agents-comm allowlist add `
   --comm telegram `
   --user "<telegram user id>"
 
 # Add a per-bot allowlist row.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js allowlist add `
+agents-comm allowlist add `
   --comm telegram `
   --user "<telegram user id>" `
   --bot-id "<bot id>"
 
 # Inspect rows.
-node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js allowlist list `
+agents-comm allowlist list `
   --comm telegram `
   --scope all
 ```

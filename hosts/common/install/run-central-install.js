@@ -13,8 +13,13 @@
  * createAtomicNodeFsSeam.
  */
 import path from "node:path";
+import { existsSync } from "node:fs";
 
-import { reconcileInstall, executeInstallPlan } from "./reconcile-central-install.js";
+import {
+  reconcileInstall,
+  executeInstallPlan,
+  installCliLaunchers,
+} from "./reconcile-central-install.js";
 import { createAtomicNodeFsSeam, resolveCentralPaths, readCentralState } from "./node-fs-seam.js";
 import { acquireInstallLock } from "./install-lock.js";
 
@@ -51,6 +56,18 @@ export async function runCentralInstall(stateRoot, actor, deps = {}) {
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot, actor.comm);
     const result = await executeInstallPlan(plan, actor, paths, fs);
+    // AGE-30: central-install the admin CLI + agents-comm launchers alongside the
+    // daemon, when the daemon bundle was (re)written and the plugin ships a
+    // cli.bundle.js. The CLI rides under the daemon version (no separate key), so
+    // it travels with the daemon write. Gated on existence so synthetic fixtures
+    // (daemon/adapter only) skip cleanly.
+    if (plan.daemon.writeBundle && actor.pluginInstallDir) {
+      const cliSrc = path.join(actor.pluginInstallDir, "cli.bundle.js");
+      if (existsSync(cliSrc)) {
+        await installCliLaunchers(paths, cliSrc, fs);
+        result.wroteBundles.push(paths.cliBundle);
+      }
+    }
     return { plan, result, stoleStale: lock.stoleStale };
   } finally {
     await lock.release();

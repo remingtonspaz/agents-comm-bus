@@ -5,7 +5,7 @@
  * `reconcile-central-install.js` stays import-free and trivially unit-testable
  * (T1 needs no fs at all); this is the I/O edge the real install hook uses.
  */
-import { mkdir, copyFile, writeFile, rename, access, readFile } from "node:fs/promises";
+import { mkdir, copyFile, writeFile, rename, access, readFile, chmod } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -22,6 +22,9 @@ export function createNodeFsSeam() {
     },
     writeFile: async (file, data) => {
       await writeFile(file, data, "utf8");
+    },
+    chmod: async (file, mode) => {
+      await chmod(file, mode);
     },
   };
 }
@@ -52,6 +55,9 @@ export function createAtomicNodeFsSeam() {
       const tmp = `${file}.tmp`;
       await writeFile(tmp, data, "utf8");
       await rename(tmp, file);
+    },
+    chmod: async (file, mode) => {
+      await chmod(file, mode);
     },
   };
 }
@@ -111,6 +117,9 @@ export function resolveCentralPaths(stateRoot, comm) {
   return {
     daemonBundle: path.join(bin, "daemon.js"),
     daemonVersionFile: path.join(bin, "version.json"),
+    // The admin CLI is centrally installed next to the daemon (it rides under
+    // the daemon version) so `agents-comm` / `agents-comm-bus` work without npm.
+    cliBundle: path.join(bin, "cli.js"),
     adapterBundle: path.join(adapters, `${comm}.js`),
     adapterVersionFile: path.join(adapters, `${comm}.version.json`),
   };

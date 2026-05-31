@@ -3658,7 +3658,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // ../hosts/common/install/entry-ensures.js
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync as existsSync4 } from "node:fs";
 import path9 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
@@ -3668,7 +3668,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.1.1";
+var DAEMON_VERSION = "0.2.0";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4040,10 +4040,12 @@ function sleep(ms) {
 
 // ../hosts/common/install/ensure-central-install.js
 import path7 from "node:path";
+import { existsSync as existsSync2 } from "node:fs";
 import { readFile as readFile5 } from "node:fs/promises";
 
 // ../hosts/common/install/run-central-install.js
 import path6 from "node:path";
+import { existsSync } from "node:fs";
 
 // ../hosts/common/install/reconcile-central-install.js
 var VERSION_FILE_SCHEMA = 1;
@@ -4221,6 +4223,22 @@ function serialize(record) {
   return `${JSON.stringify(record, null, 2)}
 `;
 }
+var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
+async function installCliLaunchers(paths, cliSrc, fs2) {
+  const binDir = dirname(paths.cliBundle);
+  await fs2.mkdirp(binDir);
+  await fs2.copyFile(cliSrc, paths.cliBundle);
+  for (const name of CLI_LAUNCHER_NAMES) {
+    await fs2.writeFile(join(binDir, `${name}.cmd`), `@echo off\r
+node "%~dp0cli.js" %*\r
+`);
+    const posix = join(binDir, name);
+    await fs2.writeFile(posix, `#!/bin/sh
+exec node "$(dirname "$0")/cli.js" "$@"
+`);
+    await fs2.chmod?.(posix, 493);
+  }
+}
 function dirname(p) {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return i === -1 ? "." : p.slice(0, i);
@@ -4230,7 +4248,7 @@ function join(dir, name) {
 }
 
 // ../hosts/common/install/node-fs-seam.js
-import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3 } from "node:fs/promises";
+import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3, chmod } from "node:fs/promises";
 import path4 from "node:path";
 function createAtomicNodeFsSeam() {
   return {
@@ -4246,6 +4264,9 @@ function createAtomicNodeFsSeam() {
       const tmp = `${file}.tmp`;
       await writeFile2(tmp, data, "utf8");
       await rename(tmp, file);
+    },
+    chmod: async (file, mode) => {
+      await chmod(file, mode);
     }
   };
 }
@@ -4280,6 +4301,9 @@ function resolveCentralPaths(stateRoot3, comm) {
   return {
     daemonBundle: path4.join(bin, "daemon.js"),
     daemonVersionFile: path4.join(bin, "version.json"),
+    // The admin CLI is centrally installed next to the daemon (it rides under
+    // the daemon version) so `agents-comm` / `agents-comm-bus` work without npm.
+    cliBundle: path4.join(bin, "cli.js"),
     adapterBundle: path4.join(adapters, `${comm}.js`),
     adapterVersionFile: path4.join(adapters, `${comm}.version.json`)
   };
@@ -4364,6 +4388,13 @@ async function runCentralInstall(stateRoot3, actor, deps = {}) {
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot3, actor.comm);
     const result = await executeInstallPlan(plan, actor, paths, fs2);
+    if (plan.daemon.writeBundle && actor.pluginInstallDir) {
+      const cliSrc = path6.join(actor.pluginInstallDir, "cli.bundle.js");
+      if (existsSync(cliSrc)) {
+        await installCliLaunchers(paths, cliSrc, fs2);
+        result.wroteBundles.push(paths.cliBundle);
+      }
+    }
     return { plan, result, stoleStale: lock.stoleStale };
   } finally {
     await lock.release();
@@ -4397,6 +4428,9 @@ async function ensureCentralInstall(options) {
   }
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
+    if (options.stateRoot && existsSync2(path7.join(options.stateRoot, "bin", "daemon.js"))) {
+      return { mode: "production", skipped: true };
+    }
     throw new Error(
       `central install (production mode): missing or invalid plugin install metadata.
   - no source-mode signal (no AGENTS_COMM_BUS_BIN, no .agents-comm-bus-dev.json marker resolved)
@@ -4436,11 +4470,11 @@ Fix one of:
 }
 
 // ../hosts/common/install/dev-config-resolver.js
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync as existsSync3 } from "node:fs";
 import path8 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 function resolveDevConfig(projectRoot, deps = {}) {
-  const exists = deps.exists ?? existsSync;
+  const exists = deps.exists ?? existsSync3;
   const readFile6 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
   const markerPath = path8.join(projectRoot, DEV_MARKER_NAME);
   if (!exists(markerPath)) {
@@ -4493,7 +4527,7 @@ function isInside(root, candidate) {
 
 // ../hosts/common/install/entry-ensures.js
 function resolveEntryContext(fromDir, deps = {}) {
-  const exists = deps.exists ?? existsSync2;
+  const exists = deps.exists ?? existsSync4;
   return {
     projectRoot: findAncestorContaining(fromDir, DEV_MARKER_NAME, exists),
     pluginInstallDir: findAncestorContaining(fromDir, INSTALL_STAMP_NAME, exists)
