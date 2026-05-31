@@ -1,361 +1,260 @@
 # agents-comm-bus Telegram Plugin
 
-Bidirectional Telegram messaging through a per-user `agents-comm-bus` daemon.
-Claude and Codex entrypoints remain plugin/MCP shims, but Telegram polling and
-durable state now live in one daemon under `~/.agents-comm-bus/`.
+Bidirectional Telegram messaging for Claude Code and Codex through a shared
+per-user `agents-comm-bus` daemon. Agent host plugins stay thin: they expose MCP
+tools and hooks, while Telegram polling, account ownership, conversations,
+queries, transcripts, and audit logs live under `~/.agents-comm-bus/`.
 
-## Phase 1 Architecture
+## Release Status
 
-- `agents-comm-bus` owns Telegram polling; MCP servers no longer start their own pollers.
-- Structured state lives in SQLite at `~/.agents-comm-bus/agents-comm-bus.db`.
-- Transcripts and audit logs are JSONL under `~/.agents-comm-bus/chats/` and `~/.agents-comm-bus/audit/`.
-- Account registration is explicit with `agents-comm-bus account-add`; inbound routing resolves `(comm, bot_user_id)`.
-- The MCP tool surface talks to the daemon over localhost WebSocket IPC and includes `list_conversations`.
-- The daemon is started lazily by plugin/MCP shims through `ensureDaemon()`. No service install is required for Phase 1.
+`universal-overhaul` is not marketplace-release ready until the production
+install gate added in `0a20bf3` passes as a hard test. AGE-23 owns the packaging
+work that makes staged marketplace artifacts self-contained. Until that lands,
+source/dev mode can work, but fresh marketplace installs are expected to fail the
+`production marketplace install (release gate)` tests.
 
-## Features
+Use [docs/architecture/release-readiness.md](docs/architecture/release-readiness.md)
+as the checklist before publishing this branch as `main` or updating marketplace
+repositories.
 
-- **Send messages to Telegram** - Claude can send updates, progress, and results
-- **Receive messages from Telegram** - Send commands to Claude remotely
-- **Auto-enter** - Messages trigger Claude automatically (no manual Enter needed)
-- **Remote permission control** - Approve/deny tool permissions via Telegram
-- **Slash command forwarding** - Send `;commit` on Telegram to run `/commit` in Claude Code
-- **Session-specific targeting** - Works correctly with multiple Claude windows
+## What It Provides
+
+- Send Telegram messages and attachments from Claude Code or Codex.
+- Receive Telegram messages into the active agent session.
+- Route permission and question prompts through Telegram inline buttons.
+- Share one per-user daemon across multiple agents and Telegram bot accounts.
+- Keep routing keyed by concrete bot IDs, not human labels.
+- Persist state in SQLite plus JSONL transcript/audit files under
+  `~/.agents-comm-bus/`.
 
 ## Requirements
 
-- Node.js 22+ (`node:sqlite` is required)
-- Telegram Bot Token (from [@BotFather](https://t.me/botfather))
-- Your Telegram User ID
+- Node.js 22 or newer. The daemon uses `node:sqlite`.
+- A Telegram bot token from [@BotFather](https://t.me/botfather).
+- Your Telegram numeric user ID, if you want allowlist restrictions.
+- One Telegram bot per registered agent/project account. Telegram rejects
+  multiple `getUpdates` consumers for the same bot token.
 
-## Installation
+## Marketplace Installation
 
-### As a Plugin
+The intended end-user path is marketplace installation, then explicit account
+registration. The plugin should not require users to clone this repository or run
+source install scripts.
 
-1. Add the marketplace:
-   ```
+### Claude Code
+
+1. Add the marketplace.
+
+   ```text
    /plugin marketplace add https://github.com/remingtonspaz/claude-code-telegram
    ```
 
-2. Install the plugin:
-   ```
+2. Install the Telegram plugin.
+
+   ```text
    /plugin install telegram-integration:telegram
    ```
 
-3. Run the installer from the plugin directory if your plugin manager did not build packages automatically:
-   ```bash
-   node install.js
+3. Restart Claude Code so the MCP server and hooks are loaded.
+
+4. Register the Telegram bot account from a terminal. Use the installed plugin
+   root path for `<plugin-root>`.
+
+   ```powershell
+   node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-add `
+     --project "<absolute project path>" `
+     --agent claude `
+     --account-label main `
+     --bot-token "<telegram bot token>"
    ```
 
-4. Register a Telegram account explicitly (see Setup below)
+5. Message the bot once from Telegram so Telegram allows the bot to reply.
 
-5. Restart Claude Code
+6. In Claude Code, check `/mcp` and confirm the `telegram` MCP server is
+   connected.
 
-### From Source
+### Codex
 
-1. Clone or download this repository into your project directory
-2. Run the installer:
-   ```bash
-   node install.js
-   ```
-3. Configure your Telegram credentials (see Setup below)
-4. Restart Claude Code
+Install the Codex Telegram plugin through the Codex plugin flow for the staged
+artifact, then register the account with `--agent codex`:
 
-### Manual Installation
-
-1. Clone or download this repository
-2. Install and build dependencies:
-   ```bash
-   node install.js
-   ```
-3. Copy `.mcp.json.template` to `.mcp.json` and add your credentials
-5. Configure hooks in `.claude/settings.local.json` (see Hooks Configuration below)
-6. Restart Claude Code
-
-## Setup
-
-### 1. Create a Telegram Bot
-
-1. Message [@BotFather](https://t.me/botfather) on Telegram
-2. Send `/newbot` and follow the prompts
-3. Copy the bot token (looks like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-
-### 2. Get Your User ID
-
-1. Message [@userinfobot](https://t.me/userinfobot) on Telegram
-2. It will reply with your user ID (a number like `123456789`)
-
-### 3. Register the Telegram Account
-
-Phase 1 uses explicit account registrations. The daemon writes credentials by
-reference and stores account ownership in SQLite.
-
-```bash
-TELEGRAM_BOT_TOKEN="your_bot_token_here" \
-node agents-comm-bus/dist/core-daemon/cli/index.js account-add \
-  --project "/path/to/project" \
-  --agent claude \
-  --account-label main
+```powershell
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-add `
+  --project "<absolute project path>" `
+  --agent codex `
+  --account-label main `
+  --bot-token "<telegram bot token>"
 ```
 
-The registration refuses duplicate ownership for the same `(comm, bot_user_id)`.
-For a transition release, legacy `.claude/telegram.json`, `.codex/telegram.json`,
-`~/.claude-telegram/*`, and `~/.codex-telegram/*` files are readable only as
-migration inputs. New writes go to `~/.agents-comm-bus/`.
+Codex session startup currently needs the project-local hook configuration that
+points at the staged Codex MCP shim. Keep the global Codex MCP config path-only;
+session URL, thread ID, and daemon session ID are discovered at runtime.
 
-### 4. Configure MCP Environment
+## Account Management
 
-Add the MCP server to your project's `.mcp.json` with your credentials:
+Account registration is explicit. The daemon stores the bot token in a
+daemon-owned file and stores only a `credentials_ref` in SQLite.
 
-```json
-{
-  "mcpServers": {
-    "telegram": {
-      "command": "node",
-      "args": ["/path/to/claude-code-telegram/hosts/claude/claude-mcp-shim.js"],
-      "env": {
-        "TELEGRAM_BOT_TOKEN": "your_bot_token_here",
-        "TELEGRAM_USER_ID": "your_user_id_here"
-      }
-    }
-  }
-}
+Common commands:
+
+```powershell
+# List registrations.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-list
+
+# Register a bot.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-add `
+  --project "<absolute project path>" `
+  --agent claude `
+  --account-label main `
+  --bot-token "<telegram bot token>"
+
+# Rotate the token for the same bot, or intentionally replace the bot.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-update-token `
+  --bot-id "<current bot id>" `
+  --bot-token "<new telegram bot token>"
+
+# Relabel a registered account.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-relabel `
+  --bot-id "<bot id>" `
+  --new-account-label "<new label>"
+
+# Remove a registered account.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js account-remove `
+  --bot-id "<bot id>"
 ```
 
-Replace `/path/to/claude-code-telegram` with:
-- **Source install:** The path where you cloned the repo (e.g., `./claude-code-telegram`)
-- **Plugin install:** The plugin cache path (check `~/.claude/plugins/`)
+Labels are display aliases. Side-effecting commands should prefer `--bot-id`;
+label targeting is accepted only when it resolves to exactly one account.
 
-Each project can have its own `.mcp.json` with different Telegram credentials.
+## Allowlist
 
-### 5. Start Your Bot
+By default, Telegram authorization depends on the adapter configuration and
+daemon records. Manage allowlist rows with:
 
-Message your bot on Telegram to start the conversation. The bot can only message you if you've messaged it first.
+```powershell
+# Add a global Telegram sender allowlist row.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js allowlist add `
+  --comm telegram `
+  --user "<telegram user id>"
 
-### 6. Restart Claude Code
+# Add a per-bot allowlist row.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js allowlist add `
+  --comm telegram `
+  --user "<telegram user id>" `
+  --bot-id "<bot id>"
 
-Restart Claude Code to load the MCP server and hooks.
-
-### 7. Verify Installation
-
-Run the status check to verify everything is configured:
-```bash
-node install.js --status
+# Inspect rows.
+node <plugin-root>\agents-comm-bus\dist\core-daemon\cli\index.js allowlist list `
+  --comm telegram `
+  --scope all
 ```
 
-Or check `/mcp` in Claude Code to see if the telegram server is connected.
+Per-bot allowlist selectors accept `--bot-id` or an unambiguous label selector.
 
-The MCP tools are:
+## MCP Tools
+
+The host MCP shims expose generic comm tools:
+
 - `comm_send_message({ comm, message, target? })`
 - `comm_send_attachment({ comm, path, caption?, target? })`
 - `comm_check_messages({ comm? })`
 - `list_conversations({ comm?, limit? })`
 
-For Telegram, explicit targets must use the nested `target` object shape
-`{ chat_native_id, thread_native_id? }`. Omitting `target` lets the daemon use
-the session's most recent inbound conversation when available; otherwise it
-returns an explicit-target error. The shim no longer accepts flat
-`chat_id`/`message_thread_id` fields.
-
-## Hooks Configuration
-
-The hooks should be configured automatically if you place this plugin in your project. If not, add the following to `.claude/settings.local.json`:
+For Telegram, explicit targets use the nested shape:
 
 ```json
 {
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node path/to/hosts/claude/hooks/user-prompt-submit.js"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node path/to/hosts/claude/hooks/permission-request.js"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node path/to/hosts/claude/hooks/session-start.js"
-          }
-        ]
-      }
-    ]
+  "comm": "telegram",
+  "target": {
+    "account": "<bot id>",
+    "chat_native_id": "<telegram chat id>",
+    "thread_native_id": "<optional topic/thread id>"
   }
 }
 ```
 
-## Usage
+Omitting `target` lets the daemon use the session's most recent inbound
+conversation when available. Flat `chat_id` and `message_thread_id` fields are
+not accepted.
 
-### Sending Messages
+## Source Development
 
-Claude can send messages to you using the MCP tools:
+Source mode is for contributors, not the marketplace user path.
 
-- `comm_send_message` - Send a text message
-- `comm_send_attachment` - Send an image or other file
-- `comm_check_messages` - Check for pending messages
-
-### Receiving Messages
-
-1. Send a message to your bot on Telegram
-2. Claude receives it automatically on the next prompt
-3. Messages appear in context as: `[Telegram Messages Received] ...`
-
-### Auto-Enter Feature
-
-When you send a Telegram message, the watcher script automatically:
-1. Detects the incoming message
-2. Focuses the Claude Code window
-3. Sends a keystroke to trigger processing
-
-No need to manually press Enter!
-
-### Remote Permission Control
-
-When Claude needs permission for a tool:
-
-1. You receive a notification: `Permission Request - Tool: Bash`
-2. Reply with:
-   - `y` or `yes` - Allow once
-   - `n` or `no` - Deny
-   - `a` or `always` - Always allow
-3. The watcher sends your response to Claude
-
-### Slash Command Forwarding
-
-Send Claude Code slash commands from Telegram using `;` as the prefix (since Telegram reserves `/` for bot commands):
-
-1. Send `;commit` on Telegram
-2. The bot confirms: "Forwarding /commit to Claude Code..."
-3. The watcher types `/commit` + Enter into the terminal
-4. Claude Code executes the command
-
-**Notes:**
-- Only single-word commands work: `;commit`, `;help`, `;mcp`
-- Multi-word messages like `;foo bar` are treated as regular messages
-
-## Project Structure
-
-```
-claude-code-telegram/
-|-- .claude-plugin/
-|   `-- plugin.json                 # Claude plugin metadata
-|-- .codex-plugin/
-|   `-- plugin.json                 # Codex plugin metadata
-|-- packages/core-contracts/        # Shared contracts/types package
-|-- core-daemon/                    # Daemon source
-|-- adapters/
-|   `-- telegram/                   # Telegram comm adapter source
-|-- agents-comm-bus/                # Daemon npm package + dist
-|-- hosts/
-|   |-- claude/
-|   |   |-- claude-mcp-shim.js      # Claude MCP shim entrypoint
-|   |   |-- hooks/                  # Claude hook source
-|   |   `-- skills/telegram/        # Claude skill source
-|   |-- codex/
-|   |   |-- codex-mcp-shim.js       # Codex MCP shim entrypoint
-|   |   |-- hooks/                  # Codex hook source
-|   |   `-- skills/telegram/        # Codex skill source
-|   `-- common/
-|       |-- mcp-shim-shared.js      # Shared MCP shim plumbing
-|       `-- skills/fragments/       # Shared skill prose fragments
-|-- mcp-server/
-|   |-- dist/                       # Bundled MCP shims
-|   `-- package.json                # Shim build package
-|-- plugins/
-|   |-- claude/telegram/            # Staged Claude plugin artifact
-|   `-- codex/telegram/             # Staged Codex plugin artifact
-|-- scripts/
-|   |-- bootstrap-codex-session.ps1 # Codex app-server bootstrapper
-|   |-- enter-watcher.ps1           # Claude keystroke watcher
-|   |-- assemble-skills.js          # Skill assembly script
-|   `-- stage-plugins.js            # Plugin artifact staging script
-|-- .mcp.json.template              # Credential template
-|-- install.js                      # Claude dev install script
-|-- install-codex.js                # Codex dev install script
-|-- package.json                    # Root workspace package.json
-`-- README.md
+```powershell
+npm install
+npm --workspace packages/core-contracts run build
+npm --workspace agents-comm-bus run build
+npm --workspace mcp-server run build
+npm run stage:plugins
 ```
 
-## Components
+Optional local CLI:
 
-| Component | Purpose |
-|-----------|---------|
-| agents-comm-bus daemon | Owns Telegram polling, SQLite state, transcripts, audit, and IPC |
-| MCP Server | Thin IPC shim exposing tools to Claude/Codex |
-| UserPromptSubmit Hook | Starts the daemon lazily and injects daemon-delivered context |
-| PermissionRequest Hook | Routes query/permission work through daemon-backed records |
-| SessionStart Hook | Auto-spawns the watcher on session start |
-| Enter Watcher | PowerShell script for keystroke automation |
-| Skill | Guides Claude on using the integration |
+```powershell
+cd agents-comm-bus
+npm link
+agents-comm account-list
+```
+
+For a source checkout, `.agents-comm-bus-dev.json` marks development mode so
+hooks can resolve source-built artifacts instead of production central-install
+artifacts. Do not document source paths as the marketplace install path.
+
+## Known Caveats
+
+- Marketplace production installs are blocked until AGE-23 makes staged daemon
+  and hook runtime artifacts self-contained.
+- Claude auto-wake currently depends on the Windows PowerShell watcher and
+  console keystroke path.
+- Claude `SessionStart` is unreliable on Windows due to an upstream Claude Code
+  harness issue; the first prompt of a new Claude session may need a manual seed
+  prompt.
+- Codex `PermissionRequest` hooks can disable Codex auto-mode classification.
+  The current workaround is to use local Codex permission handling when seamless
+  auto-mode is more important than Telegram-routed permission prompts.
+- First-run account setup is still terminal-based through `account-add`.
+
+## State Paths
+
+All durable state is per-user:
+
+| Path | Purpose |
+| --- | --- |
+| `~/.agents-comm-bus/agents-comm-bus.db` | SQLite daemon state |
+| `~/.agents-comm-bus/tokens/` | Daemon-owned Telegram token files |
+| `~/.agents-comm-bus/chats/<conversation_id>/transcript.jsonl` | Per-conversation transcripts |
+| `~/.agents-comm-bus/audit/<date>.jsonl` | Audit log |
+| `~/.agents-comm-bus/port` | Daemon IPC port discovery |
+| `~/.agents-comm-bus/daemon.pid` | Daemon process discovery |
+| `~/.agents-comm-bus/claude-wake/` | Claude watcher trigger/response files |
+
+State never lives under a plugin install directory, so it survives plugin
+reinstalls and upgrades.
 
 ## Troubleshooting
 
-### MCP server not connecting
+### MCP server missing or disconnected
 
-1. Check `/mcp` in Claude Code
-2. Verify `.mcp.json` exists with valid credentials
-3. Ensure the daemon and MCP shim are built (`node install.js`)
-4. Restart Claude Code
+Restart the host agent session. MCP servers are loaded at session start.
 
-### Messages not being received
+### Telegram messages are not received
 
-1. Run `list_conversations` to confirm daemon conversation inventory
-2. Verify bot token is valid
-3. Ensure you're messaging from the authorized user ID
-4. Check `~/.agents-comm-bus/port` and `~/.agents-comm-bus/daemon.pid` for stale daemon discovery files
+Check `~/.agents-comm-bus/daemon.pid`, `~/.agents-comm-bus/port`, and the daily
+audit log. A `409 Conflict` from Telegram means another process is polling the
+same bot token.
 
-### Auto-enter not working
+### Sends use the wrong bot
 
-1. Check if watcher is running (look for PowerShell process)
-2. Verify Claude Code is in a cmd.exe window
-3. Try restarting Claude Code session
+Run `account-list` and confirm the target uses the concrete bot ID. Labels are
+aliases and can be ambiguous across agents.
 
-### Permission notifications not appearing
+### Daemon code changed but behavior did not
 
-1. Ensure PermissionRequest hook is configured in `.claude/settings.local.json`
-2. Check that the tool isn't already in the allow list
-3. Verify Telegram bot is connected
-
-### Check installation status
-
-Run the diagnostic command:
-```bash
-node install.js --status
-```
-
-## Configuration Files
-
-| File | Purpose |
-|------|---------|
-| `.mcp.json` | MCP server config with credentials (gitignored) |
-| `.mcp.json.template` | Template for credentials |
-| `~/.agents-comm-bus/agents-comm-bus.db` | SQLite structured daemon state |
-| `~/.agents-comm-bus/chats/*/transcript.jsonl` | Conversation transcripts |
-| `~/.agents-comm-bus/audit/*.jsonl` | Daily audit logs |
-| `~/.agents-comm-bus/port` | Daemon IPC discovery port |
-| `~/.agents-comm-bus/daemon.pid` | Daemon process discovery |
+Restart the daemon by stopping the PID in `~/.agents-comm-bus/daemon.pid` and
+deleting the stale `port` and `daemon.pid` files. The next hook or MCP call will
+spawn a fresh daemon.
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
