@@ -14,6 +14,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the version-bump gate can diff against the base commit.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -28,6 +31,17 @@ jobs:
       # This also performs the full build the later steps rely on.
       - name: Verify clean build (no stale generated artifacts)
         run: npm run verify:clean-build
+
+      # AGE-25 gate: a shipped central artifact (daemon / adapter bundle) that
+      # changed without a DAEMON_VERSION / ADAPTER_VERSION bump would look
+      # "same version" to central-install superseding → stale-runtime footgun.
+      # Runs after verify:clean-build, so the committed bundle == source.
+      - name: Version-bump gate
+        env:
+          # PR: the merge base; push: the commit before this push. Either is a
+          # SHA already in history (fetch-depth 0). The script skips if unknown.
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run check:version-bump
 
       - name: Typecheck (agents-comm-bus)
         run: npm --workspace agents-comm-bus run typecheck

@@ -30,7 +30,10 @@
     "assemble:skills": "node scripts/assemble-skills.js",
     "stage:plugins": "node scripts/stage-plugins.js",
     "stage:plugins:verify": "node scripts/stage-plugins.js --verify",
-    "verify:clean-build": "node scripts/verify-clean-build.mjs"
+    "verify:clean-build": "node scripts/verify-clean-build.mjs",
+    "check:version-bump": "node scripts/check-version-bump.mjs",
+    "bump:daemon": "node scripts/bump-version.mjs daemon",
+    "bump:adapter": "node scripts/bump-version.mjs adapter"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.66.0",
