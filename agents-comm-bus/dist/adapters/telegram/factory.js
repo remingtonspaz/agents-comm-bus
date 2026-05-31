@@ -106,6 +106,9 @@ export class TelegramCommAdapterFactory {
         ]);
     }
 }
+export function createCommAdapterFactory() {
+    return new TelegramCommAdapterFactory();
+}
 async function sendTelegram(deps, params, image) {
     const chatNativeId = extractChatNativeId(params);
     const target = chatNativeId === null

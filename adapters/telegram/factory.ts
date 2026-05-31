@@ -148,6 +148,10 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
   }
 }
 
+export function createCommAdapterFactory(): CommAdapterFactory {
+  return new TelegramCommAdapterFactory();
+}
+
 async function sendTelegram(
   deps: CommIpcDeps,
   params: Record<string, unknown>,

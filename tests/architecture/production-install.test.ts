@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp } from "node:fs/promises";
+import { cp, mkdtemp, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 
 import { entryEnsures } from "../../hosts/common/install/entry-ensures.js";
 import { resolveCentralPaths } from "../../hosts/common/install/node-fs-seam.js";
+import { connectIpc } from "../../core-daemon/ipc/client.js";
+import { DAEMON_VERSION } from "../../core-daemon/config.js";
 
 // Reproduces a FRESH MARKETPLACE INSTALL (production mode) against the REAL
 // staged plugin artifacts — the path an end user actually hits, which the
@@ -43,6 +45,22 @@ function stagedPluginDir(agent: string, comm: string): string {
 
 async function tempDir(prefix: string): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+async function waitForPortFile(stateRoot: string, timeoutMs = 5_000): Promise<number> {
+  const portFile = path.join(stateRoot, "port");
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      const port = Number((await readFile(portFile, "utf8")).trim());
+      if (Number.isInteger(port) && port > 0) return port;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for daemon port file at ${portFile}: ${String(lastError)}`);
 }
 
 /** Copy the staged plugin OUTSIDE the repo so the workspace node_modules /
@@ -107,12 +125,22 @@ describe("production marketplace install (release gate)", () => {
         "schema sidecars copied next to bin/daemon.js",
       );
       assert.ok(existsSync(paths.adapterBundle), "adapters/<comm>.js copied");
+      assert.ok(
+        existsSync(path.join(path.dirname(paths.adapterBundle), "package.json")),
+        "adapters/package.json ESM pin written",
+      );
     });
 
     it(`B2[${agent}]: the staged daemon bundle loads self-contained from an isolated copy`, async () => {
       const isolated = await isolatedCopy(agent, comm);
       const bundle = path.join(isolated, "daemon.bundle.js");
       assert.ok(existsSync(bundle), "staged plugin must contain daemon.bundle.js");
+      const bundleText = await readFile(bundle, "utf8");
+      assert.doesNotMatch(
+        bundleText,
+        /node-telegram-bot-api|TelegramCommAdapterFactory/,
+        "daemon bundle must be comm-neutral; Telegram belongs in the adapter bundle",
+      );
 
       // serve.ts guards main() behind `import.meta.url === argv[1]`, and `node -e`
       // leaves argv[1] unset, so a dynamic import only resolves the static import
@@ -216,5 +244,91 @@ describe("production marketplace install (release gate)", () => {
         `staged CLI ran an unintended bundled self-run entry (stdout should be empty):\n${result.stdout.slice(0, 400)}`,
       );
     });
+
+    it(`B5[${agent}]: the real central daemon loads the installed adapter bundle`, async () => {
+      const staged = stagedPluginDir(agent, comm);
+      const stateRoot = await tempDir(`acb-prod-real-daemon-${agent}-`);
+
+      const result = await entryEnsures({
+        agent,
+        comm,
+        stateRoot,
+        pluginInstallDir: staged,
+        env: {},
+      });
+
+      const paths = resolveCentralPaths(stateRoot, comm);
+      const pid = Number((await readFile(path.join(stateRoot, "daemon.pid"), "utf8")).trim());
+      try {
+        assert.ok(result.spawned, "production gate should exercise a real daemon spawn");
+        assert.ok(existsSync(paths.daemonBundle), "central bin/daemon.js exists");
+        assert.ok(existsSync(paths.adapterBundle), "central adapters/<comm>.js exists");
+
+        const client = await connectIpc({
+          port: result.port,
+          clientVersion: DAEMON_VERSION,
+          timeoutMs: 2_000,
+          metadata: { test: "production-install-adapter-load", agent },
+        });
+        try {
+          const drained = await client.request("telegram_check_messages");
+          assert.deepEqual(
+            drained,
+            [],
+            "telegram IPC method proves the dynamic adapter factory loaded",
+          );
+        } finally {
+          client.close();
+        }
+      } finally {
+        if (Number.isInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch {
+            // Best-effort cleanup: the temp daemon may have already exited.
+          }
+        }
+      }
+    });
   }
+
+  it("source/dev daemon loads built adapter factories without central install", async () => {
+    const stateRoot = await tempDir("acb-dev-source-daemon-");
+    const daemonEntry = path.join(
+      repoRoot,
+      "agents-comm-bus",
+      "dist",
+      "core-daemon",
+      "serve.js",
+    );
+    const child = spawn(process.execPath, [daemonEntry, "serve"], {
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        AGENTS_COMM_BUS_BIN: daemonEntry,
+        AGENTS_COMM_BUS_STATE_ROOT: stateRoot,
+      },
+    });
+    try {
+      const port = await waitForPortFile(stateRoot);
+      const client = await connectIpc({
+        port,
+        clientVersion: DAEMON_VERSION,
+        timeoutMs: 2_000,
+        metadata: { test: "source-mode-adapter-load" },
+      });
+      try {
+        const drained = await client.request("telegram_check_messages");
+        assert.deepEqual(
+          drained,
+          [],
+          "source-mode daemon should infer dist/adapters and load Telegram",
+        );
+      } finally {
+        client.close();
+      }
+    } finally {
+      child.kill("SIGTERM");
+    }
+  });
 });

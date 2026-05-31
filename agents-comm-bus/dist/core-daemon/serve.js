@@ -2,25 +2,40 @@
 /**
  * Composition root for the agents-comm-bus daemon.
  *
- * Imports the specific comm-side and agent-side adapters and wires them
- * into the generic `runDaemon` library. This is the *only* file in the
- * package that knows about both "Claude" and "Telegram" together; the
- * daemon library and the adapter modules themselves stay decoupled.
+ * Imports agent-side bridges and dynamically loads installed comm-side
+ * adapters from the central adapters directory. The daemon bundle stays
+ * comm-neutral: installing a Telegram plugin ships `adapters/telegram.js`,
+ * but users without Telegram do not carry that adapter in `bin/daemon.js`.
  *
  * Adding a new comm or agent should require touching:
- *   1. The new adapter's folder under `adapters/{comm,agent}/<name>/`.
- *   2. This file (one import + one entry in the factories array).
+ *   1. The new comm adapter's folder under `adapters/<name>/`.
+ *   2. The plugin/staging metadata that installs `adapters/<name>.js`.
+ * Agent bridges remain daemon-side and are registered here.
  */
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { runDaemon } from "./daemon.js";
-import { TelegramCommAdapterFactory } from "../adapters/telegram/factory.js";
+import { resolveStatePaths } from "./paths.js";
 import { ClaudeBridgeFactory } from "./bridges/claude/bridge.js";
 import { CodexBridgeFactory } from "./bridges/codex/bridge.js";
+import { loadCommAdapterFactories } from "./runtime/comm-adapter-loader.js";
 export async function startConfiguredDaemon() {
+    const paths = resolveStatePaths({ stateRoot: process.env.AGENTS_COMM_BUS_STATE_ROOT });
+    const adaptersDir = resolveAdaptersDir(paths.root, process.env);
+    const commAdapterFactories = await loadCommAdapterFactories({ adaptersDir });
     await runDaemon({
-        commAdapterFactories: [new TelegramCommAdapterFactory()],
+        commAdapterFactories,
         agentBridgeFactories: [new ClaudeBridgeFactory(), new CodexBridgeFactory()],
     });
+}
+function resolveAdaptersDir(stateRoot, env) {
+    if (env.AGENTS_COMM_BUS_ADAPTERS_DIR) {
+        return path.resolve(env.AGENTS_COMM_BUS_ADAPTERS_DIR);
+    }
+    if (env.AGENTS_COMM_BUS_BIN) {
+        return path.resolve(path.dirname(env.AGENTS_COMM_BUS_BIN), "..", "adapters");
+    }
+    return path.join(stateRoot, "adapters");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     startConfiguredDaemon().catch((error) => {

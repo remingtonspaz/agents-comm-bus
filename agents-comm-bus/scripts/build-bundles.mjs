@@ -6,7 +6,8 @@
 // Emitted into agents-comm-bus/dist-bundle/ (gitignored; stage-plugins copies
 // the relevant artifacts into the tracked plugins/<agent>/<comm>/ trees):
 //
-//   daemon.bundle.js              <- core-daemon/serve.ts   (spawned as bin/daemon.js)
+//   daemon.bundle.js              <- core-daemon/serve.ts   (spawned as bin/daemon.js;
+//                                    comm-neutral, loads adapters/*.js dynamically)
 //   <NNN>_*.sql                   <- migration schema, colocated next to the bundle
 //   telegram.adapter.bundle.js    <- adapters/telegram/factory.ts (central adapter copy)
 //   cli.bundle.js                 <- core-daemon/cli/index.ts (admin CLI surface)
@@ -52,8 +53,8 @@ async function bundleOne(entryRel, outRel) {
 
 await mkdir(outDir, { recursive: true });
 
-// 1. Daemon — the composition root; bakes in the Telegram adapter via its own
-//    relative import, so the spawned bin/daemon.js is self-contained.
+// 1. Daemon — comm-neutral composition root. Comm adapters are loaded from the
+//    central adapters dir at runtime, so Telegram stays in telegram.adapter.bundle.js.
 await bundleOne(path.join("core-daemon", "serve.ts"), "daemon.bundle.js");
 
 // 1b. Colocate the migration .sql next to the bundle. In the bundled output the
@@ -65,9 +66,8 @@ for (const f of sqlFiles) {
   await copyFile(path.join(schemaSrcDir, f), path.join(outDir, f));
 }
 
-// 2. Per-comm CommAdapter — the central adapters/<comm>.js copy the install
-//    model tracks (a real, standalone-loadable bundle; dynamic load by a
-//    comm-agnostic daemon is a tracked follow-up).
+// 2. Per-comm CommAdapter — the central adapters/<comm>.js copy loaded
+//    dynamically by the comm-agnostic daemon.
 await bundleOne(path.join("adapters", "telegram", "factory.ts"), "telegram.adapter.bundle.js");
 
 // 3. Admin CLI surface (account-add / allowlist / migrate ...). Shipped so a

@@ -53023,6 +53023,9 @@ var TelegramCommAdapterFactory = class {
     ]);
   }
 };
+function createCommAdapterFactory() {
+  return new TelegramCommAdapterFactory();
+}
 async function sendTelegram(deps, params, image) {
   const chatNativeId = extractChatNativeId(params);
   const target = chatNativeId === null ? void 0 : await targetFromParams(deps.storage, params, chatNativeId);
@@ -53157,7 +53160,8 @@ function normalizeUserIdField(raw) {
   return [];
 }
 export {
-  TelegramCommAdapterFactory
+  TelegramCommAdapterFactory,
+  createCommAdapterFactory
 };
 /*! Bundled license information:
 

@@ -4194,12 +4194,14 @@ async function executeInstallPlan(plan, actor, paths, fs2) {
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
-    await fs2.mkdirp(dirname(paths.adapterBundle));
+    const adapterDir = dirname(paths.adapterBundle);
+    await fs2.mkdirp(adapterDir);
     await fs2.copyFile(
       /** @type {string} */
       adapterSrc,
       paths.adapterBundle
     );
+    await fs2.writeFile(join(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {

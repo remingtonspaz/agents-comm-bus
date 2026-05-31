@@ -17,4 +17,5 @@ export declare class TelegramCommAdapterFactory implements CommAdapterFactory {
     create(credentials: Record<string, unknown>, accountId: AccountId, context?: CommAdapterCreateContext): CommAdapter;
     ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }
+export declare function createCommAdapterFactory(): CommAdapterFactory;
 //# sourceMappingURL=factory.d.ts.map

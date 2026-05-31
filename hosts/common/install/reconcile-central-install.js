@@ -351,8 +351,13 @@ export async function executeInstallPlan(plan, actor, paths, fs) {
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
-    await fs.mkdirp(dirname(paths.adapterBundle));
+    const adapterDir = dirname(paths.adapterBundle);
+    await fs.mkdirp(adapterDir);
     await fs.copyFile(/** @type {string} */ (adapterSrc), paths.adapterBundle);
+    // Adapter bundles are ESM too. Pin the central adapters directory so
+    // daemon-side dynamic import can load adapters/<comm>.js from a plain
+    // state root that has no package.json above it.
+    await fs.writeFile(join(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
