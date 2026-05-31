@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 
 import type { CommId } from "agents-comm-bus-core";
 import { resolveStatePaths } from "../paths.js";
@@ -138,14 +137,10 @@ export async function allowlistImportFromFiles(
   return { comm, added, skipped, details };
 }
 
-function filePathFromCredentialsRef(ref: string | undefined, project: string): string | null {
+function filePathFromCredentialsRef(ref: string | undefined, _project: string): string | null {
   if (!ref) return null;
   if (ref.startsWith("file:")) {
     return ref.slice("file:".length);
-  }
-  // env:<NAME> path — file fallback is at project/.claude/telegram.json by convention.
-  if (ref.startsWith("env:")) {
-    return path.join(project, ".claude", "telegram.json");
   }
   return null;
 }

@@ -6,7 +6,6 @@ export interface AccountAddOptions {
     accountLabel: string;
     comm?: string;
     botToken?: string;
-    credentialsRef?: string;
     stateRoot?: string;
     probeIdentity?: ProbeIdentity;
 }

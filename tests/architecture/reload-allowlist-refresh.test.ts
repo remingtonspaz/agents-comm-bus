@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 import assert from "node:assert/strict";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -29,7 +30,19 @@ const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;
 const BOT_ID = "111111";
 
-function registration(project: string): AccountRegistration {
+function tokenPath(project: string): string {
+  return join(project, "telegram-token.json");
+}
+
+function tokenRef(project: string): string {
+  return `file:${tokenPath(project)}`;
+}
+
+async function writeTokenFile(project: string, token = "fake-token"): Promise<void> {
+  await writeFile(tokenPath(project), JSON.stringify({ botToken: token }));
+}
+
+function registration(project: string, credentials_ref = tokenRef(project)): AccountRegistration {
   return {
     schema_version: SCHEMA_VERSION_ACCOUNT,
     project,
@@ -39,7 +52,7 @@ function registration(project: string): AccountRegistration {
     bot_user_id: BOT_ID,
     // registration_id is NOT NULL as of migration 007.
     registration_id: `reg-${BOT_ID}`,
-    credentials_ref: "env:TEST_TOKEN",
+    credentials_ref,
     bot_username: "test_bot",
     created_at: 1,
     updated_at: 1,
@@ -67,6 +80,7 @@ describe("reload-path allowlist refresh", () => {
       });
 
       // Seed: one account registration + one global allowlist entry.
+      await writeTokenFile(dir);
       await storage.putAccountRegistration(registration(dir));
       await storage.addAllowlistGlobal({
         comm: TELEGRAM,
@@ -77,7 +91,7 @@ describe("reload-path allowlist refresh", () => {
       // Build the adapter via the real factory (no `start()` — we don't
       // need a live Telegram connection for this test).
       const factory = new TelegramCommAdapterFactory();
-      const env = { TEST_TOKEN: "fake-token" };
+      const env = {};
       const resolved = await factory.resolveCredentials(
         registration(dir),
         env,
@@ -153,6 +167,7 @@ describe("reload-path allowlist refresh", () => {
         comms: [],
       });
 
+      await writeTokenFile(dir);
       await storage.putAccountRegistration(registration(dir));
       await storage.addAllowlistGlobal({
         comm: TELEGRAM,
@@ -161,7 +176,7 @@ describe("reload-path allowlist refresh", () => {
       });
 
       const factory = new TelegramCommAdapterFactory();
-      const env = { TEST_TOKEN: "fake-token" };
+      const env = {};
       const resolved = await factory.resolveCredentials(
         registration(dir),
         env,
@@ -210,10 +225,11 @@ describe("reload-path allowlist refresh", () => {
         comms: [],
       });
 
+      await writeTokenFile(dir);
       await storage.putAccountRegistration(registration(dir));
 
       const factory = new TelegramCommAdapterFactory();
-      const envInitial = { TEST_TOKEN: "fake-token", TELEGRAM_USER_ID: "A,B" };
+      const envInitial = { TELEGRAM_USER_ID: "A,B" };
       const resolved = await factory.resolveCredentials(
         registration(dir),
         envInitial,
@@ -228,7 +244,7 @@ describe("reload-path allowlist refresh", () => {
 
       // Same set, different CSV order — the reload-path diff must be
       // order-independent so this does NOT trigger a phantom update.
-      const envReordered = { TEST_TOKEN: "fake-token", TELEGRAM_USER_ID: "B,A" };
+      const envReordered = { TELEGRAM_USER_ID: "B,A" };
       const summary = await reloadAdapters({
         factories: [factory],
         bridges: [],
@@ -265,10 +281,11 @@ describe("reload-path allowlist refresh", () => {
         comms: [],
       });
 
+      await writeTokenFile(dir);
       await storage.putAccountRegistration(registration(dir));
 
       const factory = new TelegramCommAdapterFactory();
-      const envInitial = { TEST_TOKEN: "fake-token" };
+      const envInitial = {};
       const resolved = await factory.resolveCredentials(
         registration(dir),
         envInitial,
@@ -280,10 +297,10 @@ describe("reload-path allowlist refresh", () => {
       });
       bus.registerComm(adapter);
 
-      // Reload with env missing the token — resolveCredentials returns
-      // undefined (env path can't find the token, no file fallback exists
-      // at the test's temp project path). The unchanged branch must
+      // Reload with the token file removed. The unchanged branch must
       // surface this as a skipped entry, not silently continue.
+      await rm(tokenPath(dir), { force: true });
+
       const summary = await reloadAdapters({
         factories: [factory],
         bridges: [],
@@ -327,10 +344,11 @@ describe("reload-path allowlist refresh", () => {
         comms: [],
       });
 
+      await writeTokenFile(dir);
       await storage.putAccountRegistration(registration(dir));
 
       const factory = new TelegramCommAdapterFactory();
-      const env = { TEST_TOKEN: "fake-token" };
+      const env = {};
       const resolved = await factory.resolveCredentials(
         registration(dir),
         env,
@@ -388,7 +406,7 @@ describe("reload-path allowlist refresh", () => {
         comms: [],
       });
 
-      await storage.putAccountRegistration(registration(dir));
+      await storage.putAccountRegistration(registration(dir, "env:TEST_TOKEN"));
       const factory = new FakeCredentialFactory();
       const oldAdapter = factory.create({ botToken: "old-token" }, BOT_ID as AccountId, {
         blobs,

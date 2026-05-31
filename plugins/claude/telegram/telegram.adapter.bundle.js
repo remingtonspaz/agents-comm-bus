@@ -13041,18 +13041,18 @@ var require_memstore = __commonJS({
       /**
        * @internal No doc because this is an overload that supports the implementation
        */
-      findCookie(domain, path2, key, callback) {
+      findCookie(domain, path, key, callback) {
         const promiseCallback = (0, utils_1.createPromiseCallback)(callback);
-        if (domain == null || path2 == null || key == null) {
+        if (domain == null || path == null || key == null) {
           return promiseCallback.resolve(void 0);
         }
-        const result = this.idx[domain]?.[path2]?.[key];
+        const result = this.idx[domain]?.[path]?.[key];
         return promiseCallback.resolve(result);
       }
       /**
        * @internal No doc because this is an overload that supports the implementation
        */
-      findCookies(domain, path2, allowSpecialUseDomain = false, callback) {
+      findCookies(domain, path, allowSpecialUseDomain = false, callback) {
         if (typeof allowSpecialUseDomain === "function") {
           callback = allowSpecialUseDomain;
           allowSpecialUseDomain = true;
@@ -13063,7 +13063,7 @@ var require_memstore = __commonJS({
           return promiseCallback.resolve([]);
         }
         let pathMatcher;
-        if (!path2) {
+        if (!path) {
           pathMatcher = function matchAll(domainIndex) {
             for (const curPath in domainIndex) {
               const pathIndex = domainIndex[curPath];
@@ -13078,7 +13078,7 @@ var require_memstore = __commonJS({
         } else {
           pathMatcher = function matchRFC(domainIndex) {
             for (const cookiePath in domainIndex) {
-              if ((0, pathMatch_1.pathMatch)(path2, cookiePath)) {
+              if ((0, pathMatch_1.pathMatch)(path, cookiePath)) {
                 const pathIndex = domainIndex[cookiePath];
                 for (const key in pathIndex) {
                   const value = pathIndex[key];
@@ -13106,14 +13106,14 @@ var require_memstore = __commonJS({
        */
       putCookie(cookie, callback) {
         const promiseCallback = (0, utils_1.createPromiseCallback)(callback);
-        const { domain, path: path2, key } = cookie;
-        if (domain == null || path2 == null || key == null) {
+        const { domain, path, key } = cookie;
+        if (domain == null || path == null || key == null) {
           return promiseCallback.resolve(void 0);
         }
         const domainEntry = this.idx[domain] ?? /* @__PURE__ */ Object.create(null);
         this.idx[domain] = domainEntry;
-        const pathEntry = domainEntry[path2] ?? /* @__PURE__ */ Object.create(null);
-        domainEntry[path2] = pathEntry;
+        const pathEntry = domainEntry[path] ?? /* @__PURE__ */ Object.create(null);
+        domainEntry[path] = pathEntry;
         pathEntry[key] = cookie;
         return promiseCallback.resolve(void 0);
       }
@@ -13129,20 +13129,20 @@ var require_memstore = __commonJS({
       /**
        * @internal No doc because this is an overload that supports the implementation
        */
-      removeCookie(domain, path2, key, callback) {
+      removeCookie(domain, path, key, callback) {
         const promiseCallback = (0, utils_1.createPromiseCallback)(callback);
-        delete this.idx[domain]?.[path2]?.[key];
+        delete this.idx[domain]?.[path]?.[key];
         return promiseCallback.resolve(void 0);
       }
       /**
        * @internal No doc because this is an overload that supports the implementation
        */
-      removeCookies(domain, path2, callback) {
+      removeCookies(domain, path, callback) {
         const promiseCallback = (0, utils_1.createPromiseCallback)(callback);
         const domainEntry = this.idx[domain];
         if (domainEntry) {
-          if (path2) {
-            delete domainEntry[path2];
+          if (path) {
+            delete domainEntry[path];
           } else {
             delete this.idx[domain];
           }
@@ -13168,8 +13168,8 @@ var require_memstore = __commonJS({
         domains.forEach((domain) => {
           const domainEntry = idx[domain] ?? {};
           const paths = Object.keys(domainEntry);
-          paths.forEach((path2) => {
-            const pathEntry = domainEntry[path2] ?? {};
+          paths.forEach((path) => {
+            const pathEntry = domainEntry[path] ?? {};
             const keys = Object.keys(pathEntry);
             keys.forEach((key) => {
               const keyEntry = pathEntry[key];
@@ -14187,18 +14187,18 @@ var require_defaultPath = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.defaultPath = defaultPath;
-    function defaultPath(path2) {
-      if (!path2 || path2.slice(0, 1) !== "/") {
+    function defaultPath(path) {
+      if (!path || path.slice(0, 1) !== "/") {
         return "/";
       }
-      if (path2 === "/") {
-        return path2;
+      if (path === "/") {
+        return path;
       }
-      const rightSlash = path2.lastIndexOf("/");
+      const rightSlash = path.lastIndexOf("/");
       if (rightSlash === 0) {
         return "/";
       }
-      return path2.slice(0, rightSlash);
+      return path.slice(0, rightSlash);
     }
   }
 });
@@ -14592,7 +14592,7 @@ var require_cookieJar = __commonJS({
           return promiseCallback.reject(parameterError);
         }
         const host = (0, canonicalDomain_1.canonicalDomain)(context.hostname);
-        const path2 = context.pathname || "/";
+        const path = context.pathname || "/";
         const secure = context.protocol && (context.protocol == "https:" || context.protocol == "wss:");
         let sameSiteLevel = 0;
         if (options.sameSiteContext) {
@@ -14620,7 +14620,7 @@ var require_cookieJar = __commonJS({
               return false;
             }
           }
-          if (!allPaths && typeof c.path === "string" && !(0, pathMatch_1.pathMatch)(path2, c.path)) {
+          if (!allPaths && typeof c.path === "string" && !(0, pathMatch_1.pathMatch)(path, c.path)) {
             return false;
           }
           if (c.secure && !secure) {
@@ -14650,7 +14650,7 @@ var require_cookieJar = __commonJS({
           }
           return true;
         }
-        store.findCookies(host, allPaths ? null : path2, this.allowSpecialUseDomain, (err, cookies) => {
+        store.findCookies(host, allPaths ? null : path, this.allowSpecialUseDomain, (err, cookies) => {
           if (err) {
             cb(err);
             return;
@@ -15085,18 +15085,18 @@ var require_permutePath = __commonJS({
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.permutePath = permutePath;
-    function permutePath(path2) {
-      if (path2 === "/") {
+    function permutePath(path) {
+      if (path === "/") {
         return ["/"];
       }
-      const permutations = [path2];
-      while (path2.length > 1) {
-        const lindex = path2.lastIndexOf("/");
+      const permutations = [path];
+      while (path.length > 1) {
+        const lindex = path.lastIndexOf("/");
         if (lindex === 0) {
           break;
         }
-        path2 = path2.slice(0, lindex);
-        permutations.push(path2);
+        path = path.slice(0, lindex);
+        permutations.push(path);
       }
       permutations.push("/");
       return permutations;
@@ -15378,13 +15378,13 @@ var require_aws_sign2 = __commonJS({
     }
     module2.exports.canonicalizeHeaders = canonicalizeHeaders;
     function canonicalizeResource(resource) {
-      var url = parse2(resource, true), path2 = url.pathname, buf = [];
+      var url = parse2(resource, true), path = url.pathname, buf = [];
       Object.keys(url.query).forEach(function(key) {
         if (!~keys.indexOf(key)) return;
         var val = "" == url.query[key] ? "" : "=" + encodeURIComponent(url.query[key]);
         buf.push(key + val);
       });
-      return path2 + (buf.length ? "?" + buf.sort().join("&") : "");
+      return path + (buf.length ? "?" + buf.sort().join("&") : "");
     }
     module2.exports.canonicalizeResource = canonicalizeResource;
   }
@@ -15670,14 +15670,14 @@ var require_aws4 = __commonJS({
       }
       if (pathStr !== "/") {
         if (normalizePath) pathStr = pathStr.replace(/\/{2,}/g, "/");
-        pathStr = pathStr.split("/").reduce(function(path2, piece) {
+        pathStr = pathStr.split("/").reduce(function(path, piece) {
           if (normalizePath && piece === "..") {
-            path2.pop();
+            path.pop();
           } else if (!normalizePath || piece !== ".") {
             if (decodePath) piece = decodeURIComponent(piece.replace(/\+/g, " "));
-            path2.push(encodeRfc3986Full(piece));
+            path.push(encodeRfc3986Full(piece));
           }
-          return path2;
+          return path;
         }, []).join("/");
         if (pathStr[0] !== "/") pathStr = "/" + pathStr;
         if (decodeSlashesInPath) pathStr = pathStr.replace(/%2F/g, "/");
@@ -15730,25 +15730,25 @@ var require_aws4 = __commonJS({
       };
     };
     RequestSigner.prototype.parsePath = function() {
-      var path2 = this.request.path || "/";
-      if (/[^0-9A-Za-z;,/?:@&=+$\-_.!~*'()#%]/.test(path2)) {
-        path2 = encodeURI(decodeURI(path2));
+      var path = this.request.path || "/";
+      if (/[^0-9A-Za-z;,/?:@&=+$\-_.!~*'()#%]/.test(path)) {
+        path = encodeURI(decodeURI(path));
       }
-      var queryIx = path2.indexOf("?"), query = null;
+      var queryIx = path.indexOf("?"), query = null;
       if (queryIx >= 0) {
-        query = querystring.parse(path2.slice(queryIx + 1));
-        path2 = path2.slice(0, queryIx);
+        query = querystring.parse(path.slice(queryIx + 1));
+        path = path.slice(0, queryIx);
       }
       this.parsedPath = {
-        path: path2,
+        path,
         query
       };
     };
     RequestSigner.prototype.formatPath = function() {
-      var path2 = this.parsedPath.path, query = this.parsedPath.query;
-      if (!query) return path2;
+      var path = this.parsedPath.path, query = this.parsedPath.query;
+      if (!query) return path;
       if (query[""] != null) delete query[""];
-      return path2 + "?" + encodeRfc3986(querystring.stringify(query));
+      return path + "?" + encodeRfc3986(querystring.stringify(query));
     };
     aws4.RequestSigner = RequestSigner;
     aws4.sign = function(request, credentials) {
@@ -28496,13 +28496,13 @@ var require_validate = __commonJS({
           return schema2.type || primitiveConstructors[schema2.name] == schema2 && schema2.name.toLowerCase();
         }
         var errors = [];
-        function checkProp(value, schema2, path2, i) {
+        function checkProp(value, schema2, path, i) {
           var l;
-          path2 += path2 ? typeof i == "number" ? "[" + i + "]" : typeof i == "undefined" ? "" : "." + i : i;
+          path += path ? typeof i == "number" ? "[" + i + "]" : typeof i == "undefined" ? "" : "." + i : i;
           function addError(message) {
-            errors.push({ property: path2, message });
+            errors.push({ property: path, message });
           }
-          if ((typeof schema2 != "object" || schema2 instanceof Array) && (path2 || typeof schema2 != "function") && !(schema2 && getType(schema2))) {
+          if ((typeof schema2 != "object" || schema2 instanceof Array) && (path || typeof schema2 != "function") && !(schema2 && getType(schema2))) {
             if (typeof schema2 == "function") {
               if (!(value instanceof schema2)) {
                 addError("is not an instance of the class/constructor " + schema2.name);
@@ -28516,12 +28516,12 @@ var require_validate = __commonJS({
             addError("is a readonly field, it can not be changed");
           }
           if (schema2["extends"]) {
-            checkProp(value, schema2["extends"], path2, i);
+            checkProp(value, schema2["extends"], path, i);
           }
           function checkType(type, value2) {
             if (type) {
               if (typeof type == "string" && type != "any" && (type == "null" ? value2 !== null : typeof value2 != type) && !(value2 instanceof Array && type == "array") && !(value2 instanceof Date && type == "date") && !(type == "integer" && value2 % 1 === 0)) {
-                return [{ property: path2, message: value2 + " - " + typeof value2 + " value found, but a " + type + " is required" }];
+                return [{ property: path, message: value2 + " - " + typeof value2 + " value found, but a " + type + " is required" }];
               }
               if (type instanceof Array) {
                 var unionErrors = [];
@@ -28536,7 +28536,7 @@ var require_validate = __commonJS({
               } else if (typeof type == "object") {
                 var priorErrors = errors;
                 errors = [];
-                checkProp(value2, type, path2);
+                checkProp(value2, type, path);
                 var theseErrors = errors;
                 errors = priorErrors;
                 return theseErrors;
@@ -28563,7 +28563,7 @@ var require_validate = __commonJS({
                       propDef = schema2.items[i];
                     if (options.coerce)
                       value[i] = options.coerce(value[i], propDef);
-                    errors.concat(checkProp(value[i], propDef, path2, i));
+                    errors.concat(checkProp(value[i], propDef, path, i));
                   }
                 }
                 if (schema2.minItems && value.length < schema2.minItems) {
@@ -28573,7 +28573,7 @@ var require_validate = __commonJS({
                   addError("There must be a maximum of " + schema2.maxItems + " in the array");
                 }
               } else if (schema2.properties || schema2.additionalProperties) {
-                errors.concat(checkObj(value, schema2.properties, path2, schema2.additionalProperties));
+                errors.concat(checkObj(value, schema2.properties, path, schema2.additionalProperties));
               }
               if (schema2.pattern && typeof value == "string" && !value.match(schema2.pattern)) {
                 addError("does not match the regex pattern " + schema2.pattern);
@@ -28611,10 +28611,10 @@ var require_validate = __commonJS({
           }
           return null;
         }
-        function checkObj(instance2, objTypeDef, path2, additionalProp) {
+        function checkObj(instance2, objTypeDef, path, additionalProp) {
           if (typeof objTypeDef == "object") {
             if (typeof instance2 != "object" || instance2 instanceof Array) {
-              errors.push({ property: path2, message: "an object is required" });
+              errors.push({ property: path, message: "an object is required" });
             }
             for (var i in objTypeDef) {
               if (objTypeDef.hasOwnProperty(i) && i != "__proto__" && i != "constructor") {
@@ -28627,7 +28627,7 @@ var require_validate = __commonJS({
                 if (options.coerce && i in instance2) {
                   value = instance2[i] = options.coerce(value, propDef);
                 }
-                checkProp(value, propDef, path2, i);
+                checkProp(value, propDef, path, i);
               }
             }
           }
@@ -28637,22 +28637,22 @@ var require_validate = __commonJS({
                 delete instance2[i];
                 continue;
               } else {
-                errors.push({ property: path2, message: "The property " + i + " is not defined in the schema and the schema does not allow additional properties" });
+                errors.push({ property: path, message: "The property " + i + " is not defined in the schema and the schema does not allow additional properties" });
               }
             }
             var requires = objTypeDef && objTypeDef[i] && objTypeDef[i].requires;
             if (requires && !(requires in instance2)) {
-              errors.push({ property: path2, message: "the presence of the property " + i + " requires that " + requires + " also be present" });
+              errors.push({ property: path, message: "the presence of the property " + i + " requires that " + requires + " also be present" });
             }
             value = instance2[i];
             if (additionalProp && (!(objTypeDef && typeof objTypeDef == "object") || !(i in objTypeDef))) {
               if (options.coerce) {
                 value = instance2[i] = options.coerce(value, additionalProp);
               }
-              checkProp(value, additionalProp, path2, i);
+              checkProp(value, additionalProp, path, i);
             }
             if (!_changing && value && value.$schema) {
-              errors = errors.concat(checkProp(value, value.$schema, path2, i));
+              errors = errors.concat(checkProp(value, value.$schema, path, i));
             }
           }
           return errors;
@@ -29288,11 +29288,11 @@ var require_signer = __commonJS({
     RequestSigner.prototype.writeDateHeader = function() {
       return this.writeHeader("date", jsprim.rfc1123(/* @__PURE__ */ new Date()));
     };
-    RequestSigner.prototype.writeTarget = function(method, path2) {
+    RequestSigner.prototype.writeTarget = function(method, path) {
       assert.string(method, "method");
-      assert.string(path2, "path");
+      assert.string(path, "path");
       method = method.toLowerCase();
-      this.writeHeader("(request-target)", method + " " + path2);
+      this.writeHeader("(request-target)", method + " " + path);
     };
     RequestSigner.prototype.sign = function(cb) {
       assert.func(cb, "callback");
@@ -38227,11 +38227,11 @@ var require_mime_types = __commonJS({
       }
       return exts[0];
     }
-    function lookup(path2) {
-      if (!path2 || typeof path2 !== "string") {
+    function lookup(path) {
+      if (!path || typeof path !== "string") {
         return false;
       }
-      var extension2 = extname("x." + path2).toLowerCase().substr(1);
+      var extension2 = extname("x." + path).toLowerCase().substr(1);
       if (!extension2) {
         return false;
       }
@@ -38968,7 +38968,7 @@ var require_form_data = __commonJS({
     "use strict";
     var CombinedStream = require_combined_stream();
     var util = __require("util");
-    var path2 = __require("path");
+    var path = __require("path");
     var http = __require("http");
     var https = __require("https");
     var parseUrl = __require("url").parse;
@@ -39096,11 +39096,11 @@ var require_form_data = __commonJS({
     FormData.prototype._getContentDisposition = function(value, options) {
       var filename;
       if (typeof options.filepath === "string") {
-        filename = path2.normalize(options.filepath).replace(/\\/g, "/");
+        filename = path.normalize(options.filepath).replace(/\\/g, "/");
       } else if (options.filename || value && (value.name || value.path)) {
-        filename = path2.basename(options.filename || value && (value.name || value.path));
+        filename = path.basename(options.filename || value && (value.name || value.path));
       } else if (value && value.readable && hasOwn(value, "httpVersion")) {
-        filename = path2.basename(value.client._httpMessage.path || "");
+        filename = path.basename(value.client._httpMessage.path || "");
       }
       if (filename) {
         return 'filename="' + filename + '"';
@@ -41080,7 +41080,7 @@ var require_auth = __commonJS({
         return authHeader;
       }
     };
-    Auth.prototype.digest = function(method, path2, authHeader) {
+    Auth.prototype.digest = function(method, path, authHeader) {
       var self2 = this;
       var challenge = {};
       var re = /([a-z0-9_-]+)=(?:"([^"]+)"|([a-z0-9_-]+))/gi;
@@ -41103,13 +41103,13 @@ var require_auth = __commonJS({
       var nc = qop && "00000001";
       var cnonce = qop && uuid().replace(/-/g, "");
       var ha1 = ha1Compute(challenge.algorithm, self2.user, challenge.realm, self2.pass, challenge.nonce, cnonce);
-      var ha2 = md52(method + ":" + path2);
+      var ha2 = md52(method + ":" + path);
       var digestResponse = qop ? md52(ha1 + ":" + challenge.nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2) : md52(ha1 + ":" + challenge.nonce + ":" + ha2);
       var authValues = {
         username: self2.user,
         realm: challenge.realm,
         nonce: challenge.nonce,
-        uri: path2,
+        uri: path,
         qop,
         response: digestResponse,
         nc,
@@ -42912,10 +42912,10 @@ var require_request = __commonJS({
     Request.prototype.enableUnixSocket = function() {
       var unixParts = this.uri.path.split(":");
       var host = unixParts[0];
-      var path2 = unixParts[1];
+      var path = unixParts[1];
       this.socketPath = host;
-      this.uri.pathname = path2;
-      this.uri.path = path2;
+      this.uri.pathname = path;
+      this.uri.path = path;
       this.uri.host = host;
       this.uri.hostname = host;
       this.uri.isUnix = true;
@@ -42964,14 +42964,14 @@ var require_request = __commonJS({
           md5: self2.getHeader("content-md5") || "",
           amazonHeaders: aws2.canonicalizeHeaders(self2.headers)
         };
-        var path2 = self2.uri.path;
-        if (opts.bucket && path2) {
-          auth.resource = "/" + opts.bucket + path2;
-        } else if (opts.bucket && !path2) {
+        var path = self2.uri.path;
+        if (opts.bucket && path) {
+          auth.resource = "/" + opts.bucket + path;
+        } else if (opts.bucket && !path) {
           auth.resource = "/" + opts.bucket;
-        } else if (!opts.bucket && path2) {
-          auth.resource = path2;
-        } else if (!opts.bucket && !path2) {
+        } else if (!opts.bucket && path) {
+          auth.resource = path;
+        } else if (!opts.bucket && !path) {
           auth.resource = "/";
         }
         auth.resource = aws2.canonicalizeResource(auth.resource);
@@ -43649,22 +43649,22 @@ var require_url_parse = __commonJS({
     }
     function resolve(relative, base) {
       if (relative === "") return base;
-      var path2 = (base || "/").split("/").slice(0, -1).concat(relative.split("/")), i = path2.length, last = path2[i - 1], unshift = false, up = 0;
+      var path = (base || "/").split("/").slice(0, -1).concat(relative.split("/")), i = path.length, last = path[i - 1], unshift = false, up = 0;
       while (i--) {
-        if (path2[i] === ".") {
-          path2.splice(i, 1);
-        } else if (path2[i] === "..") {
-          path2.splice(i, 1);
+        if (path[i] === ".") {
+          path.splice(i, 1);
+        } else if (path[i] === "..") {
+          path.splice(i, 1);
           up++;
         } else if (up) {
           if (i === 0) unshift = true;
-          path2.splice(i, 1);
+          path.splice(i, 1);
           up--;
         }
       }
-      if (unshift) path2.unshift("");
-      if (last === "." || last === "..") path2.push("");
-      return path2.join("/");
+      if (unshift) path.unshift("");
+      if (last === "." || last === "..") path.push("");
+      return path.join("/");
     }
     function Url(address, location, parser) {
       address = trimLeft(address);
@@ -44058,10 +44058,10 @@ var require_store2 = __commonJS({
       constructor() {
         this.synchronous = false;
       }
-      findCookie(domain, path2, key, cb) {
+      findCookie(domain, path, key, cb) {
         throw new Error("findCookie is not implemented");
       }
-      findCookies(domain, path2, allowSpecialUseDomain, cb) {
+      findCookies(domain, path, allowSpecialUseDomain, cb) {
         throw new Error("findCookies is not implemented");
       }
       putCookie(cookie, cb) {
@@ -44070,10 +44070,10 @@ var require_store2 = __commonJS({
       updateCookie(oldCookie, newCookie, cb) {
         throw new Error("updateCookie is not implemented");
       }
-      removeCookie(domain, path2, key, cb) {
+      removeCookie(domain, path, key, cb) {
         throw new Error("removeCookie is not implemented");
       }
-      removeCookies(domain, path2, cb) {
+      removeCookies(domain, path, cb) {
         throw new Error("removeCookies is not implemented");
       }
       removeAllCookies(cb) {
@@ -44232,16 +44232,16 @@ var require_memstore2 = __commonJS({
         const util = { inspect: getUtilInspect(inspectFallback) };
         return `{ idx: ${util.inspect(this.idx, false, 2)} }`;
       }
-      findCookie(domain, path2, key, cb) {
+      findCookie(domain, path, key, cb) {
         if (!this.idx[domain]) {
           return cb(null, void 0);
         }
-        if (!this.idx[domain][path2]) {
+        if (!this.idx[domain][path]) {
           return cb(null, void 0);
         }
-        return cb(null, this.idx[domain][path2][key] || null);
+        return cb(null, this.idx[domain][path][key] || null);
       }
-      findCookies(domain, path2, allowSpecialUseDomain, cb) {
+      findCookies(domain, path, allowSpecialUseDomain, cb) {
         const results = [];
         if (typeof allowSpecialUseDomain === "function") {
           cb = allowSpecialUseDomain;
@@ -44251,7 +44251,7 @@ var require_memstore2 = __commonJS({
           return cb(null, []);
         }
         let pathMatcher;
-        if (!path2) {
+        if (!path) {
           pathMatcher = function matchAll(domainIndex) {
             for (const curPath in domainIndex) {
               const pathIndex = domainIndex[curPath];
@@ -44263,7 +44263,7 @@ var require_memstore2 = __commonJS({
         } else {
           pathMatcher = function matchRFC(domainIndex) {
             Object.keys(domainIndex).forEach((cookiePath) => {
-              if (pathMatch(path2, cookiePath)) {
+              if (pathMatch(path, cookiePath)) {
                 const pathIndex = domainIndex[cookiePath];
                 for (const key in pathIndex) {
                   results.push(pathIndex[key]);
@@ -44296,16 +44296,16 @@ var require_memstore2 = __commonJS({
       updateCookie(oldCookie, newCookie, cb) {
         this.putCookie(newCookie, cb);
       }
-      removeCookie(domain, path2, key, cb) {
-        if (this.idx[domain] && this.idx[domain][path2] && this.idx[domain][path2][key]) {
-          delete this.idx[domain][path2][key];
+      removeCookie(domain, path, key, cb) {
+        if (this.idx[domain] && this.idx[domain][path] && this.idx[domain][path][key]) {
+          delete this.idx[domain][path][key];
         }
         cb(null);
       }
-      removeCookies(domain, path2, cb) {
+      removeCookies(domain, path, cb) {
         if (this.idx[domain]) {
-          if (path2) {
-            delete this.idx[domain][path2];
+          if (path) {
+            delete this.idx[domain][path];
           } else {
             delete this.idx[domain];
           }
@@ -44322,11 +44322,11 @@ var require_memstore2 = __commonJS({
         const domains = Object.keys(idx);
         domains.forEach((domain) => {
           const paths = Object.keys(idx[domain]);
-          paths.forEach((path2) => {
-            const keys = Object.keys(idx[domain][path2]);
+          paths.forEach((path) => {
+            const keys = Object.keys(idx[domain][path]);
             keys.forEach((key) => {
               if (key !== null) {
-                cookies.push(idx[domain][path2][key]);
+                cookies.push(idx[domain][path][key]);
               }
             });
           });
@@ -44372,8 +44372,8 @@ var require_memstore2 = __commonJS({
       const indent = "  ";
       let result = `${indent}'${domainName}': [Object: null prototype] {
 `;
-      Object.keys(domainValue).forEach((path2, i, paths) => {
-        result += formatPath(path2, domainValue[path2]);
+      Object.keys(domainValue).forEach((path, i, paths) => {
+        result += formatPath(path, domainValue[path]);
         if (i < paths.length - 1) {
           result += ",";
         }
@@ -44680,18 +44680,18 @@ var require_cookie3 = __commonJS({
       }
       return true;
     }
-    function defaultPath(path2) {
-      if (!path2 || path2.substr(0, 1) !== "/") {
+    function defaultPath(path) {
+      if (!path || path.substr(0, 1) !== "/") {
         return "/";
       }
-      if (path2 === "/") {
-        return path2;
+      if (path === "/") {
+        return path;
       }
-      const rightSlash = path2.lastIndexOf("/");
+      const rightSlash = path.lastIndexOf("/");
       if (rightSlash === 0) {
         return "/";
       }
-      return path2.slice(0, rightSlash);
+      return path.slice(0, rightSlash);
     }
     function trimTerminator(str) {
       if (validators.isEmptyString(str)) return str;
@@ -44899,19 +44899,19 @@ var require_cookie3 = __commonJS({
       cmp = a.creationIndex - b.creationIndex;
       return cmp;
     }
-    function permutePath(path2) {
-      validators.validate(validators.isString(path2));
-      if (path2 === "/") {
+    function permutePath(path) {
+      validators.validate(validators.isString(path));
+      if (path === "/") {
         return ["/"];
       }
-      const permutations = [path2];
-      while (path2.length > 1) {
-        const lindex = path2.lastIndexOf("/");
+      const permutations = [path];
+      while (path.length > 1) {
+        const lindex = path.lastIndexOf("/");
         if (lindex === 0) {
           break;
         }
-        path2 = path2.substr(0, lindex);
-        permutations.push(path2);
+        path = path.substr(0, lindex);
+        permutations.push(path);
       }
       permutations.push("/");
       return permutations;
@@ -45324,7 +45324,7 @@ var require_cookie3 = __commonJS({
         validators.validate(validators.isObject(options), cb, options);
         validators.validate(validators.isFunction(cb), cb);
         const host = canonicalDomain(context.hostname);
-        const path2 = context.pathname || "/";
+        const path = context.pathname || "/";
         let secure = options.secure;
         if (secure == null && context.protocol && (context.protocol == "https:" || context.protocol == "wss:")) {
           secure = true;
@@ -45355,7 +45355,7 @@ var require_cookie3 = __commonJS({
               return false;
             }
           }
-          if (!allPaths && !pathMatch(path2, c.path)) {
+          if (!allPaths && !pathMatch(path, c.path)) {
             return false;
           }
           if (c.secure && !secure) {
@@ -45379,7 +45379,7 @@ var require_cookie3 = __commonJS({
         }
         store.findCookies(
           host,
-          allPaths ? null : path2,
+          allPaths ? null : path,
           this.allowSpecialUseDomain,
           (err, cookies) => {
             if (err) {
@@ -45716,7 +45716,7 @@ var require_types2 = __commonJS({
 // ../node_modules/mime/mime.js
 var require_mime = __commonJS({
   "../node_modules/mime/mime.js"(exports2, module2) {
-    var path2 = __require("path");
+    var path = __require("path");
     var fs = __require("fs");
     function Mime() {
       this.types = /* @__PURE__ */ Object.create(null);
@@ -45746,8 +45746,8 @@ var require_mime = __commonJS({
       this.define(map);
       this._loading = null;
     };
-    Mime.prototype.lookup = function(path3, fallback) {
-      var ext = path3.replace(/^.*[\.\/\\]/, "").toLowerCase();
+    Mime.prototype.lookup = function(path2, fallback) {
+      var ext = path2.replace(/^.*[\.\/\\]/, "").toLowerCase();
       return this.types[ext] || fallback || this.default_type;
     };
     Mime.prototype.extension = function(mimeType) {
@@ -46111,7 +46111,7 @@ var require_telegram = __commonJS({
     var qs = __require("querystring");
     var stream = __require("stream");
     var mime = require_mime();
-    var path2 = __require("path");
+    var path = __require("path");
     var URL3 = __require("url");
     var fs = __require("fs");
     var pump = require_pump();
@@ -46386,7 +46386,7 @@ var require_telegram = __commonJS({
           var contentType = fileOptions.contentType;
           if (data instanceof stream.Stream) {
             if (!filename && data.path) {
-              var url = URL3.parse(path2.basename(data.path.toString()));
+              var url = URL3.parse(path.basename(data.path.toString()));
               if (url.pathname) {
                 filename = qs.unescape(url.pathname);
               }
@@ -46413,7 +46413,7 @@ var require_telegram = __commonJS({
             if (this.options.filepath && fs.existsSync(data)) {
               filedata = fs.createReadStream(data);
               if (!filename) {
-                filename = path2.basename(data);
+                filename = path.basename(data);
               }
             } else {
               return [null, data];
@@ -46563,7 +46563,7 @@ var require_telegram = __commonJS({
           var fileStream = this.getFileStream(fileId, form);
           fileStream.on("info", function(info) {
             var fileName = info.uri.slice(info.uri.lastIndexOf("/") + 1);
-            var filePath = path2.join(downloadDir, fileName);
+            var filePath = path.join(downloadDir, fileName);
             pump(fileStream, fs.createWriteStream(filePath), function(error) {
               if (error) {
                 return reject(error);
@@ -49769,7 +49769,7 @@ var require_telegram2 = __commonJS({
     var qs = __require("querystring");
     var stream = __require("stream");
     var mime = require_mime();
-    var path2 = __require("path");
+    var path = __require("path");
     var URL3 = __require("url");
     var fs = __require("fs");
     var pump = require_pump();
@@ -50065,7 +50065,7 @@ var require_telegram2 = __commonJS({
         let contentType = fileOptions.contentType;
         if (data instanceof stream.Stream) {
           if (!filename && data.path) {
-            const url = URL3.parse(path2.basename(data.path.toString()));
+            const url = URL3.parse(path.basename(data.path.toString()));
             if (url.pathname) {
               filename = qs.unescape(url.pathname);
             }
@@ -50092,7 +50092,7 @@ var require_telegram2 = __commonJS({
           if (this.options.filepath && fs.existsSync(data)) {
             filedata = fs.createReadStream(data);
             if (!filename) {
-              filename = path2.basename(data);
+              filename = path.basename(data);
             }
           } else {
             return [null, data];
@@ -50224,7 +50224,7 @@ var require_telegram2 = __commonJS({
         const fileStream = this.getFileStream(fileId, form);
         fileStream.on("info", (info) => {
           const fileName = info.uri.slice(info.uri.lastIndexOf("/") + 1);
-          const filePath = path2.join(downloadDir, fileName);
+          const filePath = path.join(downloadDir, fileName);
           pump(fileStream, fs.createWriteStream(filePath), (error) => {
             if (error) {
               return reject(error);
@@ -52633,7 +52633,6 @@ var require_node_telegram_bot_api = __commonJS({
 
 // ../adapters/telegram/factory.ts
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 
 // ../adapters/telegram/adapter.ts
 var import_node_telegram_bot_api = __toESM(require_node_telegram_bot_api(), 1);
@@ -52940,28 +52939,6 @@ var TelegramCommAdapterFactory = class {
     const ref = registration.credentials_ref ?? "";
     const envAllowed = normalizeCsv(env2.TELEGRAM_USER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
-    if (ref.startsWith("env:")) {
-      const name = ref.slice("env:".length);
-      const fromEnv = name ? env2[name] : void 0;
-      if (fromEnv) {
-        return {
-          credentials: {
-            botToken: fromEnv,
-            allowedUserIds: mergeAllowed(envAllowed, void 0, dbAllowed)
-          }
-        };
-      }
-      const fromFile = await readProjectTelegramConfig(registration.project, registration.agent);
-      if (fromFile?.botToken) {
-        return {
-          credentials: {
-            botToken: fromFile.botToken,
-            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed)
-          }
-        };
-      }
-      return void 0;
-    }
     if (ref.startsWith("file:")) {
       const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
       if (fromFile?.botToken) {
@@ -52975,23 +52952,6 @@ var TelegramCommAdapterFactory = class {
       return void 0;
     }
     return void 0;
-  }
-  async fallbackFromEnv(env2) {
-    const token = env2.TELEGRAM_BOT_TOKEN;
-    if (!token) return void 0;
-    let identity;
-    try {
-      identity = await probeTelegramIdentity(token);
-    } catch {
-      return void 0;
-    }
-    return {
-      credentials: {
-        botToken: token,
-        allowedUserIds: normalizeCsv(env2.TELEGRAM_USER_ID)
-      },
-      accountId: identity.bot_user_id
-    };
   }
   async probeIdentity(credentials) {
     const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
@@ -53140,14 +53100,6 @@ async function readAllowlistFromDb(context, bot_user_id) {
     if (!out.includes(row.sender_id)) out.push(row.sender_id);
   }
   return out;
-}
-async function readProjectTelegramConfig(project, agent) {
-  const agentConfig = await readJsonTelegramConfig(path.join(project, `.${agent}`, "telegram.json"));
-  if (agentConfig) return agentConfig;
-  if (agent !== "claude") {
-    return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
-  }
-  return void 0;
 }
 async function readJsonTelegramConfig(filePath) {
   try {

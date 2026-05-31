@@ -10,10 +10,6 @@ export declare class TelegramCommAdapterFactory implements CommAdapterFactory {
     resolveCredentials(registration: AccountRegistration, env: CommAdapterFactoryEnv, context?: ResolveCredentialsContext): Promise<{
         credentials: Record<string, unknown>;
     } | undefined>;
-    fallbackFromEnv(env: CommAdapterFactoryEnv): Promise<{
-        credentials: Record<string, unknown>;
-        accountId: AccountId;
-    } | undefined>;
     probeIdentity(credentials: Record<string, unknown>): Promise<{
         accountId: AccountId;
         accountUsername?: string | null;

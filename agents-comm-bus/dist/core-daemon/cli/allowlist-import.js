@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 /**
@@ -118,15 +117,11 @@ export async function allowlistImportFromFiles(options = {}) {
     }
     return { comm, added, skipped, details };
 }
-function filePathFromCredentialsRef(ref, project) {
+function filePathFromCredentialsRef(ref, _project) {
     if (!ref)
         return null;
     if (ref.startsWith("file:")) {
         return ref.slice("file:".length);
-    }
-    // env:<NAME> path — file fallback is at project/.claude/telegram.json by convention.
-    if (ref.startsWith("env:")) {
-        return path.join(project, ".claude", "telegram.json");
     }
     return null;
 }

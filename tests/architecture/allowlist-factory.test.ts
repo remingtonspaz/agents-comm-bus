@@ -25,7 +25,7 @@ function makeRegistration(overrides: Partial<AccountRegistration> = {}): Account
     agent: CLAUDE,
     account_label: "main",
     bot_user_id: "8950482517",
-    credentials_ref: "env:TELEGRAM_BOT_TOKEN",
+    credentials_ref: "file:/missing/telegram.json",
     bot_username: "Refactor_Claude_Test",
     created_at: 1,
     updated_at: 1,
@@ -34,18 +34,27 @@ function makeRegistration(overrides: Partial<AccountRegistration> = {}): Account
   };
 }
 
-async function withStorage<T>(test: (dbPath: string) => Promise<T>): Promise<T> {
+async function withStorage<T>(test: (dir: string, dbPath: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "acb-allowlist-factory-"));
   try {
-    return await test(join(dir, "storage.db"));
+    return await test(dir, join(dir, "storage.db"));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
+async function writeCredentialFile(
+  dir: string,
+  body: { botToken: string; userId?: string[] },
+): Promise<string> {
+  const path = join(dir, "telegram.json");
+  await writeFile(path, JSON.stringify(body));
+  return `file:${path}`;
+}
+
 describe("Telegram factory allowlist union", () => {
   it("unions env CSV with allowlist_global and allowlist_per_bot rows", async () => {
-    await withStorage(async (dbPath) => {
+    await withStorage(async (dir, dbPath) => {
       const storage = await openSqliteStorage(dbPath);
       await storage.addAllowlistGlobal({
         comm: TELEGRAM,
@@ -68,9 +77,10 @@ describe("Telegram factory allowlist union", () => {
 
       const factory = new TelegramCommAdapterFactory();
       const resolved = await factory.resolveCredentials(
-        makeRegistration(),
+        makeRegistration({
+          credentials_ref: await writeCredentialFile(dir, { botToken: "test-token" }),
+        }),
         {
-          TELEGRAM_BOT_TOKEN: "test-token",
           TELEGRAM_USER_ID: "env-sender-1,env-sender-2",
         },
         { storage },
@@ -99,7 +109,7 @@ describe("Telegram factory allowlist union", () => {
   });
 
   it("deduplicates ids that appear in multiple sources", async () => {
-    await withStorage(async (dbPath) => {
+    await withStorage(async (dir, dbPath) => {
       const storage = await openSqliteStorage(dbPath);
       await storage.addAllowlistGlobal({
         comm: TELEGRAM,
@@ -115,9 +125,10 @@ describe("Telegram factory allowlist union", () => {
 
       const factory = new TelegramCommAdapterFactory();
       const resolved = await factory.resolveCredentials(
-        makeRegistration(),
+        makeRegistration({
+          credentials_ref: await writeCredentialFile(dir, { botToken: "test-token" }),
+        }),
         {
-          TELEGRAM_BOT_TOKEN: "test-token",
           TELEGRAM_USER_ID: "8296218244",
         },
         { storage },
@@ -128,21 +139,27 @@ describe("Telegram factory allowlist union", () => {
     });
   });
 
-  it("works when no storage context is provided (env-only path)", async () => {
-    const factory = new TelegramCommAdapterFactory();
-    const resolved = await factory.resolveCredentials(
-      makeRegistration(),
-      {
-        TELEGRAM_BOT_TOKEN: "test-token",
-        TELEGRAM_USER_ID: "env-only-sender",
-      },
-      // No `context` argument
-    );
-    assert.ok(resolved);
-    assert.deepEqual(resolved.credentials.allowedUserIds, ["env-only-sender"]);
+  it("works when no storage context is provided (file ref + env allowlist path)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-allowlist-no-storage-"));
+    try {
+      const factory = new TelegramCommAdapterFactory();
+      const resolved = await factory.resolveCredentials(
+        makeRegistration({
+          credentials_ref: await writeCredentialFile(dir, { botToken: "test-token" }),
+        }),
+        {
+          TELEGRAM_USER_ID: "env-only-sender",
+        },
+        // No `context` argument
+      );
+      assert.ok(resolved);
+      assert.deepEqual(resolved.credentials.allowedUserIds, ["env-only-sender"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
-  it("prefers project-local .codex credentials for Codex registrations", async () => {
+  it("does not resolve env refs or project-local telegram.json fallbacks", async () => {
     const project = await mkdtemp(join(tmpdir(), "acb-codex-telegram-config-"));
     try {
       await mkdir(join(project, ".claude"));
@@ -163,12 +180,10 @@ describe("Telegram factory allowlist union", () => {
           agent: CODEX,
           credentials_ref: "env:TELEGRAM_BOT_TOKEN",
         }),
-        {},
+        { TELEGRAM_BOT_TOKEN: "env-token" },
       );
 
-      assert.ok(resolved);
-      assert.equal(resolved.credentials.botToken, "codex-token");
-      assert.deepEqual(resolved.credentials.allowedUserIds, ["codex-user"]);
+      assert.equal(resolved, undefined);
     } finally {
       await rm(project, { recursive: true, force: true });
     }

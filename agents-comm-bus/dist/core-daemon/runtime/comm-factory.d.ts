@@ -5,8 +5,8 @@ import type { IpcMethodHandler } from "./ipc-method.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 export interface CommAdapterFactoryEnv {
     /**
-     * `process.env`-like map. Comm factories may use environment variables as
-     * a legacy / dev-mode credentials fallback (e.g. `TELEGRAM_BOT_TOKEN`).
+     * `process.env`-like map. Comm factories may use environment variables for
+     * non-secret runtime options such as allowlist CSVs.
      */
     readonly [key: string]: string | undefined;
 }
@@ -15,8 +15,8 @@ export interface CommAdapterFactory {
     readonly commId: CommId;
     /**
      * Resolve credentials from a stored `account_registrations` row. Returns
-     * `undefined` if the registration can't be resolved (e.g. env var missing,
-     * file unreadable) — the daemon will log and skip the row.
+     * `undefined` if the registration can't be resolved (e.g. file unreadable);
+     * the daemon will log and skip the row.
      *
      * The optional `context.storage` lets the factory query DB-backed
      * configuration (e.g. allowlist tables) at attach/reload time. Factories
@@ -24,16 +24,6 @@ export interface CommAdapterFactory {
      */
     resolveCredentials(registration: AccountRegistration, env: CommAdapterFactoryEnv, context?: ResolveCredentialsContext): Promise<{
         credentials: Record<string, unknown>;
-    } | undefined>;
-    /**
-     * Optional environment-only fallback used when no `account_registrations`
-     * row is available (e.g. fresh dev install before `account-add`). The
-     * factory is responsible for resolving the comm-native account id (e.g.
-     * via Telegram's `getMe`) so the bus can key its adapter map by it.
-     */
-    fallbackFromEnv?(env: CommAdapterFactoryEnv): Promise<{
-        credentials: Record<string, unknown>;
-        accountId: AccountId;
     } | undefined>;
     /**
      * Optional identity probe used by comm-agnostic admin surfaces. For example,

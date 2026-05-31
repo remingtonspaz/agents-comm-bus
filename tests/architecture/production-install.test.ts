@@ -472,7 +472,6 @@ describe("production marketplace install (release gate)", () => {
         return {
           commId: "telegram",
           async resolveCredentials() { return undefined; },
-          fallbackFromEnv() { return undefined; },
           create() { throw new Error("not used by this test"); },
           async probeIdentity(credentials) {
             return {

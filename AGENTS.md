@@ -254,10 +254,9 @@ version-compatible handshake before deciding whether to reuse or respawn.
 2. Create `adapters/<name>/factory.ts` implementing
    `CommAdapterFactory` (from `runtime/comm-factory.js`):
    - `commId` — the string written to `account_registrations.comm`.
-   - `resolveCredentials(registration, env)` — read whatever `credentials_ref`
-     scheme the adapter supports (`env:VARNAME`, `file:<path>`, etc.).
-   - `fallbackFromEnv(env)` (optional) — dev-mode fallback when no
-     registrations exist yet.
+   - `resolveCredentials(registration, env)` — read the adapter's
+     daemon-owned `file:<path>` credential reference. Env may still carry
+     non-secret runtime options such as allowlist CSVs.
    - `create(credentials)` — instantiate the adapter.
    - `ipcMethods(deps)` (optional) — return a map of IPC method names to
      handlers (the MCP-tool surface). Method names should be prefixed with
@@ -303,10 +302,9 @@ version-compatible handshake before deciding whether to reuse or respawn.
 - **Shared inbound queue.** `pendingInbound` is owned by the daemon runtime
   and passed by reference to bridges + comm IPC handlers. Bridges drain it
   with their session-id stamping; comm-MCP handlers drain it generically.
-- **Credentials are references, not secrets.** The DB stores
-  `credentials_ref` (e.g. `env:TELEGRAM_BOT_TOKEN`, `file:/abs/path.json`).
-  Adapter factories resolve them at startup; secrets never sit in the
-  records table.
+- **Credentials are daemon-owned file references, not inline secrets.** The
+  DB stores `credentials_ref` as `file:/abs/path.json`. Adapter factories
+  resolve them at startup; secrets never sit in the records table.
 - **Callback resolutions bypass TTL.** When a user actively taps a button or
   sends a text reply, the query resolves even if its TTL passed. TTL is for
   abandoned queries, not slow ones.
@@ -493,10 +491,10 @@ and the hook side in `hosts/claude/hooks/wake-support.js`.
 
 | File | Purpose |
 |------|---------|
-| `.mcp.json` (gitignored) | Local-dev MCP server registration with env-supplied creds |
+| `.mcp.json` (gitignored) | Local-dev MCP server registration path/env overrides |
 | `.mcp.json.template` | Seed for `.mcp.json` after a fresh clone |
 | `.claude-plugin/plugin.json` | Plugin metadata + canonical MCP server block for marketplace install |
-| `.claude/telegram.json` (gitignored) | Per-project `{ botToken, userId }` — read by `TelegramCommAdapterFactory.resolveCredentials` as a fallback when the registration's `env:VARNAME` ref is unset |
+| `.claude/telegram.json` (gitignored) | Legacy per-project Telegram config used only by migration readers; runtime credentials live in daemon-owned token files |
 | `.claude/settings.local.json` (gitignored) | Hook command paths + permission allow/deny rules |
 | `.codex/config.toml` (gitignored) | Project-local Codex hook config written by `install-codex.js`; global `~/.codex/config.toml` should keep only the path-only MCP server entry. |
 
@@ -511,8 +509,8 @@ cp .mcp.json.template .mcp.json
 node agents-comm-bus\dist\cli\index.js account-add `
   --project "<absolute project path>" `
   --agent claude `
-  --account-label main
-# (with TELEGRAM_BOT_TOKEN exported)
+  --account-label main `
+  --bot-token "<telegram bot token>"
 ```
 
 ## Troubleshooting
@@ -639,8 +637,8 @@ follow-up commits.
   attached Telegram adapters when `process.env.TELEGRAM_BOT_TOKEN` was set
   in the daemon's own environment, ignoring the `account_registrations`
   table the CLI populates. The `TelegramCommAdapterFactory` now resolves
-  credentials from `credentials_ref` (`env:VARNAME` with `.claude/telegram.json`
-  fallback) for every registered row.
+  daemon-owned `file:` credentials from `credentials_ref` for every
+  registered row.
 - **HTML rendering for query prompts requires `parse_mode: HTML`** on the
   `sendMessage` call, plus an HTML-escaped prompt body. `OutboundPayload.format
   = "html"` propagates through `telegramSendOptions` to set `parse_mode`.

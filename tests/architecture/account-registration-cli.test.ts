@@ -19,6 +19,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 describe("account registration CLI contract", () => {
   it("exposes explicit account subcommands without implicit registration wording", () => {
     const source = readFileSync(resolve(repoRoot, "core-daemon/cli/index.ts"), "utf8");
+    const accountAddSource = readFileSync(resolve(repoRoot, "core-daemon/cli/account-add.ts"), "utf8");
 
     assert.match(source, /account-add/);
     assert.match(source, /account-list/);
@@ -26,6 +27,9 @@ describe("account registration CLI contract", () => {
     assert.match(source, /account-relabel/);
     assert.match(source, /account-update-token/);
     assert.doesNotMatch(source, /implicit/i);
+    assert.doesNotMatch(source, /credentials-ref/);
+    assert.doesNotMatch(source, /credentialsRef/);
+    assert.doesNotMatch(accountAddSource, /TELEGRAM_BOT_TOKEN/);
   });
 
   it("persists bot-token registrations as daemon-owned file credentials by default", async () => {
@@ -52,26 +56,6 @@ describe("account registration CLI contract", () => {
     });
   });
 
-  it("honors explicit credentials refs without writing a default token file", async () => {
-    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
-
-    const rec = await accountAdd({
-      project: "D:\\Projects\\stonks",
-      agent: "codex",
-      accountLabel: "stonks codex dev",
-      botToken: "secret-token",
-      credentialsRef: "env:STONKS_CODEX_TELEGRAM_BOT_TOKEN",
-      stateRoot,
-      probeIdentity: async () => ({
-        bot_user_id: "8743694023",
-        bot_username: "sd_stonks_codex_dev_bot",
-      }),
-    });
-
-    assert.equal(rec.credentials_ref, "env:STONKS_CODEX_TELEGRAM_BOT_TOKEN");
-    assert.equal(existsSync(join(stateRoot, "tokens")), false);
-  });
-
   it("rejects account-add when the bot id is already registered", async () => {
     const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
 
@@ -80,7 +64,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "secret-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8743694023", "sd_stonks_codex_dev_bot"),
     });
@@ -91,7 +74,6 @@ describe("account registration CLI contract", () => {
         agent: "claude",
         accountLabel: "main",
         botToken: "same-bot-token",
-        credentialsRef: "env:CLAUDE_TOKEN",
         stateRoot,
         probeIdentity: identity("8743694023", "sd_stonks_codex_dev_bot"),
       }),
@@ -112,7 +94,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "secret-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8743694023", "sd_stonks_codex_dev_bot"),
     });
@@ -123,7 +104,6 @@ describe("account registration CLI contract", () => {
         agent: "codex",
         accountLabel: "main",
         botToken: "replacement-token",
-        credentialsRef: "env:REPLACEMENT_TOKEN",
         stateRoot,
         probeIdentity: identity("8988792099", "sd_stonks_replacement_bot"),
       }),
@@ -144,7 +124,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "secret-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8743694023", "sd_stonks_codex_dev_bot"),
     });
@@ -167,7 +146,6 @@ describe("account registration CLI contract", () => {
       agent: "claude",
       accountLabel: "main",
       botToken: "claude-token",
-      credentialsRef: "env:CLAUDE_TOKEN",
       stateRoot,
       probeIdentity: identity("8950482517", "sd_claude_bot"),
     });
@@ -176,7 +154,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "codex-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8988792099", "sd_codex_bot"),
     });
@@ -201,7 +178,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "codex-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8988792099", "sd_codex_bot"),
     });
@@ -229,7 +205,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "codex-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8988792099", "sd_codex_bot"),
     });
@@ -288,7 +263,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "codex-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8988792099", "sd_codex_bot"),
     });
@@ -313,7 +287,6 @@ describe("account registration CLI contract", () => {
       agent: "claude",
       accountLabel: "main",
       botToken: "claude-token",
-      credentialsRef: "env:CLAUDE_TOKEN",
       stateRoot,
       probeIdentity: identity("8950482517", "sd_claude_bot"),
     });
@@ -322,7 +295,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "codex-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8988792099", "sd_codex_bot"),
     });
@@ -351,7 +323,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "main",
       botToken: "codex-token",
-      credentialsRef: "env:CODEX_TOKEN",
       stateRoot,
       probeIdentity: identity("8988792099", "sd_codex_bot"),
     });
@@ -360,7 +331,6 @@ describe("account registration CLI contract", () => {
       agent: "codex",
       accountLabel: "backup",
       botToken: "backup-token",
-      credentialsRef: "env:BACKUP_TOKEN",
       stateRoot,
       probeIdentity: identity("7777777777", "sd_backup_bot"),
     });

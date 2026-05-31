@@ -18,16 +18,15 @@ export interface AccountAddOptions {
   accountLabel: string;
   comm?: string;
   botToken?: string;
-  credentialsRef?: string;
   stateRoot?: string;
   probeIdentity?: ProbeIdentity;
 }
 
 export async function accountAdd(options: AccountAddOptions): Promise<AccountRegistration> {
   const comm = (options.comm ?? "telegram") as CommId;
-  const botToken = options.botToken ?? (comm === "telegram" ? process.env.TELEGRAM_BOT_TOKEN : undefined);
+  const botToken = options.botToken;
   if (!botToken) {
-    throw new Error("--bot-token is required for account-add (or TELEGRAM_BOT_TOKEN for telegram)");
+    throw new Error("--bot-token is required for account-add");
   }
   const identity = await (options.probeIdentity ?? ((token) =>
     probeIdentityViaDaemon({
@@ -65,7 +64,7 @@ export async function accountAdd(options: AccountAddOptions): Promise<AccountReg
       );
     }
 
-    const credentialsRef = options.credentialsRef ?? await writeTokenFile({
+    const credentialsRef = await writeTokenFile({
       stateRoot: options.stateRoot,
       comm,
       project: options.project,

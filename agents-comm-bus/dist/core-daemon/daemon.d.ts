@@ -36,8 +36,7 @@ export interface RunDaemonOptions {
  * Layout:
  *   1. Resolve filesystem paths, open storage / transcript / audit / blob stores.
  *   2. For each comm factory, load matching `account_registrations`, resolve
- *      credentials, instantiate one adapter per registration, dedup by bot id,
- *      fall back to `factory.fallbackFromEnv` when no rows are registered.
+ *      credentials, instantiate one adapter per registration, dedup by bot id.
  *   3. Construct the bus.
  *   4. For each agent bridge factory, construct the bridge with shared deps
  *      and ask it to attach to the live comms.

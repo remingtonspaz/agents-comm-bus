@@ -21,7 +21,6 @@ async function main() {
                 accountLabel: required(args.accountLabel ?? args["account-label"], "--account-label"),
                 comm: args.comm,
                 botToken: args.botToken ?? args["bot-token"],
-                credentialsRef: args.credentialsRef ?? args["credentials-ref"],
             });
             const reload = await reloadDaemonRegistrations();
             console.log(JSON.stringify({ ...redact(rec), reload }, null, 2));
@@ -191,7 +190,7 @@ function printHelp() {
     console.error(`agents-comm-bus CLI
 
 Account commands:
-  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>] [--credentials-ref <ref>]
+  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> --bot-token <token>
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
@@ -206,7 +205,7 @@ Allowlist commands:
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
 
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
-account-add stores --bot-token in a daemon-owned file ref by default; explicit --credentials-ref values are honored.
+account-add stores --bot-token in a daemon-owned file ref; credentials_ref is not user-supplied.
 `);
 }
 function resultSummary(result) {

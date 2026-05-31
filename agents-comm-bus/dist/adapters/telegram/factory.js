@@ -3,14 +3,12 @@
  *
  * Concentrates everything Telegram-specific in one place so daemon.ts can
  * stay adapter-agnostic. Owns:
- *   - credential resolution from account_registrations (env / file refs)
- *   - dev-mode env fallback (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_USER_ID`)
- *   - the project-local `.claude/telegram.json` reader (legacy convention)
+ *   - credential resolution from account_registrations (`file:` refs)
+ *   - runtime allowlist union from env CSV + DB rows
  *   - the MCP-tool IPC method surface: telegram_send, telegram_send_image,
  *     telegram_check_messages
  */
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { TelegramCommAdapter, probeTelegramIdentity } from "./adapter.js";
 const TELEGRAM_COMM_ID = "telegram";
 export class TelegramCommAdapterFactory {
@@ -19,28 +17,6 @@ export class TelegramCommAdapterFactory {
         const ref = registration.credentials_ref ?? "";
         const envAllowed = normalizeCsv(env.TELEGRAM_USER_ID);
         const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
-        if (ref.startsWith("env:")) {
-            const name = ref.slice("env:".length);
-            const fromEnv = name ? env[name] : undefined;
-            if (fromEnv) {
-                return {
-                    credentials: {
-                        botToken: fromEnv,
-                        allowedUserIds: mergeAllowed(envAllowed, undefined, dbAllowed),
-                    },
-                };
-            }
-            const fromFile = await readProjectTelegramConfig(registration.project, registration.agent);
-            if (fromFile?.botToken) {
-                return {
-                    credentials: {
-                        botToken: fromFile.botToken,
-                        allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
-                    },
-                };
-            }
-            return undefined;
-        }
         if (ref.startsWith("file:")) {
             const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
             if (fromFile?.botToken) {
@@ -54,25 +30,6 @@ export class TelegramCommAdapterFactory {
             return undefined;
         }
         return undefined;
-    }
-    async fallbackFromEnv(env) {
-        const token = env.TELEGRAM_BOT_TOKEN;
-        if (!token)
-            return undefined;
-        let identity;
-        try {
-            identity = await probeTelegramIdentity(token);
-        }
-        catch {
-            return undefined;
-        }
-        return {
-            credentials: {
-                botToken: token,
-                allowedUserIds: normalizeCsv(env.TELEGRAM_USER_ID),
-            },
-            accountId: identity.bot_user_id,
-        };
     }
     async probeIdentity(credentials) {
         const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
@@ -248,15 +205,6 @@ async function readAllowlistFromDb(context, bot_user_id) {
             out.push(row.sender_id);
     }
     return out;
-}
-async function readProjectTelegramConfig(project, agent) {
-    const agentConfig = await readJsonTelegramConfig(path.join(project, `.${agent}`, "telegram.json"));
-    if (agentConfig)
-        return agentConfig;
-    if (agent !== "claude") {
-        return readJsonTelegramConfig(path.join(project, ".claude", "telegram.json"));
-    }
-    return undefined;
 }
 async function readJsonTelegramConfig(filePath) {
     try {

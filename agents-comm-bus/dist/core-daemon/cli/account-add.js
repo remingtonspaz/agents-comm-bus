@@ -7,9 +7,9 @@ import { probeIdentityViaDaemon } from "./identity-probe.js";
 import { writeTokenFile } from "./token-file.js";
 export async function accountAdd(options) {
     const comm = (options.comm ?? "telegram");
-    const botToken = options.botToken ?? (comm === "telegram" ? process.env.TELEGRAM_BOT_TOKEN : undefined);
+    const botToken = options.botToken;
     if (!botToken) {
-        throw new Error("--bot-token is required for account-add (or TELEGRAM_BOT_TOKEN for telegram)");
+        throw new Error("--bot-token is required for account-add");
     }
     const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
         comm,
@@ -40,7 +40,7 @@ export async function accountAdd(options) {
                 `account_label=${existing.account_label}; use account-list to inspect it ` +
                 `or account-remove --comm ${comm} --bot-id ${identity.bot_user_id} before re-adding.`);
         }
-        const credentialsRef = options.credentialsRef ?? await writeTokenFile({
+        const credentialsRef = await writeTokenFile({
             stateRoot: options.stateRoot,
             comm,
             project: options.project,
