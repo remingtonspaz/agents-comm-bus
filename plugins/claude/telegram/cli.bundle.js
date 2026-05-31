@@ -58145,7 +58145,8 @@ Options:
 `);
 }
 var invokedPath = process.argv[1] ? pathToFileURL(resolve2(process.argv[1])).href : "";
-if (import.meta.url === invokedPath) {
+var invokedIsMigrateEntry = /(^|[\\/])migrate(\.[cm]?[jt]s)?$/.test(process.argv[1] ?? "");
+if (invokedIsMigrateEntry && import.meta.url === invokedPath) {
   try {
     const result = runMigration(parseMigrateArgs(process.argv.slice(2)));
     console.log(JSON.stringify(result, null, 2));

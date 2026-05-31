@@ -219,7 +219,15 @@ Options:
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
-if (import.meta.url === invokedPath) {
+// Self-run only as a standalone `migrate` entry. The basename guard is what makes
+// this bundle-safe: when migrate.ts is esbuilt as a dependency into another
+// entry's bundle (e.g. cli.bundle.js), `import.meta.url` collapses to the bundle
+// URL and equals invokedPath, which would otherwise fire this legacy-state scan
+// on EVERY CLI invocation and pollute the real command's stdout. Requiring the
+// invoked entry to actually be a migrate file prevents that; the user-facing
+// `migrate` subcommand still works via cli/index.ts -> runMigration.
+const invokedIsMigrateEntry = /(^|[\\/])migrate(\.[cm]?[jt]s)?$/.test(process.argv[1] ?? "");
+if (invokedIsMigrateEntry && import.meta.url === invokedPath) {
   try {
     const result = runMigration(parseMigrateArgs(process.argv.slice(2)));
     console.log(JSON.stringify(result, null, 2));

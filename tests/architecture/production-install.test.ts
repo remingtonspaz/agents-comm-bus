@@ -179,5 +179,42 @@ describe("production marketplace install (release gate)", () => {
         );
       }
     });
+
+    it(`B4[${agent}]: the staged CLI runs self-contained from an isolated copy`, async () => {
+      const isolated = await isolatedCopy(agent, comm);
+      const cli = path.join(isolated, "cli.bundle.js");
+      assert.ok(existsSync(cli), "staged plugin must contain cli.bundle.js");
+
+      // The CLI is the first user action (account-add). Run it with NO args: it
+      // links the whole graph, then prints help and exits 0 — no daemon/DB.
+      const result = await run(process.execPath, [cli], { cwd: isolated, timeout: 30000 }).catch(
+        (error: { stdout?: string; stderr?: string }) => ({
+          stdout: error.stdout ?? "",
+          stderr: error.stderr ?? String(error),
+        }),
+      );
+
+      // (a) self-contained: no missing module at link time.
+      assert.doesNotMatch(
+        `${result.stdout}\n${result.stderr}`,
+        MODULE_RESOLUTION_FAILURE,
+        `staged CLI is not self-contained:\n${result.stderr}`,
+      );
+      // (b) it actually linked + ran (help banner on stderr).
+      assert.match(
+        result.stderr,
+        /agents-comm-bus CLI/,
+        `staged CLI failed to run:\n${result.stdout}\n${result.stderr}`,
+      );
+      // (c) regression guard: bundling collapses every module's import.meta.url to
+      // the bundle URL, so a dependency's `import.meta.url === argv[1]` self-run
+      // guard (migrate.ts) would fire on EVERY invocation and dump a legacy-state
+      // scan to stdout. A no-arg CLI must print nothing to stdout.
+      assert.doesNotMatch(
+        result.stdout,
+        /migration_scan_started|"schema_version"/,
+        `staged CLI ran an unintended bundled self-run entry (stdout should be empty):\n${result.stdout.slice(0, 400)}`,
+      );
+    });
   }
 });
