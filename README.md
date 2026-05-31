@@ -102,6 +102,9 @@ session URL, thread ID, and daemon session ID are discovered at runtime.
 
 Account registration is explicit. The daemon stores the bot token in a
 daemon-owned file and stores only a `credentials_ref` in SQLite.
+Legacy `env:` registrations are migrated once to daemon-owned file refs when
+the token is still available from the old env var or project-local Telegram
+config. New registrations should use `--bot-token`.
 
 Common commands:
 

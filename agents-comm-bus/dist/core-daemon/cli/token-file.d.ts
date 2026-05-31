@@ -6,5 +6,6 @@ export declare function writeTokenFile(options: {
     agent: string;
     accountId: string;
     botToken: string;
+    userId?: string[];
 }): Promise<string>;
 //# sourceMappingURL=token-file.d.ts.map

@@ -10,7 +10,11 @@ export async function writeTokenFile(options) {
         accountId: options.accountId,
     });
     await mkdir(path.dirname(tokenFile), { recursive: true });
-    await writeFile(tokenFile, `${JSON.stringify({ botToken: options.botToken }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    const body = {
+        botToken: options.botToken,
+        ...(options.userId && options.userId.length > 0 ? { userId: options.userId } : {}),
+    };
+    await writeFile(tokenFile, `${JSON.stringify(body, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     try {
         await chmod(tokenFile, 0o600);
     }

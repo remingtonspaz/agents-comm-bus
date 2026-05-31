@@ -5594,9 +5594,13 @@ async function writeTokenFile(options) {
     accountId: options.accountId
   });
   await mkdir5(path11.dirname(tokenFile), { recursive: true });
+  const body = {
+    botToken: options.botToken,
+    ...options.userId && options.userId.length > 0 ? { userId: options.userId } : {}
+  };
   await writeFile3(
     tokenFile,
-    `${JSON.stringify({ botToken: options.botToken }, null, 2)}
+    `${JSON.stringify(body, null, 2)}
 `,
     { encoding: "utf8", mode: 384 }
   );

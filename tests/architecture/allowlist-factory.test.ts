@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
@@ -20,6 +20,7 @@ const CODEX = "codex" as AgentId;
 function makeRegistration(overrides: Partial<AccountRegistration> = {}): AccountRegistration {
   return {
     schema_version: SCHEMA_VERSION_ACCOUNT,
+    registration_id: "reg-allowlist-test",
     project: "/tmp/project-allowlist-test",
     comm: TELEGRAM,
     agent: CLAUDE,
@@ -159,7 +160,7 @@ describe("Telegram factory allowlist union", () => {
     }
   });
 
-  it("does not resolve env refs or project-local telegram.json fallbacks", async () => {
+  it("migrates a legacy env ref to a daemon-owned file ref from project-local telegram.json", async () => {
     const project = await mkdtemp(join(tmpdir(), "acb-codex-telegram-config-"));
     try {
       await mkdir(join(project, ".claude"));
@@ -173,19 +174,102 @@ describe("Telegram factory allowlist union", () => {
         JSON.stringify({ botToken: "codex-token", userId: ["codex-user"] }),
       );
 
-      const factory = new TelegramCommAdapterFactory();
-      const resolved = await factory.resolveCredentials(
-        makeRegistration({
+      await withStorage(async (stateRoot, dbPath) => {
+        const storage = await openSqliteStorage(dbPath);
+        const registration = makeRegistration({
           project,
           agent: CODEX,
           credentials_ref: "env:TELEGRAM_BOT_TOKEN",
-        }),
-        { TELEGRAM_BOT_TOKEN: "env-token" },
-      );
+        });
+        try {
+          await storage.putAccountRegistration(registration);
 
-      assert.equal(resolved, undefined);
+          const factory = new TelegramCommAdapterFactory();
+          const resolved = await factory.resolveCredentials(
+            registration,
+            {},
+            { storage, stateRoot },
+          );
+
+          assert.ok(resolved, "expected legacy env ref to migrate");
+          assert.equal(resolved.credentials.botToken, "codex-token");
+          assert.deepEqual(resolved.credentials.allowedUserIds, ["codex-user"]);
+
+          const [updated] = await storage.listAccountRegistrations({
+            comm: TELEGRAM,
+            agent: CODEX,
+          });
+          assert.ok(updated.credentials_ref.startsWith("file:"), "expected file: ref after migration");
+          const tokenFile = updated.credentials_ref.slice("file:".length);
+          const migrated = JSON.parse(await readFile(tokenFile, "utf8")) as {
+            botToken?: string;
+            userId?: string[];
+          };
+          assert.deepEqual(migrated, {
+            botToken: "codex-token",
+            userId: ["codex-user"],
+          });
+        } finally {
+          await storage.close();
+        }
+      });
     } finally {
       await rm(project, { recursive: true, force: true });
     }
+  });
+
+  it("leaves an unresolvable legacy env ref unresolved", async () => {
+    await withStorage(async (stateRoot, dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      const registration = makeRegistration({
+        credentials_ref: "env:TELEGRAM_BOT_TOKEN",
+      });
+      try {
+        await storage.putAccountRegistration(registration);
+
+        const factory = new TelegramCommAdapterFactory();
+        const resolved = await factory.resolveCredentials(
+          registration,
+          {},
+          { storage, stateRoot },
+        );
+
+        assert.equal(resolved, undefined);
+        const [unchanged] = await storage.listAccountRegistrations({ comm: TELEGRAM });
+        assert.equal(unchanged.credentials_ref, "env:TELEGRAM_BOT_TOKEN");
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
+  it("migrates a legacy env ref from the named environment variable when present", async () => {
+    await withStorage(async (stateRoot, dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      const registration = makeRegistration({
+        credentials_ref: "env:TELEGRAM_BOT_TOKEN",
+      });
+      try {
+        await storage.putAccountRegistration(registration);
+
+        const factory = new TelegramCommAdapterFactory();
+        const resolved = await factory.resolveCredentials(
+          registration,
+          { TELEGRAM_BOT_TOKEN: "env-token" },
+          { storage, stateRoot },
+        );
+
+        assert.ok(resolved, "expected env var token to migrate");
+        assert.equal(resolved.credentials.botToken, "env-token");
+        const [updated] = await storage.listAccountRegistrations({ comm: TELEGRAM });
+        assert.ok(updated.credentials_ref.startsWith("file:"));
+        const migrated = JSON.parse(
+          await readFile(updated.credentials_ref.slice("file:".length), "utf8"),
+        ) as { botToken?: string; userId?: string[] };
+        assert.deepEqual(migrated, { botToken: "env-token" });
+      } finally {
+        await storage.close();
+      }
+    });
   });
 });

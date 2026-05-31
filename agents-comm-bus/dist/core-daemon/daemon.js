@@ -250,10 +250,12 @@ async function loadCommAdapters(input) {
 async function createAdapterFromRegistration(input) {
     const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
         storage: input.storage,
+        stateRoot: input.stateRoot,
     });
     if (!resolved) {
+        const reason = unresolvedCredentialsReason(input.registration.credentials_ref);
         console.error(`agents-comm-bus: skipping ${input.factory.commId} account ${input.registration.account_label} ` +
-            `for project ${input.registration.project} (could not resolve credentials_ref=${input.registration.credentials_ref})`);
+            `for project ${input.registration.project} (${reason})`);
         return null;
     }
     return input.factory.create(resolved.credentials, input.registration.bot_user_id, {
@@ -309,7 +311,7 @@ export async function reloadAdapters(input) {
             skipped.push({
                 comm: entry.registration.comm,
                 account_id: entry.registration.bot_user_id,
-                reason: `could not resolve credentials_ref=${entry.registration.credentials_ref}`,
+                reason: unresolvedCredentialsReason(entry.registration.credentials_ref),
             });
             continue;
         }
@@ -379,7 +381,7 @@ export async function reloadAdapters(input) {
                 skipped.push({
                     comm: entry.registration.comm,
                     account_id: entry.registration.bot_user_id,
-                    reason: `could not re-resolve credentials_ref=${entry.registration.credentials_ref}`,
+                    reason: unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve"),
                 });
                 continue;
             }
@@ -443,6 +445,7 @@ export async function reloadAdapters(input) {
             continue;
         const resolved = await entry.factory.resolveCredentials(entry.registration, input.env, {
             storage: input.storage,
+            stateRoot: input.stateRoot,
         });
         if (!resolved) {
             // Symmetric with the attach branch: surface credential resolution
@@ -454,7 +457,7 @@ export async function reloadAdapters(input) {
             skipped.push({
                 comm: entry.registration.comm,
                 account_id: entry.registration.bot_user_id,
-                reason: `could not re-resolve credentials_ref=${entry.registration.credentials_ref}`,
+                reason: unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve"),
             });
             continue;
         }
@@ -552,6 +555,13 @@ function sameStringSet(a, b) {
             return false;
     }
     return true;
+}
+function unresolvedCredentialsReason(ref, action = "resolve") {
+    if (ref.startsWith("env:")) {
+        return `could not ${action} credentials_ref=${ref}: env: credential refs are retired; ` +
+            "rerun account-update-token with --bot-token to create a daemon-owned file: ref";
+    }
+    return `could not ${action} credentials_ref=${ref}`;
 }
 function adapterMapKey(commId, accountId) {
     return `${commId}:${accountId}`;

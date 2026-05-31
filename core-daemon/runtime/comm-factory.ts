@@ -28,9 +28,10 @@ export interface CommAdapterFactory {
    * `undefined` if the registration can't be resolved (e.g. file unreadable);
    * the daemon will log and skip the row.
    *
-   * The optional `context.storage` lets the factory query DB-backed
-   * configuration (e.g. allowlist tables) at attach/reload time. Factories
-   * that don't need storage should ignore the parameter.
+   * The optional context lets the factory query DB-backed configuration
+   * (e.g. allowlist tables) and perform one-time credential migrations into
+   * the daemon state root at attach/reload time. Factories that don't need
+   * it should ignore the parameter.
    */
   resolveCredentials(
     registration: AccountRegistration,
@@ -74,6 +75,7 @@ export interface CommAdapterCreateContext {
 
 export interface ResolveCredentialsContext {
   storage?: Storage;
+  stateRoot?: string;
 }
 
 export interface CommIpcDeps {

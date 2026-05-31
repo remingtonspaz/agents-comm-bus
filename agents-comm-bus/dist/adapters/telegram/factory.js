@@ -9,6 +9,8 @@
  *     telegram_check_messages
  */
 import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { writeTokenFile } from "../../core-daemon/cli/token-file.js";
 import { TelegramCommAdapter, probeTelegramIdentity } from "./adapter.js";
 const TELEGRAM_COMM_ID = "telegram";
 export class TelegramCommAdapterFactory {
@@ -17,6 +19,9 @@ export class TelegramCommAdapterFactory {
         const ref = registration.credentials_ref ?? "";
         const envAllowed = normalizeCsv(env.TELEGRAM_USER_ID);
         const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
+        if (ref.startsWith("env:")) {
+            return migrateLegacyEnvCredentialRef(registration, env, context, envAllowed, dbAllowed);
+        }
         if (ref.startsWith("file:")) {
             const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
             if (fromFile?.botToken) {
@@ -187,6 +192,50 @@ function mergeAllowed(fromEnv, fromFile, fromDb = undefined) {
         }
     }
     return out;
+}
+async function migrateLegacyEnvCredentialRef(registration, env, context, envAllowed, dbAllowed) {
+    if (!context?.storage || !context.stateRoot)
+        return undefined;
+    const envName = registration.credentials_ref.slice("env:".length);
+    const tokenFromEnv = envName ? env[envName] : undefined;
+    const legacyFile = tokenFromEnv
+        ? undefined
+        : await readLegacyProjectTelegramConfig(registration.project, registration.agent);
+    const botToken = tokenFromEnv ?? legacyFile?.botToken;
+    if (!botToken)
+        return undefined;
+    const credentials_ref = await writeTokenFile({
+        stateRoot: context.stateRoot,
+        comm: registration.comm,
+        project: registration.project,
+        agent: registration.agent,
+        accountId: registration.bot_user_id,
+        botToken,
+        userId: legacyFile?.userId,
+    });
+    await context.storage.putAccountRegistration({
+        ...registration,
+        credentials_ref,
+        updated_at: Date.now(),
+    });
+    return {
+        credentials: {
+            botToken,
+            allowedUserIds: mergeAllowed(envAllowed, legacyFile?.userId, dbAllowed),
+        },
+    };
+}
+async function readLegacyProjectTelegramConfig(project, agent) {
+    const candidates = [
+        path.join(project, `.${agent}`, "telegram.json"),
+        ...(agent === "claude" ? [] : [path.join(project, ".claude", "telegram.json")]),
+    ];
+    for (const candidate of candidates) {
+        const config = await readJsonTelegramConfig(candidate);
+        if (config?.botToken)
+            return config;
+    }
+    return undefined;
 }
 async function readAllowlistFromDb(context, bot_user_id) {
     if (!context?.storage)

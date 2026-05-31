@@ -12,6 +12,7 @@ export async function writeTokenFile(options: {
   agent: string;
   accountId: string;
   botToken: string;
+  userId?: string[];
 }): Promise<string> {
   const tokenFile = resolveTokenFilePath({
     stateRoot: options.stateRoot,
@@ -21,9 +22,13 @@ export async function writeTokenFile(options: {
     accountId: options.accountId,
   });
   await mkdir(path.dirname(tokenFile), { recursive: true });
+  const body = {
+    botToken: options.botToken,
+    ...(options.userId && options.userId.length > 0 ? { userId: options.userId } : {}),
+  };
   await writeFile(
     tokenFile,
-    `${JSON.stringify({ botToken: options.botToken }, null, 2)}\n`,
+    `${JSON.stringify(body, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
   try {

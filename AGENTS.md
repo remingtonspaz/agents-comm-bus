@@ -498,6 +498,13 @@ and the hook side in `hosts/claude/hooks/wake-support.js`.
 | `.claude/settings.local.json` (gitignored) | Hook command paths + permission allow/deny rules |
 | `.codex/config.toml` (gitignored) | Project-local Codex hook config written by `install-codex.js`; global `~/.codex/config.toml` should keep only the path-only MCP server entry. |
 
+Legacy `env:` Telegram credential refs are not a supported runtime scheme
+anymore. On first startup after the upgrade, resolvable legacy rows are
+migrated once into daemon-owned `file:` token refs using either the named env
+var or the old project-local `.<agent>/telegram.json` / `.claude/telegram.json`
+fallback. Rows that cannot be migrated are skipped with an actionable daemon log;
+rerun `account-update-token --bot-token` to create the file ref.
+
 For a fresh dev clone:
 
 ```powershell
