@@ -73,6 +73,14 @@ export const registrationIdentityMigration = {
         await ctx.exec(sql);
     },
 };
+export const registrationPkMigration = {
+    version: 7,
+    description: "make registration_id the canonical primary key of account_registrations",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "007_registration_pk.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -81,6 +89,7 @@ export async function runStorageMigrations(db) {
         sessionOwnerProcessMigration,
         conversationBotIdentityMigration,
         registrationIdentityMigration,
+        registrationPkMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

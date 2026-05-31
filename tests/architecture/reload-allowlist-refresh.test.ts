@@ -1,8 +1,7 @@
 import { describe, it } from "node:test";
+import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 import type {
   AccountId,
@@ -38,6 +37,8 @@ function registration(project: string): AccountRegistration {
     agent: CLAUDE,
     account_label: "main",
     bot_user_id: BOT_ID,
+    // registration_id is NOT NULL as of migration 007.
+    registration_id: `reg-${BOT_ID}`,
     credentials_ref: "env:TEST_TOKEN",
     bot_username: "test_bot",
     created_at: 1,
@@ -46,9 +47,11 @@ function registration(project: string): AccountRegistration {
   };
 }
 
+registerTempDirCleanup();
+
 describe("reload-path allowlist refresh", () => {
   it("updates an attached adapter's allowedSenderIds in place when DB rows change", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "acb-reload-allowlist-"));
+    const dir = await makeTempDir("acb-reload-allowlist-");
     try {
       const storage = await openSqliteStorage(join(dir, "storage.db"));
       const transcripts = new JsonlTranscriptStore(dir);
@@ -130,12 +133,12 @@ describe("reload-path allowlist refresh", () => {
 
       await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // temp dir removed in afterEach (registerTempDirCleanup); see _temp-dirs.ts
     }
   });
 
   it("does not record an update when the allowlist set is unchanged", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "acb-reload-noop-"));
+    const dir = await makeTempDir("acb-reload-noop-");
     try {
       const storage = await openSqliteStorage(join(dir, "storage.db"));
       const transcripts = new JsonlTranscriptStore(dir);
@@ -187,12 +190,12 @@ describe("reload-path allowlist refresh", () => {
 
       await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // temp dir removed in afterEach (registerTempDirCleanup); see _temp-dirs.ts
     }
   });
 
   it("treats allowlist sets as unordered (no phantom update on reorder)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "acb-reload-order-"));
+    const dir = await makeTempDir("acb-reload-order-");
     try {
       const storage = await openSqliteStorage(join(dir, "storage.db"));
       const transcripts = new JsonlTranscriptStore(dir);
@@ -242,12 +245,12 @@ describe("reload-path allowlist refresh", () => {
 
       await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // temp dir removed in afterEach (registerTempDirCleanup); see _temp-dirs.ts
     }
   });
 
   it("surfaces resolveCredentials failure on reload as a skipped entry", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "acb-reload-failresolve-"));
+    const dir = await makeTempDir("acb-reload-failresolve-");
     try {
       const storage = await openSqliteStorage(join(dir, "storage.db"));
       const transcripts = new JsonlTranscriptStore(dir);
@@ -304,12 +307,12 @@ describe("reload-path allowlist refresh", () => {
 
       await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // temp dir removed in afterEach (registerTempDirCleanup); see _temp-dirs.ts
     }
   });
 
   it("updates allowedSenderIds when per-bot rows are added", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "acb-reload-perbot-"));
+    const dir = await makeTempDir("acb-reload-perbot-");
     try {
       const storage = await openSqliteStorage(join(dir, "storage.db"));
       const transcripts = new JsonlTranscriptStore(dir);
@@ -365,12 +368,12 @@ describe("reload-path allowlist refresh", () => {
 
       await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // temp dir removed in afterEach (registerTempDirCleanup); see _temp-dirs.ts
     }
   });
 
   it("restarts an unchanged adapter when credential refresh is forced", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "acb-reload-credentials-"));
+    const dir = await makeTempDir("acb-reload-credentials-");
     try {
       const storage = await openSqliteStorage(join(dir, "storage.db"));
       const transcripts = new JsonlTranscriptStore(dir);
@@ -419,7 +422,7 @@ describe("reload-path allowlist refresh", () => {
 
       await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      // temp dir removed in afterEach (registerTempDirCleanup); see _temp-dirs.ts
     }
   });
 });

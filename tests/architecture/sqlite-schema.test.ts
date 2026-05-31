@@ -1,30 +1,32 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
+import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 import type { AccountRegistration, Conversation, QueryRecord, Session } from "../../packages/core-contracts/src/records/index.js";
 import type { AccountId, AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../packages/core-contracts/src/types.js";
 
+registerTempDirCleanup();
+
 async function withStorage<T>(test: (dbPath: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "acb-sqlite-"));
-  try {
-    return await test(join(dir, "storage.db"));
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  const dir = await makeTempDir("acb-sqlite-");
+  return await test(join(dir, "storage.db"));
 }
 
 function account(overrides: Partial<AccountRegistration> = {}): AccountRegistration {
+  const bot_user_id = overrides.bot_user_id ?? "bot-1";
   return {
     schema_version: 1,
     project: "project-a",
     comm: "telegram" as CommId,
     agent: "claude" as AgentId,
     account_label: "main",
-    bot_user_id: "bot-1",
+    bot_user_id,
+    // registration_id is NOT NULL as of migration 007; derive a unique default
+    // from the (unique) bot id so fixtures that omit it still insert.
+    registration_id: `reg-${bot_user_id}`,
     credentials_ref: "keyring://telegram/main",
     created_at: 1,
     updated_at: 1,
@@ -665,5 +667,57 @@ describe("AGE-20 registration-resolved account_label (phase 3b)", () => {
     // botUserIdForConversation must prefer the stable registration_id; the label
     // match survives only as the explicit legacy fallback.
     assert.match(bus, /candidate\.registration_id === conversation\.registration_id/);
+  });
+});
+
+describe("AGE-22 account_registrations PK rebuild (migration 007)", () => {
+  function tableInfo(storage: unknown, table: string): Array<{ name: string; pk: number; notnull: number }> {
+    return (storage as { db: { prepare(s: string): { all(): Array<{ name: string; pk: number; notnull: number }> } } })
+      .db.prepare(`PRAGMA table_info(${table})`).all();
+  }
+
+  it("makes registration_id the sole primary key of account_registrations", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      const cols = tableInfo(storage, "account_registrations");
+      assert.deepEqual(cols.filter((c) => c.pk > 0).map((c) => c.name), ["registration_id"]);
+      assert.equal(cols.find((c) => c.name === "registration_id")?.notnull, 1, "registration_id is NOT NULL");
+      await storage.close();
+    });
+  });
+
+  it("rejects a NULL registration_id (NOT NULL enforced by the rebuild)", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      const db = (storage as { db: { prepare(s: string): { run(...a: unknown[]): unknown } } }).db;
+      assert.throws(() =>
+        db.prepare(`
+          INSERT INTO account_registrations
+            (schema_version, registration_id, project, comm, agent, account_label, bot_user_id, credentials_ref, created_at, updated_at)
+          VALUES (1, NULL, 'p', 'telegram', 'claude', 'main', 'bot-null', 'ref', 1, 1)
+        `).run(),
+      );
+      await storage.close();
+    });
+  });
+
+  it("preserves BOTH uniqueness guarantees after the rebuild", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.putAccountRegistration(account({ registration_id: "r1", bot_user_id: "botU" }));
+      // duplicate (comm, bot_user_id) — distinct project/agent/label so it is not an upsert
+      await assert.rejects(
+        storage.putAccountRegistration(
+          account({ registration_id: "r2", project: "pz", agent: "codex" as AgentId, account_label: "o", bot_user_id: "botU" }),
+        ),
+      );
+      // duplicate registration_id (the new primary key)
+      await assert.rejects(
+        storage.putAccountRegistration(
+          account({ registration_id: "r1", project: "pz2", agent: "codex" as AgentId, account_label: "o2", bot_user_id: "botV" }),
+        ),
+      );
+      await storage.close();
+    });
   });
 });
