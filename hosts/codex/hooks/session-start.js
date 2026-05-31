@@ -31,8 +31,17 @@ const watchdog = setTimeout(() => {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const bootstrapperPath = path.join(repoRoot, 'scripts', 'bootstrap-codex-session.ps1');
+// Resolve bootstrap-codex-session.ps1 across both layouts this file runs in:
+//   - source tree:    hosts/codex/hooks/      → ../../../scripts/
+//   - staged plugin:   <plugin>/hooks/ (bundled) → ../scripts/
+// Take the first candidate that exists so the same code works from the
+// checkout or from an esbuilt, staged hook bundle.
+const bootstrapperPath =
+  [
+    path.resolve(__dirname, '..', 'scripts', 'bootstrap-codex-session.ps1'),
+    path.resolve(__dirname, '..', '..', '..', 'scripts', 'bootstrap-codex-session.ps1'),
+  ].find((candidate) => fs.existsSync(candidate)) ??
+  path.resolve(__dirname, '..', '..', '..', 'scripts', 'bootstrap-codex-session.ps1');
 
 function stableSessionId(hookInput) {
   if (process.env.AGENTS_COMM_BUS_SESSION_ID) {

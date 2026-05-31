@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, } from "../config.js";
 import { resolveStatePaths } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
@@ -161,8 +160,18 @@ function defaultTerminateDaemon(pid) {
     process.kill(pid, "SIGTERM");
 }
 function defaultSpawnDaemon(paths) {
-    const thisFile = fileURLToPath(import.meta.url);
-    const daemonEntry = path.resolve(path.dirname(thisFile), "../serve.js");
+    // Source/dev mode is signalled by AGENTS_COMM_BUS_BIN (the authoritative
+    // source switch, same one resolveInstallMode keys on): run the daemon from
+    // the project's source entry. Otherwise this is a production/central install,
+    // and the daemon is the self-contained bundle the install hook copied to
+    // `<stateRoot>/bin/daemon.js` (alongside a `bin/package.json` {"type":"module"}
+    // so node treats the .js bundle as ESM regardless of cwd). Resolving relative
+    // to import.meta.url is wrong in production because this module is itself
+    // inlined into the staged hook bundle, where `../serve.js` does not exist.
+    const binOverride = process.env.AGENTS_COMM_BUS_BIN;
+    const daemonEntry = binOverride
+        ? path.resolve(binOverride)
+        : path.join(paths.root, "bin", "daemon.js");
     const child = spawn(process.execPath, [daemonEntry, "serve"], {
         detached: true,
         stdio: "ignore",

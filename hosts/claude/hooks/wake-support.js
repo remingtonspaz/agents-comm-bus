@@ -164,9 +164,17 @@ export function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, pid: existingPid, wakeDir, reason: 'already_running' };
   }
 
-  const watcherScript = path.resolve(__dirname, '..', '..', '..', 'scripts', 'enter-watcher.ps1');
-  if (!fs.existsSync(watcherScript)) {
-    log(`ERROR: Watcher script not found: ${watcherScript}`);
+  // Resolve enter-watcher.ps1 across both layouts this file runs in:
+  //   - source tree:    hosts/claude/hooks/      → ../../../scripts/
+  //   - staged plugin:   <plugin>/hooks/ (bundled) → ../scripts/
+  // Try each candidate and take the first that exists, so the same code works
+  // whether run from the checkout or from an esbuilt, staged hook bundle.
+  const watcherScript = [
+    path.resolve(__dirname, '..', 'scripts', 'enter-watcher.ps1'),
+    path.resolve(__dirname, '..', '..', '..', 'scripts', 'enter-watcher.ps1'),
+  ].find((candidate) => fs.existsSync(candidate));
+  if (!watcherScript) {
+    log('ERROR: Watcher script not found (enter-watcher.ps1) in any known layout');
     return { started: false, wakeDir, reason: 'missing_script' };
   }
 
