@@ -509,11 +509,10 @@ For a fresh dev clone:
 
 ```powershell
 cp .mcp.json.template .mcp.json
-# Edit .mcp.json: set absolute paths and credentials
-# If you ran `npm link` in agents-comm-bus/, use:
-#   agents-comm account-add ...
-# Otherwise:
-node agents-comm-bus\dist\cli\index.js account-add `
+# Edit .mcp.json: set absolute paths and dev overrides.
+# After the first central install, add ~/.agents-comm-bus/bin to PATH once,
+# then use the central CLI:
+agents-comm account-add `
   --project "<absolute project path>" `
   --agent claude `
   --account-label main `

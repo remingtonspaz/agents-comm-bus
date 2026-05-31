@@ -3657,7 +3657,7 @@ import { mkdir as mkdir5 } from "node:fs/promises";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.0";
+var DAEMON_VERSION = "0.2.1";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -5925,15 +5925,6 @@ async function loadCommAdapters(input) {
       if (!adapter) continue;
       comms.push(adapter);
       attachedBotIds.add(registration.bot_user_id);
-    }
-    if (registrations.length === 0 && factory.fallbackFromEnv) {
-      const fallback = await factory.fallbackFromEnv(input.env);
-      if (fallback) {
-        comms.push(factory.create(fallback.credentials, fallback.accountId, {
-          blobs: input.blobs,
-          stateRoot: input.stateRoot
-        }));
-      }
     }
   }
   return comms;

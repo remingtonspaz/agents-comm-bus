@@ -3662,7 +3662,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.0";
+var DAEMON_VERSION = "0.2.1";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 
@@ -3829,8 +3829,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db = db;
   }
   db;
-  static async open(path13) {
-    const db = new DatabaseSync(path13);
+  static async open(path12) {
+    const db = new DatabaseSync(path12);
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
     await runStorageMigrations(db);
@@ -4490,8 +4490,8 @@ var SqliteStorage = class _SqliteStorage {
     };
   }
 };
-async function openSqliteStorage(path13) {
-  return SqliteStorage.open(path13);
+async function openSqliteStorage(path12) {
+  return SqliteStorage.open(path12);
 }
 function isConstraintError(error) {
   const sqliteError = error;
@@ -4635,7 +4635,7 @@ import path4 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.0";
+var DAEMON_VERSION2 = "0.2.1";
 var IPC_PROTOCOL_VERSION2 = "1.0.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -5614,9 +5614,9 @@ async function writeTokenFile(options) {
 // ../core-daemon/cli/account-add.ts
 async function accountAdd(options) {
   const comm = options.comm ?? "telegram";
-  const botToken = options.botToken ?? (comm === "telegram" ? process.env.TELEGRAM_BOT_TOKEN : void 0);
+  const botToken = options.botToken;
   if (!botToken) {
-    throw new Error("--bot-token is required for account-add (or TELEGRAM_BOT_TOKEN for telegram)");
+    throw new Error("--bot-token is required for account-add");
   }
   const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
     comm,
@@ -5645,7 +5645,7 @@ async function accountAdd(options) {
         `${comm} bot id ${identity.bot_user_id} is already registered as project=${existing.project}, agent=${existing.agent}, account_label=${existing.account_label}; use account-list to inspect it or account-remove --comm ${comm} --bot-id ${identity.bot_user_id} before re-adding.`
       );
     }
-    const credentialsRef = options.credentialsRef ?? await writeTokenFile({
+    const credentialsRef = await writeTokenFile({
       stateRoot: options.stateRoot,
       comm,
       project: options.project,
@@ -5956,7 +5956,6 @@ async function allowlistAdd(options) {
 
 // ../core-daemon/cli/allowlist-import.ts
 import { readFile as readFile7 } from "node:fs/promises";
-import path12 from "node:path";
 async function allowlistImportFromEnv(options = {}) {
   const comm = options.comm ?? "telegram";
   if (comm !== "telegram") {
@@ -6056,13 +6055,10 @@ async function allowlistImportFromFiles(options = {}) {
   }
   return { comm, added, skipped: skipped3, details };
 }
-function filePathFromCredentialsRef(ref, project) {
+function filePathFromCredentialsRef(ref, _project) {
   if (!ref) return null;
   if (ref.startsWith("file:")) {
     return ref.slice("file:".length);
-  }
-  if (ref.startsWith("env:")) {
-    return path12.join(project, ".claude", "telegram.json");
   }
   return null;
 }
@@ -6238,10 +6234,10 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
     }
     const expected = legacySessionDirForProject(projectRoot, agent, homeDir);
     for (const entry of entries) {
-      const path13 = join3(parent, entry);
+      const path12 = join3(parent, entry);
       let isDirectory = false;
       try {
-        isDirectory = statSync(path13).isDirectory();
+        isDirectory = statSync(path12).isDirectory();
       } catch {
         continue;
       }
@@ -6249,9 +6245,9 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
       roots.push({
         kind: "session-root",
         agent,
-        path: path13,
+        path: path12,
         projectHint: entry.replace(/-[0-9a-f]{6}$/i, ""),
-        expectedForProject: resolve(path13) === resolve(expected),
+        expectedForProject: resolve(path12) === resolve(expected),
         transition: TRANSITION_ONLY_MARKER,
         cleanupRelease: TRANSITION_CLEANUP_RELEASE
       });
@@ -6259,14 +6255,14 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
   }
   return roots;
 }
-function readLastChat(path13, agent, sessionRoot) {
-  const parsed = readOptionalObject(path13);
+function readLastChat(path12, agent, sessionRoot) {
+  const parsed = readOptionalObject(path12);
   if (!parsed.ok) return parsed;
   const chatId = stringValue(parsed.value.chat_id);
   if (!chatId) return { ok: false, exists: true, reason: "last-chat.json is missing chat_id" };
   return {
     ok: true,
-    file: stateFile("last-chat", agent, path13, sessionRoot, {
+    file: stateFile("last-chat", agent, path12, sessionRoot, {
       chat_id: chatId,
       message_thread_id: nullableString(parsed.value.message_thread_id),
       from_user_id: nullableString(parsed.value.from_user_id),
@@ -6274,8 +6270,8 @@ function readLastChat(path13, agent, sessionRoot) {
     })
   };
 }
-function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
-  const parsed = readOptionalObject(path13);
+function readPendingPermission(path12, agent, sessionRoot, now, ttlMs) {
+  const parsed = readOptionalObject(path12);
   if (!parsed.ok) return parsed;
   const timestamp = stringValue(parsed.value.timestamp);
   if (!timestamp) return { ok: false, exists: true, reason: "pending-permission.json is missing timestamp" };
@@ -6284,7 +6280,7 @@ function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
   if (now - timestampMs >= ttlMs) return { ok: false, exists: true, reason: "pending permission is expired" };
   return {
     ok: true,
-    file: stateFile("pending-permission", agent, path13, sessionRoot, {
+    file: stateFile("pending-permission", agent, path12, sessionRoot, {
       timestamp,
       tool_name: nullableString(parsed.value.tool_name),
       tool_input: isObject(parsed.value.tool_input) ? parsed.value.tool_input : null,
@@ -6294,8 +6290,8 @@ function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
     })
   };
 }
-function readQueue(path13, agent, sessionRoot) {
-  const parsed = readOptionalObject(path13);
+function readQueue(path12, agent, sessionRoot) {
+  const parsed = readOptionalObject(path12);
   if (!parsed.ok) return parsed;
   const rawMessages = Array.isArray(parsed.value.messages) ? parsed.value.messages : [];
   const messages = [];
@@ -6310,18 +6306,18 @@ function readQueue(path13, agent, sessionRoot) {
       imagePath: nullableString(raw.imagePath) ?? void 0
     });
   }
-  return { ok: true, file: stateFile("queue", agent, path13, sessionRoot, messages) };
+  return { ok: true, file: stateFile("queue", agent, path12, sessionRoot, messages) };
 }
-function readOptionalObject(path13) {
-  if (!existsSync5(path13)) return { ok: false, exists: false, reason: "file does not exist" };
-  const parsed = readJson(path13);
+function readOptionalObject(path12) {
+  if (!existsSync5(path12)) return { ok: false, exists: false, reason: "file does not exist" };
+  const parsed = readJson(path12);
   if (!parsed.ok) return { ok: false, exists: true, reason: parsed.reason };
   if (!isObject(parsed.value)) return { ok: false, exists: true, reason: "file is not a JSON object" };
   return { ok: true, value: parsed.value };
 }
-function readJson(path13) {
+function readJson(path12) {
   try {
-    return { ok: true, value: JSON.parse(readFileSync2(path13, "utf8")) };
+    return { ok: true, value: JSON.parse(readFileSync2(path12, "utf8")) };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "invalid JSON" };
   }
@@ -6330,22 +6326,22 @@ function normalizeUserIds(raw) {
   const values = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
   return values.map((value) => stringValue(value).trim()).filter(Boolean);
 }
-function stateFile(kind, agent, path13, sessionRoot, value) {
+function stateFile(kind, agent, path12, sessionRoot, value) {
   return {
     kind,
     agent,
-    path: path13,
+    path: path12,
     sessionRoot,
     value,
     transition: TRANSITION_ONLY_MARKER,
     cleanupRelease: TRANSITION_CLEANUP_RELEASE
   };
 }
-function skip(kind, agent, path13, reason) {
+function skip(kind, agent, path12, reason) {
   return {
     kind,
     agent,
-    path: path13,
+    path: path12,
     reason,
     transition: TRANSITION_ONLY_MARKER,
     cleanupRelease: TRANSITION_CLEANUP_RELEASE
@@ -6403,15 +6399,15 @@ function importLastChat(file, options) {
     }
   };
 }
-function skipped(path13, reason) {
+function skipped(path12, reason) {
   return {
     status: "skipped",
     reason,
-    source_file: path13,
+    source_file: path12,
     audit: {
       kind: "legacy_state_skipped",
       source: "last-chat",
-      path: path13,
+      path: path12,
       reason,
       detail: {},
       transition: TRANSITION_ONLY_MARKER,
@@ -6462,15 +6458,15 @@ function importPendingPermission(file, options) {
     }
   };
 }
-function skipped2(path13, reason) {
+function skipped2(path12, reason) {
   return {
     status: "skipped",
     reason,
-    source_file: path13,
+    source_file: path12,
     audit: {
       kind: "legacy_state_skipped",
       source: "pending-permission",
-      path: path13,
+      path: path12,
       reason,
       detail: {},
       transition: TRANSITION_ONLY_MARKER,
@@ -6691,8 +6687,7 @@ async function main() {
         agent: required(args.agent, "--agent"),
         accountLabel: required(args.accountLabel ?? args["account-label"], "--account-label"),
         comm: args.comm,
-        botToken: args.botToken ?? args["bot-token"],
-        credentialsRef: args.credentialsRef ?? args["credentials-ref"]
+        botToken: args.botToken ?? args["bot-token"]
       });
       const reload = await reloadDaemonRegistrations();
       console.log(JSON.stringify({ ...redact(rec), reload }, null, 2));
@@ -6863,7 +6858,7 @@ function printHelp2() {
   console.error(`agents-comm-bus CLI
 
 Account commands:
-  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>] [--credentials-ref <ref>]
+  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> --bot-token <token>
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
@@ -6878,7 +6873,7 @@ Allowlist commands:
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
 
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
-account-add stores --bot-token in a daemon-owned file ref by default; explicit --credentials-ref values are honored.
+account-add stores --bot-token in a daemon-owned file ref; credentials_ref is not user-supplied.
 `);
 }
 function resultSummary(result) {
