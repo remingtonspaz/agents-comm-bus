@@ -37,9 +37,9 @@ export class SqliteStorage {
         this.db
             .prepare(`
         INSERT INTO account_registrations (
-          schema_version, project, comm, agent, account_label, bot_user_id,
-          credentials_ref, bot_username, created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          schema_version, registration_id, project, comm, agent, account_label,
+          bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, comm, agent, account_label) DO UPDATE SET
           bot_user_id = excluded.bot_user_id,
           credentials_ref = excluded.credentials_ref,
@@ -47,7 +47,7 @@ export class SqliteStorage {
           updated_at = excluded.updated_at,
           metadata_json = excluded.metadata_json
       `)
-            .run(rec.schema_version, rec.project, rec.comm, rec.agent, rec.account_label, rec.bot_user_id, rec.credentials_ref, rec.bot_username ?? null, rec.created_at, rec.updated_at, encodeJson(rec.metadata));
+            .run(rec.schema_version, rec.registration_id ?? null, rec.project, rec.comm, rec.agent, rec.account_label, rec.bot_user_id, rec.credentials_ref, rec.bot_username ?? null, rec.created_at, rec.updated_at, encodeJson(rec.metadata));
     }
     async getAccountByBot(comm, bot_user_id) {
         const row = this.db
@@ -173,19 +173,20 @@ export class SqliteStorage {
         this.db
             .prepare(`
         INSERT INTO conversations (
-          schema_version, project, comm, account_label, bot_user_id, chat_native_id,
-          thread_native_id, conversation_id, agent, last_inbound_at,
+          schema_version, project, comm, account_label, bot_user_id, registration_id,
+          chat_native_id, thread_native_id, conversation_id, agent, last_inbound_at,
           last_outbound_at, last_message_id, created_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
           conversation_id = excluded.conversation_id,
           bot_user_id = excluded.bot_user_id,
+          registration_id = excluded.registration_id,
           last_inbound_at = excluded.last_inbound_at,
           last_outbound_at = excluded.last_outbound_at,
           last_message_id = excluded.last_message_id,
           metadata_json = excluded.metadata_json
       `)
-            .run(rec.schema_version, rec.project, rec.comm, rec.account_label, rec.bot_user_id, rec.chat_native_id, dbThreadId(rec.thread_native_id), rec.conversation_id, rec.agent, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, rec.created_at, encodeJson(rec.metadata));
+            .run(rec.schema_version, rec.project, rec.comm, rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.chat_native_id, dbThreadId(rec.thread_native_id), rec.conversation_id, rec.agent, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, rec.created_at, encodeJson(rec.metadata));
         return rec.conversation_id;
     }
     async getConversation(id) {
@@ -495,6 +496,7 @@ export class SqliteStorage {
         const r = row;
         return {
             schema_version: r.schema_version,
+            registration_id: r.registration_id,
             project: r.project,
             comm: r.comm,
             agent: r.agent,
@@ -515,6 +517,7 @@ export class SqliteStorage {
             comm: r.comm,
             account_label: r.account_label,
             bot_user_id: r.bot_user_id ?? null,
+            registration_id: r.registration_id ?? null,
             chat_native_id: r.chat_native_id,
             thread_native_id: recordThreadId(r.thread_native_id),
             conversation_id: r.conversation_id,

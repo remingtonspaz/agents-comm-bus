@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { SCHEMA_VERSION_ACCOUNT, } from "agents-comm-bus-core";
 import { probeTelegramIdentity } from "../../adapters/telegram/adapter.js";
@@ -48,6 +49,7 @@ export async function accountAdd(options) {
         const now = Date.now();
         const registration = {
             schema_version: SCHEMA_VERSION_ACCOUNT,
+            registration_id: `reg_${randomBytes(16).toString("hex")}`,
             project: options.project,
             comm,
             agent: options.agent,

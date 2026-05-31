@@ -17,6 +17,12 @@ import { SCHEMA_VERSION_ACCOUNT } from "../types.js";
 export interface AccountRegistration {
   schema_version: typeof SCHEMA_VERSION_ACCOUNT;
 
+  // Immutable surrogate identity (AGE-20). Generated once at account-add and
+  // never changes — notably it survives an account-update-token bot replacement
+  // (which mutates bot_user_id). Phase 1 adds it additively; later phases make
+  // it the canonical primary key.
+  registration_id: string;
+
   // Primary key
   project: string;
   comm: CommId;

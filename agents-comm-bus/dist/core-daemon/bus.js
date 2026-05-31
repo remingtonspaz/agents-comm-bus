@@ -366,6 +366,7 @@ export class MessageBus {
             comm: registration.comm,
             account_label: registration.account_label,
             bot_user_id: registration.bot_user_id,
+            registration_id: registration.registration_id,
             chat_native_id: message.chat.chat_native_id,
             thread_native_id: message.chat.thread_native_id ?? null,
             conversation_id: conversationIdForPk({
@@ -422,6 +423,7 @@ export class MessageBus {
                 comm: registration.comm,
                 account_label: registration.account_label,
                 bot_user_id: registration.bot_user_id,
+                registration_id: registration.registration_id,
                 chat_native_id: target.chat_native_id,
                 thread_native_id: target.thread_native_id ?? null,
                 conversation_id: conversationIdForPk({

@@ -28,6 +28,12 @@ export interface Conversation {
   chat_native_id: string;
   thread_native_id: string | null;
 
+  // Stable link to the owning account registration (AGE-20). Backfilled from
+  // the (comm, bot_user_id) key; nullable only for legacy rows whose
+  // registration could not be resolved. Later phases key conversation lookup
+  // on (registration_id, chat, thread) instead of the mutable label tuple.
+  registration_id: string | null;
+
   // Surrogate id for foreign-key references.
   conversation_id: ConversationId;
 

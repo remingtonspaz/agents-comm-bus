@@ -389,3 +389,54 @@ describe("allowlist storage (migration v3)", () => {
     });
   });
 });
+
+describe("AGE-20 registration identity (phase 1)", () => {
+  it("persists registration_id and returns it via getAccountByBot", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.putAccountRegistration(
+        account({ registration_id: "reg-abc", bot_user_id: "bot-x" }),
+      );
+      const row = await storage.getAccountByBot("telegram" as CommId, "bot-x");
+      assert.equal(row?.registration_id, "reg-abc");
+      await storage.close();
+    });
+  });
+
+  it("preserves registration_id across a bot replacement (it is the stable identity)", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.putAccountRegistration(
+        account({ registration_id: "reg-stable", bot_user_id: "old-bot" }),
+      );
+      const result = await storage.updateAccountRegistrationToken({
+        comm: "telegram" as CommId,
+        current_bot_user_id: "old-bot",
+        new_bot_user_id: "new-bot",
+        credentials_ref: "file:/tmp/new.json",
+        bot_username: "newbot",
+        updated_at: 2,
+      });
+      assert.equal(result.bot_changed, true);
+      assert.equal(result.previous.registration_id, "reg-stable");
+      // The bot id changed but the registration's surrogate identity did not.
+      assert.equal(result.next.registration_id, "reg-stable");
+      const moved = await storage.getAccountByBot("telegram" as CommId, "new-bot");
+      assert.equal(moved?.registration_id, "reg-stable");
+      assert.equal(moved?.bot_user_id, "new-bot");
+      await storage.close();
+    });
+  });
+
+  it("stores registration_id on conversations", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertConversation(
+        conversation({ registration_id: "reg-conv", conversation_id: "c-reg" as ConversationId }),
+      );
+      const found = await storage.getConversation("c-reg" as ConversationId);
+      assert.equal(found?.registration_id, "reg-conv");
+      await storage.close();
+    });
+  });
+});

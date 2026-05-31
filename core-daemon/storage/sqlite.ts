@@ -68,9 +68,9 @@ export class SqliteStorage implements Storage {
     this.db
       .prepare(`
         INSERT INTO account_registrations (
-          schema_version, project, comm, agent, account_label, bot_user_id,
-          credentials_ref, bot_username, created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          schema_version, registration_id, project, comm, agent, account_label,
+          bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, comm, agent, account_label) DO UPDATE SET
           bot_user_id = excluded.bot_user_id,
           credentials_ref = excluded.credentials_ref,
@@ -80,6 +80,7 @@ export class SqliteStorage implements Storage {
       `)
       .run(
         rec.schema_version,
+        rec.registration_id ?? null,
         rec.project,
         rec.comm,
         rec.agent,
@@ -258,13 +259,14 @@ export class SqliteStorage implements Storage {
     this.db
       .prepare(`
         INSERT INTO conversations (
-          schema_version, project, comm, account_label, bot_user_id, chat_native_id,
-          thread_native_id, conversation_id, agent, last_inbound_at,
+          schema_version, project, comm, account_label, bot_user_id, registration_id,
+          chat_native_id, thread_native_id, conversation_id, agent, last_inbound_at,
           last_outbound_at, last_message_id, created_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
           conversation_id = excluded.conversation_id,
           bot_user_id = excluded.bot_user_id,
+          registration_id = excluded.registration_id,
           last_inbound_at = excluded.last_inbound_at,
           last_outbound_at = excluded.last_outbound_at,
           last_message_id = excluded.last_message_id,
@@ -276,6 +278,7 @@ export class SqliteStorage implements Storage {
         rec.comm,
         rec.account_label,
         rec.bot_user_id,
+        rec.registration_id ?? null,
         rec.chat_native_id,
         dbThreadId(rec.thread_native_id),
         rec.conversation_id,
@@ -736,6 +739,7 @@ export class SqliteStorage implements Storage {
     const r = row as Record<string, unknown>;
     return {
       schema_version: r.schema_version as AccountRegistration["schema_version"],
+      registration_id: r.registration_id as string,
       project: r.project as string,
       comm: r.comm as CommId,
       agent: r.agent as AgentId,
@@ -757,6 +761,7 @@ export class SqliteStorage implements Storage {
       comm: r.comm as CommId,
       account_label: r.account_label as string,
       bot_user_id: (r.bot_user_id as string | null) ?? null,
+      registration_id: (r.registration_id as string | null) ?? null,
       chat_native_id: r.chat_native_id as string,
       thread_native_id: recordThreadId(r.thread_native_id),
       conversation_id: r.conversation_id as ConversationId,

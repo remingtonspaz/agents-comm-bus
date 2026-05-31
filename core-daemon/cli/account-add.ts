@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 
 import {
@@ -72,6 +73,7 @@ export async function accountAdd(options: AccountAddOptions): Promise<AccountReg
     const now = Date.now();
     const registration: AccountRegistration = {
       schema_version: SCHEMA_VERSION_ACCOUNT,
+      registration_id: `reg_${randomBytes(16).toString("hex")}`,
       project: options.project,
       comm,
       agent: options.agent as AgentId,

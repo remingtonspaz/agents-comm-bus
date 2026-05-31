@@ -65,6 +65,14 @@ export const conversationBotIdentityMigration = {
         await ctx.exec(sql);
     },
 };
+export const registrationIdentityMigration = {
+    version: 6,
+    description: "add immutable registration_id surrogate to registrations + conversations",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "006_registration_identity.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -72,6 +80,7 @@ export async function runStorageMigrations(db) {
         allowlistMigration,
         sessionOwnerProcessMigration,
         conversationBotIdentityMigration,
+        registrationIdentityMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map
