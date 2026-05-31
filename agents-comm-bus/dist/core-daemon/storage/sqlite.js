@@ -175,40 +175,55 @@ export class SqliteStorage {
         // conversation_id. This stops the drift: a registration field change (e.g.
         // relabel) no longer re-keys the conversation_id or duplicates the row. We
         // never overwrite conversation_id on conflict anymore.
-        const existingId = this.findExistingConversationId(rec);
-        if (existingId) {
-            this.db
-                .prepare(`
-          UPDATE conversations SET
-            account_label = ?,
-            bot_user_id = ?,
-            registration_id = ?,
-            last_inbound_at = ?,
-            last_outbound_at = ?,
-            last_message_id = ?,
-            metadata_json = ?
-          WHERE conversation_id = ?
-        `)
-                .run(rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, encodeJson(rec.metadata), existingId);
-            return existingId;
+        // AGE-20 Phase 3a: serialize the find-then-insert so a concurrent upsert for
+        // the same (registration_id, chat, thread) can't race between the lookup and
+        // the insert (closes the theoretical window from Phase 2).
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+            const existingId = this.findExistingConversationId(rec);
+            let result;
+            if (existingId) {
+                this.db
+                    .prepare(`
+            UPDATE conversations SET
+              account_label = ?,
+              bot_user_id = ?,
+              registration_id = ?,
+              last_inbound_at = ?,
+              last_outbound_at = ?,
+              last_message_id = ?,
+              metadata_json = ?
+            WHERE conversation_id = ?
+          `)
+                    .run(rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, encodeJson(rec.metadata), existingId);
+                result = existingId;
+            }
+            else {
+                this.db
+                    .prepare(`
+            INSERT INTO conversations (
+              schema_version, project, comm, account_label, bot_user_id, registration_id,
+              chat_native_id, thread_native_id, conversation_id, agent, last_inbound_at,
+              last_outbound_at, last_message_id, created_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
+              bot_user_id = excluded.bot_user_id,
+              registration_id = excluded.registration_id,
+              last_inbound_at = excluded.last_inbound_at,
+              last_outbound_at = excluded.last_outbound_at,
+              last_message_id = excluded.last_message_id,
+              metadata_json = excluded.metadata_json
+          `)
+                    .run(rec.schema_version, rec.project, rec.comm, rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.chat_native_id, dbThreadId(rec.thread_native_id), rec.conversation_id, rec.agent, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, rec.created_at, encodeJson(rec.metadata));
+                result = rec.conversation_id;
+            }
+            this.db.exec("COMMIT");
+            return result;
         }
-        this.db
-            .prepare(`
-        INSERT INTO conversations (
-          schema_version, project, comm, account_label, bot_user_id, registration_id,
-          chat_native_id, thread_native_id, conversation_id, agent, last_inbound_at,
-          last_outbound_at, last_message_id, created_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project, agent, comm, account_label, chat_native_id, thread_native_id) DO UPDATE SET
-          bot_user_id = excluded.bot_user_id,
-          registration_id = excluded.registration_id,
-          last_inbound_at = excluded.last_inbound_at,
-          last_outbound_at = excluded.last_outbound_at,
-          last_message_id = excluded.last_message_id,
-          metadata_json = excluded.metadata_json
-      `)
-            .run(rec.schema_version, rec.project, rec.comm, rec.account_label, rec.bot_user_id, rec.registration_id ?? null, rec.chat_native_id, dbThreadId(rec.thread_native_id), rec.conversation_id, rec.agent, rec.last_inbound_at, rec.last_outbound_at, rec.last_message_id, rec.created_at, encodeJson(rec.metadata));
-        return rec.conversation_id;
+        catch (error) {
+            this.db.exec("ROLLBACK");
+            throw error;
+        }
     }
     /**
      * Resolve an existing conversation's stable conversation_id by the immutable

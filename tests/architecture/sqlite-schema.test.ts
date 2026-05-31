@@ -509,3 +509,62 @@ describe("AGE-20 conversation identity stability (phase 2)", () => {
     assert.doesNotMatch(src, /conversation_id = excluded\.conversation_id/);
   });
 });
+
+describe("AGE-20 conversation surrogate identity + race (phase 3a)", () => {
+  it("rejects a second registration that reuses an existing registration_id (unique index)", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.putAccountRegistration(
+        account({ registration_id: "reg-dup", bot_user_id: "bot-a" }),
+      );
+      // Different (project, agent, label) so the ON CONFLICT upsert target does
+      // NOT match — the collision is on the registration_id unique index
+      // (idx_account_registrations_registration_id) added in phase 1.
+      await assert.rejects(
+        storage.putAccountRegistration(
+          account({
+            registration_id: "reg-dup",
+            project: "project-z",
+            agent: "codex" as AgentId,
+            account_label: "other",
+            bot_user_id: "bot-b",
+          }),
+        ),
+      );
+      await storage.close();
+    });
+  });
+
+  it("upsertConversation collapses concurrent-style same-key upserts to one stable row", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      // The transaction-wrapped find+insert must keep a single row even when two
+      // upserts arrive for the same (registration_id, chat, thread) with
+      // distinct freshly-derived conversation ids.
+      const first = await storage.upsertConversation(
+        conversation({
+          registration_id: "RT",
+          conversation_id: "fresh-1" as ConversationId,
+          chat_native_id: "chat-tx",
+        }),
+      );
+      const second = await storage.upsertConversation(
+        conversation({
+          registration_id: "RT",
+          conversation_id: "fresh-2" as ConversationId,
+          chat_native_id: "chat-tx",
+          last_inbound_at: 42,
+        }),
+      );
+      // First insert keeps its own fresh id; the second collapses onto it
+      // (same stable key) rather than re-keying to fresh-2.
+      assert.equal(first, "fresh-1");
+      assert.equal(second, "fresh-1");
+      const rows = await storage.listConversations({});
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].conversation_id, "fresh-1");
+      assert.equal(rows[0].last_inbound_at, 42);
+      await storage.close();
+    });
+  });
+});

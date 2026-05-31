@@ -370,14 +370,10 @@ export class MessageBus {
             registration_id: registration.registration_id,
             chat_native_id: message.chat.chat_native_id,
             thread_native_id: message.chat.thread_native_id ?? null,
-            conversation_id: conversationIdForPk({
-                project: registration.project,
-                agent: registration.agent,
-                comm: registration.comm,
-                account_label: registration.account_label,
-                chat_native_id: message.chat.chat_native_id,
-                thread_native_id: message.chat.thread_native_id ?? null,
-            }),
+            // AGE-20 Phase 3a: a NEW conversation gets a pure opaque surrogate, never
+            // derived from any mutable field. Storage reuses the existing stable id for
+            // an existing conversation (the candidate here is only used on first insert).
+            conversation_id: freshConversationId(),
             agent: registration.agent,
             last_inbound_at: message.received_at,
             last_outbound_at: null,
@@ -430,14 +426,7 @@ export class MessageBus {
                 registration_id: registration.registration_id,
                 chat_native_id: target.chat_native_id,
                 thread_native_id: target.thread_native_id ?? null,
-                conversation_id: conversationIdForPk({
-                    project: registration.project,
-                    agent: registration.agent,
-                    comm: registration.comm,
-                    account_label: registration.account_label,
-                    chat_native_id: target.chat_native_id,
-                    thread_native_id: target.thread_native_id ?? null,
-                }),
+                conversation_id: freshConversationId(),
                 agent: registration.agent,
                 last_inbound_at: null,
                 last_outbound_at: null,
@@ -485,16 +474,14 @@ export class MessageBus {
         }
     }
 }
-export function conversationIdForPk(pk) {
-    const raw = JSON.stringify([
-        pk.project,
-        pk.agent,
-        pk.comm,
-        pk.account_label,
-        pk.chat_native_id,
-        pk.thread_native_id ?? "",
-    ]);
-    return `conv_${crypto.createHash("sha256").update(raw).digest("hex").slice(0, 24)}`;
+/**
+ * Mint a fresh opaque conversation surrogate id (AGE-20 Phase 3a). It is NOT
+ * derived from any mutable field, so a conversation's identity never changes
+ * when its registration's label or bot id changes. Existing conversation_ids
+ * are preserved; this only generates ids for brand-new conversations.
+ */
+function freshConversationId() {
+    return `conv_${crypto.randomBytes(12).toString("hex")}`;
 }
 export function conversationIdForChat(chat) {
     return `conv_${crypto

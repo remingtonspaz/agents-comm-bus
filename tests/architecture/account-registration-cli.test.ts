@@ -11,7 +11,7 @@ import { accountRemove } from "../../core-daemon/cli/account-remove.js";
 import { accountUpdateToken } from "../../core-daemon/cli/account-update-token.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { resolveStatePaths } from "../../core-daemon/paths.js";
-import { conversationIdForPk } from "../../core-daemon/bus.js";
+import type { ConversationId } from "../../packages/core-contracts/src/types.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -330,14 +330,7 @@ describe("account registration CLI contract", () => {
     const oldTokenFile = initial.credentials_ref.slice("file:".length);
 
     const storage = await openSqliteStorage(resolveStatePaths({ stateRoot }).database);
-    const conversationId = conversationIdForPk({
-      project: "D:\\Projects\\codex",
-      agent: "codex",
-      comm: "telegram",
-      account_label: "main",
-      chat_native_id: "-100",
-      thread_native_id: null,
-    });
+    const conversationId = "conv-codex-bot-replace" as ConversationId;
     try {
       await storage.addAllowlistPerBot({
         comm: "telegram",
