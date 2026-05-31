@@ -9,33 +9,49 @@ import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 
 import { entryEnsures } from "../../hosts/common/install/entry-ensures.js";
+import { resolveCentralPaths } from "../../hosts/common/install/node-fs-seam.js";
 
 // Reproduces a FRESH MARKETPLACE INSTALL (production mode) against the REAL
-// staged plugin artifacts — the path an end user actually hits. The existing
-// entry-ensures tests only prove the wiring with SYNTHETIC fixtured bundles, so
-// they pass even though the real staged plugin can't install. These two checks
-// close that gap.
+// staged plugin artifacts — the path an end user actually hits, which the
+// synthetic entry-ensures fixtures do not exercise. These are HARD release
+// gates: a regression in the production packaging fails the suite.
 //
-// They are marked `todo` because they currently FAIL on known release blockers
-// (so the 301-green suite stays green while the gap is tracked, but the gate is
-// visible as an expected failure and actually runs the repro). When the
-// packaging is fixed they go GREEN — at that point DROP the `todo` to turn them
-// into a hard release gate that fails if production install regresses.
+// Run `npm --workspace agents-comm-bus run build:bundles` then
+// `node scripts/stage-plugins.js` before this test (CI build order); the
+// asserts below explain the fix if the staged artifacts are missing/stale.
 //
-// Blockers (both independently reproduced):
-//   B1 — stage-plugins never emits the flat daemon.bundle.js /
-//        telegram.adapter.bundle.js that the production install plan copies, so
-//        entryEnsures throws ENOENT before the daemon is ensured.
-//   B2 — the staged agents-comm-bus/dist is raw tsc output importing
-//        agents-comm-bus-core + ws + node-telegram-bot-api, none vendored or
-//        bundled into the plugin, so the daemon entry can't load in isolation.
+//   B1 — production entryEnsures (applyDevConfig -> ensureCentralInstall ->
+//        executeInstallPlan -> ensureDaemon) completes against the real staged
+//        plugin: the flat daemon.bundle.js / <comm>.adapter.bundle.js it copies
+//        exist, and the schema sidecars land next to bin/daemon.js.
+//   B2 — the staged daemon bundle loads self-contained from an isolated copy
+//        (no agents-comm-bus-core / ws / node-telegram-bot-api resolution error).
+//   B3 — the staged hook entries (which inline the daemon client) also load
+//        self-contained from an isolated copy.
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const STAGED_CLAUDE_PLUGIN = path.join(repoRoot, "plugins", "claude", "telegram");
 const run = promisify(execFile);
+
+const PLUGINS = [
+  { agent: "claude", comm: "telegram" },
+  { agent: "codex", comm: "telegram" },
+] as const;
+
+function stagedPluginDir(agent: string, comm: string): string {
+  return path.join(repoRoot, "plugins", agent, comm);
+}
 
 async function tempDir(prefix: string): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+/** Copy the staged plugin OUTSIDE the repo so the workspace node_modules /
+ *  agents-comm-bus-core symlink cannot mask a missing runtime dep. */
+async function isolatedCopy(agent: string, comm: string): Promise<string> {
+  const root = await tempDir(`acb-prod-iso-${agent}-`);
+  const dest = path.join(root, comm);
+  await cp(stagedPluginDir(agent, comm), dest, { recursive: true });
+  return dest;
 }
 
 function spyEnsureDaemon() {
@@ -52,59 +68,64 @@ function spyEnsureDaemon() {
   };
 }
 
+const MODULE_RESOLUTION_FAILURE = /ERR_MODULE_NOT_FOUND|Cannot find (package|module)/i;
+
 describe("production marketplace install (release gate)", () => {
-  it(
-    "B1: production entryEnsures completes against the REAL staged plugin",
-    {
-      todo:
-        "stage-plugins does not emit daemon.bundle.js / telegram.adapter.bundle.js; " +
-        "production entryEnsures throws ENOENT copying them before the daemon spawns",
-    },
-    async () => {
-      const stateRoot = await tempDir("acb-prod-state-");
+  for (const { agent, comm } of PLUGINS) {
+    it(`B1[${agent}]: production entryEnsures completes against the REAL staged plugin`, async () => {
+      const staged = stagedPluginDir(agent, comm);
+      assert.ok(
+        existsSync(path.join(staged, "install-stamp.json")),
+        `staged plugin missing — run 'npm --workspace agents-comm-bus run build:bundles' then 'node scripts/stage-plugins.js' (expected ${staged})`,
+      );
+
+      const stateRoot = await tempDir(`acb-prod-state-${agent}-`);
       const daemon = spyEnsureDaemon();
 
-      // Point the real production install path (applyDevConfig -> ensureCentralInstall
-      // -> ensureDaemon) at the ACTUAL staged marketplace artifact. env has no
-      // AGENTS_COMM_BUS_BIN and the dir has no dev marker, so this is production mode.
-      await entryEnsures({
-        agent: "claude",
-        comm: "telegram",
+      // env has no AGENTS_COMM_BUS_BIN and the dir has no dev marker, so this is
+      // production mode pointed at the ACTUAL staged marketplace artifact.
+      const result = await entryEnsures({
+        agent,
+        comm,
         stateRoot,
-        pluginInstallDir: STAGED_CLAUDE_PLUGIN,
+        pluginInstallDir: staged,
         env: {},
         deps: { ensureDaemon: daemon.fn },
       });
 
+      assert.equal(result.centralInstall.mode, "production");
       assert.equal(daemon.called, 1, "central install must succeed so the daemon is ensured");
-    },
-  );
 
-  it(
-    "B2: the staged daemon entry loads self-contained from an isolated copy",
-    {
-      todo:
-        "staged agents-comm-bus/dist imports agents-comm-bus-core/ws/node-telegram-bot-api " +
-        "which are not vendored or bundled into the plugin; serve.js fails ERR_MODULE_NOT_FOUND in isolation",
-    },
-    async () => {
-      // Copy the staged plugin OUTSIDE the repo so the workspace node_modules /
-      // agents-comm-bus-core symlink cannot mask missing runtime deps.
-      const isolatedRoot = await tempDir("acb-prod-iso-");
-      const isolated = path.join(isolatedRoot, "telegram");
-      await cp(STAGED_CLAUDE_PLUGIN, isolated, { recursive: true });
+      // The real central install landed the daemon bundle, its ESM pin, and the
+      // migration sidecars next to bin/daemon.js — i.e. a runnable daemon.
+      const paths = resolveCentralPaths(stateRoot, comm);
+      const binDir = path.dirname(paths.daemonBundle);
+      assert.ok(existsSync(paths.daemonBundle), "bin/daemon.js copied");
+      assert.ok(existsSync(path.join(binDir, "package.json")), "bin/package.json ESM pin written");
+      assert.ok(
+        existsSync(path.join(binDir, "001_initial.sql")),
+        "schema sidecars copied next to bin/daemon.js",
+      );
+      assert.ok(existsSync(paths.adapterBundle), "adapters/<comm>.js copied");
+    });
 
-      const serve = path.join(isolated, "agents-comm-bus", "dist", "core-daemon", "serve.js");
-      assert.ok(existsSync(serve), "staged plugin must contain the daemon entry serve.js");
+    it(`B2[${agent}]: the staged daemon bundle loads self-contained from an isolated copy`, async () => {
+      const isolated = await isolatedCopy(agent, comm);
+      const bundle = path.join(isolated, "daemon.bundle.js");
+      assert.ok(existsSync(bundle), "staged plugin must contain daemon.bundle.js");
 
-      // serve.js guards main() behind an `import.meta.url === argv[1]` check, so a
-      // dynamic import only resolves the static import graph (throwing on the first
-      // unresolved module) WITHOUT starting a real daemon.
-      const serveUrl = pathToFileURL(serve).href;
+      // serve.ts guards main() behind `import.meta.url === argv[1]`, and `node -e`
+      // leaves argv[1] unset, so a dynamic import only resolves the static import
+      // graph (throwing on the first unresolved module) WITHOUT starting a daemon.
+      const bundleUrl = pathToFileURL(bundle).href;
       const result = await run(
         process.execPath,
-        ["--input-type=module", "-e", `await import(${JSON.stringify(serveUrl)}); console.log("LOADED_OK");`],
-        { cwd: isolatedRoot, timeout: 30000 },
+        [
+          "--input-type=module",
+          "-e",
+          `await import(${JSON.stringify(bundleUrl)}); console.log("LOADED_OK");`,
+        ],
+        { cwd: isolated, timeout: 30000 },
       ).catch((error: { stdout?: string; stderr?: string }) => ({
         stdout: error.stdout ?? "",
         stderr: error.stderr ?? String(error),
@@ -113,8 +134,50 @@ describe("production marketplace install (release gate)", () => {
       assert.match(
         result.stdout,
         /LOADED_OK/,
-        `staged daemon entry is not self-contained:\n${result.stderr}`,
+        `staged daemon bundle is not self-contained:\n${result.stderr}`,
       );
-    },
-  );
+    });
+
+    it(`B3[${agent}]: the staged hook entries load self-contained from an isolated copy`, async () => {
+      const isolated = await isolatedCopy(agent, comm);
+      const hooksDir = path.join(isolated, "hooks");
+      const hooks = ["user-prompt-submit.js", "permission-request.js", "session-start.js"];
+
+      // Each hook kicks off a fire-and-forget main() at module scope, so a
+      // dynamic import resolves as soon as the static import graph LINKS — an
+      // unresolved module rejects first. We exit(0) immediately on link, before
+      // main() does any real work, so this is fast and has no daemon/state side
+      // effects. AGENTS_COMM_BUS_ROOT is pointed at a throwaway dir as a belt.
+      const stateRoot = await tempDir(`acb-prod-hookroot-${agent}-`);
+      for (const hook of hooks) {
+        const hookPath = path.join(hooksDir, hook);
+        assert.ok(existsSync(hookPath), `staged plugin must contain hooks/${hook}`);
+
+        const hookUrl = pathToFileURL(hookPath).href;
+        const result = await run(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            `await import(${JSON.stringify(hookUrl)}); console.log("LINKED_OK"); process.exit(0);`,
+          ],
+          { cwd: isolated, timeout: 30000, env: { ...process.env, AGENTS_COMM_BUS_ROOT: stateRoot } },
+        ).catch((error: { stdout?: string; stderr?: string }) => ({
+          stdout: error.stdout ?? "",
+          stderr: error.stderr ?? String(error),
+        }));
+
+        assert.doesNotMatch(
+          result.stderr,
+          MODULE_RESOLUTION_FAILURE,
+          `staged hook ${agent}/hooks/${hook} is not self-contained:\n${result.stderr}`,
+        );
+        assert.match(
+          result.stdout,
+          /LINKED_OK/,
+          `staged hook ${agent}/hooks/${hook} failed to link:\n${result.stderr}`,
+        );
+      }
+    });
+  }
 });

@@ -49,6 +49,16 @@ async function assertInstallStamp(base: string, agent: "claude" | "codex") {
     plugin_version: plugin.version,
     daemon_bundle_version: daemonVersion,
     adapter_bundle_version: adapterVersion,
+    daemon_sidecars: [
+      "001_initial.sql",
+      "002_conversation_agent_identity.sql",
+      "003_allowlist.sql",
+      "004_session_owner_process.sql",
+      "005_conversation_bot_identity.sql",
+      "006_registration_identity.sql",
+      "007_registration_pk.sql",
+      "008_conversation_registration_key.sql",
+    ],
   });
 }
 
@@ -105,10 +115,11 @@ describe("Claude Telegram artifact tree", () => {
       "permission-request.js",
       "session-start.js",
       "user-prompt-submit.js",
-      "wake-support.js",
     ]) {
       assert.ok(await pathExists(resolve(hooksDir, hookName)), `${hookName} exists`);
     }
+    // wake-support.js is inlined into the hook bundles; it is no longer a standalone file
+    assert.ok(!(await pathExists(resolve(hooksDir, "wake-support.js"))), "wake-support.js must not exist as standalone file (inlined into bundles)");
   });
 
   it("hooks.json commands use artifact-local paths", async () => {
@@ -133,15 +144,19 @@ describe("Claude Telegram artifact tree", () => {
   });
 
   it("hook source shimNames use artifact-local paths", async () => {
+    // Hooks are now esbuilt bundles; the old path-rewrite transform no longer runs.
+    // shimName is a diagnostic label only; assert self-containment via no live source-path imports.
     for (const hookName of ["permission-request.js", "user-prompt-submit.js"]) {
       const content = await readFile(resolve(base, "hooks", hookName), "utf-8");
-      assert.ok(
-        !content.includes("shimName: 'hosts/claude/hooks/"),
-        `${hookName} shimName must not reference source paths`
+      assert.doesNotMatch(
+        content,
+        /from\s+['"][^'"]*hosts\/(claude|codex)\//,
+        `${hookName} must not have live import from hosts/...`
       );
-      assert.ok(
-        content.includes("shimName: './hooks/"),
-        `${hookName} shimName must use artifact-local path`
+      assert.doesNotMatch(
+        content,
+        /require\(\s*['"][^'"]*hosts\/(claude|codex)\//,
+        `${hookName} must not have live require from hosts/...`
       );
     }
   });
@@ -152,14 +167,14 @@ describe("Claude Telegram artifact tree", () => {
   });
 
   it("wake-support.js references artifact-local watcher script", async () => {
-    const content = await readFile(resolve(base, "hooks/wake-support.js"), "utf-8");
-    assert.ok(
-      content.includes("'scripts', 'enter-watcher.ps1'"),
-      "wake-support.js must reference artifact-local script path"
-    );
-    assert.ok(
-      !content.includes("'..', '..', '..', 'scripts', 'enter-watcher.ps1'"),
-      "wake-support.js must not reference repo-root script path"
+    // wake-support.js is gone; its code is inlined into the hook bundles (e.g. session-start.js).
+    const content = await readFile(resolve(base, "hooks/session-start.js"), "utf-8");
+    assert.match(content, /enter-watcher\.ps1/, "session-start.js (inlining wake-support) must reference enter-watcher.ps1");
+    // Candidate path list includes artifact-local scripts/../scripts/enter-watcher.ps1
+    assert.match(
+      content,
+      /scripts["'],\s*["']enter-watcher\.ps1/,
+      "session-start.js must contain artifact-local scripts/ candidate path for enter-watcher.ps1"
     );
   });
 
@@ -174,12 +189,18 @@ describe("Claude Telegram artifact tree", () => {
 
     const types = new Set(manifest.artifacts.map((a: any) => a.type));
     assert.ok(types.has("assembled-skill"), "has assembled-skill provenance");
+    assert.ok(types.has("skill-fragment"), "has skill-fragment provenance");
     assert.ok(types.has("bundled-mcp-shim"), "has bundled-mcp-shim provenance");
-    assert.ok(types.has("common-install"), "has common install helper provenance");
+    assert.ok(types.has("runtime-bundle"), "has runtime-bundle provenance");
+    assert.ok(types.has("schema-sidecar"), "has schema-sidecar provenance");
+    assert.ok(types.has("package-json"), "has package-json provenance");
+    assert.ok(types.has("hook-bundle"), "has hook-bundle provenance");
     assert.ok(types.has("hook"), "has hook provenance");
     assert.ok(types.has("install-stamp"), "has install-stamp provenance");
     assert.ok(types.has("manifest"), "has manifest provenance");
     assert.ok(types.has("supporting-script"), "has supporting-script provenance");
+    // common-install is no longer staged (bundles are self-contained)
+    assert.ok(!types.has("common-install"), "must NOT have common-install provenance (obsolete)");
 
     // Every artifact must map from a source to an artifact path
     for (const art of manifest.artifacts) {
@@ -258,28 +279,31 @@ describe("Codex Telegram artifact tree", () => {
   });
 
   it("hook source shimNames use artifact-local paths", async () => {
+    // Hooks are now esbuilt bundles; the old path-rewrite transform no longer runs.
+    // shimName is a diagnostic label only; assert self-containment via no live source-path imports.
     for (const hookName of ["permission-request.js", "session-start.js", "user-prompt-submit.js"]) {
       const content = await readFile(resolve(base, "hooks", hookName), "utf-8");
-      assert.ok(
-        !content.includes("shimName: 'hosts/codex/hooks/"),
-        `${hookName} shimName must not reference source paths`
+      assert.doesNotMatch(
+        content,
+        /from\s+['"][^'"]*hosts\/(claude|codex)\//,
+        `${hookName} must not have live import from hosts/...`
       );
-      assert.ok(
-        content.includes("shimName: './hooks/"),
-        `${hookName} shimName must use artifact-local path`
+      assert.doesNotMatch(
+        content,
+        /require\(\s*['"][^'"]*hosts\/(claude|codex)\//,
+        `${hookName} must not have live require from hosts/...`
       );
     }
   });
 
   it("session-start.js references artifact-local bootstrap script", async () => {
     const content = await readFile(resolve(base, "hooks/session-start.js"), "utf-8");
-    assert.ok(
-      content.includes("'scripts', 'bootstrap-codex-session.ps1'"),
-      "session-start.js must reference artifact-local bootstrap script"
-    );
-    assert.ok(
-      !content.includes("'..', '..', '..', 'scripts', 'bootstrap-codex-session.ps1'"),
-      "session-start.js must not reference repo-root script path"
+    assert.match(content, /bootstrap-codex-session\.ps1/, "session-start.js must reference bootstrap-codex-session.ps1");
+    // Candidate path list includes artifact-local scripts/../scripts/bootstrap-codex-session.ps1
+    assert.match(
+      content,
+      /scripts["'],\s*["']bootstrap-codex-session\.ps1/,
+      "session-start.js must contain artifact-local scripts/ candidate path for bootstrap-codex-session.ps1"
     );
   });
 
@@ -299,13 +323,20 @@ describe("Codex Telegram artifact tree", () => {
 
     const types = new Set(manifest.artifacts.map((a: any) => a.type));
     assert.ok(types.has("assembled-skill"), "has assembled-skill provenance");
+    assert.ok(types.has("skill-fragment"), "has skill-fragment provenance");
     assert.ok(types.has("bundled-mcp-shim"), "has bundled-mcp-shim provenance");
-    assert.ok(types.has("common-install"), "has common install helper provenance");
-    assert.ok(types.has("hook"), "has hook provenance");
+    assert.ok(types.has("runtime-bundle"), "has runtime-bundle provenance");
+    assert.ok(types.has("schema-sidecar"), "has schema-sidecar provenance");
+    assert.ok(types.has("package-json"), "has package-json provenance");
+    assert.ok(types.has("hook-bundle"), "has hook-bundle provenance");
+    // Codex has no hooks.json, so no "hook" type
+    assert.ok(!types.has("hook"), "must NOT have hook provenance (codex has no hooks.json)");
     assert.ok(types.has("install-stamp"), "has install-stamp provenance");
     assert.ok(types.has("manifest"), "has manifest provenance");
     assert.ok(types.has("mcp-config"), "has mcp-config provenance");
     assert.ok(types.has("supporting-script"), "has supporting-script provenance");
+    // common-install is no longer staged (bundles are self-contained)
+    assert.ok(!types.has("common-install"), "must NOT have common-install provenance (obsolete)");
 
     for (const art of manifest.artifacts) {
       assert.ok(art.source, "artifact has source");
@@ -321,6 +352,9 @@ describe("Codex Telegram artifact tree", () => {
 
 describe("Artifact-global invariants", () => {
   it("no staged artifact contains source-only path references", async () => {
+    // Bundled .js files legitimately contain hosts/... substrings in esbuild per-module banner
+    // COMMENTS (e.g. "// hosts/claude/hooks/wake-support.js") and in shimName string labels.
+    // The genuine contract is: no live import/require from source-tree paths.
     const artifactRoots = [
       resolve(repoRoot, "plugins/claude/telegram"),
       resolve(repoRoot, "plugins/codex/telegram"),
@@ -332,12 +366,16 @@ describe("Artifact-global invariants", () => {
         const p = resolve(entry.parentPath ?? root, entry.name);
         if (p.endsWith(".js")) {
           const content = await readFile(p, "utf-8");
-          // Staged hooks shouldn't import from hosts/... — those are source paths
-          // They legitimately import from agents-comm-bus via node_modules/workspace
-          // so we only ban hosts/ references here
-          assert.ok(
-            !content.includes("hosts/claude/") && !content.includes("hosts/codex/"),
-            `staged artifact ${relative(repoRoot, p)} must not reference hosts/... paths`
+          // Ban live import/require statements referencing source hosts/ paths
+          assert.doesNotMatch(
+            content,
+            /from\s+['"][^'"]*hosts\/(claude|codex)\//,
+            `staged artifact ${relative(repoRoot, p)} must not have live import from hosts/... source paths`
+          );
+          assert.doesNotMatch(
+            content,
+            /require\(\s*['"][^'"]*hosts\/(claude|codex)\//,
+            `staged artifact ${relative(repoRoot, p)} must not have live require from hosts/... source paths`
           );
         }
       }
@@ -492,6 +530,9 @@ describe("Staged-skill equality assertions", () => {
 
 describe("Staged hook import locality", () => {
   it("hook imports resolve to the daemon runtime staged inside each plugin artifact", async () => {
+    // Hooks are now esbuilt bundles — all dependencies are inlined; there are NO import/require
+    // statements pointing at agents-comm-bus/dist/ or common/install/. esbuild banner comments
+    // may contain those substrings, but only in comment form. Assert no live import paths.
     for (const agent of ["claude", "codex"]) {
       const root = resolve(repoRoot, `plugins/${agent}/telegram`);
       const hooksDir = resolve(root, "hooks");
@@ -500,36 +541,41 @@ describe("Staged hook import locality", () => {
         if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
         const p = resolve(hooksDir, entry.name);
         const content = await readFile(p, "utf-8");
+        // No live import from source-tree agent paths
         assert.doesNotMatch(
           content,
-          /\.\.\/\.\.\/\.\.\/agents-comm-bus\/dist\//,
-          `${relative(repoRoot, p)} must not import daemon runtime via source-tree depth`
+          /from\s+['"][^'"]*hosts\/(claude|codex)\//,
+          `${relative(repoRoot, p)} must not have live import from hosts/... source paths`
         );
-        if (content.includes("agents-comm-bus/dist/")) {
-          assert.match(
-            content,
-            /\.\.\/agents-comm-bus\/dist\//,
-            `${relative(repoRoot, p)} must import the staged daemon runtime inside the plugin artifact`
-          );
-        }
-        if (content.includes("entry-ensures.js")) {
-          assert.match(
-            content,
-            /\.\.\/common\/install\/entry-ensures\.js/,
-            `${relative(repoRoot, p)} must import the staged common install helper inside the plugin artifact`
-          );
-        }
+        assert.doesNotMatch(
+          content,
+          /require\(\s*['"][^'"]*hosts\/(claude|codex)\//,
+          `${relative(repoRoot, p)} must not have live require from hosts/... source paths`
+        );
+        // No live import from agents-comm-bus/dist/ (all inlined)
+        assert.doesNotMatch(
+          content,
+          /from\s+['"][^'"]*agents-comm-bus\/dist\//,
+          `${relative(repoRoot, p)} must not have live import from agents-comm-bus/dist/`
+        );
+        assert.doesNotMatch(
+          content,
+          /from\s+['"][^'"]*\.\.\/\.\.\/\.\.\//,
+          `${relative(repoRoot, p)} must not have live import via source-tree depth (../../../)`
+        );
       }
     }
   });
 
   it("stages the daemon runtime package required by hook imports", async () => {
+    // Hooks are self-contained bundles; the old dist tree is gone. Assert the new runtime artifacts exist.
     for (const agent of ["claude", "codex"]) {
       const root = resolve(repoRoot, `plugins/${agent}/telegram`);
-      assert.ok(await pathExists(resolve(root, "agents-comm-bus/dist/core-daemon/serve.js")));
-      assert.ok(await pathExists(resolve(root, "agents-comm-bus/package.json")));
-      assert.ok(await pathExists(resolve(root, "common/install/entry-ensures.js")));
-      assert.ok(await pathExists(resolve(root, "common/install/ensure-central-install.js")));
+      assert.ok(await pathExists(resolve(root, "daemon.bundle.js")), `${agent}: daemon.bundle.js must exist`);
+      assert.ok(await pathExists(resolve(root, "telegram.adapter.bundle.js")), `${agent}: telegram.adapter.bundle.js must exist`);
+      assert.ok(await pathExists(resolve(root, "cli.bundle.js")), `${agent}: cli.bundle.js must exist`);
+      assert.ok(await pathExists(resolve(root, "package.json")), `${agent}: package.json must exist`);
+      assert.ok(await pathExists(resolve(root, "001_initial.sql")), `${agent}: 001_initial.sql must exist`);
     }
   });
 });
@@ -548,8 +594,10 @@ describe("Stale-string mechanism-side checks", () => {
           `${relative(repoRoot, p)} must not reference legacy root skill path`
         );
       }
-      // .stage-manifest.json legitimately records source paths in provenance
-      if (!entry.name.endsWith(".stage-manifest.json")) {
+      // .stage-manifest.json and bundled .js legitimately contain hosts/... substrings
+      // (.stage-manifest.json: source provenance; .js: esbuild banner comments and shimName labels).
+      // Restrict the ban to non-.js, non-.stage-manifest.json files (manifests, SKILL.md, etc.)
+      if (!entry.name.endsWith(".stage-manifest.json") && !p.endsWith(".js")) {
         assert.doesNotMatch(content, /hosts\/claude\//, `${relative(repoRoot, p)} must not reference source host paths`);
         assert.doesNotMatch(content, /hosts\/codex\//, `${relative(repoRoot, p)} must not reference source host paths`);
       }
@@ -574,8 +622,10 @@ describe("Stale-string mechanism-side checks", () => {
           `${relative(repoRoot, p)} must not reference legacy root skill path`
         );
       }
-      // .stage-manifest.json legitimately records source paths in provenance
-      if (!entry.name.endsWith(".stage-manifest.json")) {
+      // .stage-manifest.json and bundled .js legitimately contain hosts/... substrings
+      // (.stage-manifest.json: source provenance; .js: esbuild banner comments and shimName labels).
+      // Restrict the ban to non-.js, non-.stage-manifest.json files (manifests, SKILL.md, etc.)
+      if (!entry.name.endsWith(".stage-manifest.json") && !p.endsWith(".js")) {
         assert.doesNotMatch(content, /hosts\/claude\//, `${relative(repoRoot, p)} must not reference source host paths`);
         assert.doesNotMatch(content, /hosts\/codex\//, `${relative(repoRoot, p)} must not reference source host paths`);
       }

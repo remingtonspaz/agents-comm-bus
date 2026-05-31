@@ -28,6 +28,8 @@ import { buildInstallStamp } from "../hosts/common/install/install-stamp.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const DEFAULT_OUTPUT_DIR = resolve(REPO_ROOT, "plugins");
+// Self-contained esbuilt artifacts produced by build-bundles.mjs.
+const BUNDLE_DIR = resolve(REPO_ROOT, "agents-comm-bus", "dist-bundle");
 
 const args = process.argv.slice(2);
 const verifyMode = args.includes("--verify");
@@ -285,45 +287,16 @@ function transformClaudeHooksJson(content) {
 }
 
 /**
- * Transform hook source code so diagnostic shimNames use artifact-local paths.
- */
-function transformHookSource(content, agent) {
-  // Replace shimName: 'hosts/<agent>/hooks/foo.js' with 'hooks/foo.js'
-  content = content.replace(
-    new RegExp(`shimName: ['"]hosts/${agent}/hooks/`, "g"),
-    "shimName: './hooks/"
-  );
-  // Hooks move from hosts/<agent>/hooks/ to plugins/<agent>/<comm>/hooks/.
-  // Repoint daemon imports to the staged daemon package inside the same artifact.
-  content = content.replace(
-    /\.\.\/\.\.\/\.\.\/agents-comm-bus\/dist\//g,
-    "../agents-comm-bus/dist/"
-  );
-  content = content.replace(/\.\.\/\.\.\/common\/install\//g, "../common/install/");
-  // Replace bootstrapperPath / watcherScript repo-root references with artifact-local paths
-  content = content.replace(
-    /bootstrapperPath = path\.join\(repoRoot, 'scripts', 'bootstrap-codex-session\.ps1'\)/g,
-    "bootstrapperPath = path.join(__dirname, '..', 'scripts', 'bootstrap-codex-session.ps1')"
-  );
-  content = content.replace(
-    /watcherScript = path\.resolve\(__dirname, '\.\.', '\.\.', '\.\.', 'scripts', 'enter-watcher\.ps1'\)/g,
-    "watcherScript = path.resolve(__dirname, '..', 'scripts', 'enter-watcher.ps1')"
-  );
-  return content;
-}
-
-function transformCommonInstallSource(content) {
-  return content.replace(
-    /\.\.\/\.\.\/\.\.\/agents-comm-bus\/dist\//g,
-    "../../agents-comm-bus/dist/"
-  );
-}
-
-/**
  * Build the complete artifact tree for one (agent, comm) pair.
  */
 async function stagePair(agent, comm) {
   const outDir = resolve(OUTPUT_BASE, agent, comm);
+  // Clean the pair's output tree first so a re-stage never leaves stale layout
+  // behind (e.g. the pre-AGE-23 agents-comm-bus/dist + common/install trees the
+  // bundled design no longer ships). stage-plugins fully owns this directory.
+  if (!dryRun) {
+    await rm(outDir, { recursive: true, force: true });
+  }
   const mapping = {
     schema_version: 1,
     agent,
@@ -374,49 +347,73 @@ async function stagePair(agent, comm) {
   await copyTextFileAtomic(bundledShimSrc, shimDst, stripTrailingWhitespace);
   record(bundledShimSrc, shimDst, "bundled-mcp-shim");
 
-  /* 3. Daemon runtime package used by staged hooks */
-  const daemonDistSrc = resolve(REPO_ROOT, "agents-comm-bus", "dist");
-  const daemonDistDst = resolve(outDir, "agents-comm-bus", "dist");
-  if (!(await pathExists(daemonDistSrc))) {
-    throw new Error(`Missing daemon dist: ${daemonDistSrc}. Run 'npm --workspace agents-comm-bus run build'.`);
-  }
-  await copyTree(daemonDistSrc, daemonDistDst, record, "daemon-runtime");
-  const daemonPackageSrc = resolve(REPO_ROOT, "agents-comm-bus", "package.json");
-  const daemonPackageDst = resolve(outDir, "agents-comm-bus", "package.json");
-  await copyFileAtomic(daemonPackageSrc, daemonPackageDst);
-  record(daemonPackageSrc, daemonPackageDst, "daemon-runtime");
-
-  /* 3b. Shared install helpers used by staged hooks */
-  const commonInstallSrcDir = resolve(REPO_ROOT, "hosts", "common", "install");
-  const commonInstallDstDir = resolve(outDir, "common", "install");
-  const commonEntries = sortDirents(await readdir(commonInstallSrcDir, { withFileTypes: true }));
-  for (const e of commonEntries) {
-    if (!e.isFile() || !e.name.endsWith(".js")) continue;
-    const src = resolve(commonInstallSrcDir, e.name);
-    const dst = resolve(commonInstallDstDir, e.name);
-    await copyTextFileAtomic(src, dst, transformCommonInstallSource);
-    record(src, dst, "common-install");
-  }
-
-  /* 4. Hook files */
-  const hooksSrcDir = resolve(REPO_ROOT, "hosts", agent, "hooks");
-  const hooksDstDir = resolve(outDir, "hooks");
-  if (await pathExists(hooksSrcDir)) {
-    const hookEntries = await readdir(hooksSrcDir, { withFileTypes: true });
-    for (const e of hookEntries) {
-      if (!e.isFile()) continue;
-      const src = resolve(hooksSrcDir, e.name);
-      const dst = resolve(hooksDstDir, e.name);
-
-      let content = await readText(src);
-      if (e.name === "hooks.json") {
-        content = transformClaudeHooksJson(content);
-      } else if (e.name.endsWith(".js")) {
-        content = transformHookSource(content, agent);
-      }
-      await writeText(dst, content);
-      record(src, dst, "hook");
+  /* 3. Self-contained runtime bundles (daemon, per-comm adapter, admin CLI).
+     The daemon bundle is what the install hook copies to
+     ~/.agents-comm-bus/bin/daemon.js; the adapter is the central adapters/<comm>.js
+     copy; the CLI is the admin surface a marketplace install can run without a
+     dist tree. No raw tsc dist tree and no common/install tree are staged — the
+     hooks (section 4) are bundled self-contained and the daemon runs centrally. */
+  const requireBundle = async (name) => {
+    const src = resolve(BUNDLE_DIR, name);
+    if (!(await pathExists(src))) {
+      throw new Error(
+        `Missing bundle ${name} in ${repoRelative(BUNDLE_DIR)}. ` +
+          `Run 'npm --workspace agents-comm-bus run build:bundles'.`,
+      );
     }
+    return src;
+  };
+  for (const bundleName of ["daemon.bundle.js", `${comm}.adapter.bundle.js`, "cli.bundle.js"]) {
+    const src = await requireBundle(bundleName);
+    const dst = resolve(outDir, bundleName);
+    await copyTextFileAtomic(src, dst, stripTrailingWhitespace);
+    record(src, dst, "runtime-bundle");
+  }
+
+  /* 3b. Migration schema sidecars — copied next to daemon.bundle.js and listed
+     in the install stamp's daemon_sidecars so the install hook lands them next
+     to bin/daemon.js (the runner reads schema relative to its own module dir). */
+  const schemaFiles = (await readdir(BUNDLE_DIR)).filter((f) => f.endsWith(".sql")).sort();
+  for (const sqlName of schemaFiles) {
+    const src = resolve(BUNDLE_DIR, sqlName);
+    const dst = resolve(outDir, sqlName);
+    await copyTextFileAtomic(src, dst);
+    record(src, dst, "schema-sidecar");
+  }
+
+  /* 3c. node ESM pin — staged .js (hooks, shim, bundles) load as ESM no matter
+     where the plugin is extracted (the dir has no other package.json). */
+  const pkgJsonDst = resolve(outDir, "package.json");
+  await writeJson(pkgJsonDst, { type: "module", private: true });
+  mapping.artifacts.push({
+    source: "(generated)",
+    artifact: repoRelative(pkgJsonDst),
+    type: "package-json",
+  });
+
+  /* 4. Hook files — bundled & self-contained, from dist-bundle/hooks/<agent>/.
+     The raw hook source imports the daemon dist + common/install; the bundle
+     inlines all of it (incl. helpers like wake-support.js), so the staged plugin
+     needs neither tree. hooks.json (claude) is copied from source with its
+     command paths localized to ./hooks/*.js. */
+  const bundledHooksDir = resolve(BUNDLE_DIR, "hooks", agent);
+  const hooksDstDir = resolve(outDir, "hooks");
+  if (await pathExists(bundledHooksDir)) {
+    const hookEntries = sortDirents(await readdir(bundledHooksDir, { withFileTypes: true }));
+    for (const e of hookEntries) {
+      if (!e.isFile() || !e.name.endsWith(".js")) continue;
+      const src = resolve(bundledHooksDir, e.name);
+      const dst = resolve(hooksDstDir, e.name);
+      await copyTextFileAtomic(src, dst, stripTrailingWhitespace);
+      record(src, dst, "hook-bundle");
+    }
+  }
+  const hooksJsonSrc = resolve(REPO_ROOT, "hosts", agent, "hooks", "hooks.json");
+  if (await pathExists(hooksJsonSrc)) {
+    const dst = resolve(hooksDstDir, "hooks.json");
+    const content = transformClaudeHooksJson(await readText(hooksJsonSrc));
+    await writeText(dst, content);
+    record(hooksJsonSrc, dst, "hook");
   }
 
   /* 4. Plugin manifest */
@@ -462,6 +459,7 @@ async function stagePair(agent, comm) {
       pluginVersion,
       daemonBundleVersion,
       adapterBundleVersion,
+      daemonSidecars: schemaFiles,
     }),
   );
   mapping.artifacts.push({
@@ -530,8 +528,12 @@ async function verifyPair(agent, comm) {
   await assertFile(`${manifestName}/plugin.json`, "manifest");
   await assertFile(`skills/${comm}/SKILL.md`, "assembled skill");
   await assertFile(`${agent}-mcp-shim.js`, "bundled MCP shim");
-  await assertFile("agents-comm-bus/dist/core-daemon/serve.js", "staged daemon runtime");
-  await assertFile("agents-comm-bus/package.json", "staged daemon package metadata");
+  await assertFile("daemon.bundle.js", "self-contained daemon bundle");
+  await assertFile(`${comm}.adapter.bundle.js`, "self-contained adapter bundle");
+  await assertFile("cli.bundle.js", "self-contained CLI bundle");
+  await assertFile("install-stamp.json", "central-install stamp");
+  await assertFile("package.json", "ESM type pin");
+  await assertFile("001_initial.sql", "migration schema sidecar");
   await assertFile("hooks/permission-request.js", "permission hook");
   await assertFile("hooks/user-prompt-submit.js", "prompt hook");
   await assertFile("hooks/session-start.js", "session hook");
@@ -539,7 +541,8 @@ async function verifyPair(agent, comm) {
 
   if (agent === "claude") {
     await assertFile("hooks/hooks.json", "hooks manifest");
-    await assertFile("hooks/wake-support.js", "wake support");
+    // wake-support.js is no longer a standalone file — it is inlined into the
+    // bundled claude hooks (user-prompt-submit / permission-request / session-start).
     await assertFile("scripts/enter-watcher.ps1", "enter watcher script");
   } else if (agent === "codex") {
     await assertFile(".mcp.json", "standalone MCP config");

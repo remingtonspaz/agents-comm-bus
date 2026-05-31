@@ -16206,7 +16206,7 @@ var require_websocket_server = __commonJS({
 // common/mcp-shim-shared.js
 import { existsSync as existsSync3 } from "node:fs";
 import { spawn as spawn2 } from "node:child_process";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // ../node_modules/zod/v4/core/core.js
 var _a;
@@ -24782,7 +24782,6 @@ import path9 from "node:path";
 import { spawn } from "node:child_process";
 import { mkdir as mkdir2, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 import path3 from "node:path";
-import { fileURLToPath } from "node:url";
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
@@ -25140,8 +25139,8 @@ function defaultTerminateDaemon(pid) {
   process.kill(pid, "SIGTERM");
 }
 function defaultSpawnDaemon(paths) {
-  const thisFile = fileURLToPath(import.meta.url);
-  const daemonEntry = path3.resolve(path3.dirname(thisFile), "../serve.js");
+  const binOverride = process.env.AGENTS_COMM_BUS_BIN;
+  const daemonEntry = binOverride ? path3.resolve(binOverride) : path3.join(paths.root, "bin", "daemon.js");
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
     stdio: "ignore",
@@ -25670,7 +25669,7 @@ function spawnDaemonFromMcpShim(paths) {
   child.unref();
 }
 function resolveDaemonEntry() {
-  const here = fileURLToPath2(import.meta.url);
+  const here = fileURLToPath(import.meta.url);
   const candidates = [
     // Source runtime: hosts/common/mcp-shim-shared.js -> repo root.
     new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
@@ -25678,7 +25677,7 @@ function resolveDaemonEntry() {
     new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
     // Compatibility fallback for older mcp-server/source layouts.
     new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url)
-  ].map((url) => fileURLToPath2(url));
+  ].map((url) => fileURLToPath(url));
   const found = candidates.find((candidate) => existsSync3(candidate));
   if (!found) {
     throw new Error(`agents-comm-bus daemon entry not found from ${here}; checked ${candidates.join(", ")}`);

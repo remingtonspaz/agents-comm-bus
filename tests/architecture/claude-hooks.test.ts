@@ -59,12 +59,15 @@ test("Claude staged PermissionRequest opens daemon query without pending-permiss
 });
 
 test("Claude staged wake support uses daemon wake directory and watcher pid marker", async () => {
-  const hook = await readArtifactFile("hooks/wake-support.js");
+  // wake-support.js is no longer a standalone file; its code is inlined into the hook bundles.
+  // session-start.js contains the inlined wake-support logic.
+  const hook = await readArtifactFile("hooks/session-start.js");
 
   assert.match(hook, /claudeWakeDirForProject/);
   assert.match(hook, /watcher\.pid/);
   assert.match(hook, /enter-watcher\.ps1/);
-  assert.match(hook, /path\.resolve\(__dirname, '\.\.', 'scripts', 'enter-watcher\.ps1'\)/);
+  // Bundled output uses double quotes and resolves via a candidate list; match quote-agnostically
+  assert.match(hook, /scripts["'],\s*["']enter-watcher\.ps1/);
   assert.doesNotMatch(hook, /\.claude-telegram/);
 });
 
@@ -73,11 +76,15 @@ test("Claude staged wake support resolves watcher script from artifact-local scr
 });
 
 test("Claude staged hooks use artifact-local shimNames", async () => {
+  // Hooks are now esbuilt bundles; the old path-rewrite transform no longer runs.
+  // shimName is a diagnostic label only; assert self-containment: no live source-path imports.
   const userPrompt = await readArtifactFile("hooks/user-prompt-submit.js");
   const permission = await readArtifactFile("hooks/permission-request.js");
 
-  assert.match(userPrompt, /shimName: '\.\/hooks\/user-prompt-submit\.js'/);
-  assert.match(permission, /shimName: '\.\/hooks\/permission-request\.js'/);
+  assert.doesNotMatch(userPrompt, /from\s+['"][^'"]*hosts\/(claude|codex)\//);
+  assert.doesNotMatch(userPrompt, /require\(\s*['"][^'"]*hosts\/(claude|codex)\//);
+  assert.doesNotMatch(permission, /from\s+['"][^'"]*hosts\/(claude|codex)\//);
+  assert.doesNotMatch(permission, /require\(\s*['"][^'"]*hosts\/(claude|codex)\//);
 });
 
 test("legacy root Claude compatibility wrapper paths are removed", async () => {

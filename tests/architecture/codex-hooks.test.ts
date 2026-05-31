@@ -49,12 +49,14 @@ test("Codex staged SessionStart schedules bootstrap restart through daemon statu
   assert.match(hook, /codexThreadId/);
   assert.match(hook, /const threadId = codexThreadId\(hookInput\)/);
   assert.match(hook, /bootstrap-codex-session\.ps1/);
-  assert.match(hook, /'-ProjectDir'/);
+  // Bundled output uses double quotes; match quote-agnostically
+  assert.match(hook, /['"]- ?ProjectDir['"]/);
   assert.match(hook, /scheduleBootstrapRestart\(project, threadId\)/);
   assert.match(hook, /cwd: project/);
   assert.match(hook, /RestartCurrent/);
   assert.match(hook, /SameTerminal/);
-  assert.match(hook, /args\.push\('-ThreadId', String\(threadId\)\)/);
+  // Bundled output may use double quotes; match quote-agnostically
+  assert.match(hook, /args\.push\(['"]- ?ThreadId['"], String\(threadId\)\)/);
   assert.match(hook, /RESTART_GUARD_MS/);
   assert.doesNotMatch(hook, /\.codex-telegram/);
 });
@@ -62,9 +64,11 @@ test("Codex staged SessionStart schedules bootstrap restart through daemon statu
 test("Codex staged SessionStart resolves bootstrapper from artifact-local scripts directory", async () => {
   await access(path.join(artifactRoot, "scripts/bootstrap-codex-session.ps1"));
   const hook = await readArtifactFile("hooks/session-start.js");
+  // Bundled output resolves via a candidate list using path.resolve with double-quoted args;
+  // assert quote-agnostically that an artifact-local scripts/ candidate path is present.
   assert.match(
     hook,
-    /const bootstrapperPath = path\.join\(__dirname, '\.\.', 'scripts', 'bootstrap-codex-session\.ps1'\)/
+    /scripts["'],\s*["']bootstrap-codex-session\.ps1/
   );
 });
 
@@ -80,13 +84,16 @@ test("Codex bridge exposes bootstrap status IPC for SessionStart", async () => {
 });
 
 test("Codex staged hooks use artifact-local shimNames", async () => {
+  // Hooks are now esbuilt bundles; the old path-rewrite transform no longer runs.
+  // shimName is a diagnostic label only; assert self-containment: no live source-path imports.
   const userPrompt = await readArtifactFile("hooks/user-prompt-submit.js");
   const permission = await readArtifactFile("hooks/permission-request.js");
   const sessionStart = await readArtifactFile("hooks/session-start.js");
 
-  assert.match(userPrompt, /shimName: '\.\/hooks\/user-prompt-submit\.js'/);
-  assert.match(permission, /shimName: '\.\/hooks\/permission-request\.js'/);
-  assert.match(sessionStart, /shimName: '\.\/hooks\/session-start\.js'/);
+  for (const [name, content] of [["user-prompt-submit.js", userPrompt], ["permission-request.js", permission], ["session-start.js", sessionStart]]) {
+    assert.doesNotMatch(content, /from\s+['"][^'"]*hosts\/(claude|codex)\//, `${name} must not have live import from hosts/...`);
+    assert.doesNotMatch(content, /require\(\s*['"][^'"]*hosts\/(claude|codex)\//, `${name} must not have live require from hosts/...`);
+  }
 });
 
 test("Codex staged MCP shim owns Codex metadata inference", async () => {
