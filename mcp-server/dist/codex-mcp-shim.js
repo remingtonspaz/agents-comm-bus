@@ -16217,8 +16217,6 @@ var wrapper_default = import_websocket.default;
 
 // common/mcp-shim-shared.js
 import { existsSync as existsSync3 } from "node:fs";
-import { spawn as spawn2 } from "node:child_process";
-import { fileURLToPath } from "node:url";
 
 // ../node_modules/zod/v4/core/core.js
 var _a;
@@ -25915,53 +25913,31 @@ var PersistentIpcClient = class {
 function log(message) {
   console.error(`[acb-mcp] ${message}`);
 }
-function spawnDaemonFromMcpShim(paths) {
-  const daemonEntry = resolveDaemonEntry();
-  const child = spawn2(process.execPath, [daemonEntry, "serve"], {
-    detached: true,
-    stdio: "ignore",
-    env: {
-      ...process.env,
-      AGENTS_COMM_BUS_STATE_ROOT: paths.root
-    }
+async function ensureMcpRuntime(options) {
+  const agent = options.agentInUse();
+  const metadata = {
+    shimName: options.shimName ?? "agents-comm-mcp-shim",
+    agent,
+    project: process.cwd()
+  };
+  const ensureDaemonOptions = {
+    clientVersion: DAEMON_VERSION,
+    metadata,
+    ...options.spawnDaemon ? { spawnDaemon: options.spawnDaemon } : {}
+  };
+  const ensured = await entryEnsures({
+    fromDir: options.fromDir ?? import.meta.dirname,
+    agent,
+    env: options.env ?? process.env,
+    stateRoot: options.stateRoot,
+    ensureDaemonOptions
   });
-  child.unref();
-}
-function resolveDaemonEntry() {
-  const here = fileURLToPath(import.meta.url);
-  const candidates = [
-    // Source runtime: hosts/common/mcp-shim-shared.js -> repo root.
-    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
-    // Bundled runtime: mcp-server/dist/<host>-mcp-shim.js -> repo root.
-    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
-    // Compatibility fallback for older mcp-server/source layouts.
-    new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url)
-  ].map((url) => fileURLToPath(url));
-  const found = candidates.find((candidate) => existsSync3(candidate));
-  if (!found) {
-    throw new Error(`agents-comm-bus daemon entry not found from ${here}; checked ${candidates.join(", ")}`);
-  }
-  return found;
+  return { agent, metadata, ensured };
 }
 function createDaemonRequester(options) {
   return async function daemonRequest(method, params = {}) {
     await options.beforeDaemonRequest?.();
-    const agent = options.agentInUse();
-    const metadata = {
-      shimName: options.shimName ?? "agents-comm-mcp-shim",
-      agent,
-      project: process.cwd()
-    };
-    const ensured = await entryEnsures({
-      fromDir: import.meta.dirname,
-      agent,
-      env: process.env,
-      ensureDaemonOptions: {
-        clientVersion: DAEMON_VERSION,
-        metadata,
-        spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim
-      }
-    });
+    const { metadata, ensured } = await ensureMcpRuntime(options);
     const connection = await connectIpc({
       port: ensured.port,
       clientVersion: DAEMON_VERSION,
@@ -26370,10 +26346,13 @@ async function startPersistentCodexRegistration() {
     replace_existing_lease: true,
     manage_app_server_lifecycle: true
   };
+  await ensureMcpRuntime({
+    agentInUse: () => "codex",
+    shimName: "agents-comm-mcp-shim/session-registration"
+  });
   const client = new PersistentIpcClient({
     clientVersion: DAEMON_VERSION,
     metadata,
-    spawnDaemon: spawnDaemonFromMcpShim,
     log: (msg) => log(`ipc: ${msg}`),
     onDisconnected: (reason) => log(`ipc disconnected: ${reason}`),
     onReconnected: () => log("ipc reconnected; replaying Codex registration"),

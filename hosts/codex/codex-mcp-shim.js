@@ -6,10 +6,10 @@ import WebSocket from "ws";
 import {
   DAEMON_VERSION,
   PersistentIpcClient,
+  ensureMcpRuntime,
   installShutdownHandlers,
   log,
   runMcpShim,
-  spawnDaemonFromMcpShim,
 } from "../common/mcp-shim-shared.js";
 
 let persistentRegistration = null;
@@ -259,10 +259,14 @@ async function startPersistentCodexRegistration() {
     manage_app_server_lifecycle: true,
   };
 
+  await ensureMcpRuntime({
+    agentInUse: () => "codex",
+    shimName: "agents-comm-mcp-shim/session-registration",
+  });
+
   const client = new PersistentIpcClient({
     clientVersion: DAEMON_VERSION,
     metadata,
-    spawnDaemon: spawnDaemonFromMcpShim,
     log: (msg) => log(`ipc: ${msg}`),
     onDisconnected: (reason) => log(`ipc disconnected: ${reason}`),
     onReconnected: () => log("ipc reconnected; replaying Codex registration"),

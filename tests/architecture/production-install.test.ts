@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 
 import { entryEnsures } from "../../hosts/common/install/entry-ensures.js";
 import { resolveCentralPaths } from "../../hosts/common/install/node-fs-seam.js";
+import { createDaemonRequester } from "../../hosts/common/mcp-shim-shared.js";
 import { connectIpc } from "../../core-daemon/ipc/client.js";
 import { DAEMON_VERSION } from "../../core-daemon/config.js";
 
@@ -286,6 +287,34 @@ describe("production marketplace install (release gate)", () => {
         } finally {
           client.close();
         }
+      } finally {
+        if (Number.isInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch {
+            // Best-effort cleanup: the temp daemon may have already exited.
+          }
+        }
+      }
+    });
+
+    it(`B6[${agent}]: MCP-first cold start spawns the central daemon`, async () => {
+      const isolated = await isolatedCopy(agent, comm);
+      const stateRoot = await tempDir(`acb-prod-mcp-first-${agent}-`);
+      const daemonRequest = createDaemonRequester({
+        agentInUse: () => agent,
+        sessionInUse: () => `mcp-first-${agent}`,
+        fromDir: isolated,
+        env: { AGENTS_COMM_BUS_ROOT: stateRoot },
+      });
+
+      const result = await daemonRequest("telegram_check_messages");
+      const paths = resolveCentralPaths(stateRoot, comm);
+      const pid = Number((await readFile(path.join(stateRoot, "daemon.pid"), "utf8")).trim());
+      try {
+        assert.deepEqual(result, [], "MCP shim should reach the dynamically loaded adapter IPC method");
+        assert.ok(existsSync(paths.daemonBundle), "MCP-first path central-installed bin/daemon.js");
+        assert.ok(existsSync(paths.adapterBundle), "MCP-first path central-installed adapters/<comm>.js");
       } finally {
         if (Number.isInteger(pid) && pid > 0) {
           try {

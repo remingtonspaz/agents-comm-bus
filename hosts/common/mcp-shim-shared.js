@@ -1,6 +1,4 @@
 import { existsSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -19,55 +17,32 @@ export function log(message) {
   console.error(`[acb-mcp] ${message}`);
 }
 
-export function spawnDaemonFromMcpShim(paths) {
-  const daemonEntry = resolveDaemonEntry();
-  const child = spawn(process.execPath, [daemonEntry, "serve"], {
-    detached: true,
-    stdio: "ignore",
-    env: {
-      ...process.env,
-      AGENTS_COMM_BUS_STATE_ROOT: paths.root,
-    },
+export async function ensureMcpRuntime(options) {
+  const agent = options.agentInUse();
+  const metadata = {
+    shimName: options.shimName ?? "agents-comm-mcp-shim",
+    agent,
+    project: process.cwd(),
+  };
+  const ensureDaemonOptions = {
+    clientVersion: DAEMON_VERSION,
+    metadata,
+    ...(options.spawnDaemon ? { spawnDaemon: options.spawnDaemon } : {}),
+  };
+  const ensured = await entryEnsures({
+    fromDir: options.fromDir ?? import.meta.dirname,
+    agent,
+    env: options.env ?? process.env,
+    stateRoot: options.stateRoot,
+    ensureDaemonOptions,
   });
-  child.unref();
-}
-
-export function resolveDaemonEntry() {
-  const here = fileURLToPath(import.meta.url);
-  const candidates = [
-    // Source runtime: hosts/common/mcp-shim-shared.js -> repo root.
-    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
-    // Bundled runtime: mcp-server/dist/<host>-mcp-shim.js -> repo root.
-    new URL("../../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
-    // Compatibility fallback for older mcp-server/source layouts.
-    new URL("../agents-comm-bus/dist/core-daemon/serve.js", import.meta.url),
-  ].map((url) => fileURLToPath(url));
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (!found) {
-    throw new Error(`agents-comm-bus daemon entry not found from ${here}; checked ${candidates.join(", ")}`);
-  }
-  return found;
+  return { agent, metadata, ensured };
 }
 
 export function createDaemonRequester(options) {
   return async function daemonRequest(method, params = {}) {
     await options.beforeDaemonRequest?.();
-    const agent = options.agentInUse();
-    const metadata = {
-      shimName: options.shimName ?? "agents-comm-mcp-shim",
-      agent,
-      project: process.cwd(),
-    };
-    const ensured = await entryEnsures({
-      fromDir: import.meta.dirname,
-      agent,
-      env: process.env,
-      ensureDaemonOptions: {
-        clientVersion: DAEMON_VERSION,
-        metadata,
-        spawnDaemon: options.spawnDaemon ?? spawnDaemonFromMcpShim,
-      },
-    });
+    const { metadata, ensured } = await ensureMcpRuntime(options);
     const connection = await connectIpc({
       port: ensured.port,
       clientVersion: DAEMON_VERSION,
