@@ -568,3 +568,102 @@ describe("AGE-20 conversation surrogate identity + race (phase 3a)", () => {
     });
   });
 });
+
+describe("AGE-20 registration-resolved account_label (phase 3b)", () => {
+  function rawConversationLabel(storage: unknown, id: string): string {
+    return (
+      (storage as { db: { prepare(sql: string): { get(p: string): { account_label: string } } } })
+        .db.prepare("SELECT account_label FROM conversations WHERE conversation_id = ?").get(id)
+    ).account_label;
+  }
+  function relabelRegistration(storage: unknown, registrationId: string, label: string): void {
+    (storage as { db: { prepare(sql: string): { run(...p: string[]): unknown } } })
+      .db.prepare("UPDATE account_registrations SET account_label = ? WHERE registration_id = ?")
+      .run(label, registrationId);
+  }
+
+  it("surfaces the registration's CURRENT label on reads after a relabel, without re-keying conversation_id or touching the conversation", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.putAccountRegistration(
+        account({ registration_id: "R1", account_label: "old", bot_user_id: "bot-1" }),
+      );
+      await storage.upsertConversation(
+        conversation({
+          registration_id: "R1",
+          account_label: "old",
+          bot_user_id: "bot-1",
+          conversation_id: "C1" as ConversationId,
+        }),
+      );
+
+      // Relabel the registration directly (what account-relabel will do) — NO
+      // conversation upsert in between.
+      relabelRegistration(storage, "R1", "new");
+
+      const got = await storage.getConversation("C1" as ConversationId);
+      assert.equal(got?.account_label, "new", "read resolves the live registration label");
+      assert.equal(got?.conversation_id, "C1", "identity is unchanged by the relabel");
+
+      const list = await storage.listConversations({});
+      assert.equal(list[0]?.account_label, "new", "listConversations resolves it too");
+
+      const found = await storage.findConversation({
+        project: "project-a",
+        agent: "claude" as AgentId,
+        comm: "telegram" as CommId,
+        account_label: "anything", // label no longer needs to match
+        registration_id: "R1",
+        chat_native_id: "chat-1",
+        thread_native_id: null,
+      });
+      assert.equal(found?.account_label, "new", "findConversation resolves it too");
+
+      // Proof we resolve via the join, not by writing: the stored column is stale.
+      assert.equal(rawConversationLabel(storage, "C1"), "old");
+      await storage.close();
+    });
+  });
+
+  it("falls back to the stored account_label when registration_id is null (legacy row)", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertConversation(
+        conversation({
+          registration_id: undefined,
+          account_label: "legacy",
+          bot_user_id: "bot-x",
+          conversation_id: "CN" as ConversationId,
+        }),
+      );
+      const got = await storage.getConversation("CN" as ConversationId);
+      assert.equal(got?.account_label, "legacy");
+      await storage.close();
+    });
+  });
+
+  it("falls back to the stored account_label when registration_id has no matching registration", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertConversation(
+        conversation({
+          registration_id: "ghost",
+          account_label: "orphan",
+          bot_user_id: "bot-y",
+          conversation_id: "CO" as ConversationId,
+        }),
+      );
+      const got = await storage.getConversation("CO" as ConversationId);
+      assert.equal(got?.account_label, "orphan");
+      await storage.close();
+    });
+  });
+
+  it("no non-fallback behavior path keys off the stored conversations.account_label (source invariant)", async () => {
+    const repoRoot = resolve(import.meta.dirname, "../..");
+    const bus = await readFile(resolve(repoRoot, "core-daemon/bus.ts"), "utf8");
+    // botUserIdForConversation must prefer the stable registration_id; the label
+    // match survives only as the explicit legacy fallback.
+    assert.match(bus, /candidate\.registration_id === conversation\.registration_id/);
+  });
+});

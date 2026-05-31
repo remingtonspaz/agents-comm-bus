@@ -442,11 +442,18 @@ export class MessageBus {
     async botUserIdForConversation(conversation) {
         if (conversation.bot_user_id)
             return conversation.bot_user_id;
-        const registration = (await this.options.storage.listAccountRegistrations({
+        // AGE-20 Phase 3b: resolve the owning registration by its stable
+        // registration_id, NOT the mutable account_label. The label match is only a
+        // legacy fallback for rows whose registration_id was never backfilled.
+        const registrations = await this.options.storage.listAccountRegistrations({
             project: conversation.project,
             comm: conversation.comm,
             agent: conversation.agent,
-        })).find((candidate) => candidate.account_label === conversation.account_label);
+        });
+        const registration = (conversation.registration_id != null
+            ? registrations.find((candidate) => candidate.registration_id === conversation.registration_id)
+            : undefined) ??
+            registrations.find((candidate) => candidate.account_label === conversation.account_label);
         if (!registration) {
             throw new Error(`no account registration for conversation ${conversation.conversation_id} ` +
                 `(${conversation.agent}/${conversation.comm}/${conversation.account_label})`);

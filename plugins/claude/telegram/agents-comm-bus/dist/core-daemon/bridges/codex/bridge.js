@@ -461,11 +461,18 @@ export class CodexBridge {
                 thread_native_id: conversation.thread_native_id ?? undefined,
             };
         }
-        const registration = (await this.options.storage.listAccountRegistrations({
+        // AGE-20 Phase 3b: prefer the stable registration_id; the account_label
+        // match is only a legacy fallback for un-backfilled (null registration_id)
+        // rows. The label here is itself registration-resolved on read.
+        const registrations = await this.options.storage.listAccountRegistrations({
             project: conversation.project,
             comm: conversation.comm,
             agent: conversation.agent,
-        })).find((candidate) => candidate.account_label === conversation.account_label);
+        });
+        const registration = (conversation.registration_id != null
+            ? registrations.find((candidate) => candidate.registration_id === conversation.registration_id)
+            : undefined) ??
+            registrations.find((candidate) => candidate.account_label === conversation.account_label);
         if (!registration)
             return undefined;
         return {

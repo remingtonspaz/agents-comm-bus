@@ -26,6 +26,7 @@ export declare class SqliteStorage implements Storage {
      * predate registration_id. Returns null when no conversation exists yet.
      */
     private findExistingConversationId;
+    private readonly conversationSelect;
     getConversation(id: ConversationId): Promise<Conversation | null>;
     findConversation(pk: {
         project: string;

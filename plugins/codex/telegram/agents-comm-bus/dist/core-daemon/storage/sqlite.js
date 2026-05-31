@@ -251,9 +251,22 @@ export class SqliteStorage {
             .get(rec.project, rec.agent, rec.comm, rec.account_label, rec.chat_native_id, dbThreadId(rec.thread_native_id));
         return byTuple?.conversation_id ?? null;
     }
+    // AGE-20 Phase 3b: surface a conversation's CURRENT account_label by resolving
+    // it from the owning registration (registration_id -> account_registrations),
+    // not from the stored conversations.account_label column. The stored column is
+    // only an explicit fallback for legacy rows whose registration_id is null (or
+    // whose registration no longer exists). This makes a registration relabel
+    // visible immediately on every read, with no conversation upsert required, and
+    // means no normal behavior path keys off the mutable stored label. The literal
+    // column drop is harness-gated and tracked in AGE-22.
+    conversationSelect = `
+    SELECT c.*, COALESCE(ar.account_label, c.account_label) AS effective_account_label
+    FROM conversations c
+    LEFT JOIN account_registrations ar ON ar.registration_id = c.registration_id
+  `;
     async getConversation(id) {
         const row = this.db
-            .prepare("SELECT * FROM conversations WHERE conversation_id = ?")
+            .prepare(`${this.conversationSelect} WHERE c.conversation_id = ?`)
             .get(id);
         return row ? this.conversationFromRow(row) : null;
     }
@@ -263,8 +276,8 @@ export class SqliteStorage {
         if (pk.registration_id) {
             const byReg = this.db
                 .prepare(`
-          SELECT * FROM conversations
-          WHERE registration_id = ? AND chat_native_id = ? AND thread_native_id = ?
+          ${this.conversationSelect}
+          WHERE c.registration_id = ? AND c.chat_native_id = ? AND c.thread_native_id = ?
         `)
                 .get(pk.registration_id, pk.chat_native_id, dbThreadId(pk.thread_native_id));
             if (byReg)
@@ -273,9 +286,9 @@ export class SqliteStorage {
         if (pk.bot_user_id) {
             const byBot = this.db
                 .prepare(`
-          SELECT * FROM conversations
-          WHERE project = ? AND agent = ? AND comm = ? AND bot_user_id = ?
-            AND chat_native_id = ? AND thread_native_id = ?
+          ${this.conversationSelect}
+          WHERE c.project = ? AND c.agent = ? AND c.comm = ? AND c.bot_user_id = ?
+            AND c.chat_native_id = ? AND c.thread_native_id = ?
         `)
                 .get(pk.project, pk.agent, pk.comm, pk.bot_user_id, pk.chat_native_id, dbThreadId(pk.thread_native_id));
             if (byBot)
@@ -283,9 +296,9 @@ export class SqliteStorage {
         }
         const row = this.db
             .prepare(`
-        SELECT * FROM conversations
-        WHERE project = ? AND agent = ? AND comm = ? AND account_label = ?
-          AND chat_native_id = ? AND thread_native_id = ?
+        ${this.conversationSelect}
+        WHERE c.project = ? AND c.agent = ? AND c.comm = ? AND c.account_label = ?
+          AND c.chat_native_id = ? AND c.thread_native_id = ?
       `)
             .get(pk.project, pk.agent, pk.comm, pk.account_label, pk.chat_native_id, dbThreadId(pk.thread_native_id));
         return row ? this.conversationFromRow(row) : null;
@@ -295,7 +308,7 @@ export class SqliteStorage {
         const params = [];
         for (const key of ["project", "comm", "agent"]) {
             if (filter[key] !== undefined) {
-                clauses.push(`${key} = ?`);
+                clauses.push(`c.${key} = ?`);
                 params.push(filter[key]);
             }
         }
@@ -304,7 +317,7 @@ export class SqliteStorage {
         if (filter.limit !== undefined)
             params.push(filter.limit);
         const rows = this.db
-            .prepare(`SELECT * FROM conversations ${where} ORDER BY created_at DESC ${limit}`)
+            .prepare(`${this.conversationSelect} ${where} ORDER BY c.created_at DESC ${limit}`)
             .all(...params);
         return rows.map((row) => this.conversationFromRow(row));
     }
@@ -589,7 +602,9 @@ export class SqliteStorage {
             schema_version: r.schema_version,
             project: r.project,
             comm: r.comm,
-            account_label: r.account_label,
+            // AGE-20 Phase 3b: registration-resolved current label (see conversationSelect).
+            // Falls back to the stored column for legacy/null-registration rows.
+            account_label: (r.effective_account_label ?? r.account_label),
             bot_user_id: r.bot_user_id ?? null,
             registration_id: r.registration_id ?? null,
             chat_native_id: r.chat_native_id,
