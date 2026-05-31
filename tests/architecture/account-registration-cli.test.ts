@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
 import { accountAdd } from "../../core-daemon/cli/account-add.js";
+import { accountRelabel } from "../../core-daemon/cli/account-relabel.js";
 import { accountRemove } from "../../core-daemon/cli/account-remove.js";
 import { accountUpdateToken } from "../../core-daemon/cli/account-update-token.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
@@ -22,6 +23,7 @@ describe("account registration CLI contract", () => {
     assert.match(source, /account-add/);
     assert.match(source, /account-list/);
     assert.match(source, /account-remove/);
+    assert.match(source, /account-relabel/);
     assert.match(source, /account-update-token/);
     assert.doesNotMatch(source, /implicit/i);
   });
@@ -217,6 +219,165 @@ describe("account registration CLI contract", () => {
     } finally {
       await storage.close();
     }
+  });
+
+  it("relabels an account by bot id and conversation reads resolve the new label", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-relabel-"));
+
+    const registration = await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "codex-token",
+      credentialsRef: "env:CODEX_TOKEN",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+
+    const conversationId = "conv-codex-relabel" as ConversationId;
+    const storage = await openSqliteStorage(resolveStatePaths({ stateRoot }).database);
+    try {
+      await storage.upsertConversation({
+        schema_version: 1,
+        project: "D:\\Projects\\codex",
+        comm: "telegram",
+        account_label: "main",
+        bot_user_id: "8988792099",
+        registration_id: registration.registration_id,
+        chat_native_id: "-100",
+        thread_native_id: null,
+        conversation_id: conversationId,
+        agent: "codex",
+        last_inbound_at: null,
+        last_outbound_at: null,
+        last_message_id: null,
+        created_at: 1,
+      });
+    } finally {
+      await storage.close();
+    }
+
+    const result = await accountRelabel({
+      comm: "telegram",
+      botId: "8988792099",
+      newAccountLabel: "codex-main",
+      stateRoot,
+    });
+
+    assert.equal(result.previous.account_label, "main");
+    assert.equal(result.next.account_label, "codex-main");
+    assert.equal(result.next.registration_id, registration.registration_id);
+
+    const verify = await openSqliteStorage(resolveStatePaths({ stateRoot }).database);
+    try {
+      const account = await verify.getAccountByBot("telegram", "8988792099");
+      assert.equal(account?.account_label, "codex-main");
+      const conversation = await verify.getConversation(conversationId);
+      assert.equal(conversation?.conversation_id, conversationId);
+      assert.equal(conversation?.account_label, "codex-main");
+    } finally {
+      await verify.close();
+    }
+  });
+
+  it("relabels an account by an unambiguous label selector", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-relabel-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "codex-token",
+      credentialsRef: "env:CODEX_TOKEN",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+
+    const result = await accountRelabel({
+      comm: "telegram",
+      accountLabel: "main",
+      agent: "codex",
+      newAccountLabel: "codex-main",
+      stateRoot,
+    });
+
+    assert.equal(result.next.account_label, "codex-main");
+    assert.equal(result.next.bot_user_id, "8988792099");
+  });
+
+  it("rejects ambiguous label-based relabel targets", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-relabel-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\claude",
+      agent: "claude",
+      accountLabel: "main",
+      botToken: "claude-token",
+      credentialsRef: "env:CLAUDE_TOKEN",
+      stateRoot,
+      probeIdentity: identity("8950482517", "sd_claude_bot"),
+    });
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "codex-token",
+      credentialsRef: "env:CODEX_TOKEN",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+
+    await assert.rejects(
+      () => accountRelabel({
+        comm: "telegram",
+        accountLabel: "main",
+        newAccountLabel: "shared-main",
+        stateRoot,
+      }),
+      (error: Error) => {
+        assert.match(error.message, /ambiguous/);
+        assert.match(error.message, /8950482517/);
+        assert.match(error.message, /8988792099/);
+        return true;
+      },
+    );
+  });
+
+  it("rejects relabeling to an existing label in the same project and agent", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-relabel-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "codex-token",
+      credentialsRef: "env:CODEX_TOKEN",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "backup",
+      botToken: "backup-token",
+      credentialsRef: "env:BACKUP_TOKEN",
+      stateRoot,
+      probeIdentity: identity("7777777777", "sd_backup_bot"),
+    });
+
+    await assert.rejects(
+      () => accountRelabel({
+        comm: "telegram",
+        botId: "8988792099",
+        newAccountLabel: "backup",
+        stateRoot,
+      }),
+      (error: Error) => {
+        assert.match(error.message, /account label backup is already registered/);
+        assert.match(error.message, /7777777777/);
+        return true;
+      },
+    );
   });
 
   it("rotates a same-bot token without changing the bot id", async () => {

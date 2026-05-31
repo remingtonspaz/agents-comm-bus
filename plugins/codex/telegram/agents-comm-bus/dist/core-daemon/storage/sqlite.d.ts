@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "agents-comm-bus-core";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
-import type { AccountTokenUpdateInput, AccountTokenUpdateResult, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -18,6 +18,7 @@ export declare class SqliteStorage implements Storage {
     }): Promise<AccountRegistration[]>;
     deleteAccountRegistration(project: string, comm: CommId, agent: AgentId, account_label: string): Promise<void>;
     updateAccountRegistrationToken(input: AccountTokenUpdateInput): Promise<AccountTokenUpdateResult>;
+    updateAccountRegistrationLabel(input: AccountRelabelInput): Promise<AccountRelabelResult>;
     upsertConversation(rec: Conversation): Promise<ConversationId>;
     /**
      * Resolve an existing conversation's stable conversation_id by its immutable

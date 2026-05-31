@@ -43,6 +43,18 @@ export interface AccountTokenUpdateResult {
   migrated_conversation_rows: number;
 }
 
+export interface AccountRelabelInput {
+  comm: CommId;
+  bot_user_id: string;
+  account_label: string;
+  updated_at: number;
+}
+
+export interface AccountRelabelResult {
+  previous: AccountRegistration;
+  next: AccountRegistration;
+}
+
 export interface Storage {
   // account_registrations
   putAccountRegistration(rec: AccountRegistration): Promise<void>;
@@ -64,6 +76,9 @@ export interface Storage {
   updateAccountRegistrationToken(
     input: AccountTokenUpdateInput,
   ): Promise<AccountTokenUpdateResult>;
+  updateAccountRegistrationLabel(
+    input: AccountRelabelInput,
+  ): Promise<AccountRelabelResult>;
 
   // conversations
   upsertConversation(rec: Conversation): Promise<ConversationId>;

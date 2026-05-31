@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { accountAdd } from "./account-add.js";
 import { accountList } from "./account-list.js";
+import { accountRelabel, } from "./account-relabel.js";
 import { accountRemove } from "./account-remove.js";
 import { accountUpdateToken, } from "./account-update-token.js";
 import { allowlistAdd } from "./allowlist-add.js";
@@ -45,6 +46,19 @@ async function main() {
             });
             const reload = await reloadDaemonRegistrations();
             console.log(JSON.stringify({ ok: true, reload }, null, 2));
+            return;
+        }
+        case "account-relabel": {
+            const result = await accountRelabel({
+                project: args.project,
+                agent: args.agent,
+                comm: args.comm,
+                accountLabel: args.accountLabel ?? args["account-label"],
+                botId: args.botId ?? args["bot-id"],
+                newAccountLabel: required(args.newAccountLabel ?? args["new-account-label"], "--new-account-label"),
+            });
+            const reload = await reloadDaemonRegistrations();
+            console.log(JSON.stringify({ ...redact(result.next), relabel: relabelSummary(result), reload }, null, 2));
             return;
         }
         case "account-update-token": {
@@ -180,6 +194,7 @@ Account commands:
   agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>] [--credentials-ref <ref>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
+  agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
   agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --bot-token <token> [--allow-bot-change]
 
 Allowlist commands:
@@ -201,6 +216,13 @@ function resultSummary(result) {
         bot_changed: result.bot_changed,
         migrated_allowlist_rows: result.migrated_allowlist_rows,
         migrated_conversation_rows: result.migrated_conversation_rows,
+    };
+}
+function relabelSummary(result) {
+    return {
+        previous_account_label: result.previous.account_label,
+        account_label: result.next.account_label,
+        bot_user_id: result.next.bot_user_id,
     };
 }
 main().catch((error) => {

@@ -359,6 +359,26 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-relabel.d.ts",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-relabel.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-relabel.d.ts.map",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-relabel.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-relabel.js",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-relabel.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-relabel.js.map",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-relabel.js.map",
+      "type": "daemon-runtime"
+    },
+    {
       "source": "agents-comm-bus/dist/core-daemon/cli/account-remove.d.ts",
       "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-remove.d.ts",
       "type": "daemon-runtime"

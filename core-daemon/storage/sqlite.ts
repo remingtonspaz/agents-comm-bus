@@ -10,6 +10,8 @@ import type {
   Session,
 } from "agents-comm-bus-core/records";
 import type {
+  AccountRelabelInput,
+  AccountRelabelResult,
   AccountTokenUpdateInput,
   AccountTokenUpdateResult,
   SessionLeaseOwner,
@@ -249,6 +251,70 @@ export class SqliteStorage implements Storage {
         migrated_allowlist_rows: migratedAllowlistRows,
         migrated_conversation_rows: migratedConversationRows,
       };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async updateAccountRegistrationLabel(
+    input: AccountRelabelInput,
+  ): Promise<AccountRelabelResult> {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previousRow = this.db
+        .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
+        .get(input.comm, input.bot_user_id);
+      if (!previousRow) {
+        throw new Error(
+          `no account registration found for (comm=${input.comm}, bot-id=${input.bot_user_id})`,
+        );
+      }
+      const previous = this.accountFromRow(previousRow);
+
+      if (previous.account_label === input.account_label) {
+        this.db.exec("COMMIT");
+        return { previous, next: previous };
+      }
+
+      const collision = this.db
+        .prepare(`
+          SELECT * FROM account_registrations
+          WHERE project = ? AND comm = ? AND agent = ? AND account_label = ?
+        `)
+        .get(previous.project, previous.comm, previous.agent, input.account_label);
+      if (collision) {
+        const row = this.accountFromRow(collision);
+        throw new Error(
+          `account label ${input.account_label} is already registered for ` +
+            `project=${row.project}, comm=${row.comm}, agent=${row.agent} ` +
+            `as bot id ${row.bot_user_id}`,
+        );
+      }
+
+      const result = this.db
+        .prepare(`
+          UPDATE account_registrations
+          SET account_label = ?,
+              updated_at = ?
+          WHERE registration_id = ?
+        `)
+        .run(input.account_label, input.updated_at, previous.registration_id) as { changes?: number };
+      if (Number(result.changes ?? 0) !== 1) {
+        throw new Error(
+          `failed to relabel account registration for ${input.comm}/${input.bot_user_id}`,
+        );
+      }
+
+      const nextRow = this.db
+        .prepare("SELECT * FROM account_registrations WHERE registration_id = ?")
+        .get(previous.registration_id);
+      if (!nextRow) {
+        throw new Error(`updated account registration not found for ${previous.registration_id}`);
+      }
+
+      this.db.exec("COMMIT");
+      return { previous, next: this.accountFromRow(nextRow) };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
