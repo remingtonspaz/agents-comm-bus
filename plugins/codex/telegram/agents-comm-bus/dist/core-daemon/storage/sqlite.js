@@ -78,6 +78,97 @@ export class SqliteStorage {
       `)
             .run(project, comm, agent, account_label);
     }
+    async updateAccountRegistrationToken(input) {
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+            const previousRow = this.db
+                .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
+                .get(input.comm, input.current_bot_user_id);
+            if (!previousRow) {
+                throw new Error(`no account registration found for (comm=${input.comm}, bot-id=${input.current_bot_user_id})`);
+            }
+            const previous = this.accountFromRow(previousRow);
+            const botChanged = input.current_bot_user_id !== input.new_bot_user_id;
+            if (botChanged) {
+                const existing = this.db
+                    .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
+                    .get(input.comm, input.new_bot_user_id);
+                if (existing) {
+                    const row = this.accountFromRow(existing);
+                    throw new Error(`${input.comm} bot id ${input.new_bot_user_id} is already registered as ` +
+                        `project=${row.project}, agent=${row.agent}, account_label=${row.account_label}`);
+                }
+                const allowlistConflict = this.db
+                    .prepare(`
+            SELECT sender_id FROM allowlist_per_bot
+            WHERE comm = ? AND bot_user_id = ?
+              AND sender_id IN (
+                SELECT sender_id FROM allowlist_per_bot
+                WHERE comm = ? AND bot_user_id = ?
+              )
+            LIMIT 1
+          `)
+                    .get(input.comm, input.current_bot_user_id, input.comm, input.new_bot_user_id);
+                if (allowlistConflict) {
+                    const row = allowlistConflict;
+                    throw new Error(`cannot move ${input.comm} bot id ${input.current_bot_user_id} to ` +
+                        `${input.new_bot_user_id}: allowlist row already exists for sender ` +
+                        `${row.sender_id ?? "(unknown)"}`);
+                }
+            }
+            const accountResult = this.db
+                .prepare(`
+          UPDATE account_registrations
+          SET bot_user_id = ?,
+              credentials_ref = ?,
+              bot_username = ?,
+              updated_at = ?
+          WHERE comm = ? AND bot_user_id = ?
+        `)
+                .run(input.new_bot_user_id, input.credentials_ref, input.bot_username ?? null, input.updated_at, input.comm, input.current_bot_user_id);
+            if (Number(accountResult.changes ?? 0) !== 1) {
+                throw new Error(`failed to update account registration for ${input.comm}/${input.current_bot_user_id}`);
+            }
+            let migratedAllowlistRows = 0;
+            let migratedConversationRows = 0;
+            if (botChanged) {
+                const allowlistResult = this.db
+                    .prepare(`
+            UPDATE allowlist_per_bot
+            SET bot_user_id = ?
+            WHERE comm = ? AND bot_user_id = ?
+          `)
+                    .run(input.new_bot_user_id, input.comm, input.current_bot_user_id);
+                migratedAllowlistRows = Number(allowlistResult.changes ?? 0);
+                const conversationResult = this.db
+                    .prepare(`
+            UPDATE conversations
+            SET bot_user_id = ?
+            WHERE comm = ? AND bot_user_id = ?
+          `)
+                    .run(input.new_bot_user_id, input.comm, input.current_bot_user_id);
+                migratedConversationRows = Number(conversationResult.changes ?? 0);
+            }
+            const nextRow = this.db
+                .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
+                .get(input.comm, input.new_bot_user_id);
+            if (!nextRow) {
+                throw new Error(`updated account registration not found for ${input.comm}/${input.new_bot_user_id}`);
+            }
+            this.db.exec("COMMIT");
+            return {
+                previous,
+                next: this.accountFromRow(nextRow),
+                bot_changed: botChanged,
+                migrated_allowlist_rows: migratedAllowlistRows,
+                migrated_conversation_rows: migratedConversationRows,
+            };
+        }
+        catch (error) {
+            this.db.exec("ROLLBACK");
+            throw error;
+        }
+    }
     async upsertConversation(rec) {
         this.db
             .prepare(`

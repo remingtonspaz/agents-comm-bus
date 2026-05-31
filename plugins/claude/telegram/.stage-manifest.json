@@ -399,6 +399,26 @@
       "type": "daemon-runtime"
     },
     {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-update-token.d.ts",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-update-token.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-update-token.d.ts.map",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-update-token.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-update-token.js",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-update-token.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/account-update-token.js.map",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/account-update-token.js.map",
+      "type": "daemon-runtime"
+    },
+    {
       "source": "agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts",
       "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/allowlist-add.d.ts",
       "type": "daemon-runtime"
@@ -556,6 +576,26 @@
     {
       "source": "agents-comm-bus/dist/core-daemon/cli/reload-helper.js.map",
       "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/reload-helper.js.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/token-file.d.ts",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/token-file.d.ts",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/token-file.d.ts.map",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/token-file.d.ts.map",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/token-file.js",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/token-file.js",
+      "type": "daemon-runtime"
+    },
+    {
+      "source": "agents-comm-bus/dist/core-daemon/cli/token-file.js.map",
+      "artifact": "plugins/claude/telegram/agents-comm-bus/dist/core-daemon/cli/token-file.js.map",
       "type": "daemon-runtime"
     },
     {

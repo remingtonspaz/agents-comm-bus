@@ -215,7 +215,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     }
   }
 
-  const reloadRegistrations = (): Promise<ReloadSummary> =>
+  const reloadRegistrations = (reloadOptions?: ReloadOptions): Promise<ReloadSummary> =>
     reloadAdapters({
       factories: options.commAdapterFactories,
       bridges,
@@ -224,6 +224,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       env,
       blobs,
       stateRoot: paths.root,
+      options: reloadOptions,
     });
 
   const server = await startIpcServer({
@@ -368,12 +369,16 @@ export interface ReloadSummary {
   added: Array<{ comm: CommId; account_id: AccountId }>;
   removed: Array<{ comm: CommId; account_id: AccountId }>;
   /**
-   * Adapters whose registration is unchanged but whose runtime state was
-   * refreshed in-place (e.g. allowlist set diff). The adapter instance and
-   * its live polling are NOT recreated.
+   * Adapters whose registration key is unchanged but whose runtime state was
+   * refreshed. Allowlist diffs update in place; credential refreshes recreate
+   * the adapter so same-bot token rotation takes effect without daemon restart.
    */
-  updated: Array<{ comm: CommId; account_id: AccountId; what: "allowlist" }>;
+  updated: Array<{ comm: CommId; account_id: AccountId; what: "allowlist" | "credentials" }>;
   skipped: Array<{ comm: CommId; account_id?: string; reason: string }>;
+}
+
+export interface ReloadOptions {
+  forceCredentialRefresh?: Array<{ comm: CommId | string; accountId: AccountId | string }>;
 }
 
 /**
@@ -399,6 +404,7 @@ export async function reloadAdapters(input: {
   env: NodeJS.ProcessEnv;
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
+  options?: ReloadOptions;
 }): Promise<ReloadSummary> {
   const added: ReloadSummary["added"] = [];
   const removed: ReloadSummary["removed"] = [];
@@ -485,6 +491,12 @@ export async function reloadAdapters(input: {
     removed.push({ comm: entry.commId, account_id: entry.accountId });
   }
 
+  const forceCredentialRefresh = new Set(
+    input.options?.forceCredentialRefresh?.map((target) =>
+      adapterMapKey(target.comm as CommId, target.accountId as AccountId),
+    ) ?? [],
+  );
+
   // Third branch: registrations that exist in both `desired` and `current`.
   // The (commId, accountId) is unchanged, so no attach/detach needed — but
   // the source of the adapter's allowlist (env CSV ∪ .json file userId ∪ DB
@@ -495,6 +507,96 @@ export async function reloadAdapters(input: {
   // the daemon or recreating the adapter (which would interrupt polling).
   for (const [key, entry] of desired) {
     if (!current.has(key)) continue;
+    if (forceCredentialRefresh.has(key)) {
+      const adapter = await createAdapterFromRegistration({
+        factory: entry.factory,
+        registration: entry.registration,
+        env: input.env,
+        blobs: input.blobs,
+        stateRoot: input.stateRoot,
+        storage: input.storage,
+      });
+      if (!adapter) {
+        skipped.push({
+          comm: entry.registration.comm,
+          account_id: entry.registration.bot_user_id,
+          reason: `could not re-resolve credentials_ref=${entry.registration.credentials_ref}`,
+        });
+        continue;
+      }
+
+      const oldAdapter = input.bus.unregisterComm(
+        entry.registration.comm,
+        entry.registration.bot_user_id as AccountId,
+      );
+      for (const bridge of input.bridges) {
+        bridge.detachComm?.(
+          entry.registration.comm,
+          entry.registration.bot_user_id as AccountId,
+        );
+      }
+      if (oldAdapter) {
+        try {
+          await oldAdapter.stop();
+        } catch (error) {
+          console.error(
+            `agents-comm-bus: failed to stop ${entry.registration.comm}/${entry.registration.bot_user_id} ` +
+              `for credential refresh: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+
+      try {
+        input.bus.registerComm(adapter);
+        for (const bridge of input.bridges) {
+          bridge.attachComm?.(adapter);
+        }
+        await adapter.start();
+        updated.push({
+          comm: entry.registration.comm,
+          account_id: entry.registration.bot_user_id as AccountId,
+          what: "credentials",
+        });
+      } catch (error) {
+        input.bus.unregisterComm(
+          entry.registration.comm,
+          entry.registration.bot_user_id as AccountId,
+        );
+        for (const bridge of input.bridges) {
+          bridge.detachComm?.(
+            entry.registration.comm,
+            entry.registration.bot_user_id as AccountId,
+          );
+        }
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(
+          `agents-comm-bus: failed to restart ${entry.registration.comm}/${entry.registration.bot_user_id} ` +
+            `on credential refresh: ${reason}`,
+        );
+        if (oldAdapter) {
+          try {
+            input.bus.registerComm(oldAdapter);
+            for (const bridge of input.bridges) {
+              bridge.attachComm?.(oldAdapter);
+            }
+            await oldAdapter.start();
+          } catch (restoreError) {
+            console.error(
+              `agents-comm-bus: failed to restore previous ${entry.registration.comm}/` +
+                `${entry.registration.bot_user_id} adapter after credential refresh failure: ` +
+                `${restoreError instanceof Error ? restoreError.message : String(restoreError)}`,
+            );
+          }
+        }
+        skipped.push({
+          comm: entry.registration.comm,
+          account_id: entry.registration.bot_user_id,
+          reason: `failed to refresh credentials: ${reason}`,
+        });
+      }
+      continue;
+    }
+
     const liveAdapter = input.bus.getComm(
       entry.registration.comm,
       entry.registration.bot_user_id as AccountId,
@@ -530,7 +632,7 @@ export async function reloadAdapters(input: {
     });
   }
 
-  if (added.length > 0 || removed.length > 0) {
+  if (added.length > 0 || removed.length > 0 || updated.some((entry) => entry.what === "credentials")) {
     for (const bridge of input.bridges) {
       bridge.invalidateRegistrationCaches?.();
     }
@@ -629,7 +731,7 @@ async function dispatchIpc(
     ipcMethods: Map<string, IpcMethodHandler>;
     bridgesByMethod: Map<string, AgentBridge>;
     socket?: { once(event: "close", handler: () => void): void };
-    reloadRegistrations: () => Promise<ReloadSummary>;
+    reloadRegistrations: (options?: ReloadOptions) => Promise<ReloadSummary>;
   },
 ): Promise<unknown> {
   const params = (request.params ?? {}) as Record<string, unknown>;
@@ -642,7 +744,7 @@ async function dispatchIpc(
   }
 
   if (request.method === "reload_registrations") {
-    return context.reloadRegistrations();
+    return context.reloadRegistrations(parseReloadOptions(params));
   }
 
   const bridge = context.bridgesByMethod.get(request.method);
@@ -656,4 +758,19 @@ async function dispatchIpc(
   }
 
   throw new Error(`unknown IPC method: ${request.method}`);
+}
+
+function parseReloadOptions(params: Record<string, unknown>): ReloadOptions {
+  const raw = params.forceCredentialRefresh;
+  if (!Array.isArray(raw)) return {};
+  const forceCredentialRefresh = raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    if (record.comm == null || record.accountId == null) return [];
+    return [{
+      comm: String(record.comm),
+      accountId: String(record.accountId),
+    }];
+  });
+  return { forceCredentialRefresh };
 }

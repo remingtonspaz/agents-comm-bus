@@ -11,6 +11,11 @@ export interface ReloadResult {
   summary?: unknown;
 }
 
+export interface ForceCredentialRefreshTarget {
+  comm: string;
+  accountId: string;
+}
+
 /**
  * Best-effort hot-reload trigger for the CLI's account-add / account-remove
  * commands. Reads the daemon's discovery files and, if a daemon is alive,
@@ -21,6 +26,7 @@ export interface ReloadResult {
  */
 export async function reloadDaemonRegistrations(options: {
   timeoutMs?: number;
+  forceCredentialRefresh?: ForceCredentialRefreshTarget[];
 } = {}): Promise<ReloadResult> {
   const paths = resolveStatePaths();
   const port = await readPortFile(paths.portFile);
@@ -37,7 +43,10 @@ export async function reloadDaemonRegistrations(options: {
       timeoutMs,
       metadata: { shimName: "agents-comm-bus/cli" },
     });
-    const summary = await connection.request("reload_registrations");
+    const params = options.forceCredentialRefresh
+      ? { forceCredentialRefresh: options.forceCredentialRefresh }
+      : undefined;
+    const summary = await connection.request("reload_registrations", params);
     return { attempted: true, ok: true, summary };
   } catch (error) {
     return {

@@ -59,19 +59,25 @@ export interface ReloadSummary {
         account_id: AccountId;
     }>;
     /**
-     * Adapters whose registration is unchanged but whose runtime state was
-     * refreshed in-place (e.g. allowlist set diff). The adapter instance and
-     * its live polling are NOT recreated.
+     * Adapters whose registration key is unchanged but whose runtime state was
+     * refreshed. Allowlist diffs update in place; credential refreshes recreate
+     * the adapter so same-bot token rotation takes effect without daemon restart.
      */
     updated: Array<{
         comm: CommId;
         account_id: AccountId;
-        what: "allowlist";
+        what: "allowlist" | "credentials";
     }>;
     skipped: Array<{
         comm: CommId;
         account_id?: string;
         reason: string;
+    }>;
+}
+export interface ReloadOptions {
+    forceCredentialRefresh?: Array<{
+        comm: CommId | string;
+        accountId: AccountId | string;
     }>;
 }
 /**
@@ -97,6 +103,7 @@ export declare function reloadAdapters(input: {
     env: NodeJS.ProcessEnv;
     blobs: ContentAddressedBlobStore;
     stateRoot: string;
+    options?: ReloadOptions;
 }): Promise<ReloadSummary>;
 /**
  * Drain the shared `pendingInbound` queue, optionally scoped to one comm.

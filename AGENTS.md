@@ -121,7 +121,7 @@ Three perpendicular layers meeting at the bus:
 │   │       ├── app-server-lifecycle.ts # Codex app-server stop/kill logic
 │   │       └── bridge.ts      # CodexBridge + CodexBridgeFactory (v4 IPC handler)
 │   ├── bootstrap/             # ensure-daemon, spawn-lock, handshake
-│   ├── cli/                   # account-add, account-list, account-remove CLI
+│   ├── cli/                   # account-add, account-list, account-remove, account-update-token CLI
 │   ├── ipc/                   # WebSocket protocol + server + client
 │   ├── runtime/               # Generic contracts the daemon dispatches against:
 │   │   ├── agent-bridge.ts
@@ -189,6 +189,9 @@ hooks). After linking, you can run `agents-comm account-list` from any
 directory instead of `node agents-comm-bus\dist\cli\index.js account-list`.
 On Windows the wrappers land as `.cmd` files under `%APPDATA%\npm\`; on
 macOS/Linux they're shebang scripts in the npm global bin dir.
+Use `agents-comm account-update-token` to rotate a bot token; replacing the
+bot identity requires `--allow-bot-change` and remaps per-bot allowlist rows
+plus conversation `bot_user_id` references.
 
 Tests (only the bootstrap-race + IPC-versioning suites run by default; others
 are exercised via build typecheck):

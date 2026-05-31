@@ -8,7 +8,14 @@ import type {
   AccountId,
   AccountRegistration,
   AgentId,
+  ChatRef,
+  CommAdapter,
+  CommConnectionState,
   CommId,
+  FailureClassification,
+  Message,
+  OutboundPayload,
+  SendResult,
 } from "../../packages/core-contracts/src/index.js";
 import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/types.js";
 import { MessageBus } from "../../core-daemon/bus.js";
@@ -361,4 +368,114 @@ describe("reload-path allowlist refresh", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("restarts an unchanged adapter when credential refresh is forced", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-reload-credentials-"));
+    try {
+      const storage = await openSqliteStorage(join(dir, "storage.db"));
+      const transcripts = new JsonlTranscriptStore(dir);
+      const audit = new JsonlAuditStore(dir);
+      const blobs = new ContentAddressedBlobStore(dir);
+      const bus = new MessageBus({
+        project: dir,
+        storage,
+        transcripts,
+        audit,
+        blobs,
+        comms: [],
+      });
+
+      await storage.putAccountRegistration(registration(dir));
+      const factory = new FakeCredentialFactory();
+      const oldAdapter = factory.create({ botToken: "old-token" }, BOT_ID as AccountId, {
+        blobs,
+        stateRoot: dir,
+      }) as FakeCredentialAdapter;
+      bus.registerComm(oldAdapter);
+
+      const summary = await reloadAdapters({
+        factories: [factory],
+        bridges: [],
+        bus,
+        storage,
+        env: { TEST_TOKEN: "new-token" } as unknown as NodeJS.ProcessEnv,
+        blobs,
+        stateRoot: dir,
+        options: {
+          forceCredentialRefresh: [{ comm: TELEGRAM, accountId: BOT_ID }],
+        },
+      });
+
+      const live = bus.getComm(TELEGRAM, BOT_ID as AccountId);
+      assert.notEqual(live, oldAdapter, "credential refresh should replace the adapter instance");
+      assert.equal(oldAdapter.stopCount, 1);
+      assert.equal((live as FakeCredentialAdapter).token, "new-token");
+      assert.equal((live as FakeCredentialAdapter).startCount, 1);
+      assert.deepEqual(summary.updated, [{
+        comm: TELEGRAM,
+        account_id: BOT_ID,
+        what: "credentials",
+      }]);
+
+      await storage.close();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+class FakeCredentialFactory {
+  readonly commId = TELEGRAM;
+
+  async resolveCredentials(
+    rec: AccountRegistration,
+    env: NodeJS.ProcessEnv,
+  ): Promise<{ credentials: Record<string, unknown> } | undefined> {
+    const name = rec.credentials_ref.replace(/^env:/, "");
+    const token = env[name];
+    return token ? { credentials: { botToken: token } } : undefined;
+  }
+
+  create(
+    credentials: Record<string, unknown>,
+    accountId: AccountId,
+  ): CommAdapter {
+    return new FakeCredentialAdapter(accountId, String(credentials.botToken ?? ""));
+  }
+}
+
+class FakeCredentialAdapter implements CommAdapter {
+  readonly id = TELEGRAM;
+  readonly allowedSenderIds: readonly string[] = [];
+  startCount = 0;
+  stopCount = 0;
+
+  constructor(readonly accountId: AccountId, readonly token: string) {}
+
+  async start(): Promise<void> {
+    this.startCount += 1;
+  }
+
+  async stop(): Promise<void> {
+    this.stopCount += 1;
+  }
+
+  onInbound(_handler: (msg: Message) => Promise<void>): void {}
+  onConnectionState(_handler: (state: CommConnectionState) => void): void {}
+
+  async send(
+    _target: ChatRef,
+    _payload: OutboundPayload,
+    _idempotencyKey: string,
+  ): Promise<SendResult> {
+    return { platform_message_id: "fake", sent_at: 1 };
+  }
+
+  reportPressure(): { backlog: number; rateLimited: boolean } {
+    return { backlog: 0, rateLimited: false };
+  }
+
+  classifyFailure(_error: unknown): FailureClassification {
+    return "transient";
+  }
+}

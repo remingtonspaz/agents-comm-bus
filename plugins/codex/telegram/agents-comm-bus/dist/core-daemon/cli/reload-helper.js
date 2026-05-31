@@ -25,7 +25,10 @@ export async function reloadDaemonRegistrations(options = {}) {
             timeoutMs,
             metadata: { shimName: "agents-comm-bus/cli" },
         });
-        const summary = await connection.request("reload_registrations");
+        const params = options.forceCredentialRefresh
+            ? { forceCredentialRefresh: options.forceCredentialRefresh }
+            : undefined;
+        const summary = await connection.request("reload_registrations", params);
         return { attempted: true, ok: true, summary };
     }
     catch (error) {

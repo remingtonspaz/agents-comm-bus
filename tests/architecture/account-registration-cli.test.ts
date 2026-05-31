@@ -8,8 +8,10 @@ import { dirname, join, resolve } from "node:path";
 
 import { accountAdd } from "../../core-daemon/cli/account-add.js";
 import { accountRemove } from "../../core-daemon/cli/account-remove.js";
+import { accountUpdateToken } from "../../core-daemon/cli/account-update-token.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { resolveStatePaths } from "../../core-daemon/paths.js";
+import { conversationIdForPk } from "../../core-daemon/bus.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -20,6 +22,7 @@ describe("account registration CLI contract", () => {
     assert.match(source, /account-add/);
     assert.match(source, /account-list/);
     assert.match(source, /account-remove/);
+    assert.match(source, /account-update-token/);
     assert.doesNotMatch(source, /implicit/i);
   });
 
@@ -214,6 +217,230 @@ describe("account registration CLI contract", () => {
     } finally {
       await storage.close();
     }
+  });
+
+  it("rotates a same-bot token without changing the bot id", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-update-token-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "old-token",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+
+    const result = await accountUpdateToken({
+      comm: "telegram",
+      botId: "8988792099",
+      botToken: "new-token",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot_renamed"),
+    });
+
+    assert.equal(result.bot_changed, false);
+    assert.equal(result.previous.bot_user_id, "8988792099");
+    assert.equal(result.next.bot_user_id, "8988792099");
+    assert.equal(result.next.bot_username, "sd_codex_bot_renamed");
+    const tokenFile = result.next.credentials_ref.slice("file:".length);
+    assert.deepEqual(JSON.parse(await readFile(tokenFile, "utf8")), {
+      botToken: "new-token",
+    });
+  });
+
+  it("rejects a different-bot token unless --allow-bot-change is set", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-update-token-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "old-token",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+
+    await assert.rejects(
+      () => accountUpdateToken({
+        comm: "telegram",
+        botId: "8988792099",
+        botToken: "other-bot-token",
+        stateRoot,
+        probeIdentity: identity("8950482517", "sd_claude_bot"),
+      }),
+      (error: Error) => {
+        assert.match(error.message, /Token belongs to a different bot/);
+        assert.match(error.message, /8988792099 -> 8950482517/);
+        assert.match(error.message, /--allow-bot-change/);
+        return true;
+      },
+    );
+  });
+
+  it("rejects bot replacement when the new bot id is already registered", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-update-token-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "codex-token",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+    await accountAdd({
+      project: "D:\\Projects\\claude",
+      agent: "claude",
+      accountLabel: "main",
+      botToken: "claude-token",
+      stateRoot,
+      probeIdentity: identity("8950482517", "sd_claude_bot"),
+    });
+
+    await assert.rejects(
+      () => accountUpdateToken({
+        comm: "telegram",
+        botId: "8988792099",
+        botToken: "claude-token",
+        allowBotChange: true,
+        stateRoot,
+        probeIdentity: identity("8950482517", "sd_claude_bot"),
+      }),
+      (error: Error) => {
+        assert.match(error.message, /already registered/);
+        assert.match(error.message, /8950482517/);
+        assert.match(error.message, /cannot replace 8988792099/);
+        return true;
+      },
+    );
+  });
+
+  it("replaces bot identity with explicit confirmation and migrates bot-id references", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-update-token-"));
+
+    const initial = await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "old-token",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+    const oldTokenFile = initial.credentials_ref.slice("file:".length);
+
+    const storage = await openSqliteStorage(resolveStatePaths({ stateRoot }).database);
+    const conversationId = conversationIdForPk({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      comm: "telegram",
+      account_label: "main",
+      chat_native_id: "-100",
+      thread_native_id: null,
+    });
+    try {
+      await storage.addAllowlistPerBot({
+        comm: "telegram",
+        bot_user_id: "8988792099",
+        sender_id: "1234",
+        added_at: 1,
+      });
+      await storage.upsertConversation({
+        schema_version: 1,
+        project: "D:\\Projects\\codex",
+        comm: "telegram",
+        account_label: "main",
+        bot_user_id: "8988792099",
+        chat_native_id: "-100",
+        thread_native_id: null,
+        conversation_id: conversationId,
+        agent: "codex",
+        last_inbound_at: null,
+        last_outbound_at: null,
+        last_message_id: null,
+        created_at: 1,
+      });
+    } finally {
+      await storage.close();
+    }
+
+    const result = await accountUpdateToken({
+      comm: "telegram",
+      accountLabel: "main",
+      agent: "codex",
+      botToken: "replacement-token",
+      allowBotChange: true,
+      stateRoot,
+      probeIdentity: identity("7777777777", "sd_replacement_bot"),
+    });
+
+    assert.equal(result.bot_changed, true);
+    assert.equal(result.migrated_allowlist_rows, 1);
+    assert.equal(result.migrated_conversation_rows, 1);
+    assert.equal(result.next.bot_user_id, "7777777777");
+    assert.equal(existsSync(oldTokenFile), false);
+    assert.deepEqual(
+      JSON.parse(await readFile(result.next.credentials_ref.slice("file:".length), "utf8")),
+      { botToken: "replacement-token" },
+    );
+
+    const verify = await openSqliteStorage(resolveStatePaths({ stateRoot }).database);
+    try {
+      assert.equal(await verify.getAccountByBot("telegram", "8988792099"), null);
+      assert.ok(await verify.getAccountByBot("telegram", "7777777777"));
+      assert.deepEqual(await verify.listAllowlistPerBot({
+        comm: "telegram",
+        bot_user_id: "7777777777",
+      }), [{
+        comm: "telegram",
+        bot_user_id: "7777777777",
+        sender_id: "1234",
+        added_at: 1,
+        added_by: undefined,
+        note: undefined,
+      }]);
+      const conv = await verify.getConversation(conversationId);
+      assert.equal(conv?.bot_user_id, "7777777777");
+    } finally {
+      await verify.close();
+    }
+  });
+
+  it("rejects ambiguous label-based token updates", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-update-token-"));
+
+    await accountAdd({
+      project: "D:\\Projects\\claude",
+      agent: "claude",
+      accountLabel: "main",
+      botToken: "claude-token",
+      stateRoot,
+      probeIdentity: identity("8950482517", "sd_claude_bot"),
+    });
+    await accountAdd({
+      project: "D:\\Projects\\codex",
+      agent: "codex",
+      accountLabel: "main",
+      botToken: "codex-token",
+      stateRoot,
+      probeIdentity: identity("8988792099", "sd_codex_bot"),
+    });
+
+    await assert.rejects(
+      () => accountUpdateToken({
+        comm: "telegram",
+        accountLabel: "main",
+        botToken: "new-token",
+        stateRoot,
+        probeIdentity: identity("8988792099", "sd_codex_bot"),
+      }),
+      (error: Error) => {
+        assert.match(error.message, /ambiguous/);
+        assert.match(error.message, /8950482517/);
+        assert.match(error.message, /8988792099/);
+        return true;
+      },
+    );
   });
 });
 

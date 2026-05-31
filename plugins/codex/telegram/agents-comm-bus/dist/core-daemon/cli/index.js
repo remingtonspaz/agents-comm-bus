@@ -2,6 +2,7 @@
 import { accountAdd } from "./account-add.js";
 import { accountList } from "./account-list.js";
 import { accountRemove } from "./account-remove.js";
+import { accountUpdateToken, } from "./account-update-token.js";
 import { allowlistAdd } from "./allowlist-add.js";
 import { allowlistImportFromEnv, allowlistImportFromFiles, } from "./allowlist-import.js";
 import { allowlistList } from "./allowlist-list.js";
@@ -44,6 +45,24 @@ async function main() {
             });
             const reload = await reloadDaemonRegistrations();
             console.log(JSON.stringify({ ok: true, reload }, null, 2));
+            return;
+        }
+        case "account-update-token": {
+            const result = await accountUpdateToken({
+                comm: args.comm,
+                botId: args.botId ?? args["bot-id"],
+                accountLabel: args.accountLabel ?? args["account-label"],
+                agent: args.agent,
+                project: args.project,
+                botToken: required(args.botToken ?? args["bot-token"], "--bot-token"),
+                allowBotChange: args.allowBotChange !== undefined || args["allow-bot-change"] !== undefined,
+            });
+            const reload = await reloadDaemonRegistrations({
+                forceCredentialRefresh: result.bot_changed
+                    ? []
+                    : [{ comm: result.next.comm, accountId: result.next.bot_user_id }],
+            });
+            console.log(JSON.stringify({ ...redact(result.next), update: resultSummary(result), reload }, null, 2));
             return;
         }
         case "allowlist": {
@@ -161,6 +180,7 @@ Account commands:
   agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> [--bot-token <token>] [--credentials-ref <ref>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
+  agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --bot-token <token> [--allow-bot-change]
 
 Allowlist commands:
   agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                                                      # global
@@ -173,6 +193,15 @@ Allowlist commands:
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
 account-add stores --bot-token in a daemon-owned file ref by default; explicit --credentials-ref values are honored.
 `);
+}
+function resultSummary(result) {
+    return {
+        previous_bot_user_id: result.previous.bot_user_id,
+        bot_user_id: result.next.bot_user_id,
+        bot_changed: result.bot_changed,
+        migrated_allowlist_rows: result.migrated_allowlist_rows,
+        migrated_conversation_rows: result.migrated_conversation_rows,
+    };
 }
 main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));

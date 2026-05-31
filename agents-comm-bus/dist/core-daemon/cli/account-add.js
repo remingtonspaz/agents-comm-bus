@@ -1,9 +1,9 @@
-import { chmod, mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import { SCHEMA_VERSION_ACCOUNT, } from "agents-comm-bus-core";
 import { probeTelegramIdentity } from "../../adapters/telegram/adapter.js";
-import { resolveStatePaths, resolveTokenFilePath } from "../paths.js";
+import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
+import { writeTokenFile } from "./token-file.js";
 export async function accountAdd(options) {
     const comm = (options.comm ?? "telegram");
     if (comm !== "telegram") {
@@ -65,23 +65,5 @@ export async function accountAdd(options) {
     finally {
         await storage.close();
     }
-}
-async function writeTokenFile(options) {
-    const tokenFile = resolveTokenFilePath({
-        stateRoot: options.stateRoot,
-        comm: options.comm,
-        project: options.project,
-        agent: options.agent,
-        accountId: options.accountId,
-    });
-    await mkdir(path.dirname(tokenFile), { recursive: true });
-    await writeFile(tokenFile, `${JSON.stringify({ botToken: options.botToken }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    try {
-        await chmod(tokenFile, 0o600);
-    }
-    catch {
-        // Best effort: Windows ACL inheritance is still per-user under the daemon state root.
-    }
-    return `file:${tokenFile}`;
 }
 //# sourceMappingURL=account-add.js.map

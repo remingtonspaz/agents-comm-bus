@@ -26,6 +26,23 @@ export interface SessionLeaseOwner {
   process_label?: string | null;
 }
 
+export interface AccountTokenUpdateInput {
+  comm: CommId;
+  current_bot_user_id: string;
+  new_bot_user_id: string;
+  credentials_ref: string;
+  bot_username?: string;
+  updated_at: number;
+}
+
+export interface AccountTokenUpdateResult {
+  previous: AccountRegistration;
+  next: AccountRegistration;
+  bot_changed: boolean;
+  migrated_allowlist_rows: number;
+  migrated_conversation_rows: number;
+}
+
 export interface Storage {
   // account_registrations
   putAccountRegistration(rec: AccountRegistration): Promise<void>;
@@ -44,6 +61,9 @@ export interface Storage {
     agent: AgentId,
     account_label: string,
   ): Promise<void>;
+  updateAccountRegistrationToken(
+    input: AccountTokenUpdateInput,
+  ): Promise<AccountTokenUpdateResult>;
 
   // conversations
   upsertConversation(rec: Conversation): Promise<ConversationId>;

@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "agents-comm-bus-core";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
-import type { SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AccountTokenUpdateInput, AccountTokenUpdateResult, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -17,6 +17,7 @@ export declare class SqliteStorage implements Storage {
         agent?: AgentId;
     }): Promise<AccountRegistration[]>;
     deleteAccountRegistration(project: string, comm: CommId, agent: AgentId, account_label: string): Promise<void>;
+    updateAccountRegistrationToken(input: AccountTokenUpdateInput): Promise<AccountTokenUpdateResult>;
     upsertConversation(rec: Conversation): Promise<ConversationId>;
     getConversation(id: ConversationId): Promise<Conversation | null>;
     findConversation(pk: {
