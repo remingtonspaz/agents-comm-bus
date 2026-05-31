@@ -25302,13 +25302,18 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteBundles = [];
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
-    await fs.mkdirp(dirname(paths.daemonBundle));
+    const binDir = dirname(paths.daemonBundle);
+    await fs.mkdirp(binDir);
     await fs.copyFile(
       /** @type {string} */
       daemonSrc,
       paths.daemonBundle
     );
     wroteBundles.push(paths.daemonBundle);
+    for (const name of actor.daemonSidecars ?? []) {
+      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join(binDir, name));
+    }
+    await fs.writeFile(join(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
     await fs.mkdirp(dirname(paths.daemonVersionFile));
@@ -25316,12 +25321,14 @@ async function executeInstallPlan(plan, actor, paths, fs) {
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
-    await fs.mkdirp(dirname(paths.adapterBundle));
+    const adapterDir = dirname(paths.adapterBundle);
+    await fs.mkdirp(adapterDir);
     await fs.copyFile(
       /** @type {string} */
       adapterSrc,
       paths.adapterBundle
     );
+    await fs.writeFile(join(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
@@ -25338,6 +25345,9 @@ function serialize(record2) {
 function dirname(p) {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return i === -1 ? "." : p.slice(0, i);
+}
+function join(dir, name) {
+  return `${dir}/${name}`;
 }
 
 // common/install/node-fs-seam.js
@@ -25534,7 +25544,8 @@ Fix one of:
     daemonBundleVersion: stamp.daemon_bundle_version,
     adapterBundleVersion: stamp.adapter_bundle_version,
     pluginInstallDir: options.pluginInstallDir,
-    installedAt: options.installedAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    installedAt: options.installedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
+    ...Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}
   };
   const run = options.deps?.runCentralInstall ?? runCentralInstall;
   const outcome = await run(options.stateRoot, actor, {
