@@ -260,25 +260,35 @@ async function discoverPairs() {
 }
 
 /**
- * Transform a Claude hooks.json so command paths are artifact-local.
- * Source: "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/user-prompt-submit.js"
- * Staged:  "node ./hooks/user-prompt-submit.js"
+ * Localize a Claude hooks.json to the flat artifact layout while KEEPING the
+ * ${CLAUDE_PLUGIN_ROOT} prefix.
  *
- * Also remove the ${CLAUDE_PLUGIN_ROOT} prefix since the artifact layout
- * puts hooks directly under <agent>/<comm>/hooks/.
+ * Claude Code runs plugin hook commands from the SESSION's cwd (the user's
+ * project dir), NOT the plugin install dir — so the path must stay rooted at
+ * ${CLAUDE_PLUGIN_ROOT}, which Claude substitutes with the plugin install dir.
+ * A relative "./hooks/..." resolves against the project cwd and dies with
+ * "Cannot find module" (this silently broke the ENTIRE prod install: MCP
+ * disconnected + every hook failing with cjs/loader). The artifact puts hooks
+ * under <plugin>/hooks/, so we only remap the source subpath
+ * hosts/claude/hooks/ -> hooks/, leaving the ${CLAUDE_PLUGIN_ROOT} root intact.
+ * Source: "node ${CLAUDE_PLUGIN_ROOT}/hosts/claude/hooks/user-prompt-submit.js"
+ * Staged: "node ${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-submit.js"
  */
 function transformClaudeHooksJson(content) {
   const obj = JSON.parse(content);
-  const stripPrefix = (cmd) =>
-    cmd
-      .replace(/\$\{CLAUDE_PLUGIN_ROOT\}\/hosts\/claude\/hooks\//g, "./hooks/")
-      .replace(/\$\{CLAUDE_PLUGIN_ROOT\}\//g, "./");
+  // Replacement via a function so the literal "${CLAUDE_PLUGIN_ROOT}" survives
+  // String.replace's "$" substitution rules unmangled.
+  const localize = (cmd) =>
+    cmd.replace(
+      /\$\{CLAUDE_PLUGIN_ROOT\}\/hosts\/claude\/hooks\//g,
+      () => "${CLAUDE_PLUGIN_ROOT}/hooks/",
+    );
 
   for (const category of Object.values(obj.hooks || {})) {
     for (const entry of category) {
       for (const hook of entry.hooks || []) {
         if (typeof hook.command === "string") {
-          hook.command = stripPrefix(hook.command);
+          hook.command = localize(hook.command);
         }
       }
     }
@@ -430,7 +440,10 @@ async function stagePair(agent, comm) {
     if (agent === "codex") {
       delete manifest.mcpServers;
     } else if (manifest.mcpServers?.telegram?.args) {
-      manifest.mcpServers.telegram.args = [`./${bundledShimName}`];
+      // ${CLAUDE_PLUGIN_ROOT}-rooted, NOT relative: Claude runs the plugin MCP
+      // server from the session cwd, so "./" would resolve against the project
+      // dir and fail to start (MCP "disconnected"). See transformClaudeHooksJson.
+      manifest.mcpServers.telegram.args = ["${CLAUDE_PLUGIN_ROOT}/" + bundledShimName];
     }
     // Ensure skills field points to local skills dir
     manifest.skills = "./skills/";
@@ -549,8 +562,11 @@ async function verifyPair(agent, comm) {
     await assertFile("scripts/bootstrap-codex-session.ps1", "bootstrap script");
   }
 
-  // Path-independence check: no artifact file should contain absolute paths
-  // or source-only paths like hosts/... in its manifest or .mcp.json
+  // Path check: no artifact may reference absolute or source-only (hosts/...)
+  // paths; and Claude plugin MCP/hook commands MUST be ${CLAUDE_PLUGIN_ROOT}-rooted.
+  // Claude runs them from the SESSION cwd, not the plugin dir, so a relative
+  // "./" silently breaks the entire install (MCP disconnected + every hook
+  // failing with cjs/loader). This guard is what would have caught that.
   const manifestPath = resolve(outDir, `${manifestName}/plugin.json`);
   if (await pathExists(manifestPath)) {
     const manifest = await readJson(manifestPath);
@@ -561,6 +577,28 @@ async function verifyPair(agent, comm) {
     for (const arg of args) {
       if (arg.includes("hosts/") || arg.startsWith("/")) {
         checks.push({ label: `manifest arg artifact-local (${arg})`, ok: false, path: manifestPath });
+      }
+      if (agent === "claude" && !arg.startsWith("${CLAUDE_PLUGIN_ROOT}/")) {
+        checks.push({ label: `manifest MCP arg must be \${CLAUDE_PLUGIN_ROOT}-rooted (${arg})`, ok: false, path: manifestPath });
+      }
+    }
+  }
+
+  // Claude hooks.json commands must also be ${CLAUDE_PLUGIN_ROOT}-rooted (same
+  // session-cwd resolution problem — and this path was previously unguarded).
+  if (agent === "claude") {
+    const hooksJsonPath = resolve(outDir, "hooks", "hooks.json");
+    if (await pathExists(hooksJsonPath)) {
+      const hooksObj = await readJson(hooksJsonPath);
+      for (const category of Object.values(hooksObj.hooks || {})) {
+        for (const entry of category) {
+          for (const hook of entry.hooks || []) {
+            const cmd = typeof hook.command === "string" ? hook.command : "";
+            if (!cmd.includes("${CLAUDE_PLUGIN_ROOT}/")) {
+              checks.push({ label: `hook command must be \${CLAUDE_PLUGIN_ROOT}-rooted (${cmd})`, ok: false, path: hooksJsonPath });
+            }
+          }
+        }
       }
     }
   }

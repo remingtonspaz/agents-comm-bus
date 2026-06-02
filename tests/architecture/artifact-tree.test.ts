@@ -86,7 +86,7 @@ describe("Claude Telegram artifact tree", () => {
     assert.strictEqual(fmCount, 1, "exactly one frontmatter block");
   });
 
-  it("manifest MCP server args reference only local paths", async () => {
+  it("manifest MCP server args are ${CLAUDE_PLUGIN_ROOT}-rooted", async () => {
     const manifestPath = resolve(base, ".claude-plugin/plugin.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
     const args = manifest.mcpServers?.telegram?.args ?? [];
@@ -95,9 +95,12 @@ describe("Claude Telegram artifact tree", () => {
         !arg.includes("hosts/") && !arg.startsWith("/"),
         `MCP arg must not reference source or absolute paths: ${arg}`
       );
+      // Claude runs the plugin MCP server from the SESSION cwd, not the plugin
+      // dir — a relative "./" resolves against the project dir and the server
+      // fails to start ("disconnected"). It MUST be ${CLAUDE_PLUGIN_ROOT}-rooted.
       assert.ok(
-        arg.startsWith("./"),
-        `MCP arg must use artifact-local relative path: ${arg}`
+        arg.startsWith("${CLAUDE_PLUGIN_ROOT}/"),
+        `MCP arg must be \${CLAUDE_PLUGIN_ROOT}-rooted, not relative: ${arg}`
       );
     }
   });
@@ -122,7 +125,7 @@ describe("Claude Telegram artifact tree", () => {
     assert.ok(!(await pathExists(resolve(hooksDir, "wake-support.js"))), "wake-support.js must not exist as standalone file (inlined into bundles)");
   });
 
-  it("hooks.json commands use artifact-local paths", async () => {
+  it("hooks.json commands are ${CLAUDE_PLUGIN_ROOT}-rooted", async () => {
     const hooksJsonPath = resolve(base, "hooks/hooks.json");
     const hooksJson = JSON.parse(await readFile(hooksJsonPath, "utf-8"));
     for (const category of Object.values(hooksJson.hooks || {}) as any[]) {
@@ -130,12 +133,15 @@ describe("Claude Telegram artifact tree", () => {
         for (const hook of entry.hooks || []) {
           if (typeof hook.command === "string") {
             assert.ok(
-              !hook.command.includes("hosts/") && !hook.command.includes("${CLAUDE_PLUGIN_ROOT}"),
+              !hook.command.includes("hosts/"),
               `hook command must not reference source paths: ${hook.command}`
             );
+            // Claude runs plugin hooks from the SESSION cwd, not the plugin dir —
+            // a relative "./hooks/..." resolves against the project dir and dies
+            // with "Cannot find module". It MUST be ${CLAUDE_PLUGIN_ROOT}-rooted.
             assert.ok(
-              hook.command.includes("./hooks/"),
-              `hook command must use artifact-local path: ${hook.command}`
+              hook.command.includes("${CLAUDE_PLUGIN_ROOT}/hooks/"),
+              `hook command must be \${CLAUDE_PLUGIN_ROOT}-rooted, not relative: ${hook.command}`
             );
           }
         }
@@ -601,10 +607,15 @@ describe("Stale-string mechanism-side checks", () => {
         assert.doesNotMatch(content, /hosts\/claude\//, `${relative(repoRoot, p)} must not reference source host paths`);
         assert.doesNotMatch(content, /hosts\/codex\//, `${relative(repoRoot, p)} must not reference source host paths`);
       }
-      // Staged manifest must not reference source mcp-server/dist path
+      // Staged manifest must not reference source mcp-server/dist path.
       if (p.endsWith("plugin.json") || p.endsWith(".mcp.json")) {
         assert.doesNotMatch(content, /mcp-server\/dist/, `${relative(repoRoot, p)} must not reference mcp-server/dist`);
-        assert.doesNotMatch(content, /\$\{CLAUDE_PLUGIN_ROOT\}/, `${relative(repoRoot, p)} must not reference env var root`);
+        // ${CLAUDE_PLUGIN_ROOT} is REQUIRED in the Claude plugin manifest (Claude
+        // resolves plugin MCP/hook commands from the session cwd, not the plugin
+        // dir); it must not appear in any non-Claude manifest.
+        if (!p.replace(/\\/g, "/").includes("/claude/")) {
+          assert.doesNotMatch(content, /\$\{CLAUDE_PLUGIN_ROOT\}/, `${relative(repoRoot, p)} must not reference Claude env var root`);
+        }
       }
     }
   });

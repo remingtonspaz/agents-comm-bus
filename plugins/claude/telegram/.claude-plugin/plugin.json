@@ -9,7 +9,7 @@
     "telegram": {
       "command": "node",
       "args": [
-        "./claude-mcp-shim.js"
+        "${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"
       ]
     }
   },

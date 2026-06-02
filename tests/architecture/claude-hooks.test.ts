@@ -26,9 +26,11 @@ test("Claude artifact hooks config points at artifact-local hook entrypoints", a
   const permissionCommand = hooksJson.hooks.PermissionRequest[0].hooks[0].command;
   const sessionStartCommand = hooksJson.hooks.SessionStart[0].hooks[0].command;
 
-  assert.equal(userPromptCommand, "node ./hooks/user-prompt-submit.js");
-  assert.equal(permissionCommand, "node ./hooks/permission-request.js");
-  assert.equal(sessionStartCommand, "node ./hooks/session-start.js");
+  // ${CLAUDE_PLUGIN_ROOT}-rooted, not relative: Claude runs plugin hooks from the
+  // session cwd, not the plugin dir, so "./hooks/..." fails with "Cannot find module".
+  assert.equal(userPromptCommand, "node ${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-submit.js");
+  assert.equal(permissionCommand, "node ${CLAUDE_PLUGIN_ROOT}/hooks/permission-request.js");
+  assert.equal(sessionStartCommand, "node ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js");
 });
 
 test("Claude staged UserPromptSubmit drains daemon inbound without legacy queue files", async () => {
@@ -98,8 +100,9 @@ test("Claude staged plugin manifest is self-contained with local MCP shim path",
 
   assert.equal(manifest.name, "telegram");
   assert.equal(manifest.mcpServers.telegram.command, "node");
-  // Manifest in artifact must use artifact-local relative path
-  assert.deepEqual(manifest.mcpServers.telegram.args, ["./claude-mcp-shim.js"]);
+  // ${CLAUDE_PLUGIN_ROOT}-rooted, not relative: Claude runs the plugin MCP from
+  // the session cwd, so "./" would not resolve and the server fails to start.
+  assert.deepEqual(manifest.mcpServers.telegram.args, ["${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"]);
   assert.ok(manifest.skills?.endsWith("skills/"), "skills field points to ./skills/");
 });
 
@@ -108,7 +111,9 @@ test("Claude staged manifest does not leak source paths", async () => {
   const manifestStr = JSON.stringify(manifest);
   assert.doesNotMatch(manifestStr, /hosts\/claude/);
   assert.doesNotMatch(manifestStr, /mcp-server\/dist/);
-  assert.doesNotMatch(manifestStr, /\$\{CLAUDE_PLUGIN_ROOT\}/);
+  // ${CLAUDE_PLUGIN_ROOT} is REQUIRED (Claude substitutes it with the plugin
+  // install dir) — the leak we guard is SOURCE paths, not this var.
+  assert.match(manifestStr, /\$\{CLAUDE_PLUGIN_ROOT\}/);
 });
 
 test("Claude staged hooks do not import from source paths", async () => {
