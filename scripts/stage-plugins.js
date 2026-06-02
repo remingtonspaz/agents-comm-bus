@@ -11,7 +11,7 @@
 //   3. Stage supporting scripts (PS1 files referenced by hooks)
 //   4. Assemble skill from agent-specific + shared fragments
 //   5. Write plugin manifest with artifact-local MCP args + skills path
-//   6. Write .mcp.json for Codex (artifact-local paths)
+//   6. Write .mcp.json for Codex (cwd-independent installed-cache launcher)
 //   7. Write .stage-manifest.json proving source-to-artifact lineage
 //
 // Staged artifacts reference only artifact-local paths.
@@ -50,6 +50,22 @@ function isTextArtifactPath(filePath) {
 
 function repoRelative(p) {
   return relative(REPO_ROOT, p).replace(/\\/g, "/");
+}
+
+function codexMcpLauncherScript({ marketplaceName, pluginName, shimName }) {
+  const jsString = (value) => `'${String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+  return [
+    "const fs=require('node:fs');",
+    "const os=require('node:os');",
+    "const path=require('node:path');",
+    "const {pathToFileURL}=require('node:url');",
+    "const home=process.env.CODEX_HOME||path.join(os.homedir(),'.codex');",
+    `const root=path.join(home,'plugins','cache',${jsString(marketplaceName)},${jsString(pluginName)});`,
+    "const versions=fs.existsSync(root)?fs.readdirSync(root,{withFileTypes:true}).filter((entry)=>entry.isDirectory()).map((entry)=>entry.name).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})):[];",
+    `const dir=versions.reverse().map((version)=>path.join(root,version)).find((candidate)=>fs.existsSync(path.join(candidate,${jsString(shimName)})));`,
+    `if(!dir){console.error('[acb-mcp] unable to locate installed ${pluginName} plugin shim under '+root);process.exit(1);}`,
+    `import(pathToFileURL(path.join(dir,${jsString(shimName)})).href).catch((error)=>{console.error(error);process.exit(1);});`,
+  ].join(" ");
 }
 
 function sortDirents(entries) {
@@ -487,7 +503,17 @@ async function stagePair(agent, comm) {
     const mcp = {
       [comm]: {
         command: "node",
-        args: [`./${bundledShimName}`],
+        // Codex starts plugin MCP servers from the session cwd, not reliably
+        // from the plugin root. Resolve the installed cache root at runtime so
+        // the server starts from any project directory.
+        args: [
+          "-e",
+          codexMcpLauncherScript({
+            marketplaceName: "agents-comm-bus-codex",
+            pluginName: comm,
+            shimName: bundledShimName,
+          }),
+        ],
       },
     };
     await writeJson(mcpJsonDst, mcp);
@@ -616,7 +642,20 @@ async function verifyPair(agent, comm) {
     const mcpPath = resolve(outDir, ".mcp.json");
     if (await pathExists(mcpPath)) {
       const mcp = await readJson(mcpPath);
-      const args = mcp.mcpServers?.telegram?.args ?? [];
+      const args = mcp.telegram?.args ?? [];
+      if (mcp.telegram?.command !== "node" || args[0] !== "-e") {
+        checks.push({ label: "codex MCP uses cwd-independent launcher", ok: false, path: mcpPath });
+      }
+      const launcher = String(args[1] ?? "");
+      if (
+        !launcher.includes("'plugins','cache'") ||
+        !launcher.includes("agents-comm-bus-codex") ||
+        !launcher.includes("telegram") ||
+        !launcher.includes("codex-mcp-shim.js") ||
+        !launcher.includes("pathToFileURL")
+      ) {
+        checks.push({ label: "codex MCP launcher resolves installed plugin cache", ok: false, path: mcpPath });
+      }
       for (const arg of args) {
         if (arg.includes("hosts/") || arg.startsWith("/")) {
           checks.push({ label: `.mcp.json arg artifact-local (${arg})`, ok: false, path: mcpPath });

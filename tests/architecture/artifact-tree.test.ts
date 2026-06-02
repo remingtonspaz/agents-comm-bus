@@ -253,7 +253,7 @@ describe("Codex Telegram artifact tree", () => {
     assert.strictEqual(fmCount, 1, "exactly one frontmatter block");
   });
 
-  it("manifest and .mcp.json reference only local paths", async () => {
+  it("manifest and .mcp.json avoid cwd-relative MCP shim paths", async () => {
     const manifestPath = resolve(base, ".codex-plugin/plugin.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
     assert.strictEqual(manifest.mcpServers, "./.mcp.json", "Codex plugin.json must point to the staged MCP config");
@@ -262,14 +262,16 @@ describe("Codex Telegram artifact tree", () => {
     const mcpPath = resolve(base, ".mcp.json");
     const mcp = JSON.parse(await readFile(mcpPath, "utf-8"));
     const mcpArgs = mcp.telegram?.args ?? [];
+    assert.strictEqual(mcp.telegram?.command, "node", "Codex MCP server runs under node");
+    assert.strictEqual(mcpArgs[0], "-e", "Codex MCP uses an inline launcher instead of a cwd-relative script path");
+    assert.match(mcpArgs[1], /plugins['"],['"]cache/, "launcher resolves the installed plugin cache");
+    assert.match(mcpArgs[1], /agents-comm-bus-codex/, "launcher resolves this marketplace's installed cache");
+    assert.match(mcpArgs[1], /codex-mcp-shim\.js/, "launcher imports the bundled shim");
+    assert.match(mcpArgs[1], /pathToFileURL/, "launcher imports the shim by absolute file URL");
     for (const arg of mcpArgs) {
       assert.ok(
         !arg.includes("hosts/") && !arg.startsWith("/"),
         `.mcp.json arg must not reference source or absolute paths: ${arg}`
-      );
-      assert.ok(
-        arg.startsWith("./"),
-        `.mcp.json arg must use artifact-local relative path: ${arg}`
       );
     }
   });
