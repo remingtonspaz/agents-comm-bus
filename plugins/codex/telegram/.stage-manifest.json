@@ -94,6 +94,11 @@
       "type": "hook-bundle"
     },
     {
+      "source": "hosts/codex/hooks/hooks.json",
+      "artifact": "plugins/codex/telegram/hooks/hooks.json",
+      "type": "hook"
+    },
+    {
       "source": ".codex-plugin/plugin.json",
       "artifact": "plugins/codex/telegram/.codex-plugin/plugin.json",
       "type": "manifest"

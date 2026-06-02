@@ -229,7 +229,8 @@ describe("Codex Telegram artifact tree", () => {
     assert.ok(await pathExists(manifestPath), "manifest exists");
     const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
     assert.strictEqual(manifest.name, "telegram");
-    assert.strictEqual(manifest.mcpServers, undefined, "Codex manifest does not declare MCP servers");
+    assert.strictEqual(manifest.mcpServers, "./.mcp.json", "Codex manifest declares bundled MCP config");
+    assert.strictEqual(manifest.hooks, "./hooks/hooks.json", "Codex manifest declares bundled hooks");
     assert.ok(manifest.skills?.endsWith("skills/"), "skills field points to ./skills/");
   });
 
@@ -254,7 +255,8 @@ describe("Codex Telegram artifact tree", () => {
   it("manifest and .mcp.json reference only local paths", async () => {
     const manifestPath = resolve(base, ".codex-plugin/plugin.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
-    assert.strictEqual(manifest.mcpServers, undefined, "Codex plugin.json must not contain MCP server declarations");
+    assert.strictEqual(manifest.mcpServers, "./.mcp.json", "Codex plugin.json must point to the staged MCP config");
+    assert.strictEqual(manifest.hooks, "./hooks/hooks.json", "Codex plugin.json must point to the staged hooks config");
 
     const mcpPath = resolve(base, ".mcp.json");
     const mcp = JSON.parse(await readFile(mcpPath, "utf-8"));
@@ -335,8 +337,7 @@ describe("Codex Telegram artifact tree", () => {
     assert.ok(types.has("schema-sidecar"), "has schema-sidecar provenance");
     assert.ok(types.has("package-json"), "has package-json provenance");
     assert.ok(types.has("hook-bundle"), "has hook-bundle provenance");
-    // Codex has no hooks.json, so no "hook" type
-    assert.ok(!types.has("hook"), "must NOT have hook provenance (codex has no hooks.json)");
+    assert.ok(types.has("hook"), "has hook provenance");
     assert.ok(types.has("install-stamp"), "has install-stamp provenance");
     assert.ok(types.has("manifest"), "has manifest provenance");
     assert.ok(types.has("mcp-config"), "has mcp-config provenance");

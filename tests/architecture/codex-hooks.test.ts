@@ -109,12 +109,13 @@ test("Codex staged MCP shim owns Codex metadata inference", async () => {
   assert.doesNotMatch(shared, /function agentInUse/);
 });
 
-test("Codex staged plugin manifest is self-contained and leaves MCP config to .mcp.json", async () => {
+test("Codex staged plugin manifest declares bundled MCP config and hooks", async () => {
   const manifest = JSON.parse(await readArtifactFile(".codex-plugin/plugin.json"));
 
   assert.equal(manifest.name, "telegram");
   assert.match(manifest.description, /agents-comm-bus/);
-  assert.equal(manifest.mcpServers, undefined);
+  assert.equal(manifest.mcpServers, "./.mcp.json");
+  assert.equal(manifest.hooks, "./hooks/hooks.json");
   assert.match(manifest.interface.longDescription, /shared agents-comm-bus daemon/);
 });
 
@@ -124,6 +125,14 @@ test("Codex staged manifest does not leak source paths", async () => {
   assert.doesNotMatch(manifestStr, /hosts\/codex/);
   assert.doesNotMatch(manifestStr, /mcp-server\/dist/);
   assert.doesNotMatch(manifestStr, /\$\{CODEX_PLUGIN_ROOT\}/);
+});
+
+test("Codex staged hooks manifest is plugin-rooted", async () => {
+  const hooks = JSON.parse(await readArtifactFile("hooks/hooks.json"));
+  assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, "node ${PLUGIN_ROOT}/hooks/session-start.js");
+  assert.equal(hooks.hooks.UserPromptSubmit[0].hooks[0].command, "node ${PLUGIN_ROOT}/hooks/user-prompt-submit.js");
+  assert.equal(hooks.hooks.PermissionRequest[0].matcher, "*");
+  assert.equal(hooks.hooks.PermissionRequest[0].hooks[0].command, "node ${PLUGIN_ROOT}/hooks/permission-request.js");
 });
 
 test("Codex staged hooks do not import from source paths", async () => {

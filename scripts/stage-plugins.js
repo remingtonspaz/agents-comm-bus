@@ -421,7 +421,8 @@ async function stagePair(agent, comm) {
   const hooksJsonSrc = resolve(REPO_ROOT, "hosts", agent, "hooks", "hooks.json");
   if (await pathExists(hooksJsonSrc)) {
     const dst = resolve(hooksDstDir, "hooks.json");
-    const content = transformClaudeHooksJson(await readText(hooksJsonSrc));
+    const sourceContent = await readText(hooksJsonSrc);
+    const content = agent === "claude" ? transformClaudeHooksJson(sourceContent) : sourceContent;
     await writeText(dst, content);
     record(hooksJsonSrc, dst, "hook");
   }
@@ -435,10 +436,9 @@ async function stagePair(agent, comm) {
   if (await pathExists(manifestSrc)) {
     const manifest = await readJson(manifestSrc);
     pluginVersion = typeof manifest.version === "string" ? manifest.version : null;
-    // Ensure MCP server args point to the staged shim. Codex stores MCP
-    // server declarations in artifact-local .mcp.json, not plugin.json.
     if (agent === "codex") {
-      delete manifest.mcpServers;
+      manifest.mcpServers = "./.mcp.json";
+      manifest.hooks = "./hooks/hooks.json";
     } else if (manifest.mcpServers?.telegram?.args) {
       // ${CLAUDE_PLUGIN_ROOT}-rooted, NOT relative: Claude runs the plugin MCP
       // server from the session cwd, so "./" would resolve against the project
@@ -558,6 +558,7 @@ async function verifyPair(agent, comm) {
     // bundled claude hooks (user-prompt-submit / permission-request / session-start).
     await assertFile("scripts/enter-watcher.ps1", "enter watcher script");
   } else if (agent === "codex") {
+    await assertFile("hooks/hooks.json", "hooks manifest");
     await assertFile(".mcp.json", "standalone MCP config");
     await assertFile("scripts/bootstrap-codex-session.ps1", "bootstrap script");
   }
@@ -570,8 +571,13 @@ async function verifyPair(agent, comm) {
   const manifestPath = resolve(outDir, `${manifestName}/plugin.json`);
   if (await pathExists(manifestPath)) {
     const manifest = await readJson(manifestPath);
-    if (agent === "codex" && manifest.mcpServers !== undefined) {
-      checks.push({ label: "codex manifest omits mcpServers", ok: false, path: manifestPath });
+    if (agent === "codex") {
+      if (manifest.mcpServers !== "./.mcp.json") {
+        checks.push({ label: "codex manifest points mcpServers at ./.mcp.json", ok: false, path: manifestPath });
+      }
+      if (manifest.hooks !== "./hooks/hooks.json") {
+        checks.push({ label: "codex manifest points hooks at ./hooks/hooks.json", ok: false, path: manifestPath });
+      }
     }
     const args = manifest.mcpServers?.telegram?.args ?? [];
     for (const arg of args) {
@@ -584,18 +590,18 @@ async function verifyPair(agent, comm) {
     }
   }
 
-  // Claude hooks.json commands must also be ${CLAUDE_PLUGIN_ROOT}-rooted (same
-  // session-cwd resolution problem — and this path was previously unguarded).
-  if (agent === "claude") {
+  // Plugin hook commands must be rooted at the plugin install dir.
+  if (agent === "claude" || agent === "codex") {
     const hooksJsonPath = resolve(outDir, "hooks", "hooks.json");
     if (await pathExists(hooksJsonPath)) {
+      const expectedRoot = agent === "claude" ? "${CLAUDE_PLUGIN_ROOT}/" : "${PLUGIN_ROOT}/";
       const hooksObj = await readJson(hooksJsonPath);
       for (const category of Object.values(hooksObj.hooks || {})) {
         for (const entry of category) {
           for (const hook of entry.hooks || []) {
             const cmd = typeof hook.command === "string" ? hook.command : "";
-            if (!cmd.includes("${CLAUDE_PLUGIN_ROOT}/")) {
-              checks.push({ label: `hook command must be \${CLAUDE_PLUGIN_ROOT}-rooted (${cmd})`, ok: false, path: hooksJsonPath });
+            if (!cmd.includes(expectedRoot)) {
+              checks.push({ label: `hook command must be plugin-rooted (${cmd})`, ok: false, path: hooksJsonPath });
             }
           }
         }
