@@ -1,4 +1,22 @@
 import TelegramBot from "node-telegram-bot-api";
+/**
+ * If `error` is a Telegram getUpdates 409 Conflict (another live consumer is
+ * polling the same bot token), return a LOUD, actionable message; else null.
+ *
+ * AGE-35: behind the cross-checkout comm-resource lease, a 409 means a
+ * non-lease-aware poller (a stray daemon from an unmanaged process, or an
+ * external bot instance) — it must be surfaced with the bot / account / resource,
+ * not silently flapped to "degraded".
+ */
+export function pollingConflictMessage(error, accountId, botUserId) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/\b409\b/.test(message))
+        return null;
+    return (`agents-comm-bus telegram: 409 Conflict polling getUpdates for bot ` +
+        `${botUserId ?? accountId} (resourceId=${accountId}) — another process is ` +
+        `consuming this bot's updates. Behind the comm-resource lease this should ` +
+        `not happen; look for a stray daemon or an external poller. (${message})`);
+}
 export class TelegramCommAdapter {
     options;
     id = "telegram";
@@ -13,6 +31,7 @@ export class TelegramCommAdapter {
     bot;
     botUserId = null;
     fetchImpl;
+    log;
     constructor(options) {
         this.options = options;
         this.accountId = options.accountId;
@@ -20,6 +39,7 @@ export class TelegramCommAdapter {
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
         this.bot = options.bot ?? null;
         this.fetchImpl = options.fetch ?? fetch;
+        this.log = options.log ?? ((message) => console.error(message));
     }
     /**
      * Derived view of the allowlist. Returns a snapshot array each access so
@@ -75,7 +95,17 @@ export class TelegramCommAdapter {
                 .then(() => this.emitState("connected"))
                 .catch(() => this.emitState("degraded"));
         });
-        this.bot.on("polling_error", () => this.emitState("degraded"));
+        this.bot.on("polling_error", (error) => {
+            this.emitState("degraded");
+            // AGE-35: a 409 Conflict means another live consumer is polling this bot's
+            // getUpdates. Behind the comm-resource lease that should not happen, so
+            // surface it LOUDLY (stray daemon / external poller) instead of silently
+            // degrading — for Telegram the 409 is the only platform signal of a
+            // double-owner.
+            const conflict = pollingConflictMessage(error, String(this.accountId), this.botUserId);
+            if (conflict)
+                this.log(conflict);
+        });
         this.emitState("connected");
     }
     async stop() {

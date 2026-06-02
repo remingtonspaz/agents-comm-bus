@@ -12,6 +12,8 @@ import {
   decideContention,
   inferAuthorityRank,
   wrapWithLease,
+  DEFAULT_RENEW_INTERVAL_MS,
+  DEFAULT_IPC_RECENCY_MARGIN_MS,
   type LeaseRecord,
   type SelfIdentity,
 } from "../../core-daemon/runtime/comm-lease.js";
@@ -274,6 +276,30 @@ describe("AGE-35 decideContention (pure)", () => {
       existing: holder({ authorityRank: "production", lastIpcServedAt: 10_000 - 29_999 }),
     });
     assert.equal(d.take, false);
+  });
+
+  it("config: the same-rank margin keeps >=3x headroom over the renew interval (review item 1)", () => {
+    // The holder's PERSISTED lastIpcServedAt lags its true activity by up to one
+    // renew interval (refreshed only on renew); the margin must absorb that lag,
+    // else an actively-serving same-rank holder could be falsely superseded.
+    assert.ok(DEFAULT_IPC_RECENCY_MARGIN_MS >= 3 * DEFAULT_RENEW_INTERVAL_MS);
+  });
+
+  it("does NOT supersede a same-rank holder lagging by one renew interval (review item 1)", () => {
+    // Models the gap Codex flagged: the holder served IPC right up to `now`, but
+    // its persisted lease value is one full renew interval old. That lag must NOT
+    // be enough to steal the lease from an actively-serving same-rank holder.
+    const d = decideContention({
+      ...baseArgs,
+      self: selfIdentity({ authorityRank: "production" }),
+      selfLastIpcServedAt: baseArgs.now,
+      existing: holder({
+        authorityRank: "production",
+        lastIpcServedAt: baseArgs.now - DEFAULT_RENEW_INTERVAL_MS,
+      }),
+    });
+    assert.equal(d.take, false);
+    assert.equal((d as { reason: string }).reason, "held-by-same-rank-fresh");
   });
 });
 

@@ -1,5 +1,15 @@
 import TelegramBot from "node-telegram-bot-api";
 import type { AccountId, BlobStore, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
+/**
+ * If `error` is a Telegram getUpdates 409 Conflict (another live consumer is
+ * polling the same bot token), return a LOUD, actionable message; else null.
+ *
+ * AGE-35: behind the cross-checkout comm-resource lease, a 409 means a
+ * non-lease-aware poller (a stray daemon from an unmanaged process, or an
+ * external bot instance) — it must be surfaced with the bot / account / resource,
+ * not silently flapped to "degraded".
+ */
+export declare function pollingConflictMessage(error: unknown, accountId: string, botUserId: string | null): string | null;
 export interface TelegramCommAdapterOptions {
     botToken: string;
     /**
@@ -13,6 +23,11 @@ export interface TelegramCommAdapterOptions {
     now?: () => number;
     attachmentBlobStore?: BlobStore;
     fetch?: typeof fetch;
+    /**
+     * Loud logger for actionable anomalies (e.g. a 409 polling conflict). Defaults
+     * to console.error (→ the daemon's stderr). Injectable for tests.
+     */
+    log?: (message: string) => void;
 }
 export declare class TelegramCommAdapter implements CommAdapter {
     private readonly options;
@@ -28,6 +43,7 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private bot;
     private botUserId;
     private readonly fetchImpl;
+    private readonly log;
     constructor(options: TelegramCommAdapterOptions);
     /**
      * Derived view of the allowlist. Returns a snapshot array each access so

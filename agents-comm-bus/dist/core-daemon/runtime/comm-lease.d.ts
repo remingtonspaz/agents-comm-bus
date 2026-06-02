@@ -19,6 +19,15 @@ export declare const DEFAULT_STALENESS_MS = 90000;
  * holder's for the contender to be considered "clearly fresher" and supersede.
  * Without a margin, normal clock jitter would let two equally-active daemons
  * flap the lease back and forth.
+ *
+ * INVARIANT (AGE-35 review): the holder's PERSISTED `lastIpcServedAt` is only
+ * rewritten on renew (every DEFAULT_RENEW_INTERVAL_MS), so it lags the holder's
+ * true IPC activity by up to one renew interval. The same-rank compare reads
+ * that persisted value, so this margin MUST stay comfortably larger than the
+ * renew interval (we keep margin >= 3x renew) — otherwise that lag could make an
+ * actively-serving same-rank holder look stale enough to be superseded,
+ * violating the "both active same-rank ⇒ deny, don't guess" invariant. See
+ * {@link DEFAULT_RENEW_INTERVAL_MS}.
  */
 export declare const DEFAULT_IPC_RECENCY_MARGIN_MS = 30000;
 /**
@@ -215,6 +224,7 @@ export interface WrapWithLeaseOptions {
     /** Loud logger. Defaults to console.error. */
     log?: (message: string) => void;
 }
+export declare const DEFAULT_RENEW_INTERVAL_MS = 10000;
 /**
  * Wrap an adapter so the daemon only starts it once it holds the
  * `(comm, resource)` ownership lease. The bus and the inner adapter stay

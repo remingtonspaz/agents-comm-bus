@@ -23,6 +23,15 @@ export const DEFAULT_STALENESS_MS = 90_000;
  * holder's for the contender to be considered "clearly fresher" and supersede.
  * Without a margin, normal clock jitter would let two equally-active daemons
  * flap the lease back and forth.
+ *
+ * INVARIANT (AGE-35 review): the holder's PERSISTED `lastIpcServedAt` is only
+ * rewritten on renew (every DEFAULT_RENEW_INTERVAL_MS), so it lags the holder's
+ * true IPC activity by up to one renew interval. The same-rank compare reads
+ * that persisted value, so this margin MUST stay comfortably larger than the
+ * renew interval (we keep margin >= 3x renew) — otherwise that lag could make an
+ * actively-serving same-rank holder look stale enough to be superseded,
+ * violating the "both active same-rank ⇒ deny, don't guess" invariant. See
+ * {@link DEFAULT_RENEW_INTERVAL_MS}.
  */
 export const DEFAULT_IPC_RECENCY_MARGIN_MS = 30_000;
 export const AUTHORITY_RANK_ORDER = {
@@ -463,7 +472,13 @@ function isAlreadyExistsError(error) {
         "code" in error &&
         error.code === "EEXIST");
 }
-const DEFAULT_RENEW_INTERVAL_MS = 30_000;
+// Kept well below DEFAULT_IPC_RECENCY_MARGIN_MS (30s): the holder rewrites its
+// lease `lastIpcServedAt` (= the daemon's most-recent IPC activity) on every
+// renew, so a short interval keeps the PERSISTED activity current enough that
+// the same-rank recency compare can never falsely supersede an actively-serving
+// holder. The 3x headroom (10s renew vs 30s margin) also absorbs renewal jitter
+// from event-loop lag. See AGE-35 review (item 1).
+export const DEFAULT_RENEW_INTERVAL_MS = 10_000;
 const DEFAULT_REACQUIRE_INTERVAL_MS = 60_000;
 /**
  * Wrap an adapter so the daemon only starts it once it holds the

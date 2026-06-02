@@ -4054,7 +4054,7 @@ function defaultIsPidAlive(pid) {
 function isAlreadyExistsError(error) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
-var DEFAULT_RENEW_INTERVAL_MS = 3e4;
+var DEFAULT_RENEW_INTERVAL_MS = 1e4;
 var DEFAULT_REACQUIRE_INTERVAL_MS = 6e4;
 function wrapWithLease(inner, arbiter, options = {}) {
   const renewIntervalMs = options.renewIntervalMs ?? DEFAULT_RENEW_INTERVAL_MS;
