@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.4";
+var DAEMON_VERSION = "0.2.5";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -8750,6 +8750,7 @@ function assertCommAdapterFactory(modulePath, value) {
 
 // ../core-daemon/serve.ts
 async function startConfiguredDaemon() {
+  process.title = `${DAEMON_NAME} daemon`;
   const paths = resolveStatePaths({ stateRoot: process.env.AGENTS_COMM_BUS_STATE_ROOT });
   const adaptersDir = resolveAdaptersDir(paths.root, process.env);
   const commAdapterFactories = await loadCommAdapterFactories({ adaptersDir });

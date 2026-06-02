@@ -16,12 +16,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { runDaemon } from "./daemon.js";
+import { DAEMON_NAME } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
 import { ClaudeBridgeFactory } from "./bridges/claude/bridge.js";
 import { CodexBridgeFactory } from "./bridges/codex/bridge.js";
 import { loadCommAdapterFactories } from "./runtime/comm-adapter-loader.js";
 
 export async function startConfiguredDaemon(): Promise<void> {
+  process.title = `${DAEMON_NAME} daemon`;
   const paths = resolveStatePaths({ stateRoot: process.env.AGENTS_COMM_BUS_STATE_ROOT });
   const adaptersDir = resolveAdaptersDir(paths.root, process.env);
   const commAdapterFactories = await loadCommAdapterFactories({ adaptersDir });
