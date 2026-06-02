@@ -109,7 +109,7 @@
       "type": "install-stamp"
     },
     {
-      "source": ".mcp.json.template",
+      "source": "(generated)",
       "artifact": "plugins/codex/telegram/.mcp.json",
       "type": "mcp-config"
     },

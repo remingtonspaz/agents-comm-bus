@@ -89,14 +89,14 @@ function discoverCodexRemoteOwnerProcess(appServerUrl) {
       const remote = powerShellSingleQuoted(appServerUrl);
       const script = [
         `$remote = ${remote}`,
-        "$p = Get-CimInstance Win32_Process | Where-Object {",
+        "$p = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {",
         "  $_.CommandLine -and",
         "  $_.CommandLine.Contains($remote) -and",
         "  $_.CommandLine -match '(?i)\\bresume\\b' -and",
         "  $_.CommandLine -notmatch '(?i)\\bapp-server\\b'",
         "} | Sort-Object @{ Expression = { if ($_.Name -ieq 'codex.exe') { 0 } else { 1 } } }, ProcessId | Select-Object -First 1 ProcessId,Name",
         "if ($null -ne $p) { $p | ConvertTo-Json -Compress }",
-      ].join("; ");
+      ].join("\n");
       const output = execFileSync("powershell.exe", ["-NoProfile", "-Command", script], {
         encoding: "utf8",
         timeout: 1500,

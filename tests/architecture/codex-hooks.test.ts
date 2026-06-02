@@ -147,8 +147,9 @@ test("Codex staged hooks do not import from source paths", async () => {
 
 test("Codex staged .mcp.json is standalone with local paths", async () => {
   const mcp = JSON.parse(await readArtifactFile(".mcp.json"));
-  assert.equal(mcp.mcpServers.telegram.command, "node");
-  assert.deepEqual(mcp.mcpServers.telegram.args, ["./codex-mcp-shim.js"]);
+  assert.equal(mcp.telegram.command, "node");
+  assert.deepEqual(mcp.telegram.args, ["./codex-mcp-shim.js"]);
+  assert.equal(mcp.mcpServers, undefined);
   const mcpStr = JSON.stringify(mcp);
   assert.doesNotMatch(mcpStr, /hosts\/codex/);
   assert.doesNotMatch(mcpStr, /mcp-server\/dist/);

@@ -483,16 +483,19 @@ async function stagePair(agent, comm) {
 
   /* 5. Codex .mcp.json */
   if (agent === "codex") {
-    const mcpJsonSrc = resolve(REPO_ROOT, ".mcp.json.template");
     const mcpJsonDst = resolve(outDir, ".mcp.json");
-    if (await pathExists(mcpJsonSrc)) {
-      const mcp = await readJson(mcpJsonSrc);
-      if (mcp.mcpServers?.telegram?.args) {
-        mcp.mcpServers.telegram.args = [`./${bundledShimName}`];
-      }
-      await writeJson(mcpJsonDst, mcp);
-      record(mcpJsonSrc, mcpJsonDst, "mcp-config");
-    }
+    const mcp = {
+      [comm]: {
+        command: "node",
+        args: [`./${bundledShimName}`],
+      },
+    };
+    await writeJson(mcpJsonDst, mcp);
+    mapping.artifacts.push({
+      source: "(generated)",
+      artifact: repoRelative(mcpJsonDst),
+      type: "mcp-config",
+    });
   }
 
   /* 6. Supporting scripts */

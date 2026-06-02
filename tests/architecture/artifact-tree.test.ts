@@ -238,7 +238,8 @@ describe("Codex Telegram artifact tree", () => {
     const mcpPath = resolve(base, ".mcp.json");
     assert.ok(await pathExists(mcpPath), ".mcp.json exists");
     const mcp = JSON.parse(await readFile(mcpPath, "utf-8"));
-    assert.ok(mcp.mcpServers?.telegram, "declares telegram MCP server");
+    assert.ok(mcp.telegram, "declares telegram MCP server as a direct server map");
+    assert.strictEqual(mcp.mcpServers, undefined, "does not use the legacy mcpServers wrapper");
   });
 
   it("has the assembled skill at skills/telegram/SKILL.md", async () => {
@@ -260,7 +261,7 @@ describe("Codex Telegram artifact tree", () => {
 
     const mcpPath = resolve(base, ".mcp.json");
     const mcp = JSON.parse(await readFile(mcpPath, "utf-8"));
-    const mcpArgs = mcp.mcpServers?.telegram?.args ?? [];
+    const mcpArgs = mcp.telegram?.args ?? [];
     for (const arg of mcpArgs) {
       assert.ok(
         !arg.includes("hosts/") && !arg.startsWith("/"),
