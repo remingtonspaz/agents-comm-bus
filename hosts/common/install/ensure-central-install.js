@@ -31,6 +31,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { runCentralInstall as defaultRunCentralInstall } from "./run-central-install.js";
+import { readCentralState as defaultReadCentralState } from "./node-fs-seam.js";
 import { stripBom } from "./strip-bom.js";
 
 export const INSTALL_STAMP_NAME = "install-stamp.json";
@@ -60,11 +61,18 @@ export const INSTALL_STAMP_NAME = "install-stamp.json";
  * @property {Record<string,string|undefined>} [env]   defaults to process.env
  * @property {string} [installedAt]           ISO timestamp; defaults to now
  * @property {boolean} [daemonRunning]        pass-through to runCentralInstall
+ * @property {boolean} [readOnlyIfCentralInstalled]
+ *                      When true, a production caller may reuse an existing
+ *                      daemon+adapter central install without taking the
+ *                      install lock even if the stamp carries newer content.
+ *                      Intended for sandboxed MCP startup only; hooks/CLI keep
+ *                      the install-capable default.
  * @property {import("./install-lock.js").InstallLockOptions} [lock]
  * @property {EnsureCentralInstallDeps} [deps]
  *
  * @typedef {Object} EnsureCentralInstallDeps  injectable seams for tests
  * @property {typeof readFile} [readFile]
+ * @property {typeof defaultReadCentralState} [readCentralState]
  * @property {typeof defaultRunCentralInstall} [runCentralInstall]
  * @property {import("./reconcile-central-install.js").FsSeam} [fs]
  *
@@ -188,6 +196,17 @@ export async function ensureCentralInstall(options) {
     ...(Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}),
   };
 
+  if (await centralInstallContentIsCurrent(options.stateRoot, resolvedComm, stamp, options.deps)) {
+    return { mode: "production", actor, skipped: true };
+  }
+
+  if (
+    options.readOnlyIfCentralInstalled &&
+    (await centralInstallHasRunnableContent(options.stateRoot, resolvedComm, options.deps))
+  ) {
+    return { mode: "production", actor, skipped: true };
+  }
+
   const run = options.deps?.runCentralInstall ?? defaultRunCentralInstall;
   const outcome = await run(options.stateRoot, actor, {
     fs: options.deps?.fs,
@@ -196,4 +215,56 @@ export async function ensureCentralInstall(options) {
   });
 
   return { mode: "production", actor, ...outcome };
+}
+
+/**
+ * Read-only fast path for packaged callers whose central install is already
+ * current. This avoids taking install.lock during ordinary MCP startup, which
+ * matters for sandboxed plugin processes that can read the central install but
+ * cannot write to it.
+ *
+ * Provenance-only plugin changes are intentionally allowed to skip here when
+ * the shipped daemon/adapter content versions already match. Runtime only
+ * needs the content; provenance refresh can happen from an install-capable path.
+ *
+ * @param {string} stateRoot
+ * @param {string} comm
+ * @param {InstallStamp} stamp
+ * @param {EnsureCentralInstallDeps} [deps]
+ * @returns {Promise<boolean>}
+ */
+async function centralInstallContentIsCurrent(stateRoot, comm, stamp, deps = {}) {
+  const readState = deps.readCentralState ?? defaultReadCentralState;
+  try {
+    const state = await readState(stateRoot, comm);
+    return Boolean(
+      state.daemonExists &&
+        state.adapterExists &&
+        state.daemonVersionFile?.content_version === stamp.daemon_bundle_version &&
+        state.adapterVersionFile?.content_version === stamp.adapter_bundle_version,
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read-only MCP startup is allowed to reuse an older installed central runtime
+ * when it is already runnable. That avoids lock writes from sandboxed MCP
+ * subprocesses during plugin updates; install-capable hooks/CLI can still
+ * perform the real upgrade later.
+ *
+ * @param {string} stateRoot
+ * @param {string} comm
+ * @param {EnsureCentralInstallDeps} [deps]
+ * @returns {Promise<boolean>}
+ */
+async function centralInstallHasRunnableContent(stateRoot, comm, deps = {}) {
+  const readState = deps.readCentralState ?? defaultReadCentralState;
+  try {
+    const state = await readState(stateRoot, comm);
+    return Boolean(state.daemonExists && state.adapterExists);
+  } catch {
+    return false;
+  }
 }

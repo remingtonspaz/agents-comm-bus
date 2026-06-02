@@ -35,6 +35,7 @@ export async function ensureMcpRuntime(options) {
     env: options.env ?? process.env,
     stateRoot: options.stateRoot,
     ensureDaemonOptions,
+    readOnlyCentralInstall: true,
   });
   return { agent, metadata, ensured };
 }

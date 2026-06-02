@@ -3668,7 +3668,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.5";
+var DAEMON_VERSION = "0.2.6";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4479,6 +4479,12 @@ Fix one of:
     installedAt: options.installedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
     ...Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}
   };
+  if (await centralInstallContentIsCurrent(options.stateRoot, resolvedComm, stamp, options.deps)) {
+    return { mode: "production", actor, skipped: true };
+  }
+  if (options.readOnlyIfCentralInstalled && await centralInstallHasRunnableContent(options.stateRoot, resolvedComm, options.deps)) {
+    return { mode: "production", actor, skipped: true };
+  }
   const run = options.deps?.runCentralInstall ?? runCentralInstall;
   const outcome = await run(options.stateRoot, actor, {
     fs: options.deps?.fs,
@@ -4486,6 +4492,26 @@ Fix one of:
     daemonRunning: options.daemonRunning ?? false
   });
   return { mode: "production", actor, ...outcome };
+}
+async function centralInstallContentIsCurrent(stateRoot3, comm, stamp, deps = {}) {
+  const readState = deps.readCentralState ?? readCentralState;
+  try {
+    const state = await readState(stateRoot3, comm);
+    return Boolean(
+      state.daemonExists && state.adapterExists && state.daemonVersionFile?.content_version === stamp.daemon_bundle_version && state.adapterVersionFile?.content_version === stamp.adapter_bundle_version
+    );
+  } catch {
+    return false;
+  }
+}
+async function centralInstallHasRunnableContent(stateRoot3, comm, deps = {}) {
+  const readState = deps.readCentralState ?? readCentralState;
+  try {
+    const state = await readState(stateRoot3, comm);
+    return Boolean(state.daemonExists && state.adapterExists);
+  } catch {
+    return false;
+  }
 }
 
 // ../hosts/common/install/dev-config-resolver.js
@@ -4572,6 +4598,7 @@ async function entryEnsures(options) {
     env = process.env,
     ensureDaemonOptions = {},
     daemonRunning = false,
+    readOnlyCentralInstall = false,
     deps = {}
   } = options ?? {};
   const ensureDaemonFn = deps.ensureDaemon ?? ensureDaemon;
@@ -4593,6 +4620,7 @@ async function entryEnsures(options) {
     pluginInstallDir: resolvedPluginInstallDir,
     env: resolvedEnv,
     daemonRunning,
+    readOnlyIfCentralInstalled: readOnlyCentralInstall,
     deps: deps.centralInstallDeps
   });
   const daemon = await ensureDaemonFn({ ...ensureDaemonOptions, stateRoot: canonicalStateRoot });

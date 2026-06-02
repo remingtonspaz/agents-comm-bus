@@ -75,6 +75,9 @@ function findAncestorContaining(dir, name, exists) {
  * @property {Record<string,string|undefined>} [env]   defaults to process.env (outermost only)
  * @property {Object} [ensureDaemonOptions]  forwarded verbatim to ensureDaemon
  * @property {boolean} [daemonRunning]
+ * @property {boolean} [readOnlyCentralInstall]
+ *                      For sandboxed MCP startup: reuse an already-installed
+ *                      central daemon+adapter without taking install.lock.
  * @property {EntryEnsuresDeps} [deps]
  *
  * @typedef {Object} EntryEnsuresDeps
@@ -100,6 +103,7 @@ export async function entryEnsures(options) {
     env = process.env,
     ensureDaemonOptions = {},
     daemonRunning = false,
+    readOnlyCentralInstall = false,
     deps = {},
   } = options ?? {};
 
@@ -144,6 +148,7 @@ export async function entryEnsures(options) {
     pluginInstallDir: resolvedPluginInstallDir,
     env: resolvedEnv,
     daemonRunning,
+    readOnlyIfCentralInstalled: readOnlyCentralInstall,
     deps: deps.centralInstallDeps,
   });
 

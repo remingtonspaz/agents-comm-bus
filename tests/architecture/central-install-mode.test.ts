@@ -221,6 +221,74 @@ describe("ensureCentralInstall — production mode, strict", () => {
     const dv = JSON.parse(await readFile(paths.daemonVersionFile, "utf8"));
     assert.equal(dv.content_version, "1.0.0");
   });
+
+  it("skips the lock-taking installer when stamped central content is already current", async () => {
+    const root = await tempRoot();
+    const plugin = await fixturedPlugin("telegram", "1.0.0");
+
+    await ensureCentralInstall({
+      stateRoot: root,
+      pluginInstallDir: plugin,
+      env: {},
+      installedAt: "2026-05-29T00:00:00Z",
+    });
+
+    let called = false;
+    const throwingInstaller = async () => {
+      called = true;
+      throw new Error("runCentralInstall should not run for current stamped content");
+    };
+
+    const res = await ensureCentralInstall({
+      stateRoot: root,
+      pluginInstallDir: plugin,
+      env: {},
+      installedAt: "2026-05-29T00:01:00Z",
+      deps: { runCentralInstall: throwingInstaller },
+    });
+
+    assert.equal(res.mode, "production");
+    assert.equal(res.skipped, true);
+    assert.equal(res.actor?.daemonBundleVersion, "1.0.0");
+    assert.equal(called, false, "current stamped content must not take install.lock");
+  });
+
+  it("lets a read-only MCP-style caller reuse runnable central content during a plugin update", async () => {
+    const root = await tempRoot();
+    const installed = await fixturedPlugin("telegram", "1.0.0");
+    const incoming = await fixturedPlugin("telegram", "2.0.0");
+
+    await ensureCentralInstall({
+      stateRoot: root,
+      pluginInstallDir: installed,
+      env: {},
+      installedAt: "2026-05-29T00:00:00Z",
+    });
+
+    let called = false;
+    const throwingInstaller = async () => {
+      called = true;
+      throw new Error("read-only MCP startup should not take install.lock");
+    };
+
+    const res = await ensureCentralInstall({
+      stateRoot: root,
+      pluginInstallDir: incoming,
+      env: {},
+      installedAt: "2026-05-29T00:01:00Z",
+      readOnlyIfCentralInstalled: true,
+      deps: { runCentralInstall: throwingInstaller },
+    });
+
+    assert.equal(res.mode, "production");
+    assert.equal(res.skipped, true);
+    assert.equal(res.actor?.daemonBundleVersion, "2.0.0", "actor still reflects the incoming plugin stamp");
+    assert.equal(called, false, "read-only caller must not take install.lock for runnable central content");
+
+    const paths = resolveCentralPaths(root, "telegram");
+    const dv = JSON.parse(await readFile(paths.daemonVersionFile, "utf8"));
+    assert.equal(dv.content_version, "1.0.0", "read-only reuse does not upgrade central content");
+  });
 });
 
 describe("ensureCentralInstall — stamp keeps provenance separate from content (regression guard)", () => {
