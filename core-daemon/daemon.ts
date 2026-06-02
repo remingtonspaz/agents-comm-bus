@@ -8,8 +8,15 @@ import {
   type SessionId,
   type Storage,
 } from "agents-comm-bus-core";
+import os from "node:os";
+
 import { DAEMON_VERSION } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
+import {
+  CommLeaseArbiter,
+  inferAuthorityRank,
+  wrapWithLease,
+} from "./runtime/comm-lease.js";
 import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
@@ -92,12 +99,57 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   const blobs = new ContentAddressedBlobStore(paths.root);
   const pendingInbound: PendingInboundEntry[] = [];
 
+  // AGE-35: cross-checkout single-consumer ownership lease. A stray daemon from
+  // another git checkout/worktree must not be able to poll the same Telegram bot
+  // as the canonical daemon (two getUpdates consumers → 409 outage). Build ONE
+  // arbiter with this daemon's self-identity; it gates every adapter that
+  // declares an `exclusiveResource()`. The lease lives at a FIXED homedir path so
+  // every daemon contends regardless of its state root.
+  const daemonBin = env.AGENTS_COMM_BUS_BIN ?? process.argv[1] ?? null;
+  const { authorityRank, checkoutRoot } = inferAuthorityRank({
+    env,
+    daemonBin,
+    cwd: process.cwd(),
+  });
+  // The IPC server bumps this on each served request; the lease uses it as the
+  // same-rank recency tiebreaker (a quieter same-rank holder can be superseded).
+  const ipcActivity = { value: Date.now() };
+  const leaseArbiter = new CommLeaseArbiter({
+    self: {
+      pid: process.pid,
+      stateRoot: paths.root,
+      checkoutRoot,
+      daemonBin,
+      daemonVersion: DAEMON_VERSION,
+      authorityRank,
+    },
+    lastIpcServedAt: () => ipcActivity.value,
+    onAudit: (event) => {
+      void audit
+        .append({
+          timestamp: Date.now(),
+          kind: event.kind,
+          detail: { comm_id: event.comm_id, resource_id: event.resource_id, ...event.detail },
+        })
+        .catch(() => {});
+    },
+  });
+
+  // Startup banner: make the contending daemon's identity unmistakable in logs.
+  console.error(
+    `agents-comm-bus ${DAEMON_VERSION} starting: ` +
+      `stateRoot=${paths.root} checkoutRoot=${checkoutRoot ?? "?"} ` +
+      `daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} ` +
+      `home=${os.homedir()}`,
+  );
+
   const comms = await loadCommAdapters({
     factories: options.commAdapterFactories,
     storage,
     env,
     blobs,
     stateRoot: paths.root,
+    leaseArbiter,
   });
 
   const bus = new MessageBus({
@@ -223,13 +275,17 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       env,
       blobs,
       stateRoot: paths.root,
+      leaseArbiter,
       options: reloadOptions,
     });
 
   const server = await startIpcServer({
     metadata: { stateRoot: paths.root },
-    onRequest: async (request, socket) =>
-      dispatchIpc(request, {
+    onRequest: async (request, socket) => {
+      // AGE-35: every served IPC request is a liveness signal for the lease's
+      // same-rank recency tiebreaker.
+      ipcActivity.value = Date.now();
+      return dispatchIpc(request, {
         bus,
         ipcMethods,
         bridgesByMethod,
@@ -237,7 +293,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         env,
         socket,
         reloadRegistrations,
-      }),
+      });
+    },
   });
   try {
     await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
@@ -304,6 +361,7 @@ async function loadCommAdapters(input: {
   env: NodeJS.ProcessEnv;
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
+  leaseArbiter: CommLeaseArbiter;
 }): Promise<CommAdapter[]> {
   const comms: CommAdapter[] = [];
   const attachedBotIds = new Set<string>();
@@ -321,6 +379,7 @@ async function loadCommAdapters(input: {
         blobs: input.blobs,
         stateRoot: input.stateRoot,
         storage: input.storage,
+        leaseArbiter: input.leaseArbiter,
       });
       if (!adapter) continue;
       comms.push(adapter);
@@ -338,6 +397,7 @@ async function createAdapterFromRegistration(input: {
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
   storage?: Storage;
+  leaseArbiter: CommLeaseArbiter;
 }): Promise<CommAdapter | null> {
   const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
     storage: input.storage,
@@ -351,10 +411,22 @@ async function createAdapterFromRegistration(input: {
     );
     return null;
   }
-  return input.factory.create(resolved.credentials, input.registration.bot_user_id as AccountId, {
-    blobs: input.blobs,
-    stateRoot: input.stateRoot,
-  });
+  const adapter = input.factory.create(
+    resolved.credentials,
+    input.registration.bot_user_id as AccountId,
+    {
+      blobs: input.blobs,
+      stateRoot: input.stateRoot,
+    },
+  );
+  // AGE-35: gate single-consumer adapters behind the cross-checkout ownership
+  // lease. Generic on `exclusiveResource()` — no telegram-specific code here, so
+  // the composition root stays clean. Adapters with no exclusive backend (null)
+  // pass through unwrapped.
+  if (adapter.exclusiveResource?.() != null) {
+    return wrapWithLease(adapter, input.leaseArbiter);
+  }
+  return adapter;
 }
 
 export interface ReloadSummary {
@@ -397,6 +469,7 @@ export async function reloadAdapters(input: {
   env: NodeJS.ProcessEnv;
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
+  leaseArbiter: CommLeaseArbiter;
   options?: ReloadOptions;
 }): Promise<ReloadSummary> {
   const added: ReloadSummary["added"] = [];
@@ -428,6 +501,7 @@ export async function reloadAdapters(input: {
       blobs: input.blobs,
       stateRoot: input.stateRoot,
       storage: input.storage,
+      leaseArbiter: input.leaseArbiter,
     });
     if (!adapter) {
       skipped.push({
@@ -508,6 +582,7 @@ export async function reloadAdapters(input: {
         blobs: input.blobs,
         stateRoot: input.stateRoot,
         storage: input.storage,
+        leaseArbiter: input.leaseArbiter,
       });
       if (!adapter) {
         skipped.push({

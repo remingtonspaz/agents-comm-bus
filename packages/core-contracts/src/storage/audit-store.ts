@@ -26,6 +26,11 @@ export type AuditEventKind =
   | "daemon_superseded"
   | "daemon_discovery_reclaimed"
   | "daemon_pid_watchdog_error"
+  | "comm_lease_acquired"
+  | "comm_lease_reclaimed"
+  | "comm_lease_denied"
+  | "comm_lease_lost"
+  | "comm_lease_released"
   | "registration_added"
   | "registration_removed"
   | "loop_prevention_drop";

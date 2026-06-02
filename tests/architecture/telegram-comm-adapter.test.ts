@@ -2,9 +2,65 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type TelegramBot from "node-telegram-bot-api";
 
-import { TelegramCommAdapter } from "../../adapters/telegram/adapter.js";
+import { TelegramCommAdapter, pollingConflictMessage } from "../../adapters/telegram/adapter.js";
 import type { CommConnectionState } from "../../packages/core-contracts/src/index.js";
 import type { BlobRef, BlobStore } from "../../packages/core-contracts/src/storage/blob-store.js";
+
+describe("AGE-35 Telegram 409 polling-conflict diagnostic", () => {
+  it("returns a loud, actionable message for a 409 Conflict polling error", () => {
+    const msg = pollingConflictMessage(
+      new Error("ETELEGRAM: 409 Conflict: terminated by other getUpdates request"),
+      "8950482517",
+      "8950482517",
+    );
+    assert.ok(msg, "a 409 polling error must produce a loud message");
+    assert.match(msg!, /409 Conflict/);
+    assert.match(msg!, /8950482517/); // bot / resource id surfaced
+    assert.match(msg!, /stray daemon|external poller/);
+  });
+
+  it("falls back to the accountId when botUserId is not yet known", () => {
+    const msg = pollingConflictMessage(new Error("409 Conflict"), "acct-77", null);
+    assert.ok(msg);
+    assert.match(msg!, /bot acct-77/);
+  });
+
+  it("returns null for non-409 polling errors (no false loud log)", () => {
+    assert.equal(pollingConflictMessage(new Error("ETELEGRAM: 502 Bad Gateway"), "1", "1"), null);
+    assert.equal(pollingConflictMessage(new Error("ECONNRESET"), "1", "1"), null);
+    // a "409" embedded in a longer number must NOT trip the word-boundary match
+    assert.equal(pollingConflictMessage(new Error("status 4090 elsewhere"), "1", "1"), null);
+  });
+
+  it("the adapter wires the loud log on a 409 polling_error (injected bot + logger)", async () => {
+    const logged: string[] = [];
+    const handlers: Record<string, (arg: unknown) => void> = {};
+    const fakeBot = {
+      getMe: async () => ({ id: 555 }),
+      on: (event: string, handler: (arg: unknown) => void) => {
+        handlers[event] = handler;
+      },
+      isPolling: () => false,
+      stopPolling: async () => {},
+    } as unknown as TelegramBot;
+
+    const adapter = new TelegramCommAdapter({
+      botToken: "test",
+      accountId: "555" as any,
+      bot: fakeBot,
+      polling: false,
+      log: (m) => logged.push(m),
+    });
+    await adapter.start();
+    handlers["polling_error"]?.(new Error("ETELEGRAM: 409 Conflict: terminated by other getUpdates request"));
+    assert.equal(logged.length, 1, "a 409 polling_error must emit exactly one loud log");
+    assert.match(logged[0], /409 Conflict/);
+
+    logged.length = 0;
+    handlers["polling_error"]?.(new Error("ETELEGRAM: 502 Bad Gateway"));
+    assert.equal(logged.length, 0, "a non-409 polling_error must not emit the loud 409 log");
+  });
+});
 
 describe("TelegramCommAdapter failure classification", () => {
   it("classifies 403 blocked/kicked paths as permanent", () => {

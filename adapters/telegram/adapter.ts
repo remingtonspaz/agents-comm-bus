@@ -16,6 +16,30 @@ import type {
   CommId,
 } from "agents-comm-bus-core";
 
+/**
+ * If `error` is a Telegram getUpdates 409 Conflict (another live consumer is
+ * polling the same bot token), return a LOUD, actionable message; else null.
+ *
+ * AGE-35: behind the cross-checkout comm-resource lease, a 409 means a
+ * non-lease-aware poller (a stray daemon from an unmanaged process, or an
+ * external bot instance) — it must be surfaced with the bot / account / resource,
+ * not silently flapped to "degraded".
+ */
+export function pollingConflictMessage(
+  error: unknown,
+  accountId: string,
+  botUserId: string | null,
+): string | null {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/\b409\b/.test(message)) return null;
+  return (
+    `agents-comm-bus telegram: 409 Conflict polling getUpdates for bot ` +
+    `${botUserId ?? accountId} (resourceId=${accountId}) — another process is ` +
+    `consuming this bot's updates. Behind the comm-resource lease this should ` +
+    `not happen; look for a stray daemon or an external poller. (${message})`
+  );
+}
+
 export interface TelegramCommAdapterOptions {
   botToken: string;
   /**
@@ -29,6 +53,11 @@ export interface TelegramCommAdapterOptions {
   now?: () => number;
   attachmentBlobStore?: BlobStore;
   fetch?: typeof fetch;
+  /**
+   * Loud logger for actionable anomalies (e.g. a 409 polling conflict). Defaults
+   * to console.error (→ the daemon's stderr). Injectable for tests.
+   */
+  log?: (message: string) => void;
 }
 
 export class TelegramCommAdapter implements CommAdapter {
@@ -45,6 +74,7 @@ export class TelegramCommAdapter implements CommAdapter {
   private bot: TelegramBot | null;
   private botUserId: string | null = null;
   private readonly fetchImpl: typeof fetch;
+  private readonly log: (message: string) => void;
 
   constructor(private readonly options: TelegramCommAdapterOptions) {
     this.accountId = options.accountId;
@@ -52,6 +82,7 @@ export class TelegramCommAdapter implements CommAdapter {
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
     this.bot = options.bot ?? null;
     this.fetchImpl = options.fetch ?? fetch;
+    this.log = options.log ?? ((message) => console.error(message));
   }
 
   /**
@@ -80,6 +111,18 @@ export class TelegramCommAdapter implements CommAdapter {
     this.allowedUserIds = new Set(ids);
   }
 
+  /**
+   * Telegram's `getUpdates` long-poll allows exactly one live consumer per bot
+   * token — a second poller gets `409 Conflict: terminated by other getUpdates`.
+   * The exclusive resource is therefore the bot_user_id (this adapter's
+   * accountId): the daemon takes a cross-checkout ownership lease keyed by
+   * (id, resourceId) before starting this adapter, so a stray daemon from
+   * another checkout never races us to a 409.
+   */
+  exclusiveResource(): { resourceId: string } | null {
+    return { resourceId: String(this.accountId) };
+  }
+
   async start(): Promise<void> {
     this.emitState("connecting");
     if (!this.bot) {
@@ -99,7 +142,16 @@ export class TelegramCommAdapter implements CommAdapter {
         .then(() => this.emitState("connected"))
         .catch(() => this.emitState("degraded"));
     });
-    this.bot.on("polling_error", () => this.emitState("degraded"));
+    this.bot.on("polling_error", (error) => {
+      this.emitState("degraded");
+      // AGE-35: a 409 Conflict means another live consumer is polling this bot's
+      // getUpdates. Behind the comm-resource lease that should not happen, so
+      // surface it LOUDLY (stray daemon / external poller) instead of silently
+      // degrading — for Telegram the 409 is the only platform signal of a
+      // double-owner.
+      const conflict = pollingConflictMessage(error, String(this.accountId), this.botUserId);
+      if (conflict) this.log(conflict);
+    });
     this.emitState("connected");
   }
 

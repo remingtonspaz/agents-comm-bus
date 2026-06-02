@@ -52713,6 +52713,11 @@ async function writeTokenFile(options) {
 
 // ../adapters/telegram/adapter.ts
 var import_node_telegram_bot_api = __toESM(require_node_telegram_bot_api(), 1);
+function pollingConflictMessage(error, accountId, botUserId) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!/\b409\b/.test(message)) return null;
+  return `agents-comm-bus telegram: 409 Conflict polling getUpdates for bot ${botUserId ?? accountId} (resourceId=${accountId}) \u2014 another process is consuming this bot's updates. Behind the comm-resource lease this should not happen; look for a stray daemon or an external poller. (${message})`;
+}
 var TelegramCommAdapter = class {
   constructor(options) {
     this.options = options;
@@ -52721,6 +52726,7 @@ var TelegramCommAdapter = class {
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
     this.bot = options.bot ?? null;
     this.fetchImpl = options.fetch ?? fetch;
+    this.log = options.log ?? ((message) => console.error(message));
   }
   options;
   id = "telegram";
@@ -52735,6 +52741,7 @@ var TelegramCommAdapter = class {
   bot;
   botUserId = null;
   fetchImpl;
+  log;
   /**
    * Derived view of the allowlist. Returns a snapshot array each access so
    * callers (notably the bus's foreign-bot gate) always see the current Set
@@ -52759,6 +52766,17 @@ var TelegramCommAdapter = class {
   updateAllowedSenderIds(ids) {
     this.allowedUserIds = new Set(ids);
   }
+  /**
+   * Telegram's `getUpdates` long-poll allows exactly one live consumer per bot
+   * token — a second poller gets `409 Conflict: terminated by other getUpdates`.
+   * The exclusive resource is therefore the bot_user_id (this adapter's
+   * accountId): the daemon takes a cross-checkout ownership lease keyed by
+   * (id, resourceId) before starting this adapter, so a stray daemon from
+   * another checkout never races us to a 409.
+   */
+  exclusiveResource() {
+    return { resourceId: String(this.accountId) };
+  }
   async start() {
     this.emitState("connecting");
     if (!this.bot) {
@@ -52774,7 +52792,11 @@ var TelegramCommAdapter = class {
     this.bot.on("callback_query", (query) => {
       void this.handleTelegramCallback(query).then(() => this.emitState("connected")).catch(() => this.emitState("degraded"));
     });
-    this.bot.on("polling_error", () => this.emitState("degraded"));
+    this.bot.on("polling_error", (error) => {
+      this.emitState("degraded");
+      const conflict = pollingConflictMessage(error, String(this.accountId), this.botUserId);
+      if (conflict) this.log(conflict);
+    });
     this.emitState("connected");
   }
   async stop() {
