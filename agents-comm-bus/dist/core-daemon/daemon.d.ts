@@ -1,4 +1,5 @@
 import { type AccountId, type CommId } from "agents-comm-bus-core";
+import { CommLeaseArbiter } from "./runtime/comm-lease.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
@@ -102,6 +103,7 @@ export declare function reloadAdapters(input: {
     env: NodeJS.ProcessEnv;
     blobs: ContentAddressedBlobStore;
     stateRoot: string;
+    leaseArbiter: CommLeaseArbiter;
     options?: ReloadOptions;
 }): Promise<ReloadSummary>;
 /**

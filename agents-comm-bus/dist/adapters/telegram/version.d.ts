@@ -13,5 +13,5 @@
  * policy can be formalized later; the invariant is that this is its own named
  * source, never derived from plugin_version or DAEMON_VERSION.
  */
-export declare const ADAPTER_VERSION = "0.1.1";
+export declare const ADAPTER_VERSION = "0.1.2";
 //# sourceMappingURL=version.d.ts.map

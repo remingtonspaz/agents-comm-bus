@@ -49,6 +49,17 @@ export declare class TelegramCommAdapter implements CommAdapter {
      * should become "atomic snapshot replace" rather than mid-flight mutation.
      */
     updateAllowedSenderIds(ids: readonly string[]): void;
+    /**
+     * Telegram's `getUpdates` long-poll allows exactly one live consumer per bot
+     * token — a second poller gets `409 Conflict: terminated by other getUpdates`.
+     * The exclusive resource is therefore the bot_user_id (this adapter's
+     * accountId): the daemon takes a cross-checkout ownership lease keyed by
+     * (id, resourceId) before starting this adapter, so a stray daemon from
+     * another checkout never races us to a 409.
+     */
+    exclusiveResource(): {
+        resourceId: string;
+    } | null;
     start(): Promise<void>;
     stop(): Promise<void>;
     onInbound(handler: (msg: Message) => Promise<void>): void;

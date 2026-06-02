@@ -80,6 +80,18 @@ export class TelegramCommAdapter implements CommAdapter {
     this.allowedUserIds = new Set(ids);
   }
 
+  /**
+   * Telegram's `getUpdates` long-poll allows exactly one live consumer per bot
+   * token — a second poller gets `409 Conflict: terminated by other getUpdates`.
+   * The exclusive resource is therefore the bot_user_id (this adapter's
+   * accountId): the daemon takes a cross-checkout ownership lease keyed by
+   * (id, resourceId) before starting this adapter, so a stray daemon from
+   * another checkout never races us to a 409.
+   */
+  exclusiveResource(): { resourceId: string } | null {
+    return { resourceId: String(this.accountId) };
+  }
+
   async start(): Promise<void> {
     this.emitState("connecting");
     if (!this.bot) {

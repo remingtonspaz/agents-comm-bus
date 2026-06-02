@@ -98,6 +98,16 @@ export interface CommAdapter {
    */
   updateAllowedSenderIds?(ids: readonly string[]): void;
 
+  /**
+   * Optional: declare this adapter's exclusive single-consumer backend resource.
+   * If the platform allows only one live consumer per credential (Telegram
+   * getUpdates → 409 on a 2nd poller), return a stable resource id; the daemon
+   * acquires a cross-checkout ownership lease keyed by (id, resourceId) and only
+   * starts this adapter once it holds the lease. Adapters with no single-consumer
+   * backend (webhook / stateless send) return null.
+   */
+  exclusiveResource?(): { resourceId: string } | null;
+
   /** Start polling/streaming inbound traffic. */
   start(): Promise<void>;
   /** Stop and release platform connections. */

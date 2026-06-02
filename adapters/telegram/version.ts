@@ -13,4 +13,4 @@
  * policy can be formalized later; the invariant is that this is its own named
  * source, never derived from plugin_version or DAEMON_VERSION.
  */
-export const ADAPTER_VERSION = "0.1.1";
+export const ADAPTER_VERSION = "0.1.2";
