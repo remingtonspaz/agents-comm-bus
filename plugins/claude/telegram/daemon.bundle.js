@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.7";
+var DAEMON_VERSION = "0.2.8";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -6274,14 +6274,7 @@ async function runDaemon(options) {
   console.error(
     `agents-comm-bus ${DAEMON_VERSION} starting: stateRoot=${paths.root} checkoutRoot=${checkoutRoot ?? "?"} daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} home=${os3.homedir()}`
   );
-  const comms = await loadCommAdapters({
-    factories: options.commAdapterFactories,
-    storage,
-    env,
-    blobs,
-    stateRoot: paths.root,
-    leaseArbiter
-  });
+  const comms = [];
   const bus = new MessageBus({
     project: process.cwd(),
     storage,
@@ -6290,8 +6283,31 @@ async function runDaemon(options) {
     blobs,
     comms
   });
-  const bridges = options.agentBridgeFactories.map(
-    (factory) => factory.create({ storage, bus, audit, pendingInbound })
+  const bridges = [];
+  const inFlightAdapters = /* @__PURE__ */ new Set();
+  const ensureCommsForSessionFn = (project, agent) => ensureCommsForSession({
+    project,
+    agent,
+    factories: options.commAdapterFactories,
+    bus,
+    bridges,
+    storage,
+    env,
+    blobs,
+    stateRoot: paths.root,
+    leaseArbiter,
+    inFlight: inFlightAdapters
+  });
+  bridges.push(
+    ...options.agentBridgeFactories.map(
+      (factory) => factory.create({
+        storage,
+        bus,
+        audit,
+        pendingInbound,
+        ensureCommsForSession: ensureCommsForSessionFn
+      })
+    )
   );
   bus.setDispatchSink({
     enqueueInbound: async (message, conversation) => {
@@ -6461,30 +6477,71 @@ async function bestEffortWithTimeout(action, timeoutMs, label) {
     if (timeout) clearTimeout(timeout);
   }
 }
-async function loadCommAdapters(input) {
-  const comms = [];
-  const attachedBotIds = /* @__PURE__ */ new Set();
-  for (const factory of input.factories) {
-    const registrations = await input.storage.listAccountRegistrations({
-      comm: factory.commId
-    });
-    for (const registration of registrations) {
-      if (attachedBotIds.has(registration.bot_user_id)) continue;
-      const adapter = await createAdapterFromRegistration({
+async function addAdapterForRegistration(input) {
+  const adapter = await createAdapterFromRegistration({
+    factory: input.factory,
+    registration: input.registration,
+    env: input.env,
+    blobs: input.blobs,
+    stateRoot: input.stateRoot,
+    storage: input.storage,
+    leaseArbiter: input.leaseArbiter
+  });
+  if (!adapter) {
+    return { ok: false, reason: unresolvedCredentialsReason(input.registration.credentials_ref) };
+  }
+  const accountId = input.registration.bot_user_id;
+  try {
+    input.bus.registerComm(adapter);
+    for (const bridge of input.bridges) {
+      bridge.attachComm?.(adapter);
+    }
+    await adapter.start();
+    return { ok: true };
+  } catch (error) {
+    input.bus.unregisterComm(input.registration.comm, accountId);
+    for (const bridge of input.bridges) {
+      bridge.detachComm?.(input.registration.comm, accountId);
+    }
+    return {
+      ok: false,
+      reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+async function ensureCommsForSession(input) {
+  const registrations = await input.storage.listAccountRegistrations({
+    project: input.project,
+    agent: input.agent
+  });
+  for (const registration of registrations) {
+    const factory = input.factories.find((f) => f.commId === registration.comm);
+    if (!factory) continue;
+    const accountId = registration.bot_user_id;
+    const key = adapterMapKey(registration.comm, accountId);
+    if (input.bus.getComm(registration.comm, accountId) || input.inFlight.has(key)) continue;
+    input.inFlight.add(key);
+    try {
+      const result = await addAdapterForRegistration({
         factory,
         registration,
+        bus: input.bus,
+        bridges: input.bridges,
         env: input.env,
         blobs: input.blobs,
         stateRoot: input.stateRoot,
         storage: input.storage,
         leaseArbiter: input.leaseArbiter
       });
-      if (!adapter) continue;
-      comms.push(adapter);
-      attachedBotIds.add(registration.bot_user_id);
+      if (!result.ok) {
+        console.error(
+          `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
+        );
+      }
+    } finally {
+      input.inFlight.delete(key);
     }
   }
-  return comms;
 }
 async function createAdapterFromRegistration(input) {
   const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
@@ -6516,17 +6573,18 @@ async function reloadAdapters(input) {
   const removed = [];
   const updated = [];
   const skipped = [];
+  const current = /* @__PURE__ */ new Map();
+  for (const entry of input.bus.listComms()) {
+    current.set(adapterMapKey(entry.commId, entry.accountId), entry);
+  }
   const desired = /* @__PURE__ */ new Map();
   for (const factory of input.factories) {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id);
+      if (!current.has(key)) continue;
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
-  }
-  const current = /* @__PURE__ */ new Map();
-  for (const entry of input.bus.listComms()) {
-    current.set(adapterMapKey(entry.commId, entry.accountId), entry);
   }
   for (const [key, entry] of desired) {
     if (current.has(key)) continue;
@@ -6739,7 +6797,10 @@ async function resolveOwnedAccountKeys(storage, session) {
   if (typeof session !== "string" || session.length === 0) return void 0;
   const sess = await storage.getSession(session);
   if (!sess) return /* @__PURE__ */ new Set();
-  const regs = await storage.listAccountRegistrations({ agent: sess.agent });
+  const regs = await storage.listAccountRegistrations({
+    project: sess.project,
+    agent: sess.agent
+  });
   return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 function sameStringSet(a, b) {
@@ -7028,8 +7089,8 @@ var ClaudeBridge = class {
    * record contract: `(comm, bot_user_id)` uniquely identifies a
    * `(project, agent)` registration per the daemon design.
    */
-  async drainPendingInbound() {
-    const owned = await this.ownedAccountKeys();
+  async drainPendingInbound(session) {
+    const owned = await this.ownedAccountKeys(session);
     const drained = [];
     for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
       const entry = this.options.pendingInbound[i];
@@ -7047,7 +7108,16 @@ var ClaudeBridge = class {
    * Future-proofing for runtime registration would re-fetch on miss; left
    * as a follow-up.
    */
-  async ownedAccountKeys() {
+  async ownedAccountKeys(session) {
+    if (session) {
+      const sess = await this.options.storage.getSession(session);
+      if (!sess) return /* @__PURE__ */ new Set();
+      const scoped = await this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId
+      });
+      return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+    }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;
     const registrations = await this.options.storage.listAccountRegistrations({
       agent: this.agentId
@@ -7091,11 +7161,18 @@ var ClaudeBridge = class {
     socket?.once("close", () => {
       void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
     });
+    try {
+      await this.options.ensureCommsForSession?.(project, this.agentId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     return { ok: true, wake_dir: registration.wakeDir };
   }
   async drainInbound(params) {
     const session = typeof params.session === "string" ? params.session : void 0;
-    const drained = await this.drainPendingInbound();
+    const drained = await this.drainPendingInbound(session);
     if (session && drained.length > 0) {
       await this.options.storage.setSessionMostRecentInbound(
         session,
@@ -7378,7 +7455,8 @@ var ClaudeBridgeFactory = class {
     return new ClaudeBridge({
       storage: context.storage,
       bus: context.bus,
-      pendingInbound: context.pendingInbound
+      pendingInbound: context.pendingInbound,
+      ensureCommsForSession: context.ensureCommsForSession
     });
   }
 };
@@ -8200,6 +8278,13 @@ var CodexBridge = class {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
     this.trackSession(project, session);
+    try {
+      await this.options.ensureCommsForSession?.(project, this.agentId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle = params.manage_app_server_lifecycle === true || params.source === "mcp-server";
     const lease = {
@@ -8221,7 +8306,7 @@ var CodexBridge = class {
   }
   async drainInbound(params) {
     const session = typeof params.session === "string" ? params.session : void 0;
-    const owned = await this.ownedAccountKeys();
+    const owned = await this.ownedAccountKeys(session);
     const drained = [];
     for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
       const entry = this.options.pendingInbound[i];
@@ -8506,7 +8591,16 @@ var CodexBridge = class {
    * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See
    * the matching comment in `ClaudeBridge` for the caching contract.
    */
-  async ownedAccountKeys() {
+  async ownedAccountKeys(session) {
+    if (session) {
+      const sess = await this.options.storage.getSession(session);
+      if (!sess) return /* @__PURE__ */ new Set();
+      const scoped = await this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId
+      });
+      return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+    }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;
     const registrations = await this.options.storage.listAccountRegistrations({
       agent: this.agentId
@@ -8661,7 +8755,8 @@ var CodexBridgeFactory = class {
       storage: context.storage,
       bus: context.bus,
       audit: context.audit,
-      pendingInbound: context.pendingInbound
+      pendingInbound: context.pendingInbound,
+      ensureCommsForSession: context.ensureCommsForSession
     });
   }
 };

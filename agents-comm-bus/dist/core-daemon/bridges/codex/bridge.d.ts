@@ -1,6 +1,6 @@
 import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 export interface CodexBridgeOptions {
@@ -14,6 +14,12 @@ export interface CodexBridgeOptions {
     appServerCleanupDelayMs?: number;
     sessionOwnerCheckIntervalMs?: number;
     isProcessAlive?: (pid: number) => boolean;
+    /**
+     * AGE-38: lazy, session-triggered comm-adapter instantiation on register.
+     * Optional so tests can construct the bridge directly; the daemon's
+     * composition root always supplies it.
+     */
+    ensureCommsForSession?: EnsureCommsForSession;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;

@@ -8,9 +8,9 @@
  * `attach` to the bus + the running comm adapters; everything Claude-specific
  * stays inside this module.
  */
-import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
+import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
@@ -25,6 +25,12 @@ export interface ClaudeBridgeOptions {
     pendingInbound: PendingInboundEntry[];
     /** Max queue depth before old entries are dropped. */
     pendingInboundMax?: number;
+    /**
+     * AGE-38: lazy, session-triggered comm-adapter instantiation on register.
+     * Optional so tests can construct the bridge directly; the daemon's
+     * composition root always supplies it.
+     */
+    ensureCommsForSession?: EnsureCommsForSession;
 }
 /**
  * Outcome shape returned by claude_register_session.
@@ -76,7 +82,7 @@ export declare class ClaudeBridge implements AgentBridge {
      * record contract: `(comm, bot_user_id)` uniquely identifies a
      * `(project, agent)` registration per the daemon design.
      */
-    drainPendingInbound(): Promise<PendingInboundEntry[]>;
+    drainPendingInbound(session?: SessionId): Promise<PendingInboundEntry[]>;
     /**
      * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. The
      * daemon's account registrations only change via the CLI, which requires

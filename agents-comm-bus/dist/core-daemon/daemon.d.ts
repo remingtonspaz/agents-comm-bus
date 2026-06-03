@@ -1,4 +1,4 @@
-import { type AccountId, type CommId } from "agents-comm-bus-core";
+import { type AccountId, type AccountRegistration, type AgentId, type CommId, type Storage } from "agents-comm-bus-core";
 import { CommLeaseArbiter } from "./runtime/comm-lease.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
@@ -48,6 +48,53 @@ export interface RunDaemonOptions {
  *      (which starts the comm pollers).
  */
 export declare function runDaemon(options: RunDaemonOptions): Promise<void>;
+/**
+ * AGE-38: the shared adapter add-sequence — construct, register on the bus,
+ * wire every bridge's per-comm callbacks (`attachComm`, which wires button-tap
+ * resolution), start (which acquires the comm lease), and roll back cleanly on
+ * failure so a failed-to-start adapter is never left wedged in the bus map
+ * (which would block a future re-add for the same bot). The caller owns the
+ * "already live" idempotency check before calling.
+ */
+export declare function addAdapterForRegistration(input: {
+    factory: CommAdapterFactory;
+    registration: AccountRegistration;
+    bus: MessageBus;
+    bridges: AgentBridge[];
+    env: NodeJS.ProcessEnv;
+    blobs: ContentAddressedBlobStore;
+    stateRoot: string;
+    storage: Storage;
+    leaseArbiter: CommLeaseArbiter;
+}): Promise<{
+    ok: true;
+} | {
+    ok: false;
+    reason: string;
+}>;
+/**
+ * AGE-38: instantiate (and lease) only the comm adapters a `(project, agent)`
+ * session needs, lazily on session entry. Resolves the session's registrations
+ * and brings up only those bots — never every registered bot — skipping any
+ * already live or being brought up by a concurrent register (`inFlight` de-dupes
+ * the race so two near-simultaneous registers for the same new bot don't both
+ * construct and collide on `bus.registerComm`). Best-effort per bot: a failure
+ * is logged and skipped, never thrown, so one bad credential can't fail session
+ * registration.
+ */
+export declare function ensureCommsForSession(input: {
+    project: string;
+    agent: AgentId;
+    factories: CommAdapterFactory[];
+    bus: MessageBus;
+    bridges: AgentBridge[];
+    storage: Storage;
+    env: NodeJS.ProcessEnv;
+    blobs: ContentAddressedBlobStore;
+    stateRoot: string;
+    leaseArbiter: CommLeaseArbiter;
+    inFlight: Set<string>;
+}): Promise<void>;
 export interface ReloadSummary {
     ok: true;
     added: Array<{

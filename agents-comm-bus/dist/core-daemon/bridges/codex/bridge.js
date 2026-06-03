@@ -197,6 +197,15 @@ export class CodexBridge {
             this.adapter.setAppServerUrl(session, params.app_server_url);
         }
         this.trackSession(project, session);
+        // AGE-38: lazily bring up this project's comm adapters on session entry.
+        // Best-effort — a partial instantiation failure must not fail registration.
+        try {
+            await this.options.ensureCommsForSession?.(project, this.agentId);
+        }
+        catch (error) {
+            console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        }
         const persistAfterDisconnect = params.persist_after_disconnect === true;
         const manageAppServerLifecycle = params.manage_app_server_lifecycle === true ||
             params.source === "mcp-server";
@@ -226,7 +235,7 @@ export class CodexBridge {
         // draining bridge sweeps the queue and starves its siblings. We use
         // `message.chat.account` (the bot_user_id, the source-of-truth field)
         // rather than the derived `conversation.agent`.
-        const owned = await this.ownedAccountKeys();
+        const owned = await this.ownedAccountKeys(session);
         const drained = [];
         for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
             const entry = this.options.pendingInbound[i];
@@ -510,7 +519,23 @@ export class CodexBridge {
      * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See
      * the matching comment in `ClaudeBridge` for the caching contract.
      */
-    async ownedAccountKeys() {
+    async ownedAccountKeys(session) {
+        // AGE-38: scope to the calling session's (project, agent), not agent-wide
+        // (see ClaudeBridge for the rationale). The wake path
+        // (`pendingInboundForConversation`) still calls this with no session and
+        // applies its own `conversation.project` filter, so agent-wide is correct
+        // there. Unknown session → empty Set (don't bleed). No session → agent-wide
+        // (cached).
+        if (session) {
+            const sess = await this.options.storage.getSession(session);
+            if (!sess)
+                return new Set();
+            const scoped = await this.options.storage.listAccountRegistrations({
+                project: sess.project,
+                agent: this.agentId,
+            });
+            return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+        }
         if (this.ownedAccountsCache)
             return this.ownedAccountsCache;
         const registrations = await this.options.storage.listAccountRegistrations({
@@ -683,6 +708,7 @@ export class CodexBridgeFactory {
             bus: context.bus,
             audit: context.audit,
             pendingInbound: context.pendingInbound,
+            ensureCommsForSession: context.ensureCommsForSession,
         });
     }
 }

@@ -328,6 +328,37 @@ version-compatible handshake before deciding whether to reuse or respawn.
 - **Shared inbound queue.** `pendingInbound` is owned by the daemon runtime
   and passed by reference to bridges + comm IPC handlers. Bridges drain it
   with their session-id stamping; comm-MCP handlers drain it generically.
+- **Lazy, session-triggered comm-adapter instantiation (AGE-38).** The daemon
+  does **not** eager-load every registered bot at startup — it boots with
+  **zero adapters** and brings up only the bots a `(project, agent)` session
+  needs, via `ensureCommsForSession(project, agent)` (in `daemon.ts`) called
+  from each bridge's register-session handler (`claude_register_session` /
+  `codex_register_session`). This makes the daemon *courteous*: a daemon only
+  contends for (and leases, AGE-35) the bots its live sessions actually use, so
+  a dev/main-dev daemon working on one project no longer reclaims every prod
+  bot across all projects. The instantiation is idempotent (skip bots already
+  live or in-flight) and best-effort per bot (a bad credential is logged, not
+  thrown — it must not fail session registration). The shared add-sequence
+  (`addAdapterForRegistration`) is `createAdapterFromRegistration` →
+  `bus.registerComm` → `bridge.attachComm` *for every bridge* (this wires
+  button-tap callback resolution — easy to forget) → `adapter.start()`, with
+  rollback (`unregisterComm` + `detachComm`) on a failed start so a
+  failed-to-start adapter is never wedged in `bus.comms`. A **zero-adapter
+  daemon is a valid steady state** — `checkDaemonPidOwnership` keys on
+  pid-file ownership, never adapter count, so a daemon with no live sessions
+  does not self-retire. Consistency invariants that ride with this: (a) the
+  **reload path never eager-adds** — `reloadAdapters` reconciles only
+  *currently-live* adapters (refresh/remove); new bots come up exclusively via
+  `ensureCommsForSession`, so a CLI write firing `reload_registrations` can't
+  re-introduce eager global loading; (b) **drains are scoped to the session's
+  `(project, agent)`**, not agent-wide — `ownedAccountKeys(session)` /
+  `resolveOwnedAccountKeys` resolve the session's project so one project's
+  session can't sweep another project's pending inbound. **No release-on-exit
+  yet:** an instantiated adapter stays until daemon stop. The rare case where a
+  would-be-outranked daemon needs a bot a higher-rank daemon holds is handled
+  manually (drop the dev marker, kill the dev daemon + its pid marker, let the
+  account's session re-ensure into prod); robust refcount-release is deferred
+  until per-host session-*exit* tracking is reliable.
 - **Credentials are daemon-owned file references, not inline secrets.** The
   DB stores `credentials_ref` as `file:/abs/path.json`. Adapter factories
   resolve them at startup; secrets never sit in the records table.

@@ -12,11 +12,22 @@ import type { MessageBus } from "../bus.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 
+/**
+ * Lazily bring up the comm adapters a `(project, agent)` session needs, on
+ * session entry. AGE-38: the daemon no longer eager-loads every registered bot
+ * at startup; instead a bridge calls this from its register-session handler so
+ * the daemon instantiates (and leases) only the bots its live sessions use.
+ * Idempotent — safe to call on every register (hooks register frequently).
+ */
+export type EnsureCommsForSession = (project: string, agent: AgentId) => Promise<void>;
+
 export interface AgentBridgeContext {
   storage: Storage;
   bus: MessageBus;
   audit: AuditStore;
   pendingInbound: PendingInboundEntry[];
+  /** AGE-38: lazy, session-triggered comm-adapter instantiation. */
+  ensureCommsForSession: EnsureCommsForSession;
 }
 
 export interface AgentBridge {

@@ -23,6 +23,7 @@ import type {
   AgentBridge,
   AgentBridgeContext,
   AgentBridgeFactory,
+  EnsureCommsForSession,
 } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import {
@@ -44,6 +45,12 @@ export interface CodexBridgeOptions {
   appServerCleanupDelayMs?: number;
   sessionOwnerCheckIntervalMs?: number;
   isProcessAlive?: (pid: number) => boolean;
+  /**
+   * AGE-38: lazy, session-triggered comm-adapter instantiation on register.
+   * Optional so tests can construct the bridge directly; the daemon's
+   * composition root always supplies it.
+   */
+  ensureCommsForSession?: EnsureCommsForSession;
 }
 
 export interface RegisterCodexSessionResult {
@@ -316,6 +323,16 @@ export class CodexBridge implements AgentBridge {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
     this.trackSession(project, session);
+    // AGE-38: lazily bring up this project's comm adapters on session entry.
+    // Best-effort — a partial instantiation failure must not fail registration.
+    try {
+      await this.options.ensureCommsForSession?.(project, this.agentId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle =
@@ -348,7 +365,7 @@ export class CodexBridge implements AgentBridge {
     // draining bridge sweeps the queue and starves its siblings. We use
     // `message.chat.account` (the bot_user_id, the source-of-truth field)
     // rather than the derived `conversation.agent`.
-    const owned = await this.ownedAccountKeys();
+    const owned = await this.ownedAccountKeys(session);
     const drained: PendingInboundEntry[] = [];
     for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
       const entry = this.options.pendingInbound[i];
@@ -676,7 +693,22 @@ export class CodexBridge implements AgentBridge {
    * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See
    * the matching comment in `ClaudeBridge` for the caching contract.
    */
-  private async ownedAccountKeys(): Promise<Set<string>> {
+  private async ownedAccountKeys(session?: SessionId): Promise<Set<string>> {
+    // AGE-38: scope to the calling session's (project, agent), not agent-wide
+    // (see ClaudeBridge for the rationale). The wake path
+    // (`pendingInboundForConversation`) still calls this with no session and
+    // applies its own `conversation.project` filter, so agent-wide is correct
+    // there. Unknown session → empty Set (don't bleed). No session → agent-wide
+    // (cached).
+    if (session) {
+      const sess = await this.options.storage.getSession(session);
+      if (!sess) return new Set<string>();
+      const scoped = await this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId,
+      });
+      return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+    }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;
     const registrations = await this.options.storage.listAccountRegistrations({
       agent: this.agentId,
@@ -872,6 +904,7 @@ export class CodexBridgeFactory implements AgentBridgeFactory {
       bus: context.bus,
       audit: context.audit,
       pendingInbound: context.pendingInbound,
+      ensureCommsForSession: context.ensureCommsForSession,
     });
   }
 }

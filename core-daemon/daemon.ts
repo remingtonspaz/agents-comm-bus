@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import {
   type AccountId,
   type AccountRegistration,
+  type AgentId,
   type CommAdapter,
   type CommId,
   type SessionId,
@@ -26,7 +27,11 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
-import type { AgentBridge, AgentBridgeFactory } from "./runtime/agent-bridge.js";
+import type {
+  AgentBridge,
+  AgentBridgeFactory,
+  EnsureCommsForSession,
+} from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
@@ -143,14 +148,15 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       `home=${os.homedir()}`,
   );
 
-  const comms = await loadCommAdapters({
-    factories: options.commAdapterFactories,
-    storage,
-    env,
-    blobs,
-    stateRoot: paths.root,
-    leaseArbiter,
-  });
+  // AGE-38: lazy, session-triggered comm-adapter instantiation. The daemon no
+  // longer eager-loads every registered bot at startup (which made any daemon
+  // greedily reclaim every bot's lease across all projects — e.g. a main-dev
+  // daemon stealing every prod bot). Instead it boots with ZERO adapters and
+  // brings up only the bots a `(project, agent)` session needs, via
+  // `ensureCommsForSession` on register (below). A zero-adapter daemon is a
+  // valid steady state: the pid-watchdog keys on pid-file ownership, never
+  // adapter count.
+  const comms: CommAdapter[] = [];
 
   const bus = new MessageBus({
     project: process.cwd(),
@@ -161,8 +167,37 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     comms,
   });
 
-  const bridges: AgentBridge[] = options.agentBridgeFactories.map((factory) =>
-    factory.create({ storage, bus, audit, pendingInbound }),
+  // AGE-38: `bridges` is filled AFTER `ensureCommsForSession` is built because
+  // the closure captures the array by reference. This is safe — the only thing
+  // that can invoke `ensureCommsForSession` is a register-session IPC call, and
+  // the IPC server doesn't start until further below, by which point `bridges`
+  // is fully populated.
+  const bridges: AgentBridge[] = [];
+  const inFlightAdapters = new Set<string>();
+  const ensureCommsForSessionFn: EnsureCommsForSession = (project, agent) =>
+    ensureCommsForSession({
+      project,
+      agent,
+      factories: options.commAdapterFactories,
+      bus,
+      bridges,
+      storage,
+      env,
+      blobs,
+      stateRoot: paths.root,
+      leaseArbiter,
+      inFlight: inFlightAdapters,
+    });
+  bridges.push(
+    ...options.agentBridgeFactories.map((factory) =>
+      factory.create({
+        storage,
+        bus,
+        audit,
+        pendingInbound,
+        ensureCommsForSession: ensureCommsForSessionFn,
+      }),
+    ),
   );
 
   bus.setDispatchSink({
@@ -355,39 +390,112 @@ async function bestEffortWithTimeout(
   }
 }
 
-async function loadCommAdapters(input: {
+/**
+ * AGE-38: the shared adapter add-sequence — construct, register on the bus,
+ * wire every bridge's per-comm callbacks (`attachComm`, which wires button-tap
+ * resolution), start (which acquires the comm lease), and roll back cleanly on
+ * failure so a failed-to-start adapter is never left wedged in the bus map
+ * (which would block a future re-add for the same bot). The caller owns the
+ * "already live" idempotency check before calling.
+ */
+export async function addAdapterForRegistration(input: {
+  factory: CommAdapterFactory;
+  registration: AccountRegistration;
+  bus: MessageBus;
+  bridges: AgentBridge[];
+  env: NodeJS.ProcessEnv;
+  blobs: ContentAddressedBlobStore;
+  stateRoot: string;
+  storage: Storage;
+  leaseArbiter: CommLeaseArbiter;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const adapter = await createAdapterFromRegistration({
+    factory: input.factory,
+    registration: input.registration,
+    env: input.env,
+    blobs: input.blobs,
+    stateRoot: input.stateRoot,
+    storage: input.storage,
+    leaseArbiter: input.leaseArbiter,
+  });
+  if (!adapter) {
+    return { ok: false, reason: unresolvedCredentialsReason(input.registration.credentials_ref) };
+  }
+  const accountId = input.registration.bot_user_id as AccountId;
+  try {
+    input.bus.registerComm(adapter);
+    for (const bridge of input.bridges) {
+      bridge.attachComm?.(adapter);
+    }
+    await adapter.start();
+    return { ok: true };
+  } catch (error) {
+    input.bus.unregisterComm(input.registration.comm, accountId);
+    for (const bridge of input.bridges) {
+      bridge.detachComm?.(input.registration.comm, accountId);
+    }
+    return {
+      ok: false,
+      reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * AGE-38: instantiate (and lease) only the comm adapters a `(project, agent)`
+ * session needs, lazily on session entry. Resolves the session's registrations
+ * and brings up only those bots — never every registered bot — skipping any
+ * already live or being brought up by a concurrent register (`inFlight` de-dupes
+ * the race so two near-simultaneous registers for the same new bot don't both
+ * construct and collide on `bus.registerComm`). Best-effort per bot: a failure
+ * is logged and skipped, never thrown, so one bad credential can't fail session
+ * registration.
+ */
+export async function ensureCommsForSession(input: {
+  project: string;
+  agent: AgentId;
   factories: CommAdapterFactory[];
-  storage: Awaited<ReturnType<typeof openSqliteStorage>>;
+  bus: MessageBus;
+  bridges: AgentBridge[];
+  storage: Storage;
   env: NodeJS.ProcessEnv;
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
   leaseArbiter: CommLeaseArbiter;
-}): Promise<CommAdapter[]> {
-  const comms: CommAdapter[] = [];
-  const attachedBotIds = new Set<string>();
-
-  for (const factory of input.factories) {
-    const registrations = await input.storage.listAccountRegistrations({
-      comm: factory.commId,
-    });
-    for (const registration of registrations) {
-      if (attachedBotIds.has(registration.bot_user_id)) continue;
-      const adapter = await createAdapterFromRegistration({
+  inFlight: Set<string>;
+}): Promise<void> {
+  const registrations = await input.storage.listAccountRegistrations({
+    project: input.project,
+    agent: input.agent,
+  });
+  for (const registration of registrations) {
+    const factory = input.factories.find((f) => f.commId === registration.comm);
+    if (!factory) continue;
+    const accountId = registration.bot_user_id as AccountId;
+    const key = adapterMapKey(registration.comm, accountId);
+    if (input.bus.getComm(registration.comm, accountId) || input.inFlight.has(key)) continue;
+    input.inFlight.add(key);
+    try {
+      const result = await addAdapterForRegistration({
         factory,
         registration,
+        bus: input.bus,
+        bridges: input.bridges,
         env: input.env,
         blobs: input.blobs,
         stateRoot: input.stateRoot,
         storage: input.storage,
         leaseArbiter: input.leaseArbiter,
       });
-      if (!adapter) continue;
-      comms.push(adapter);
-      attachedBotIds.add(registration.bot_user_id);
+      if (!result.ok) {
+        console.error(
+          `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`,
+        );
+      }
+    } finally {
+      input.inFlight.delete(key);
     }
   }
-
-  return comms;
 }
 
 async function createAdapterFromRegistration(input: {
@@ -478,18 +586,28 @@ export async function reloadAdapters(input: {
   const skipped: ReloadSummary["skipped"] = [];
 
   type DesiredEntry = { factory: CommAdapterFactory; registration: AccountRegistration };
+
+  const current = new Map<string, { commId: CommId; accountId: AccountId }>();
+  for (const entry of input.bus.listComms()) {
+    current.set(adapterMapKey(entry.commId, entry.accountId), entry);
+  }
+
+  // AGE-38: the daemon no longer eager-loads, so reload must reconcile ONLY
+  // currently-live adapters (refresh credentials/allowlist, or remove when the
+  // registration was deleted) and must NEVER add a brand-new bot here —
+  // otherwise any CLI write firing reload_registrations would silently
+  // re-introduce eager global loading across all projects. New bots come up
+  // exclusively via `ensureCommsForSession` on session entry. Restricting
+  // `desired` to keys that are ALSO currently live makes the add branch below a
+  // no-op while leaving the remove/refresh branches intact.
   const desired = new Map<string, DesiredEntry>();
   for (const factory of input.factories) {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id as AccountId);
+      if (!current.has(key)) continue; // never eager-add an un-instantiated row
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
-  }
-
-  const current = new Map<string, { commId: CommId; accountId: AccountId }>();
-  for (const entry of input.bus.listComms()) {
-    current.set(adapterMapKey(entry.commId, entry.accountId), entry);
   }
 
   for (const [key, entry] of desired) {
@@ -764,10 +882,13 @@ function pendingAccountKey(entry: PendingInboundEntry): string {
 
 /**
  * Resolve the bot accounts a calling session owns, as `${comm}:${account}`
- * keys, for scoping a generic drain. Mirrors the per-agent ownership the
- * bridges use. Returns undefined when there is no session (legacy caller â†’
- * fall back to comm/global), and an empty Set when the session is unknown
- * (scope to nothing rather than global-wipe).
+ * keys, for scoping a generic drain. AGE-38: scoped to the session's
+ * `(project, agent)`, not agent-wide — under lazy per-`(project, agent)`
+ * instantiation a daemon can serve live sessions for multiple projects of the
+ * same agent, and an agent-wide scope would let one project's session drain
+ * another project's pending inbound. Returns undefined when there is no session
+ * (legacy caller → fall back to comm/global), and an empty Set when the session
+ * is unknown (scope to nothing rather than global-wipe).
  */
 async function resolveOwnedAccountKeys(
   storage: Storage,
@@ -776,7 +897,10 @@ async function resolveOwnedAccountKeys(
   if (typeof session !== "string" || session.length === 0) return undefined;
   const sess = await storage.getSession(session as SessionId);
   if (!sess) return new Set<string>();
-  const regs = await storage.listAccountRegistrations({ agent: sess.agent });
+  const regs = await storage.listAccountRegistrations({
+    project: sess.project,
+    agent: sess.agent,
+  });
   return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 

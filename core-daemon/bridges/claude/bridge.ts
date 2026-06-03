@@ -34,6 +34,7 @@ import type {
   AgentBridge,
   AgentBridgeContext,
   AgentBridgeFactory,
+  EnsureCommsForSession,
 } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
@@ -52,6 +53,12 @@ export interface ClaudeBridgeOptions {
   pendingInbound: PendingInboundEntry[];
   /** Max queue depth before old entries are dropped. */
   pendingInboundMax?: number;
+  /**
+   * AGE-38: lazy, session-triggered comm-adapter instantiation on register.
+   * Optional so tests can construct the bridge directly; the daemon's
+   * composition root always supplies it.
+   */
+  ensureCommsForSession?: EnsureCommsForSession;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
@@ -172,8 +179,8 @@ export class ClaudeBridge implements AgentBridge {
    * record contract: `(comm, bot_user_id)` uniquely identifies a
    * `(project, agent)` registration per the daemon design.
    */
-  async drainPendingInbound(): Promise<PendingInboundEntry[]> {
-    const owned = await this.ownedAccountKeys();
+  async drainPendingInbound(session?: SessionId): Promise<PendingInboundEntry[]> {
+    const owned = await this.ownedAccountKeys(session);
     const drained: PendingInboundEntry[] = [];
     for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
       const entry = this.options.pendingInbound[i];
@@ -192,7 +199,22 @@ export class ClaudeBridge implements AgentBridge {
    * Future-proofing for runtime registration would re-fetch on miss; left
    * as a follow-up.
    */
-  private async ownedAccountKeys(): Promise<Set<string>> {
+  private async ownedAccountKeys(session?: SessionId): Promise<Set<string>> {
+    // AGE-38: scope to the calling session's (project, agent), not agent-wide.
+    // A daemon can serve live Claude sessions for multiple projects (distinct
+    // bots, all instantiated under lazy loading), and an agent-wide scope would
+    // let one project's drain sweep another project's pending inbound. Unknown
+    // session → empty Set (don't bleed). No session is the legacy/defensive
+    // path → agent-wide (cached, since registrations only change via the CLI).
+    if (session) {
+      const sess = await this.options.storage.getSession(session);
+      if (!sess) return new Set<string>();
+      const scoped = await this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId,
+      });
+      return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+    }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;
     const registrations = await this.options.storage.listAccountRegistrations({
       agent: this.agentId,
@@ -246,12 +268,22 @@ export class ClaudeBridge implements AgentBridge {
     socket?.once("close", () => {
       void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
     });
+    // AGE-38: lazily bring up this project's comm adapters on session entry.
+    // Best-effort — a partial instantiation failure must not fail registration.
+    try {
+      await this.options.ensureCommsForSession?.(project, this.agentId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     return { ok: true, wake_dir: registration.wakeDir };
   }
 
   async drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]> {
     const session = typeof params.session === "string" ? params.session as SessionId : undefined;
-    const drained = await this.drainPendingInbound();
+    const drained = await this.drainPendingInbound(session);
     if (session && drained.length > 0) {
       await this.options.storage.setSessionMostRecentInbound(
         session,
@@ -591,6 +623,7 @@ export class ClaudeBridgeFactory implements AgentBridgeFactory {
       storage: context.storage,
       bus: context.bus,
       pendingInbound: context.pendingInbound,
+      ensureCommsForSession: context.ensureCommsForSession,
     });
   }
 }
