@@ -69,16 +69,22 @@ class FakeAdapter implements CommAdapter {
   readonly allowedSenderIds: readonly string[] = [];
   startCount = 0;
   stopCount = 0;
+  polling = false;
 
   constructor(readonly accountId: AccountId, private readonly failStart = false) {}
 
   async start(): Promise<void> {
+    // Model a partial start: the poller spins up (polling = true) BEFORE the
+    // failure point, mirroring the Telegram adapter building its getUpdates
+    // poller before getMe() resolves.
+    this.polling = true;
     if (this.failStart) throw new Error("simulated start failure");
     this.startCount += 1;
   }
 
   async stop(): Promise<void> {
     this.stopCount += 1;
+    this.polling = false;
   }
 
   onInbound(_handler: (msg: Message) => Promise<void>): void {}
@@ -293,6 +299,11 @@ describe("AGE-38 lazy, session-triggered comm-adapter instantiation", () => {
         null,
         "the failed-to-start adapter must be rolled back out of the bus map",
       );
+      // Finding 2: a partially-started adapter must be stop()'d so it can't leak
+      // a poller that keeps consuming updates outside the bus + lease.
+      const failedAdapter = factory.adapters.get("botX")!;
+      assert.equal(failedAdapter.stopCount, 1, "the partially-started adapter was stopped");
+      assert.equal(failedAdapter.polling, false, "no poller is left running after a failed start");
 
       // The bot is re-addable after rollback (it wasn't left wedged).
       factory.failStartFor = undefined;
@@ -345,6 +356,44 @@ describe("AGE-38 lazy, session-triggered comm-adapter instantiation", () => {
       );
       assert.equal(summary.added.length, 0, "reload adds nothing under lazy loading");
       assert.ok(bus.getComm(TELEGRAM, "botZ" as AccountId), "the already-live bot remains attached");
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("reload hot-adds a new bot for an ACTIVE scope but not an inactive one (finding 1)", async () => {
+    const dir = await makeTempDir("acb-lazy-reload-active-");
+    const { storage, blobs, bus } = await makeHarness(dir);
+    try {
+      const factory = new RecordingFactory();
+      // botA belongs to an active project scope (a session for projA registered
+      // this daemon-lifetime); botB belongs to an inactive one. Neither is live.
+      await storage.putAccountRegistration(registration("projA", "botA"));
+      await storage.putAccountRegistration(registration("projB", "botB"));
+
+      const summary = await reloadAdapters({
+        factories: [factory],
+        bridges: [],
+        bus,
+        storage,
+        env: {} as NodeJS.ProcessEnv,
+        blobs,
+        stateRoot: dir,
+        leaseArbiter: makeArbiter(dir),
+        activeScopes: new Set([`${CLAUDE}:projA`]),
+      });
+
+      assert.ok(
+        bus.getComm(TELEGRAM, "botA" as AccountId),
+        "an account-add for an actively-served project takes effect on reload (hot-add)",
+      );
+      assert.equal(
+        bus.getComm(TELEGRAM, "botB" as AccountId),
+        null,
+        "a bot for an inactive project stays lazy (cross-daemon courtesy preserved)",
+      );
+      assert.deepEqual(summary.added.map((a) => a.account_id), ["botA"]);
+      assert.deepEqual(factory.created, ["botA"], "only the active-scope bot is constructed");
     } finally {
       await storage.close();
     }

@@ -4172,6 +4172,8 @@ function wrapWithLease(inner, arbiter, options = {}) {
       } catch (error) {
         innerStarted = false;
         holdingLease = false;
+        await inner.stop().catch(() => {
+        });
         await arbiter.release(inner.id, resource.resourceId).catch(() => {
         });
         throw error;
@@ -6285,19 +6287,23 @@ async function runDaemon(options) {
   });
   const bridges = [];
   const inFlightAdapters = /* @__PURE__ */ new Set();
-  const ensureCommsForSessionFn = (project, agent) => ensureCommsForSession({
-    project,
-    agent,
-    factories: options.commAdapterFactories,
-    bus,
-    bridges,
-    storage,
-    env,
-    blobs,
-    stateRoot: paths.root,
-    leaseArbiter,
-    inFlight: inFlightAdapters
-  });
+  const activeScopes = /* @__PURE__ */ new Set();
+  const ensureCommsForSessionFn = (project, agent) => {
+    activeScopes.add(scopeKey(agent, project));
+    return ensureCommsForSession({
+      project,
+      agent,
+      factories: options.commAdapterFactories,
+      bus,
+      bridges,
+      storage,
+      env,
+      blobs,
+      stateRoot: paths.root,
+      leaseArbiter,
+      inFlight: inFlightAdapters
+    });
+  };
   bridges.push(
     ...options.agentBridgeFactories.map(
       (factory) => factory.create({
@@ -6409,6 +6415,7 @@ async function runDaemon(options) {
     blobs,
     stateRoot: paths.root,
     leaseArbiter,
+    activeScopes,
     options: reloadOptions
   });
   const server = await startIpcServer({
@@ -6499,6 +6506,8 @@ async function addAdapterForRegistration(input) {
     await adapter.start();
     return { ok: true };
   } catch (error) {
+    await adapter.stop().catch(() => {
+    });
     input.bus.unregisterComm(input.registration.comm, accountId);
     for (const bridge of input.bridges) {
       bridge.detachComm?.(input.registration.comm, accountId);
@@ -6582,52 +6591,34 @@ async function reloadAdapters(input) {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id);
-      if (!current.has(key)) continue;
+      const scopeActive = input.activeScopes?.has(scopeKey(reg.agent, reg.project)) ?? false;
+      if (!current.has(key) && !scopeActive) continue;
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
   }
   for (const [key, entry] of desired) {
     if (current.has(key)) continue;
-    const adapter = await createAdapterFromRegistration({
+    const result = await addAdapterForRegistration({
       factory: entry.factory,
       registration: entry.registration,
+      bus: input.bus,
+      bridges: input.bridges,
       env: input.env,
       blobs: input.blobs,
       stateRoot: input.stateRoot,
       storage: input.storage,
       leaseArbiter: input.leaseArbiter
     });
-    if (!adapter) {
-      skipped.push({
-        comm: entry.registration.comm,
-        account_id: entry.registration.bot_user_id,
-        reason: unresolvedCredentialsReason(entry.registration.credentials_ref)
-      });
-      continue;
-    }
-    try {
-      input.bus.registerComm(adapter);
-      for (const bridge of input.bridges) {
-        bridge.attachComm?.(adapter);
-      }
-      await adapter.start();
+    if (result.ok) {
       added.push({
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id
       });
-    } catch (error) {
-      input.bus.unregisterComm(
-        entry.registration.comm,
-        entry.registration.bot_user_id
-      );
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(
-        `agents-comm-bus: failed to start ${entry.registration.comm}/${entry.registration.bot_user_id} on reload: ${reason}`
-      );
+    } else {
       skipped.push({
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id,
-        reason: `failed to start adapter: ${reason}`
+        reason: result.reason
       });
     }
   }
@@ -6819,6 +6810,9 @@ function unresolvedCredentialsReason(ref, action = "resolve") {
 }
 function adapterMapKey(commId, accountId) {
   return `${commId}:${accountId}`;
+}
+function scopeKey(agent, project) {
+  return `${agent}:${project}`;
 }
 async function dispatchIpc(request, context) {
   const params = request.params ?? {};

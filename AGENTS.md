@@ -342,15 +342,24 @@ version-compatible handshake before deciding whether to reuse or respawn.
   (`addAdapterForRegistration`) is `createAdapterFromRegistration` →
   `bus.registerComm` → `bridge.attachComm` *for every bridge* (this wires
   button-tap callback resolution — easy to forget) → `adapter.start()`, with
-  rollback (`unregisterComm` + `detachComm`) on a failed start so a
-  failed-to-start adapter is never wedged in `bus.comms`. A **zero-adapter
+  rollback (best-effort `adapter.stop()` — a partial start can leak a poller,
+  e.g. the Telegram adapter spins up its `getUpdates` poller before `getMe()`
+  resolves — then `unregisterComm` + `detachComm`) on a failed start so a
+  failed-to-start adapter is never wedged in `bus.comms` or left polling
+  outside the lease. The lease wrapper (`wrapWithLease.start`) does the same
+  `inner.stop()` before releasing the lease on an inner-start failure. A
+  **zero-adapter
   daemon is a valid steady state** — `checkDaemonPidOwnership` keys on
   pid-file ownership, never adapter count, so a daemon with no live sessions
   does not self-retire. Consistency invariants that ride with this: (a) the
-  **reload path never eager-adds** — `reloadAdapters` reconciles only
-  *currently-live* adapters (refresh/remove); new bots come up exclusively via
-  `ensureCommsForSession`, so a CLI write firing `reload_registrations` can't
-  re-introduce eager global loading; (b) **drains are scoped to the session's
+  **reload path is scope-gated** — `reloadAdapters` hot-adds a row only if it is
+  already live OR its `(agent, project)` scope is active (a session for it
+  registered this daemon-lifetime, tracked in `activeScopes`); rows for projects
+  the daemon isn't serving stay lazy, so a CLI write firing
+  `reload_registrations` can't re-introduce eager global loading, while
+  `account-add` for an actively-served project still takes effect immediately
+  (active-scope eviction rides with the deferred session-exit work); (b)
+  **drains are scoped to the session's
   `(project, agent)`**, not agent-wide — `ownedAccountKeys(session)` /
   `resolveOwnedAccountKeys` resolve the session's project so one project's
   session can't sweep another project's pending inbound. **No release-on-exit

@@ -174,8 +174,16 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // is fully populated.
   const bridges: AgentBridge[] = [];
   const inFlightAdapters = new Set<string>();
-  const ensureCommsForSessionFn: EnsureCommsForSession = (project, agent) =>
-    ensureCommsForSession({
+  // AGE-38: `(agent, project)` scopes that have registered a session this
+  // daemon-lifetime. Reload uses this to hot-add a bot account-add'd for a
+  // project the daemon is actively serving, while keeping inactive projects
+  // lazy. Not evicted yet — eviction rides with the deferred session-exit work;
+  // until then a stale scope only causes a bounded re-add on `account-add` for a
+  // project whose bots are usually already live anyway.
+  const activeScopes = new Set<string>();
+  const ensureCommsForSessionFn: EnsureCommsForSession = (project, agent) => {
+    activeScopes.add(scopeKey(agent, project));
+    return ensureCommsForSession({
       project,
       agent,
       factories: options.commAdapterFactories,
@@ -188,6 +196,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       leaseArbiter,
       inFlight: inFlightAdapters,
     });
+  };
   bridges.push(
     ...options.agentBridgeFactories.map((factory) =>
       factory.create({
@@ -311,6 +320,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       blobs,
       stateRoot: paths.root,
       leaseArbiter,
+      activeScopes,
       options: reloadOptions,
     });
 
@@ -430,6 +440,12 @@ export async function addAdapterForRegistration(input: {
     await adapter.start();
     return { ok: true };
   } catch (error) {
+    // Best-effort stop FIRST: an adapter can partially start before throwing
+    // (e.g. the Telegram adapter spins up its getUpdates poller before `getMe()`
+    // resolves), so a failed start must not leak a poller that keeps consuming
+    // updates outside the bus and lease. `stop()` is idempotent enough to be
+    // safe even if start() never got that far.
+    await adapter.stop().catch(() => {});
     input.bus.unregisterComm(input.registration.comm, accountId);
     for (const bridge of input.bridges) {
       bridge.detachComm?.(input.registration.comm, accountId);
@@ -578,6 +594,14 @@ export async function reloadAdapters(input: {
   blobs: ContentAddressedBlobStore;
   stateRoot: string;
   leaseArbiter: CommLeaseArbiter;
+  /**
+   * AGE-38: the set of currently-active `(agent, project)` scopes (sessions
+   * that registered this daemon-lifetime), keyed `${agent}:${project}`. Reload
+   * hot-adds a registration whose scope is active even if it isn't live yet — so
+   * `account-add` for a project the daemon is actively serving takes effect
+   * immediately, while rows for inactive projects stay lazy.
+   */
+  activeScopes?: ReadonlySet<string>;
   options?: ReloadOptions;
 }): Promise<ReloadSummary> {
   const added: ReloadSummary["added"] = [];
@@ -592,67 +616,50 @@ export async function reloadAdapters(input: {
     current.set(adapterMapKey(entry.commId, entry.accountId), entry);
   }
 
-  // AGE-38: the daemon no longer eager-loads, so reload must reconcile ONLY
-  // currently-live adapters (refresh credentials/allowlist, or remove when the
-  // registration was deleted) and must NEVER add a brand-new bot here —
-  // otherwise any CLI write firing reload_registrations would silently
-  // re-introduce eager global loading across all projects. New bots come up
-  // exclusively via `ensureCommsForSession` on session entry. Restricting
-  // `desired` to keys that are ALSO currently live makes the add branch below a
-  // no-op while leaving the remove/refresh branches intact.
+  // AGE-38: the daemon no longer eager-loads, so reload must NOT add adapters for
+  // rows of projects the daemon isn't serving — otherwise any CLI write firing
+  // reload_registrations would silently re-introduce eager global loading across
+  // all projects. A row is `desired` only if it is ALREADY live, OR its
+  // `(agent, project)` scope is active (a session for it registered this
+  // daemon-lifetime). That preserves cross-daemon courtesy (a dev daemon never
+  // registered other projects' scopes, so it still won't grab them) while
+  // keeping hot-reload for `account-add`/allowlist on a project being served.
   const desired = new Map<string, DesiredEntry>();
   for (const factory of input.factories) {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id as AccountId);
-      if (!current.has(key)) continue; // never eager-add an un-instantiated row
+      const scopeActive = input.activeScopes?.has(scopeKey(reg.agent, reg.project)) ?? false;
+      if (!current.has(key) && !scopeActive) continue; // inactive project → stay lazy
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
   }
 
   for (const [key, entry] of desired) {
     if (current.has(key)) continue;
-    const adapter = await createAdapterFromRegistration({
+    // AGE-38: hot-add via the shared add-sequence so the reload path gets the
+    // same attachComm wiring + stop()/detach rollback as `ensureCommsForSession`.
+    const result = await addAdapterForRegistration({
       factory: entry.factory,
       registration: entry.registration,
+      bus: input.bus,
+      bridges: input.bridges,
       env: input.env,
       blobs: input.blobs,
       stateRoot: input.stateRoot,
       storage: input.storage,
       leaseArbiter: input.leaseArbiter,
     });
-    if (!adapter) {
-      skipped.push({
-        comm: entry.registration.comm,
-        account_id: entry.registration.bot_user_id,
-        reason: unresolvedCredentialsReason(entry.registration.credentials_ref),
-      });
-      continue;
-    }
-    try {
-      input.bus.registerComm(adapter);
-      for (const bridge of input.bridges) {
-        bridge.attachComm?.(adapter);
-      }
-      await adapter.start();
+    if (result.ok) {
       added.push({
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id as AccountId,
       });
-    } catch (error) {
-      input.bus.unregisterComm(
-        entry.registration.comm,
-        entry.registration.bot_user_id as AccountId,
-      );
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(
-        `agents-comm-bus: failed to start ${entry.registration.comm}/${entry.registration.bot_user_id} ` +
-          `on reload: ${reason}`,
-      );
+    } else {
       skipped.push({
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id,
-        reason: `failed to start adapter: ${reason}`,
+        reason: result.reason,
       });
     }
   }
@@ -923,6 +930,13 @@ function unresolvedCredentialsReason(ref: string, action = "resolve"): string {
 
 function adapterMapKey(commId: CommId, accountId: AccountId | string): string {
   return `${commId}:${accountId}`;
+}
+
+// AGE-38: key for the active-(project, agent)-scope set used to gate reload
+// hot-adds. A scope is "active" once a session for it has registered this
+// daemon-lifetime.
+function scopeKey(agent: AgentId | string, project: string): string {
+  return `${agent}:${project}`;
 }
 
 async function dispatchIpc(

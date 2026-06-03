@@ -151,6 +151,14 @@ export declare function reloadAdapters(input: {
     blobs: ContentAddressedBlobStore;
     stateRoot: string;
     leaseArbiter: CommLeaseArbiter;
+    /**
+     * AGE-38: the set of currently-active `(agent, project)` scopes (sessions
+     * that registered this daemon-lifetime), keyed `${agent}:${project}`. Reload
+     * hot-adds a registration whose scope is active even if it isn't live yet — so
+     * `account-add` for a project the daemon is actively serving takes effect
+     * immediately, while rows for inactive projects stay lazy.
+     */
+    activeScopes?: ReadonlySet<string>;
     options?: ReloadOptions;
 }): Promise<ReloadSummary>;
 /**

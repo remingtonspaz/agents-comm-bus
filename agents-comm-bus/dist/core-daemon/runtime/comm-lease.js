@@ -628,7 +628,11 @@ export function wrapWithLease(inner, arbiter, options = {}) {
             catch (error) {
                 innerStarted = false;
                 holdingLease = false;
-                // Could not start despite holding the lease — release it so a peer can try.
+                // AGE-38: the inner adapter may have partially started before throwing
+                // (e.g. a Telegram poller spins up before `getMe()` resolves) — best-effort
+                // stop it so a failed start doesn't leak a poller consuming getUpdates
+                // outside the bus, THEN release the lease so a peer can try.
+                await inner.stop().catch(() => { });
                 await arbiter.release(inner.id, resource.resourceId).catch(() => { });
                 throw error;
             }
