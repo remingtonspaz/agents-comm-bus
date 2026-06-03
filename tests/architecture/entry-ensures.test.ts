@@ -172,6 +172,11 @@ describe("entryEnsures — canonical stateRoot derivation", () => {
       path.join(projectRoot, ".acb-dev"),
       "marker-resolved stateRoot reached the daemon ensure",
     );
+    assert.equal(
+      (daemon.lastOpts?.env as Record<string, string> | undefined)?.AGENTS_COMM_BUS_BIN,
+      path.join(projectRoot, binRel),
+      "marker-resolved daemonBin reached the daemon spawn env",
+    );
   });
 });
 
@@ -213,6 +218,11 @@ describe("entryEnsures — source/dev mode", () => {
     assert.equal(result.centralInstall.mode, "source");
     assert.equal(result.centralInstall.skipped, true);
     assert.equal(daemon.called, 1, "daemon still ensured in source mode");
+    assert.equal(
+      (daemon.lastOpts?.env as Record<string, string> | undefined)?.AGENTS_COMM_BUS_BIN,
+      "/proj/core/serve.js",
+      "explicit source-mode daemonBin reached the daemon spawn env",
+    );
   });
 
   it("a gitignored dev marker resolves into source mode (marker -> env -> resolveInstallMode)", async () => {
@@ -241,5 +251,10 @@ describe("entryEnsures — source/dev mode", () => {
 
     assert.equal(result.centralInstall.mode, "source", "marker put us in source mode");
     assert.equal(daemon.called, 1);
+    assert.equal(
+      (daemon.lastOpts?.env as Record<string, string> | undefined)?.AGENTS_COMM_BUS_BIN,
+      path.join(projectRoot, binRel),
+      "marker-derived source-mode daemonBin reached ensureDaemon",
+    );
   });
 });

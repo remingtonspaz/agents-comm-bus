@@ -1,6 +1,7 @@
 import { resolveStatePaths, type StatePathOptions } from "../paths.js";
 import type { DaemonHello, DiagnosticMetadata } from "../ipc/protocol.js";
 export interface EnsureDaemonOptions extends StatePathOptions {
+    env?: NodeJS.ProcessEnv;
     clientVersion?: string;
     protocolVersion?: string;
     metadata?: DiagnosticMetadata;

@@ -16,6 +16,7 @@ import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
 import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
 
 export interface EnsureDaemonOptions extends StatePathOptions {
+  env?: NodeJS.ProcessEnv;
   clientVersion?: string;
   protocolVersion?: string;
   metadata?: DiagnosticMetadata;
@@ -106,7 +107,11 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           return { ...recheck, spawned };
         }
 
-        await (options.spawnDaemon ?? defaultSpawnDaemon)(paths);
+        if (options.spawnDaemon) {
+          await options.spawnDaemon(paths);
+        } else {
+          defaultSpawnDaemon(paths, options.env ?? process.env);
+        }
         spawned = true;
       } finally {
         await lock.release();
@@ -262,7 +267,7 @@ function defaultTerminateDaemon(pid: number): void {
   process.kill(pid, "SIGTERM");
 }
 
-function defaultSpawnDaemon(paths: ReturnType<typeof resolveStatePaths>): void {
+function defaultSpawnDaemon(paths: ReturnType<typeof resolveStatePaths>, env: NodeJS.ProcessEnv = process.env): void {
   // Source/dev mode is signalled by AGENTS_COMM_BUS_BIN (the authoritative
   // source switch, same one resolveInstallMode keys on): run the daemon from
   // the project's source entry. Otherwise this is a production/central install,
@@ -271,7 +276,7 @@ function defaultSpawnDaemon(paths: ReturnType<typeof resolveStatePaths>): void {
   // so node treats the .js bundle as ESM regardless of cwd). Resolving relative
   // to import.meta.url is wrong in production because this module is itself
   // inlined into the staged hook bundle, where `../serve.js` does not exist.
-  const binOverride = process.env.AGENTS_COMM_BUS_BIN;
+  const binOverride = env.AGENTS_COMM_BUS_BIN;
   const daemonEntry = binOverride
     ? path.resolve(binOverride)
     : path.join(paths.root, "bin", "daemon.js");
@@ -279,7 +284,7 @@ function defaultSpawnDaemon(paths: ReturnType<typeof resolveStatePaths>): void {
     detached: true,
     stdio: "ignore",
     env: {
-      ...process.env,
+      ...env,
       AGENTS_COMM_BUS_STATE_ROOT: paths.root,
     },
   });

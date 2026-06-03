@@ -154,6 +154,10 @@ export async function entryEnsures(options) {
 
   // 3. Then ensure the daemon with the SAME canonical root; return its result so
   //    callers keep using { port, hello, spawned }.
-  const daemon = await ensureDaemonFn({ ...ensureDaemonOptions, stateRoot: canonicalStateRoot });
+  const daemon = await ensureDaemonFn({
+    ...ensureDaemonOptions,
+    stateRoot: canonicalStateRoot,
+    env: resolvedEnv,
+  });
   return { ...daemon, centralInstall };
 }

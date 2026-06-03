@@ -3668,7 +3668,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.6";
+var DAEMON_VERSION = "0.2.7";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -3933,7 +3933,11 @@ async function ensureDaemon(options = {}) {
         if (recheck) {
           return { ...recheck, spawned };
         }
-        await (options.spawnDaemon ?? defaultSpawnDaemon)(paths);
+        if (options.spawnDaemon) {
+          await options.spawnDaemon(paths);
+        } else {
+          defaultSpawnDaemon(paths, options.env ?? process.env);
+        }
         spawned = true;
       } finally {
         await lock.release();
@@ -4033,14 +4037,14 @@ function defaultTerminateDaemon(pid) {
   }
   process.kill(pid, "SIGTERM");
 }
-function defaultSpawnDaemon(paths) {
-  const binOverride = process.env.AGENTS_COMM_BUS_BIN;
+function defaultSpawnDaemon(paths, env = process.env) {
+  const binOverride = env.AGENTS_COMM_BUS_BIN;
   const daemonEntry = binOverride ? path3.resolve(binOverride) : path3.join(paths.root, "bin", "daemon.js");
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
     stdio: "ignore",
     env: {
-      ...process.env,
+      ...env,
       AGENTS_COMM_BUS_STATE_ROOT: paths.root
     }
   });
@@ -4623,7 +4627,11 @@ async function entryEnsures(options) {
     readOnlyIfCentralInstalled: readOnlyCentralInstall,
     deps: deps.centralInstallDeps
   });
-  const daemon = await ensureDaemonFn({ ...ensureDaemonOptions, stateRoot: canonicalStateRoot });
+  const daemon = await ensureDaemonFn({
+    ...ensureDaemonOptions,
+    stateRoot: canonicalStateRoot,
+    env: resolvedEnv
+  });
   return { ...daemon, centralInstall };
 }
 
