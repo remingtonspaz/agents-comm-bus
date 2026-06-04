@@ -55,6 +55,31 @@ export interface SendResult {
 }
 
 /**
+ * AGE-10: an inbound update the adapter dropped BEFORE it reached the bus —
+ * e.g. the sender failed the adapter's allowlist. Historically these drops
+ * were silent (nothing in the audit log, nothing on stderr), which made
+ * "message sent but agent never woke" undiagnosable without a bypass probe.
+ * Adapters emit one event per drop; the bus audits it as `inbound_filter_drop`.
+ */
+export interface FilterDropEvent {
+  /**
+   * Why the update was dropped. Well-known values:
+   * `sender_not_allowed` (sender id not in the adapter's allowlist),
+   * `missing_sender_id` (update carried no sender id to check).
+   * Adapters may add comm-specific reasons.
+   */
+  reason: string;
+  /** Update class the drop occurred on (e.g. `message`, `callback`). */
+  update_kind: string;
+  /** Comm-native sender id, when the platform provided one. */
+  sender_id?: string;
+  /** Comm-native chat id, when known. */
+  chat_native_id?: string;
+  /** Comm-native message id, when known. */
+  platform_message_id?: string;
+}
+
+/**
  * Classification used by the bus to decide retry policy and surface health.
  *
  * - `permanent`: do not retry (e.g. chat deleted, bot kicked).
@@ -144,6 +169,15 @@ export interface CommAdapter {
 
   /** Subscribe to connection-state transitions for health reporting. */
   onConnectionState(handler: (state: CommConnectionState) => void): void;
+
+  /**
+   * Optional: subscribe to adapter-level inbound filter drops (AGE-10). The
+   * bus wires this in `registerComm` (alongside `onInbound` /
+   * `onConnectionState`) and appends an `inbound_filter_drop` audit event per
+   * drop, so allowlist-driven drops are observable instead of silent.
+   * Adapters without inbound filtering may omit this method.
+   */
+  onFilterDrop?(handler: (event: FilterDropEvent) => void): void;
 
   /**
    * Idempotent send: calling `send` with the same `idempotencyKey` must not

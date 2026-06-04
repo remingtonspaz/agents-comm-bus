@@ -33,7 +33,10 @@ export type AuditEventKind =
   | "comm_lease_released"
   | "registration_added"
   | "registration_removed"
-  | "loop_prevention_drop";
+  | "loop_prevention_drop"
+  // AGE-10: an inbound update dropped by an ADAPTER-level filter (allowlist /
+  // missing sender id) before it reached the bus — previously silent.
+  | "inbound_filter_drop";
 
 export interface AuditEvent {
   timestamp: number;

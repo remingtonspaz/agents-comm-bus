@@ -1,5 +1,5 @@
 import TelegramBot from "node-telegram-bot-api";
-import type { AccountId, BlobStore, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
+import type { AccountId, BlobStore, CallbackEvent, ChatRef, CommConnectionState, CommAdapter, FailureClassification, FilterDropEvent, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
 /**
  * If `error` is a Telegram getUpdates 409 Conflict (another live consumer is
  * polling the same bot token), return a LOUD, actionable message; else null.
@@ -28,6 +28,13 @@ export interface TelegramCommAdapterOptions {
      * to console.error (→ the daemon's stderr). Injectable for tests.
      */
     log?: (message: string) => void;
+    /**
+     * AGE-10: verbose allowlist-filter tracing. When true, every inbound
+     * allowlist evaluation (pass AND drop) logs one line via `log` — the
+     * debug mode for "message sent but nothing happened at all" sessions.
+     * Defaults to `process.env.AGENTS_COMM_BUS_FILTER_TRACE === "1"`.
+     */
+    filterTrace?: boolean;
 }
 export declare class TelegramCommAdapter implements CommAdapter {
     private readonly options;
@@ -38,6 +45,8 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private readonly sentByKey;
     private inboundHandler;
     private readonly callbackHandlers;
+    private filterDropHandler;
+    private readonly filterTrace;
     private stateHandler;
     private connectionState;
     private bot;
@@ -80,6 +89,11 @@ export declare class TelegramCommAdapter implements CommAdapter {
     stop(): Promise<void>;
     onInbound(handler: (msg: Message) => Promise<void>): void;
     onCallback(handler: (event: CallbackEvent) => Promise<void>): void;
+    /**
+     * AGE-10: subscribe to adapter-level inbound filter drops. Wired by the bus
+     * in `registerComm`; one event per dropped update.
+     */
+    onFilterDrop(handler: (event: FilterDropEvent) => void): void;
     answerCallback(callbackId: string, options?: {
         text?: string;
         showAlert?: boolean;
@@ -100,6 +114,15 @@ export declare class TelegramCommAdapter implements CommAdapter {
     private normalizeAttachments;
     private retrieveAttachment;
     private emitState;
+    /**
+     * AGE-10: surface an adapter-level inbound drop instead of silently
+     * returning. The handler (wired by the bus in `registerComm`) audits it as
+     * `inbound_filter_drop`; with `filterTrace` enabled the drop also logs a
+     * one-line trace via `log` for live debugging.
+     */
+    private emitFilterDrop;
+    /** AGE-10: with `filterTrace` enabled, log allowlist passes too — proof the filter is letting traffic through. */
+    private traceFilterPass;
 }
 export declare function probeTelegramIdentity(botToken: string): Promise<{
     bot_user_id: string;

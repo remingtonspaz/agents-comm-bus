@@ -4819,6 +4819,13 @@ var MessageBus = class {
         detail: { comm: comm.id, account: comm.accountId, connection_state: state }
       });
     });
+    comm.onFilterDrop?.((event) => {
+      void this.options.audit.append({
+        timestamp: this.now(),
+        kind: "inbound_filter_drop",
+        detail: { comm: comm.id, account: comm.accountId, ...event }
+      });
+    });
   }
   /**
    * Detach a comm adapter from the bus map. Does NOT call `comm.stop()` —
@@ -4896,7 +4903,14 @@ var MessageBus = class {
         detail: {
           message_id: message.message_id,
           reason: "foreign_bot",
-          sender_id: message.sender.id
+          sender_id: message.sender.id,
+          // AGE-10: enough context to identify WHICH bot/chat dropped the
+          // message without a bypass probe.
+          comm: message.chat.comm,
+          account: message.chat.account,
+          chat_native_id: message.chat.chat_native_id,
+          platform_message_id: message.platform_message_id,
+          sender_is_bot: message.sender.isBot
         }
       });
       throw new Error(`foreign bot sender rejected: ${message.sender.id}`);

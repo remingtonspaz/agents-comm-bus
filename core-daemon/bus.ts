@@ -112,6 +112,17 @@ export class MessageBus {
         detail: { comm: comm.id, account: comm.accountId, connection_state: state },
       });
     });
+    // AGE-10: adapter-level allowlist drops become audit events instead of
+    // silent returns — the "message sent but agent never woke" class. Wired
+    // here (alongside onInbound/onConnectionState) so lazily-added adapters
+    // (AGE-38) get it automatically.
+    comm.onFilterDrop?.((event) => {
+      void this.options.audit.append({
+        timestamp: this.now(),
+        kind: "inbound_filter_drop",
+        detail: { comm: comm.id, account: comm.accountId, ...event },
+      });
+    });
   }
 
   /**
@@ -205,6 +216,13 @@ export class MessageBus {
           message_id: message.message_id,
           reason: "foreign_bot",
           sender_id: message.sender.id,
+          // AGE-10: enough context to identify WHICH bot/chat dropped the
+          // message without a bypass probe.
+          comm: message.chat.comm,
+          account: message.chat.account,
+          chat_native_id: message.chat.chat_native_id,
+          platform_message_id: message.platform_message_id,
+          sender_is_bot: message.sender.isBot,
         },
       });
       throw new Error(`foreign bot sender rejected: ${message.sender.id}`);

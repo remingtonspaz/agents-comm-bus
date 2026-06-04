@@ -26,6 +26,8 @@ export class TelegramCommAdapter {
     sentByKey = new Map();
     inboundHandler = null;
     callbackHandlers = [];
+    filterDropHandler = null;
+    filterTrace;
     stateHandler = null;
     connectionState = null;
     bot;
@@ -40,6 +42,7 @@ export class TelegramCommAdapter {
         this.bot = options.bot ?? null;
         this.fetchImpl = options.fetch ?? fetch;
         this.log = options.log ?? ((message) => console.error(message));
+        this.filterTrace = options.filterTrace ?? process.env.AGENTS_COMM_BUS_FILTER_TRACE === "1";
     }
     /**
      * Derived view of the allowlist. Returns a snapshot array each access so
@@ -120,6 +123,13 @@ export class TelegramCommAdapter {
     onCallback(handler) {
         this.callbackHandlers.push(handler);
     }
+    /**
+     * AGE-10: subscribe to adapter-level inbound filter drops. Wired by the bus
+     * in `registerComm`; one event per dropped update.
+     */
+    onFilterDrop(handler) {
+        this.filterDropHandler = handler;
+    }
     async answerCallback(callbackId, options = {}) {
         const bot = this.requireBot();
         await bot.answerCallbackQuery(callbackId, {
@@ -183,8 +193,16 @@ export class TelegramCommAdapter {
             return;
         const fromId = String(raw.from.id);
         if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(fromId)) {
+            this.emitFilterDrop({
+                reason: "sender_not_allowed",
+                update_kind: "callback",
+                sender_id: fromId,
+                chat_native_id: raw.message ? String(raw.message.chat.id) : undefined,
+                platform_message_id: raw.message ? String(raw.message.message_id) : undefined,
+            });
             return;
         }
+        this.traceFilterPass("callback", fromId);
         if (!raw.data || !raw.message)
             return;
         const event = {
@@ -203,8 +221,16 @@ export class TelegramCommAdapter {
             return;
         const fromId = raw.from?.id == null ? null : String(raw.from.id);
         if (this.allowedUserIds.size > 0 && (!fromId || !this.allowedUserIds.has(fromId))) {
+            this.emitFilterDrop({
+                reason: fromId ? "sender_not_allowed" : "missing_sender_id",
+                update_kind: "message",
+                sender_id: fromId ?? undefined,
+                chat_native_id: String(raw.chat.id),
+                platform_message_id: String(raw.message_id),
+            });
             return;
         }
+        this.traceFilterPass("message", fromId);
         const botUserId = this.botUserId;
         if (!botUserId)
             throw new Error("Telegram adapter has no bot identity");
@@ -291,6 +317,33 @@ export class TelegramCommAdapter {
             return;
         this.connectionState = state;
         this.stateHandler?.(state);
+    }
+    /**
+     * AGE-10: surface an adapter-level inbound drop instead of silently
+     * returning. The handler (wired by the bus in `registerComm`) audits it as
+     * `inbound_filter_drop`; with `filterTrace` enabled the drop also logs a
+     * one-line trace via `log` for live debugging.
+     */
+    emitFilterDrop(event) {
+        try {
+            this.filterDropHandler?.(event);
+        }
+        catch {
+            // Observability must never break inbound handling.
+        }
+        if (this.filterTrace) {
+            this.log(`agents-comm-bus telegram[${this.accountId}] FILTER DROP: ${event.update_kind} ` +
+                `sender=${event.sender_id ?? "<none>"} chat=${event.chat_native_id ?? "?"} ` +
+                `msg=${event.platform_message_id ?? "?"} reason=${event.reason} ` +
+                `(allowlist size=${this.allowedUserIds.size})`);
+        }
+    }
+    /** AGE-10: with `filterTrace` enabled, log allowlist passes too — proof the filter is letting traffic through. */
+    traceFilterPass(updateKind, senderId) {
+        if (!this.filterTrace)
+            return;
+        this.log(`agents-comm-bus telegram[${this.accountId}] filter pass: ${updateKind} ` +
+            `sender=${senderId ?? "<none>"} (allowlist size=${this.allowedUserIds.size})`);
     }
 }
 export async function probeTelegramIdentity(botToken) {

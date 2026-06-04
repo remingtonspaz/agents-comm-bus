@@ -9,6 +9,7 @@ import type {
   CommConnectionState,
   CommAdapter,
   FailureClassification,
+  FilterDropEvent,
   Message,
   MessageId,
   OutboundPayload,
@@ -58,6 +59,13 @@ export interface TelegramCommAdapterOptions {
    * to console.error (→ the daemon's stderr). Injectable for tests.
    */
   log?: (message: string) => void;
+  /**
+   * AGE-10: verbose allowlist-filter tracing. When true, every inbound
+   * allowlist evaluation (pass AND drop) logs one line via `log` — the
+   * debug mode for "message sent but nothing happened at all" sessions.
+   * Defaults to `process.env.AGENTS_COMM_BUS_FILTER_TRACE === "1"`.
+   */
+  filterTrace?: boolean;
 }
 
 export class TelegramCommAdapter implements CommAdapter {
@@ -69,6 +77,8 @@ export class TelegramCommAdapter implements CommAdapter {
   private readonly sentByKey = new Map<string, SendResult>();
   private inboundHandler: ((msg: Message) => Promise<void>) | null = null;
   private readonly callbackHandlers: Array<(event: CallbackEvent) => Promise<void>> = [];
+  private filterDropHandler: ((event: FilterDropEvent) => void) | null = null;
+  private readonly filterTrace: boolean;
   private stateHandler: ((state: CommConnectionState) => void) | null = null;
   private connectionState: CommConnectionState | null = null;
   private bot: TelegramBot | null;
@@ -83,6 +93,7 @@ export class TelegramCommAdapter implements CommAdapter {
     this.bot = options.bot ?? null;
     this.fetchImpl = options.fetch ?? fetch;
     this.log = options.log ?? ((message) => console.error(message));
+    this.filterTrace = options.filterTrace ?? process.env.AGENTS_COMM_BUS_FILTER_TRACE === "1";
   }
 
   /**
@@ -168,6 +179,14 @@ export class TelegramCommAdapter implements CommAdapter {
 
   onCallback(handler: (event: CallbackEvent) => Promise<void>): void {
     this.callbackHandlers.push(handler);
+  }
+
+  /**
+   * AGE-10: subscribe to adapter-level inbound filter drops. Wired by the bus
+   * in `registerComm`; one event per dropped update.
+   */
+  onFilterDrop(handler: (event: FilterDropEvent) => void): void {
+    this.filterDropHandler = handler;
   }
 
   async answerCallback(
@@ -262,8 +281,16 @@ export class TelegramCommAdapter implements CommAdapter {
     if (this.callbackHandlers.length === 0) return;
     const fromId = String(raw.from.id);
     if (this.allowedUserIds.size > 0 && !this.allowedUserIds.has(fromId)) {
+      this.emitFilterDrop({
+        reason: "sender_not_allowed",
+        update_kind: "callback",
+        sender_id: fromId,
+        chat_native_id: raw.message ? String(raw.message.chat.id) : undefined,
+        platform_message_id: raw.message ? String(raw.message.message_id) : undefined,
+      });
       return;
     }
+    this.traceFilterPass("callback", fromId);
     if (!raw.data || !raw.message) return;
     const event: CallbackEvent = {
       callback_id: raw.id,
@@ -281,8 +308,16 @@ export class TelegramCommAdapter implements CommAdapter {
     if (!this.inboundHandler) return;
     const fromId = raw.from?.id == null ? null : String(raw.from.id);
     if (this.allowedUserIds.size > 0 && (!fromId || !this.allowedUserIds.has(fromId))) {
+      this.emitFilterDrop({
+        reason: fromId ? "sender_not_allowed" : "missing_sender_id",
+        update_kind: "message",
+        sender_id: fromId ?? undefined,
+        chat_native_id: String(raw.chat.id),
+        platform_message_id: String(raw.message_id),
+      });
       return;
     }
+    this.traceFilterPass("message", fromId);
     const botUserId = this.botUserId;
     if (!botUserId) throw new Error("Telegram adapter has no bot identity");
 
@@ -369,6 +404,37 @@ export class TelegramCommAdapter implements CommAdapter {
     if (this.connectionState === state) return;
     this.connectionState = state;
     this.stateHandler?.(state);
+  }
+
+  /**
+   * AGE-10: surface an adapter-level inbound drop instead of silently
+   * returning. The handler (wired by the bus in `registerComm`) audits it as
+   * `inbound_filter_drop`; with `filterTrace` enabled the drop also logs a
+   * one-line trace via `log` for live debugging.
+   */
+  private emitFilterDrop(event: FilterDropEvent): void {
+    try {
+      this.filterDropHandler?.(event);
+    } catch {
+      // Observability must never break inbound handling.
+    }
+    if (this.filterTrace) {
+      this.log(
+        `agents-comm-bus telegram[${this.accountId}] FILTER DROP: ${event.update_kind} ` +
+          `sender=${event.sender_id ?? "<none>"} chat=${event.chat_native_id ?? "?"} ` +
+          `msg=${event.platform_message_id ?? "?"} reason=${event.reason} ` +
+          `(allowlist size=${this.allowedUserIds.size})`,
+      );
+    }
+  }
+
+  /** AGE-10: with `filterTrace` enabled, log allowlist passes too — proof the filter is letting traffic through. */
+  private traceFilterPass(updateKind: string, senderId: string | null): void {
+    if (!this.filterTrace) return;
+    this.log(
+      `agents-comm-bus telegram[${this.accountId}] filter pass: ${updateKind} ` +
+        `sender=${senderId ?? "<none>"} (allowlist size=${this.allowedUserIds.size})`,
+    );
   }
 }
 
