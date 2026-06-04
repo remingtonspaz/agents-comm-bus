@@ -55,6 +55,8 @@ export declare class ClaudeBridge implements AgentBridge {
     readonly ipcMethods: ReadonlySet<string>;
     private readonly wake;
     private ownedAccountsCache;
+    /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
+    private readonly questionSequences;
     constructor(options: ClaudeBridgeOptions);
     /**
      * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
@@ -96,6 +98,15 @@ export declare class ClaudeBridge implements AgentBridge {
     }): Promise<RegisterSessionResult>;
     drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]>;
     openQuery(params: Record<string, unknown>): Promise<OpenQueryResult>;
+    /**
+     * Shared open-query path: build → supersede? → bus.openQuery → send →
+     * setQuerySourceMessage. Used by the IPC handler and the AGE-37 sequencer.
+     */
+    private openQueryCore;
+    /** Drop stale sequencer entries when a new AskUserQuestion supersedes. */
+    private clearQuestionSequencesForSession;
+    /** Open the next question in an AskUserQuestion sequence after resolution. */
+    private openNextQuestion;
     private handleCommCallback;
     private chatRefForConversation;
 }

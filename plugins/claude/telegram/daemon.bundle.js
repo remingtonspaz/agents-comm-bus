@@ -7154,6 +7154,8 @@ var ClaudeBridge = class {
   ipcMethods = CLAUDE_IPC_METHODS;
   wake = new ClaudeWakeRegistry();
   ownedAccountsCache = null;
+  /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
+  questionSequences = /* @__PURE__ */ new Map();
   /**
    * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
    * shared dispatch sink (pendingInbound + onInboundConversation fan-out)
@@ -7167,6 +7169,11 @@ var ClaudeBridge = class {
         const payload = wakePayloadFromDecision(decision);
         if (!payload) return;
         await this.wake.writeResponseForSession(query.session, payload);
+        const seq = this.questionSequences.get(query.query_id);
+        if (seq) {
+          this.questionSequences.delete(query.query_id);
+          await this.openNextQuestion(seq);
+        }
       }
     });
     for (const comm of comms) {
@@ -7320,38 +7327,97 @@ var ClaudeBridge = class {
     );
     const rawKind = params.kind ?? queryInput.kind;
     const kind = rawKind === "choice" || rawKind === "freetext" || rawKind === "approval" ? rawKind : "approval";
-    const queryId = `q_${crypto2.randomUUID()}`;
     const sessionRecord = await this.options.storage.getSession(session);
     const conversation = sessionRecord?.most_recent_inbound_conversation_id ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id) : null;
     const originChat = conversation ? await this.chatRefForConversation(conversation) : void 0;
     const options = Array.isArray(params.options) ? params.options.map(String) : Array.isArray(queryInput.options) ? queryInput.options.map(String) : void 0;
+    const ttlSeconds = typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS;
+    const promptFormatRaw = params.prompt_format ?? queryInput.prompt_format;
+    const promptFormat = promptFormatRaw === "html" ? "html" : "plain";
+    const supersede = params.supersede !== false;
+    const questions = parseNormalizedQuestions(
+      params.questions ?? queryInput.questions
+    );
+    if (questions && questions.length > 1) {
+      if (supersede) {
+        this.clearQuestionSequencesForSession(session);
+      }
+      const firstQuestion = questions[0];
+      const sequencedPrompt = formatQuestionPrompt(firstQuestion, 0, questions.length);
+      const sequencedOptions = questionOptionsFromNormalized(firstQuestion);
+      const queryId2 = await this.openQueryCore({
+        session,
+        kind: "choice",
+        promptText: sequencedPrompt,
+        promptFormat: "html",
+        options: sequencedOptions,
+        originChat,
+        ttlSeconds,
+        supersede
+      });
+      this.questionSequences.set(queryId2, {
+        session,
+        questions,
+        index: 0,
+        ttlSeconds
+      });
+      const hookResponse2 = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });
+      return {
+        query_id: queryId2,
+        hook_response: hookResponse2,
+        hookJson: hookResponse2,
+        nativeHookJson: hookResponse2
+      };
+    }
+    const queryId = await this.openQueryCore({
+      session,
+      kind,
+      promptText,
+      promptFormat,
+      options,
+      originChat,
+      ttlSeconds,
+      supersede
+    });
+    const hookResponse = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });
+    return {
+      query_id: queryId,
+      hook_response: hookResponse,
+      hookJson: hookResponse,
+      nativeHookJson: hookResponse
+    };
+  }
+  /**
+   * Shared open-query path: build → supersede? → bus.openQuery → send →
+   * setQuerySourceMessage. Used by the IPC handler and the AGE-37 sequencer.
+   */
+  async openQueryCore(input) {
+    const queryId = `q_${crypto2.randomUUID()}`;
     const query = {
       schema_version: 1,
       query_id: queryId,
       agent: "claude",
-      session,
-      kind,
-      prompt_text: promptText,
-      options,
-      origin_chat: originChat,
+      session: input.session,
+      kind: input.kind,
+      prompt_text: input.promptText,
+      options: input.options,
+      origin_chat: input.originChat,
       created_at: Date.now(),
-      ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS
+      ttl_seconds: input.ttlSeconds
     };
-    const supersede = params.supersede !== false;
-    if (supersede) {
-      await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    if (input.supersede) {
+      await this.options.storage.supersedeOpenQueriesForSession(input.session, Date.now());
     }
     await this.options.bus.openQuery(query);
-    if (originChat) {
-      const promptFormat = params.prompt_format ?? queryInput.prompt_format;
-      const inlineKeyboard = inlineKeyboardForQuery(queryId, kind, options);
+    if (input.originChat) {
+      const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
       const promptMessageId = await this.options.bus.send({
-        session,
-        comm: originChat.comm,
-        target: originChat,
+        session: input.session,
+        comm: input.originChat.comm,
+        target: input.originChat,
         payload: {
-          text: promptText,
-          format: promptFormat === "html" ? "html" : "plain",
+          text: input.promptText,
+          format: input.promptFormat === "html" ? "html" : "plain",
           inline_keyboard: inlineKeyboard
         },
         idempotencyKey: `query:${queryId}`
@@ -7364,13 +7430,64 @@ var ClaudeBridge = class {
         );
       }
     }
-    const hookResponse = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });
-    return {
-      query_id: queryId,
-      hook_response: hookResponse,
-      hookJson: hookResponse,
-      nativeHookJson: hookResponse
-    };
+    return queryId;
+  }
+  /** Drop stale sequencer entries when a new AskUserQuestion supersedes. */
+  clearQuestionSequencesForSession(session) {
+    for (const [queryId, seq] of this.questionSequences) {
+      if (seq.session === session) {
+        this.questionSequences.delete(queryId);
+      }
+    }
+  }
+  /** Open the next question in an AskUserQuestion sequence after resolution. */
+  async openNextQuestion(seq) {
+    const nextIndex = seq.index + 1;
+    if (nextIndex >= seq.questions.length) return;
+    const sessionRecord = await this.options.storage.getSession(seq.session);
+    const conversation = sessionRecord?.most_recent_inbound_conversation_id ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id) : null;
+    const originChat = conversation ? await this.chatRefForConversation(conversation) : void 0;
+    const nextQuestion = seq.questions[nextIndex];
+    const promptText = formatQuestionPrompt(nextQuestion, nextIndex, seq.questions.length);
+    const options = questionOptionsFromNormalized(nextQuestion);
+    const attemptOpen = async () => this.openQueryCore({
+      session: seq.session,
+      kind: "choice",
+      promptText,
+      promptFormat: "html",
+      options,
+      originChat,
+      ttlSeconds: seq.ttlSeconds,
+      supersede: false
+    });
+    try {
+      const queryId = await attemptOpen();
+      this.questionSequences.set(queryId, { ...seq, index: nextIndex });
+    } catch (firstError) {
+      try {
+        const queryId = await attemptOpen();
+        this.questionSequences.set(queryId, { ...seq, index: nextIndex });
+      } catch (secondError) {
+        console.error(
+          `agents-comm-bus: failed to open AskUserQuestion ${nextIndex + 1}/${seq.questions.length} for session ${seq.session}: ${secondError instanceof Error ? secondError.message : String(secondError)} (retry after: ${firstError instanceof Error ? firstError.message : String(firstError)})`
+        );
+        if (originChat) {
+          try {
+            await this.options.bus.send({
+              session: seq.session,
+              comm: originChat.comm,
+              target: originChat,
+              payload: {
+                text: `\u26A0\uFE0F Couldn't post question ${nextIndex + 1}/${seq.questions.length} \u2014 answer the remaining questions locally; this sequence is cancelled.`,
+                format: "plain"
+              },
+              idempotencyKey: `query-seq-fail:${seq.session}:${nextIndex}:${Date.now()}`
+            });
+          } catch {
+          }
+        }
+      }
+    }
   }
   async handleCommCallback(comm, event) {
     const parsed = parseCallbackData(event.data);
@@ -7572,6 +7689,66 @@ function requiredString(paramsValue, name) {
 }
 function recordOrEmpty(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function parseNormalizedQuestions(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const parsed = [];
+  for (const entry of value.slice(0, 8)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const record = entry;
+    if (typeof record.question !== "string" || !Array.isArray(record.options)) return null;
+    const options = [];
+    for (const opt of record.options) {
+      if (!opt || typeof opt !== "object" || Array.isArray(opt)) return null;
+      const optRecord = opt;
+      if (typeof optRecord.label !== "string") return null;
+      options.push({
+        label: optRecord.label,
+        description: typeof optRecord.description === "string" ? optRecord.description : void 0
+      });
+    }
+    parsed.push({
+      question: record.question,
+      header: typeof record.header === "string" ? record.header : void 0,
+      multiSelect: Boolean(record.multiSelect),
+      options
+    });
+  }
+  return parsed.length > 0 ? parsed : null;
+}
+function questionOptionsFromNormalized(q) {
+  return q.options.map((option) => {
+    const description = option.description ? ` - ${option.description}` : "";
+    return `${option.label}${description}`;
+  });
+}
+function formatQuestionPrompt(q, index, total) {
+  let message = `\u2753 <b>Question ${index + 1}/${total}:</b> ${escapeHtml(q.question)}
+`;
+  const options = q.options;
+  for (let i = 0; i < options.length; i += 1) {
+    const opt = options[i];
+    message += `
+<b>${i + 1}.</b> ${escapeHtml(opt.label)}`;
+    if (opt.description) {
+      message += `
+    <i>${escapeHtml(opt.description)}</i>`;
+    }
+  }
+  message += `
+<b>${options.length + 1}.</b> Other (custom text)`;
+  if (q.multiSelect) {
+    message += `
+
+<i>(Multi-select: reply with comma-separated numbers)</i>`;
+  }
+  message += `
+
+Reply with <b>number</b> to select`;
+  return message;
 }
 function sessionLeaseOwnerFromParams(params) {
   const pid = numberParam(params.owner_process_pid);

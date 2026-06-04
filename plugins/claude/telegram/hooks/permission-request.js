@@ -4946,6 +4946,19 @@ function questionOptions(toolInput) {
     return `${option.label}${description}`;
   });
 }
+function normalizedQuestions(toolInput) {
+  const raw = toolInput?.questions;
+  if (!Array.isArray(raw) || raw.length === 0) return void 0;
+  return raw.slice(0, 8).map((q) => ({
+    question: q.question,
+    header: q.header,
+    multiSelect: Boolean(q.multiSelect),
+    options: (q.options || []).map((option) => ({
+      label: option.label,
+      description: option.description
+    }))
+  }));
+}
 function formatAskUserQuestion(toolInput) {
   const questions = toolInput?.questions || [];
   if (questions.length === 0) return null;
@@ -5125,19 +5138,23 @@ async function main() {
       owner_process_pid: claudePid,
       owner_process_label: "claude"
     });
+    const queryPayload = {
+      kind: queryKind(toolName),
+      prompt_text: promptText(toolName, toolInput),
+      prompt_format: "html",
+      options: questionOptions(toolInput),
+      prompt_type: promptType(toolName)
+    };
+    if (toolName === "AskUserQuestion" && Array.isArray(toolInput.questions) && toolInput.questions.length > 0) {
+      queryPayload.questions = normalizedQuestions(toolInput);
+    }
     const result = await ipc.request("claude_open_query", {
       agent: "claude",
       session,
       project,
       cwd: project,
       ttl_seconds: DEFAULT_TTL_SECONDS,
-      query: {
-        kind: queryKind(toolName),
-        prompt_text: promptText(toolName, toolInput),
-        prompt_format: "html",
-        options: questionOptions(toolInput),
-        prompt_type: promptType(toolName)
-      },
+      query: queryPayload,
       claude: {
         tool_name: toolName,
         tool_input: toolInput,
