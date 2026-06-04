@@ -170,5 +170,14 @@ export async function entryEnsures(options) {
       AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot,
     },
   });
-  return { ...daemon, centralInstall };
+  return {
+    ...daemon,
+    centralInstall,
+    stateRoot: canonicalStateRoot,
+    discoveryRoot: canonicalDiscoveryRoot,
+    env: {
+      ...resolvedEnv,
+      AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot,
+    },
+  };
 }

@@ -113,10 +113,11 @@ export class PersistentIpcClient {
     }
     async connectOnce() {
         const ensured = await ensureDaemon({
+            ...this.options.ensureDaemonOptions,
             clientVersion: this.options.clientVersion,
             protocolVersion: this.options.protocolVersion,
             metadata: this.options.metadata,
-            spawnDaemon: this.options.spawnDaemon,
+            spawnDaemon: this.options.spawnDaemon ?? this.options.ensureDaemonOptions?.spawnDaemon,
         });
         const host = this.options.host ?? IPC_HOST;
         const socket = new WebSocket(`ws://${host}:${ensured.port}`);

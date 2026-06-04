@@ -7,6 +7,8 @@ export interface PersistentIpcClientOptions {
     host?: string;
     /** Forwarded to `ensureDaemon`; respawns the daemon if it died. */
     spawnDaemon?: EnsureDaemonOptions["spawnDaemon"];
+    /** Forwarded to every `ensureDaemon` call before reconnecting. */
+    ensureDaemonOptions?: EnsureDaemonOptions;
     /** Per-attempt connect+handshake timeout. Default 5s. */
     connectTimeoutMs?: number;
     /** Minimum reconnect backoff. Default 250ms. */

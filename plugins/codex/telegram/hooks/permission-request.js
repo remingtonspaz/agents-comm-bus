@@ -3662,7 +3662,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.9";
+var DAEMON_VERSION = "0.2.10";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4670,7 +4670,16 @@ async function entryEnsures(options) {
       AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot
     }
   });
-  return { ...daemon, centralInstall };
+  return {
+    ...daemon,
+    centralInstall,
+    stateRoot: canonicalStateRoot,
+    discoveryRoot: canonicalDiscoveryRoot,
+    env: {
+      ...resolvedEnv,
+      AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot
+    }
+  };
 }
 
 // ../hosts/codex/hooks/permission-request.js

@@ -200,7 +200,7 @@ describe("entryEnsures — canonical stateRoot derivation", () => {
       "utf8",
     );
 
-    await entryEnsures({
+    const result = await entryEnsures({
       agent: "claude",
       comm: "telegram",
       projectRoot,
@@ -221,6 +221,13 @@ describe("entryEnsures — canonical stateRoot derivation", () => {
       (daemon.lastOpts?.env as Record<string, string> | undefined)?.AGENTS_COMM_BUS_DISCOVERY_ROOT,
       path.join(projectRoot, ".agents-comm-bus-discovery"),
       "marker-resolved discoveryRoot reached the daemon spawn env",
+    );
+    assert.equal(result.stateRoot, path.join(projectRoot, "durable-default"));
+    assert.equal(result.discoveryRoot, path.join(projectRoot, ".agents-comm-bus-discovery"));
+    assert.equal(
+      result.env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+      path.join(projectRoot, ".agents-comm-bus-discovery"),
+      "entryEnsures returns the exact env needed by long-lived reconnect clients",
     );
   });
 });

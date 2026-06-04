@@ -24795,7 +24795,7 @@ import path3 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.9";
+var DAEMON_VERSION = "0.2.10";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -25795,7 +25795,16 @@ async function entryEnsures(options) {
       AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot
     }
   });
-  return { ...daemon, centralInstall };
+  return {
+    ...daemon,
+    centralInstall,
+    stateRoot: canonicalStateRoot,
+    discoveryRoot: canonicalDiscoveryRoot,
+    env: {
+      ...resolvedEnv,
+      AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot
+    }
+  };
 }
 
 // ../agents-comm-bus/dist/core-daemon/ipc/persistent-client.js
@@ -25883,10 +25892,11 @@ var PersistentIpcClient = class {
   }
   async connectOnce() {
     const ensured = await ensureDaemon({
+      ...this.options.ensureDaemonOptions,
       clientVersion: this.options.clientVersion,
       protocolVersion: this.options.protocolVersion,
       metadata: this.options.metadata,
-      spawnDaemon: this.options.spawnDaemon
+      spawnDaemon: this.options.spawnDaemon ?? this.options.ensureDaemonOptions?.spawnDaemon
     });
     const host = this.options.host ?? IPC_HOST;
     const socket = new wrapper_default(`ws://${host}:${ensured.port}`);
@@ -26480,13 +26490,18 @@ async function startPersistentCodexRegistration() {
     replace_existing_lease: true,
     manage_app_server_lifecycle: true
   };
-  await ensureMcpRuntime({
+  const runtime = await ensureMcpRuntime({
     agentInUse: () => "codex",
     shimName: "agents-comm-mcp-shim/session-registration"
   });
   const client = new PersistentIpcClient({
     clientVersion: DAEMON_VERSION,
     metadata,
+    ensureDaemonOptions: {
+      stateRoot: runtime.stateRoot,
+      discoveryRoot: runtime.discoveryRoot,
+      env: runtime.env
+    },
     log: (msg) => log(`ipc: ${msg}`),
     onDisconnected: (reason) => log(`ipc disconnected: ${reason}`),
     onReconnected: () => log("ipc reconnected; replaying Codex registration"),

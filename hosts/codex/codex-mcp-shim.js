@@ -259,7 +259,7 @@ async function startPersistentCodexRegistration() {
     manage_app_server_lifecycle: true,
   };
 
-  await ensureMcpRuntime({
+  const runtime = await ensureMcpRuntime({
     agentInUse: () => "codex",
     shimName: "agents-comm-mcp-shim/session-registration",
   });
@@ -267,6 +267,11 @@ async function startPersistentCodexRegistration() {
   const client = new PersistentIpcClient({
     clientVersion: DAEMON_VERSION,
     metadata,
+    ensureDaemonOptions: {
+      stateRoot: runtime.stateRoot,
+      discoveryRoot: runtime.discoveryRoot,
+      env: runtime.env,
+    },
     log: (msg) => log(`ipc: ${msg}`),
     onDisconnected: (reason) => log(`ipc disconnected: ${reason}`),
     onReconnected: () => log("ipc reconnected; replaying Codex registration"),

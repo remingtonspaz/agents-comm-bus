@@ -48,6 +48,8 @@ export interface PersistentIpcClientOptions {
   host?: string;
   /** Forwarded to `ensureDaemon`; respawns the daemon if it died. */
   spawnDaemon?: EnsureDaemonOptions["spawnDaemon"];
+  /** Forwarded to every `ensureDaemon` call before reconnecting. */
+  ensureDaemonOptions?: EnsureDaemonOptions;
   /** Per-attempt connect+handshake timeout. Default 5s. */
   connectTimeoutMs?: number;
   /** Minimum reconnect backoff. Default 250ms. */
@@ -166,10 +168,11 @@ export class PersistentIpcClient {
 
   private async connectOnce(): Promise<void> {
     const ensured = await ensureDaemon({
+      ...this.options.ensureDaemonOptions,
       clientVersion: this.options.clientVersion,
       protocolVersion: this.options.protocolVersion,
       metadata: this.options.metadata,
-      spawnDaemon: this.options.spawnDaemon,
+      spawnDaemon: this.options.spawnDaemon ?? this.options.ensureDaemonOptions?.spawnDaemon,
     });
 
     const host = this.options.host ?? IPC_HOST;
