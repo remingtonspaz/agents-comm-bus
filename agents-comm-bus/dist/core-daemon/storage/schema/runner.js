@@ -89,6 +89,14 @@ export const conversationRegistrationKeyMigration = {
         await ctx.exec(sql);
     },
 };
+export const multiOpenQueriesMigration = {
+    version: 9,
+    description: "AGE-9: drop the one-open-query-per-session unique index (policy moves to callers)",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "009_multi_open_queries.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -99,6 +107,7 @@ export async function runStorageMigrations(db) {
         registrationIdentityMigration,
         registrationPkMigration,
         conversationRegistrationKeyMigration,
+        multiOpenQueriesMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

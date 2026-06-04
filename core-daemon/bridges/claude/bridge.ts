@@ -335,12 +335,19 @@ export class ClaudeBridge implements AgentBridge {
       ttl_seconds:
         typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS,
     };
-    await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    // AGE-9: callers choose supersede-vs-coexist. Hook-driven paths keep the
+    // default (true) — Claude's local UI is exclusive, so a new local prompt
+    // always moots the prior one. Deliberate multi-open callers (the AGE-37
+    // question sequencer, future fan-out flows) pass supersede=false.
+    const supersede = params.supersede !== false;
+    if (supersede) {
+      await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    }
     await this.options.bus.openQuery(query);
     if (originChat) {
       const promptFormat = params.prompt_format ?? queryInput.prompt_format;
       const inlineKeyboard = inlineKeyboardForQuery(queryId, kind, options);
-      await this.options.bus.send({
+      const promptMessageId = await this.options.bus.send({
         session,
         comm: originChat.comm,
         target: originChat,
@@ -351,6 +358,18 @@ export class ClaudeBridge implements AgentBridge {
         },
         idempotencyKey: `query:${queryId}`,
       });
+      // AGE-9: record the prompt's message id so a comm reply that replies-to
+      // this exact message resolves THIS query (activates the long-dormant
+      // matchReplyToQuery rule). Best-effort — on failure the query stays
+      // resolvable via buttons and bare replies.
+      try {
+        await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
 
     const hookResponse = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });

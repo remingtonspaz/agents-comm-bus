@@ -264,13 +264,79 @@ export class MessageBus {
         });
     }
     async tryResolveOpenQuery(conversation, message) {
-        const query = await this.options.storage.getOpenQueryByConversation(conversation.conversation_id);
-        if (!query || !message.text)
+        if (!message.text)
             return false;
-        const decision = decisionFromMessage(query, message, chatRefFromConversation(conversation), this.now());
-        if (!decision)
+        const open = await this.options.storage.listOpenQueriesByConversation(conversation.conversation_id);
+        if (open.length === 0)
             return false;
-        return this.resolveQuery(query.query_id, decision);
+        const chat = chatRefFromConversation(conversation);
+        // AGE-9 stage 1 — reply-to targeting: a reply to a specific prompt message
+        // resolves exactly that query (the v4 matchReplyToQuery rule; the
+        // by-conversation lookup already enforces the same-chat half, and
+        // source_message_id is populated post-send by the bridges). An
+        // unparseable reply to a prompt falls through as normal inbound.
+        if (message.reply_to) {
+            const target = open.find((q) => q.source_message_id === message.reply_to);
+            if (target) {
+                const decision = decisionFromMessage(target, message, chat, this.now());
+                if (!decision)
+                    return false;
+                return this.resolveQuery(target.query_id, decision);
+            }
+        }
+        // AGE-9 stage 2 — bare reply: resolve iff exactly one open query parses
+        // the text. Strict kinds (approval y/n/a, choice digits) outrank freetext
+        // (which accepts anything), so a bare "y" stays unambiguous even with a
+        // freetext query also open. With more than one candidate we never guess:
+        // the answer attempt is consumed and a helper points at buttons/reply-to.
+        const candidates = open
+            .map((q) => ({
+            query: q,
+            decision: decisionFromMessage(q, message, chat, this.now()),
+        }))
+            .filter((entry) => entry.decision !== null);
+        const strict = candidates.filter((entry) => entry.query.kind !== "freetext");
+        const pool = strict.length > 0 ? strict : candidates;
+        if (pool.length === 1) {
+            return this.resolveQuery(pool[0].query.query_id, pool[0].decision);
+        }
+        if (pool.length > 1) {
+            await this.sendAmbiguousReplyHelper(conversation, pool.map((entry) => entry.query), message);
+            return true; // consumed: clearly an answer attempt, but ambiguous
+        }
+        return false;
+    }
+    /**
+     * AGE-9: a bare reply matched more than one open query — never guess which
+     * one was meant. Tell the user how to disambiguate (buttons are precise;
+     * replying to the specific prompt message is precise). Best-effort: a
+     * helper-send failure must not block inbound processing.
+     */
+    async sendAmbiguousReplyHelper(conversation, matched, message) {
+        try {
+            await this.send({
+                session: matched[0].session,
+                comm: conversation.comm,
+                target: chatRefFromConversation(conversation),
+                payload: {
+                    text: `⚠️ ${matched.length} prompts are open — I can't tell which one you answered. ` +
+                        `Tap a button on the prompt, or reply directly to the specific prompt message.`,
+                },
+                idempotencyKey: `query-ambiguous:${message.message_id}`,
+            });
+            await this.options.audit.append({
+                timestamp: this.now(),
+                kind: "query_ambiguous_reply",
+                detail: {
+                    message_id: message.message_id,
+                    open_query_ids: matched.map((q) => q.query_id),
+                },
+            });
+        }
+        catch (error) {
+            console.error(`agents-comm-bus: failed to send ambiguous-reply helper: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        }
     }
     async resolveQuery(queryId, decision) {
         const record = await this.options.storage.getQuery(queryId);

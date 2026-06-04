@@ -85,6 +85,13 @@ export declare class MessageBus {
     send(request: SendRequest): Promise<MessageId>;
     openQuery(query: Query): Promise<void>;
     private tryResolveOpenQuery;
+    /**
+     * AGE-9: a bare reply matched more than one open query — never guess which
+     * one was meant. Tell the user how to disambiguate (buttons are precise;
+     * replying to the specific prompt message is precise). Best-effort: a
+     * helper-send failure must not block inbound processing.
+     */
+    private sendAmbiguousReplyHelper;
     resolveQuery(queryId: QueryId, decision: ResolvedDecision): Promise<boolean>;
     resolveQueryFromCallback(input: {
         queryId: QueryId;

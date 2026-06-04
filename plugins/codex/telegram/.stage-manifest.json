@@ -74,6 +74,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/009_multi_open_queries.sql",
+      "artifact": "plugins/codex/telegram/009_multi_open_queries.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/telegram/package.json",
       "type": "package-json"

@@ -53,6 +53,9 @@ export declare class SqliteStorage implements Storage {
     getOpenQueryByConversation(conversation_id: ConversationId): Promise<QueryRecord | null>;
     getQuery(query_id: QueryId): Promise<QueryRecord | null>;
     getOpenQueryById(query_id: QueryId): Promise<QueryRecord | null>;
+    listOpenQueriesForSession(session: SessionId): Promise<QueryRecord[]>;
+    listOpenQueriesByConversation(conversation_id: ConversationId): Promise<QueryRecord[]>;
+    setQuerySourceMessage(query_id: QueryId, source_message_id: MessageId): Promise<boolean>;
     updateQueryKind(query_id: QueryId, kind: "approval" | "choice" | "freetext"): Promise<boolean>;
     supersedeOpenQueriesForSession(session_id: SessionId, now: number): Promise<number>;
     upsertSession(rec: Session): Promise<void>;

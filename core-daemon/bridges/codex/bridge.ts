@@ -420,11 +420,15 @@ export class CodexBridge implements AgentBridge {
       ttl_seconds:
         typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS,
     };
-    await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    // AGE-9: same caller-chosen supersede policy as ClaudeBridge.openQuery.
+    const supersede = params.supersede !== false;
+    if (supersede) {
+      await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    }
     const resolutionPromise = this.waitForResolution(queryId, query.ttl_seconds);
     await this.options.bus.openQuery(query);
     const promptFormat = params.prompt_format ?? queryInput.prompt_format;
-    await this.options.bus.send({
+    const promptMessageId = await this.options.bus.send({
       session,
       comm: originChat.comm,
       target: originChat,
@@ -435,6 +439,15 @@ export class CodexBridge implements AgentBridge {
       },
       idempotencyKey: `query:${queryId}`,
     });
+    // AGE-9: activate reply-to targeting for this prompt (best-effort).
+    try {
+      await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     const decision = await resolutionPromise;
     const hookResponse = codexDecisionFromResolution(decision);

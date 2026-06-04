@@ -36,7 +36,10 @@ export type AuditEventKind =
   | "loop_prevention_drop"
   // AGE-10: an inbound update dropped by an ADAPTER-level filter (allowlist /
   // missing sender id) before it reached the bus — previously silent.
-  | "inbound_filter_drop";
+  | "inbound_filter_drop"
+  // AGE-9: a bare text reply matched more than one open query; the answer
+  // attempt was consumed and a disambiguation helper was sent instead.
+  | "query_ambiguous_reply";
 
 export interface AuditEvent {
   timestamp: number;

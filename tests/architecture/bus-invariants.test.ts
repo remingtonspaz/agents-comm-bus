@@ -337,6 +337,26 @@ class MemoryStorage implements Storage {
       q.origin_chat_id === conversation_id && q.resolved_at == null) ?? null;
   }
 
+  // AGE-9: multi-open variants + prompt-source recording.
+  async listOpenQueriesForSession(session: SessionId): Promise<QueryRecord[]> {
+    return [...this.queries.values()]
+      .filter((q) => q.session === session && q.resolved_at == null)
+      .sort((a, b) => a.created_at - b.created_at);
+  }
+
+  async listOpenQueriesByConversation(conversation_id: ConversationId): Promise<QueryRecord[]> {
+    return [...this.queries.values()]
+      .filter((q) => q.origin_chat_id === conversation_id && q.resolved_at == null)
+      .sort((a, b) => a.created_at - b.created_at);
+  }
+
+  async setQuerySourceMessage(query_id: QueryId, source_message_id: MessageId): Promise<boolean> {
+    const rec = this.queries.get(query_id);
+    if (!rec || rec.resolved_at != null) return false;
+    this.queries.set(query_id, { ...rec, source_message_id });
+    return true;
+  }
+
   async getQuery(query_id: QueryId): Promise<QueryRecord | null> {
     return this.queries.get(query_id) ?? null;
   }

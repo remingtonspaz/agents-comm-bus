@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.11";
+var DAEMON_VERSION = "0.2.12";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -5046,13 +5046,69 @@ var MessageBus = class {
     });
   }
   async tryResolveOpenQuery(conversation, message) {
-    const query = await this.options.storage.getOpenQueryByConversation(
+    if (!message.text) return false;
+    const open4 = await this.options.storage.listOpenQueriesByConversation(
       conversation.conversation_id
     );
-    if (!query || !message.text) return false;
-    const decision = decisionFromMessage(query, message, chatRefFromConversation(conversation), this.now());
-    if (!decision) return false;
-    return this.resolveQuery(query.query_id, decision);
+    if (open4.length === 0) return false;
+    const chat = chatRefFromConversation(conversation);
+    if (message.reply_to) {
+      const target = open4.find((q) => q.source_message_id === message.reply_to);
+      if (target) {
+        const decision = decisionFromMessage(target, message, chat, this.now());
+        if (!decision) return false;
+        return this.resolveQuery(target.query_id, decision);
+      }
+    }
+    const candidates = open4.map((q) => ({
+      query: q,
+      decision: decisionFromMessage(q, message, chat, this.now())
+    })).filter((entry) => entry.decision !== null);
+    const strict = candidates.filter((entry) => entry.query.kind !== "freetext");
+    const pool = strict.length > 0 ? strict : candidates;
+    if (pool.length === 1) {
+      return this.resolveQuery(pool[0].query.query_id, pool[0].decision);
+    }
+    if (pool.length > 1) {
+      await this.sendAmbiguousReplyHelper(
+        conversation,
+        pool.map((entry) => entry.query),
+        message
+      );
+      return true;
+    }
+    return false;
+  }
+  /**
+   * AGE-9: a bare reply matched more than one open query — never guess which
+   * one was meant. Tell the user how to disambiguate (buttons are precise;
+   * replying to the specific prompt message is precise). Best-effort: a
+   * helper-send failure must not block inbound processing.
+   */
+  async sendAmbiguousReplyHelper(conversation, matched, message) {
+    try {
+      await this.send({
+        session: matched[0].session,
+        comm: conversation.comm,
+        target: chatRefFromConversation(conversation),
+        payload: {
+          text: `\u26A0\uFE0F ${matched.length} prompts are open \u2014 I can't tell which one you answered. Tap a button on the prompt, or reply directly to the specific prompt message.`
+        },
+        idempotencyKey: `query-ambiguous:${message.message_id}`
+      });
+      await this.options.audit.append({
+        timestamp: this.now(),
+        kind: "query_ambiguous_reply",
+        detail: {
+          message_id: message.message_id,
+          open_query_ids: matched.map((q) => q.query_id)
+        }
+      });
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to send ambiguous-reply helper: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
   async resolveQuery(queryId, decision) {
     const record = await this.options.storage.getQuery(queryId);
@@ -5446,6 +5502,14 @@ var conversationRegistrationKeyMigration = {
     await ctx.exec(sql);
   }
 };
+var multiOpenQueriesMigration = {
+  version: 9,
+  description: "AGE-9: drop the one-open-query-per-session unique index (policy moves to callers)",
+  async up(ctx) {
+    const sql = await readFile4(join(schemaDir, "009_multi_open_queries.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -5455,7 +5519,8 @@ async function runStorageMigrations(db) {
     conversationBotIdentityMigration,
     registrationIdentityMigration,
     registrationPkMigration,
-    conversationRegistrationKeyMigration
+    conversationRegistrationKeyMigration,
+    multiOpenQueriesMigration
   ]);
 }
 
@@ -5870,6 +5935,26 @@ var SqliteStorage = class _SqliteStorage {
   async getOpenQueryById(query_id) {
     const row = this.db.prepare("SELECT * FROM queries WHERE query_id = ? AND resolved_at IS NULL").get(query_id);
     return row ? this.queryFromRow(row) : null;
+  }
+  async listOpenQueriesForSession(session) {
+    const rows = this.db.prepare(`
+        SELECT * FROM queries
+        WHERE session_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `).all(session);
+    return rows.map((row) => this.queryFromRow(row));
+  }
+  async listOpenQueriesByConversation(conversation_id) {
+    const rows = this.db.prepare(`
+        SELECT * FROM queries
+        WHERE origin_chat_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `).all(conversation_id);
+    return rows.map((row) => this.queryFromRow(row));
+  }
+  async setQuerySourceMessage(query_id, source_message_id) {
+    const result = this.db.prepare("UPDATE queries SET source_message_id = ? WHERE query_id = ? AND resolved_at IS NULL").run(source_message_id, query_id);
+    return Number(result.changes ?? 0) > 0;
   }
   async updateQueryKind(query_id, kind) {
     const result = this.db.prepare("UPDATE queries SET kind = ? WHERE query_id = ? AND resolved_at IS NULL").run(kind, query_id);
@@ -7252,12 +7337,15 @@ var ClaudeBridge = class {
       created_at: Date.now(),
       ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS
     };
-    await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    const supersede = params.supersede !== false;
+    if (supersede) {
+      await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    }
     await this.options.bus.openQuery(query);
     if (originChat) {
       const promptFormat = params.prompt_format ?? queryInput.prompt_format;
       const inlineKeyboard = inlineKeyboardForQuery(queryId, kind, options);
-      await this.options.bus.send({
+      const promptMessageId = await this.options.bus.send({
         session,
         comm: originChat.comm,
         target: originChat,
@@ -7268,6 +7356,13 @@ var ClaudeBridge = class {
         },
         idempotencyKey: `query:${queryId}`
       });
+      try {
+        await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to record prompt message id for ${queryId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
     const hookResponse = hookResponseForUnresolvedClaudeQuery({ ...params, tool_name: toolName });
     return {
@@ -8400,11 +8495,14 @@ var CodexBridge = class {
       created_at: Date.now(),
       ttl_seconds: typeof params.ttl_seconds === "number" ? params.ttl_seconds : DEFAULT_TTL_SECONDS2
     };
-    await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    const supersede = params.supersede !== false;
+    if (supersede) {
+      await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
+    }
     const resolutionPromise = this.waitForResolution(queryId, query.ttl_seconds);
     await this.options.bus.openQuery(query);
     const promptFormat = params.prompt_format ?? queryInput.prompt_format;
-    await this.options.bus.send({
+    const promptMessageId = await this.options.bus.send({
       session,
       comm: originChat.comm,
       target: originChat,
@@ -8415,6 +8513,13 @@ var CodexBridge = class {
       },
       idempotencyKey: `query:${queryId}`
     });
+    try {
+      await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to record prompt message id for ${queryId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     const decision = await resolutionPromise;
     const hookResponse = codexDecisionFromResolution(decision);
     return {

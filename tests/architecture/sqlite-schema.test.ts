@@ -127,14 +127,23 @@ describe("SQLite storage schema", () => {
     });
   });
 
-  it("enforces one open query per session with a partial unique index", async () => {
+  it("allows multiple concurrent open queries per session (AGE-9, migration 009)", async () => {
     await withStorage(async (dbPath) => {
       const storage = await openSqliteStorage(dbPath);
       await storage.upsertSession(session());
       await storage.insertQuery(query());
 
-      await assert.rejects(
-        storage.insertQuery(query({ query_id: "query-2" as QueryId })),
+      // Pre-AGE-9 this second insert was rejected by the partial unique index
+      // idx_queries_one_open_per_session. Migration 009 drops it: one-open is
+      // now a CALLER policy (the hook paths still supersede-before-open),
+      // while deliberate callers may hold several open queries at once.
+      await storage.insertQuery(query({ query_id: "query-2" as QueryId }));
+
+      const open = await storage.listOpenQueriesForSession("session-1" as SessionId);
+      assert.deepEqual(
+        open.map((q) => q.query_id),
+        ["query-1", "query-2"],
+        "both queries are open concurrently, oldest first",
       );
 
       const resolved = await storage.resolveQuery(
@@ -152,10 +161,15 @@ describe("SQLite storage schema", () => {
         },
         3,
       );
-      assert.equal(resolved, true);
+      assert.equal(resolved, true, "resolving one open query leaves the other open");
 
-      await storage.insertQuery(query({ query_id: "query-2" as QueryId }));
-      assert.equal((await storage.getOpenQueryForSession("session-1" as SessionId))?.query_id, "query-2");
+      const remaining = await storage.listOpenQueriesForSession("session-1" as SessionId);
+      assert.deepEqual(remaining.map((q) => q.query_id), ["query-2"]);
+
+      // And the supersede policy tool still closes everything that remains.
+      const swept = await storage.supersedeOpenQueriesForSession("session-1" as SessionId, 4);
+      assert.equal(swept, 1);
+      assert.equal((await storage.getOpenQueryForSession("session-1" as SessionId)), null);
 
       await storage.close();
     });

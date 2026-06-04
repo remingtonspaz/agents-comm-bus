@@ -58,6 +58,7 @@ async function assertInstallStamp(base: string, agent: "claude" | "codex") {
       "006_registration_identity.sql",
       "007_registration_pk.sql",
       "008_conversation_registration_key.sql",
+      "009_multi_open_queries.sql",
     ],
   });
 }

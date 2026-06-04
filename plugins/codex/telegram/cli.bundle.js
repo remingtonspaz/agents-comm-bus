@@ -3662,7 +3662,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.11";
+var DAEMON_VERSION = "0.2.12";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 
@@ -3808,6 +3808,14 @@ var conversationRegistrationKeyMigration = {
     await ctx.exec(sql);
   }
 };
+var multiOpenQueriesMigration = {
+  version: 9,
+  description: "AGE-9: drop the one-open-query-per-session unique index (policy moves to callers)",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "009_multi_open_queries.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3817,7 +3825,8 @@ async function runStorageMigrations(db) {
     conversationBotIdentityMigration,
     registrationIdentityMigration,
     registrationPkMigration,
-    conversationRegistrationKeyMigration
+    conversationRegistrationKeyMigration,
+    multiOpenQueriesMigration
   ]);
 }
 
@@ -4233,6 +4242,26 @@ var SqliteStorage = class _SqliteStorage {
     const row = this.db.prepare("SELECT * FROM queries WHERE query_id = ? AND resolved_at IS NULL").get(query_id);
     return row ? this.queryFromRow(row) : null;
   }
+  async listOpenQueriesForSession(session) {
+    const rows = this.db.prepare(`
+        SELECT * FROM queries
+        WHERE session_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `).all(session);
+    return rows.map((row) => this.queryFromRow(row));
+  }
+  async listOpenQueriesByConversation(conversation_id) {
+    const rows = this.db.prepare(`
+        SELECT * FROM queries
+        WHERE origin_chat_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `).all(conversation_id);
+    return rows.map((row) => this.queryFromRow(row));
+  }
+  async setQuerySourceMessage(query_id, source_message_id) {
+    const result = this.db.prepare("UPDATE queries SET source_message_id = ? WHERE query_id = ? AND resolved_at IS NULL").run(source_message_id, query_id);
+    return Number(result.changes ?? 0) > 0;
+  }
   async updateQueryKind(query_id, kind) {
     const result = this.db.prepare("UPDATE queries SET kind = ? WHERE query_id = ? AND resolved_at IS NULL").run(kind, query_id);
     return Number(result.changes ?? 0) > 0;
@@ -4647,7 +4676,7 @@ import path4 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.11";
+var DAEMON_VERSION2 = "0.2.12";
 var IPC_PROTOCOL_VERSION2 = "1.0.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;

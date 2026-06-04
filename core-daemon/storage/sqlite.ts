@@ -608,6 +608,40 @@ export class SqliteStorage implements Storage {
     return row ? this.queryFromRow(row) : null;
   }
 
+  async listOpenQueriesForSession(session: SessionId): Promise<QueryRecord[]> {
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM queries
+        WHERE session_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `)
+      .all(session);
+    return rows.map((row) => this.queryFromRow(row));
+  }
+
+  async listOpenQueriesByConversation(
+    conversation_id: ConversationId,
+  ): Promise<QueryRecord[]> {
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM queries
+        WHERE origin_chat_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `)
+      .all(conversation_id);
+    return rows.map((row) => this.queryFromRow(row));
+  }
+
+  async setQuerySourceMessage(
+    query_id: QueryId,
+    source_message_id: MessageId,
+  ): Promise<boolean> {
+    const result = this.db
+      .prepare("UPDATE queries SET source_message_id = ? WHERE query_id = ? AND resolved_at IS NULL")
+      .run(source_message_id, query_id) as { changes?: number };
+    return Number(result.changes ?? 0) > 0;
+  }
+
   async updateQueryKind(query_id: QueryId, kind: "approval" | "choice" | "freetext"): Promise<boolean> {
     const result = this.db
       .prepare("UPDATE queries SET kind = ? WHERE query_id = ? AND resolved_at IS NULL")

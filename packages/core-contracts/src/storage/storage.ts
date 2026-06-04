@@ -126,6 +126,27 @@ export interface Storage {
   getOpenQueryById(query_id: QueryId): Promise<QueryRecord | null>;
   getQuery(query_id: QueryId): Promise<QueryRecord | null>;
   /**
+   * AGE-9: list ALL open queries for a session, oldest first. Multiple
+   * concurrent open queries per session are allowed since migration 009;
+   * the singular `getOpenQuery*` variants remain for one-open callers.
+   */
+  listOpenQueriesForSession(session: SessionId): Promise<QueryRecord[]>;
+  /** AGE-9: list ALL open queries for a conversation, oldest first. */
+  listOpenQueriesByConversation(
+    conversation_id: ConversationId,
+  ): Promise<QueryRecord[]>;
+  /**
+   * AGE-9: record the sent prompt's message id (MessageId form, e.g.
+   * `telegram:123`) on a still-open query, so a comm reply that `reply_to`s
+   * the prompt message resolves exactly that query (the v4
+   * `matchReplyToQuery` rule, until now never activated because the column
+   * was never populated). Returns false if the query is already resolved.
+   */
+  setQuerySourceMessage(
+    query_id: QueryId,
+    source_message_id: MessageId,
+  ): Promise<boolean>;
+  /**
    * Update an open query's `kind` (e.g. flip `"choice"` → `"freetext"` when
    * the user clicks an "Other" callback to provide a custom reply). Returns
    * false if the query is missing or already resolved.

@@ -425,6 +425,32 @@ export class SqliteStorage {
             .get(query_id);
         return row ? this.queryFromRow(row) : null;
     }
+    async listOpenQueriesForSession(session) {
+        const rows = this.db
+            .prepare(`
+        SELECT * FROM queries
+        WHERE session_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `)
+            .all(session);
+        return rows.map((row) => this.queryFromRow(row));
+    }
+    async listOpenQueriesByConversation(conversation_id) {
+        const rows = this.db
+            .prepare(`
+        SELECT * FROM queries
+        WHERE origin_chat_id = ? AND resolved_at IS NULL
+        ORDER BY created_at ASC
+      `)
+            .all(conversation_id);
+        return rows.map((row) => this.queryFromRow(row));
+    }
+    async setQuerySourceMessage(query_id, source_message_id) {
+        const result = this.db
+            .prepare("UPDATE queries SET source_message_id = ? WHERE query_id = ? AND resolved_at IS NULL")
+            .run(source_message_id, query_id);
+        return Number(result.changes ?? 0) > 0;
+    }
     async updateQueryKind(query_id, kind) {
         const result = this.db
             .prepare("UPDATE queries SET kind = ? WHERE query_id = ? AND resolved_at IS NULL")
