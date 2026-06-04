@@ -665,6 +665,19 @@ export class SqliteStorage implements Storage {
     return Number(result.changes ?? 0);
   }
 
+  async cancelOpenQuery(query_id: QueryId, now: number): Promise<boolean> {
+    const result = this.db
+      .prepare(`
+        UPDATE queries
+        SET resolved_at = ?,
+            resolution_json = ?
+        WHERE query_id = ?
+          AND resolved_at IS NULL
+      `)
+      .run(now, JSON.stringify({ kind: "cancelled" }), query_id) as { changes?: number };
+    return Number(result.changes ?? 0) > 0;
+  }
+
   async upsertSession(rec: Session): Promise<void> {
     this.db
       .prepare(`

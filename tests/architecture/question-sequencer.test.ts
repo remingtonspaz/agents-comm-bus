@@ -318,6 +318,51 @@ describe("AGE-37 AskUserQuestion sequencer", () => {
     }
   });
 
+  it("clears a stale sequence when a normal supersede query opens (review fix)", async () => {
+    const dir = await makeTempDir("acb-q37-plain-supersede-");
+    const h = await makeHarness(dir);
+    try {
+      await h.bridge.openQuery({
+        session: SESSION,
+        prompt_text: "<fallback>",
+        kind: "choice",
+        options: ["Alpha - A desc", "Beta"],
+        query: { questions: [Q1, Q2, Q3] },
+      });
+      assert.equal(h.adapter.sent.length, 1);
+      assert.equal(sequenceMapSize(h.bridge), 1);
+
+      // A plain hook query (no questions array) with the default
+      // supersede=true must drop the in-memory sequence along with the
+      // storage rows it supersedes.
+      const plain = await h.bridge.openQuery({
+        session: SESSION,
+        prompt_text: "Allow Bash(npm test)?",
+        kind: "approval",
+      });
+      assert.equal(sequenceMapSize(h.bridge), 0, "supersede=true open must sweep stale sequences");
+      assert.equal(h.adapter.sent.length, 2);
+
+      assert.equal(
+        await h.bus.resolveQuery(plain.query_id, {
+          query_id: plain.query_id,
+          decision: "allow",
+          decided_by_sender_id: "user-1",
+          decided_in_chat: {
+            comm: TELEGRAM,
+            account: BOT as AccountId,
+            chat_native_id: "chat-1",
+          },
+          decided_at: Date.now(),
+        }),
+        true,
+      );
+      assert.equal(h.adapter.sent.length, 2, "stale sequence must not advance after the sweep");
+    } finally {
+      await h.storage.close();
+    }
+  });
+
   it("uses today's single-question path when only one question is provided", async () => {
     const dir = await makeTempDir("acb-q37-single-");
     const h = await makeHarness(dir);
@@ -371,6 +416,16 @@ describe("AGE-37 AskUserQuestion sequencer", () => {
         "fallback send attempted, or both open+retry failed before fallback could record",
       );
       assert.ok(errors.length > 0, "failure is logged loudly");
+
+      // Review fix: the failed open attempts (initial + retry) must not leave
+      // ghost open queries — an open-but-never-seen prompt could capture
+      // bare-digit replies meant for visible prompts.
+      const openAfterFailure = await h.storage.listOpenQueriesForSession(SESSION);
+      assert.equal(
+        openAfterFailure.length,
+        0,
+        "no open queries may remain after the simulated Q2 send failure",
+      );
     } finally {
       console.error = originalError;
       await h.storage.close();

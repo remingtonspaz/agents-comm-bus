@@ -103,7 +103,7 @@ export declare class ClaudeBridge implements AgentBridge {
      * setQuerySourceMessage. Used by the IPC handler and the AGE-37 sequencer.
      */
     private openQueryCore;
-    /** Drop stale sequencer entries when a new AskUserQuestion supersedes. */
+    /** Drop stale sequencer entries when any supersede=true open fires. */
     private clearQuestionSequencesForSession;
     /** Open the next question in an AskUserQuestion sequence after resolution. */
     private openNextQuestion;

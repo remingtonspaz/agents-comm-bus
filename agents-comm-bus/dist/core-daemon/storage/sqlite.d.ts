@@ -58,6 +58,7 @@ export declare class SqliteStorage implements Storage {
     setQuerySourceMessage(query_id: QueryId, source_message_id: MessageId): Promise<boolean>;
     updateQueryKind(query_id: QueryId, kind: "approval" | "choice" | "freetext"): Promise<boolean>;
     supersedeOpenQueriesForSession(session_id: SessionId, now: number): Promise<number>;
+    cancelOpenQuery(query_id: QueryId, now: number): Promise<boolean>;
     upsertSession(rec: Session): Promise<void>;
     acquireSessionLease(session: SessionId, connection_id: string, at: number, owner?: SessionLeaseOwner): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;

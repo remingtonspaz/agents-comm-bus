@@ -469,6 +469,18 @@ export class SqliteStorage {
             .run(now, JSON.stringify({ kind: "superseded" }), session_id);
         return Number(result.changes ?? 0);
     }
+    async cancelOpenQuery(query_id, now) {
+        const result = this.db
+            .prepare(`
+        UPDATE queries
+        SET resolved_at = ?,
+            resolution_json = ?
+        WHERE query_id = ?
+          AND resolved_at IS NULL
+      `)
+            .run(now, JSON.stringify({ kind: "cancelled" }), query_id);
+        return Number(result.changes ?? 0) > 0;
+    }
     async upsertSession(rec) {
         this.db
             .prepare(`

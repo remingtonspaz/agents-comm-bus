@@ -5970,6 +5970,16 @@ var SqliteStorage = class _SqliteStorage {
       `).run(now, JSON.stringify({ kind: "superseded" }), session_id);
     return Number(result.changes ?? 0);
   }
+  async cancelOpenQuery(query_id, now) {
+    const result = this.db.prepare(`
+        UPDATE queries
+        SET resolved_at = ?,
+            resolution_json = ?
+        WHERE query_id = ?
+          AND resolved_at IS NULL
+      `).run(now, JSON.stringify({ kind: "cancelled" }), query_id);
+    return Number(result.changes ?? 0) > 0;
+  }
   async upsertSession(rec) {
     this.db.prepare(`
         INSERT INTO sessions (
@@ -7339,9 +7349,6 @@ var ClaudeBridge = class {
       params.questions ?? queryInput.questions
     );
     if (questions && questions.length > 1) {
-      if (supersede) {
-        this.clearQuestionSequencesForSession(session);
-      }
       const firstQuestion = questions[0];
       const sequencedPrompt = formatQuestionPrompt(firstQuestion, 0, questions.length);
       const sequencedOptions = questionOptionsFromNormalized(firstQuestion);
@@ -7407,32 +7414,44 @@ var ClaudeBridge = class {
     };
     if (input.supersede) {
       await this.options.storage.supersedeOpenQueriesForSession(input.session, Date.now());
+      this.clearQuestionSequencesForSession(input.session);
     }
     await this.options.bus.openQuery(query);
     if (input.originChat) {
-      const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
-      const promptMessageId = await this.options.bus.send({
-        session: input.session,
-        comm: input.originChat.comm,
-        target: input.originChat,
-        payload: {
-          text: input.promptText,
-          format: input.promptFormat === "html" ? "html" : "plain",
-          inline_keyboard: inlineKeyboard
-        },
-        idempotencyKey: `query:${queryId}`
-      });
       try {
-        await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+        const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
+        const promptMessageId = await this.options.bus.send({
+          session: input.session,
+          comm: input.originChat.comm,
+          target: input.originChat,
+          payload: {
+            text: input.promptText,
+            format: input.promptFormat === "html" ? "html" : "plain",
+            inline_keyboard: inlineKeyboard
+          },
+          idempotencyKey: `query:${queryId}`
+        });
+        try {
+          await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+        } catch (error) {
+          console.error(
+            `agents-comm-bus: failed to record prompt message id for ${queryId}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
       } catch (error) {
-        console.error(
-          `agents-comm-bus: failed to record prompt message id for ${queryId}: ${error instanceof Error ? error.message : String(error)}`
-        );
+        try {
+          await this.options.storage.cancelOpenQuery(queryId, Date.now());
+        } catch (cancelError) {
+          console.error(
+            `agents-comm-bus: failed to cancel unsent query ${queryId}: ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
+          );
+        }
+        throw error;
       }
     }
     return queryId;
   }
-  /** Drop stale sequencer entries when a new AskUserQuestion supersedes. */
+  /** Drop stale sequencer entries when any supersede=true open fires. */
   clearQuestionSequencesForSession(session) {
     for (const [queryId, seq] of this.questionSequences) {
       if (seq.session === session) {

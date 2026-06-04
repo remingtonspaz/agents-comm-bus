@@ -239,9 +239,6 @@ export class ClaudeBridge {
         // AGE-37: multi-question AskUserQuestion → show one question at a time.
         const questions = parseNormalizedQuestions(params.questions ?? queryInput.questions);
         if (questions && questions.length > 1) {
-            if (supersede) {
-                this.clearQuestionSequencesForSession(session);
-            }
             const firstQuestion = questions[0];
             const sequencedPrompt = formatQuestionPrompt(firstQuestion, 0, questions.length);
             const sequencedOptions = questionOptionsFromNormalized(firstQuestion);
@@ -307,36 +304,59 @@ export class ClaudeBridge {
         };
         if (input.supersede) {
             await this.options.storage.supersedeOpenQueriesForSession(input.session, Date.now());
+            // AGE-37: the in-memory sequence map mirrors storage open-state, so a
+            // supersede must also drop the session's stale sequences — ANY
+            // supersede=true open (a plain permission prompt included), not just a
+            // new AskUserQuestion. openNextQuestion passes supersede=false, so a
+            // sequence never clears itself mid-flight.
+            this.clearQuestionSequencesForSession(input.session);
         }
         await this.options.bus.openQuery(query);
         if (input.originChat) {
-            const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
-            const promptMessageId = await this.options.bus.send({
-                session: input.session,
-                comm: input.originChat.comm,
-                target: input.originChat,
-                payload: {
-                    text: input.promptText,
-                    format: input.promptFormat === "html" ? "html" : "plain",
-                    inline_keyboard: inlineKeyboard,
-                },
-                idempotencyKey: `query:${queryId}`,
-            });
-            // AGE-9: record the prompt's message id so a comm reply that replies-to
-            // this exact message resolves THIS query (activates the long-dormant
-            // matchReplyToQuery rule). Best-effort — on failure the query stays
-            // resolvable via buttons and bare replies.
             try {
-                await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+                const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
+                const promptMessageId = await this.options.bus.send({
+                    session: input.session,
+                    comm: input.originChat.comm,
+                    target: input.originChat,
+                    payload: {
+                        text: input.promptText,
+                        format: input.promptFormat === "html" ? "html" : "plain",
+                        inline_keyboard: inlineKeyboard,
+                    },
+                    idempotencyKey: `query:${queryId}`,
+                });
+                // AGE-9: record the prompt's message id so a comm reply that replies-to
+                // this exact message resolves THIS query (activates the long-dormant
+                // matchReplyToQuery rule). Best-effort — on failure the query stays
+                // resolvable via buttons and bare replies.
+                try {
+                    await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+                }
+                catch (error) {
+                    console.error(`agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
+                        `${error instanceof Error ? error.message : String(error)}`);
+                }
             }
             catch (error) {
-                console.error(`agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
-                    `${error instanceof Error ? error.message : String(error)}`);
+                // AGE-37: the prompt never reached the user, so the just-inserted row
+                // must not stay open — with multi-open queries (migration 009) an
+                // open-but-never-seen query could capture bare-digit replies meant
+                // for visible prompts. Roll it back, then rethrow for the caller's
+                // retry/fallback path.
+                try {
+                    await this.options.storage.cancelOpenQuery(queryId, Date.now());
+                }
+                catch (cancelError) {
+                    console.error(`agents-comm-bus: failed to cancel unsent query ${queryId}: ` +
+                        `${cancelError instanceof Error ? cancelError.message : String(cancelError)}`);
+                }
+                throw error;
             }
         }
         return queryId;
     }
-    /** Drop stale sequencer entries when a new AskUserQuestion supersedes. */
+    /** Drop stale sequencer entries when any supersede=true open fires. */
     clearQuestionSequencesForSession(session) {
         for (const [queryId, seq] of this.questionSequences) {
             if (seq.session === session) {

@@ -165,6 +165,15 @@ export interface Storage {
     session_id: SessionId,
     now: number,
   ): Promise<number>;
+  /**
+   * AGE-37: mark a single open query as resolved with
+   * `resolution_json = {"kind":"cancelled"}`. Used to roll back a
+   * just-inserted query whose comm prompt failed to send — with multiple
+   * concurrent open queries (migration 009) an open-but-never-seen query
+   * could otherwise capture bare-digit replies meant for visible prompts.
+   * Returns false if the query is missing or already resolved.
+   */
+  cancelOpenQuery(query_id: QueryId, now: number): Promise<boolean>;
 
   // sessions
   upsertSession(rec: Session): Promise<void>;

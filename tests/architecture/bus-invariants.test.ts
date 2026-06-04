@@ -357,6 +357,14 @@ class MemoryStorage implements Storage {
     return true;
   }
 
+  // AGE-37: roll back a just-opened query whose prompt send failed.
+  async cancelOpenQuery(query_id: QueryId, now: number): Promise<boolean> {
+    const rec = this.queries.get(query_id);
+    if (!rec || rec.resolved_at != null) return false;
+    this.queries.set(query_id, { ...rec, resolved_at: now });
+    return true;
+  }
+
   async getQuery(query_id: QueryId): Promise<QueryRecord | null> {
     return this.queries.get(query_id) ?? null;
   }
