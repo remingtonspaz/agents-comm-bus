@@ -25827,7 +25827,14 @@ async function ensureMcpRuntime(options) {
     ensureDaemonOptions,
     readOnlyCentralInstall: true
   });
-  return { agent, metadata, ensured };
+  return {
+    agent,
+    metadata,
+    ensured,
+    stateRoot: ensured.stateRoot,
+    discoveryRoot: ensured.discoveryRoot,
+    env: ensured.env
+  };
 }
 function createDaemonRequester(options) {
   return async function daemonRequest(method, params = {}) {
