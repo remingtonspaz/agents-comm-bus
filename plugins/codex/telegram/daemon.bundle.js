@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.8";
+var DAEMON_VERSION = "0.2.9";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3685,6 +3685,18 @@ function resolveStatePaths(options = {}) {
     auditDir: path.join(root, "audit"),
     chatsDir: path.join(root, "chats"),
     tokensDir: path.join(root, "tokens"),
+    pidFile: path.join(root, "daemon.pid"),
+    portFile: path.join(root, "port"),
+    spawnLock: path.join(root, ".spawn.lock")
+  };
+}
+function discoveryRoot(options = {}) {
+  return path.resolve(options.discoveryRoot ?? stateRoot(options));
+}
+function resolveDiscoveryPaths(options = {}) {
+  const root = discoveryRoot(options);
+  return {
+    root,
     pidFile: path.join(root, "daemon.pid"),
     portFile: path.join(root, "port"),
     spawnLock: path.join(root, ".spawn.lock")
@@ -4494,7 +4506,10 @@ async function readPortFile(portFile) {
   }
 }
 async function writeDaemonDiscoveryFiles(input) {
-  const paths = resolveStatePaths({ stateRoot: input.stateRoot });
+  const paths = resolveDiscoveryPaths({
+    stateRoot: input.stateRoot,
+    discoveryRoot: input.discoveryRoot
+  });
   await mkdir2(paths.root, { recursive: true });
   const existingPort = await readPortFile(paths.portFile);
   if (existingPort !== void 0 && existingPort !== input.port) {
@@ -4593,7 +4608,12 @@ async function checkDaemonPidOwnership(options) {
   const pidFile = await read(options.pidFile);
   if (pidFile.status === "missing") {
     try {
-      await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+      await writeDiscovery({
+        stateRoot: options.stateRoot,
+        discoveryRoot: options.discoveryRoot,
+        pid: selfPid,
+        port: options.port
+      });
       return { status: "reclaimed", selfPid, reason: "missing" };
     } catch (error) {
       return {
@@ -4639,7 +4659,12 @@ async function checkDaemonPidOwnership(options) {
     return { status: "superseded", selfPid, ownerPid: pidFile.pid };
   }
   try {
-    await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+    await writeDiscovery({
+      stateRoot: options.stateRoot,
+      discoveryRoot: options.discoveryRoot,
+      pid: selfPid,
+      port: options.port
+    });
     return {
       status: "reclaimed",
       selfPid,
@@ -6237,11 +6262,16 @@ async function runDaemon(options) {
   const argv = options.argv ?? process.argv.slice(2);
   const env = options.env ?? process.env;
   const paths = resolveStatePaths({ stateRoot: options.stateRoot ?? env.AGENTS_COMM_BUS_STATE_ROOT });
+  const discoveryPaths = resolveDiscoveryPaths({
+    stateRoot: paths.root,
+    discoveryRoot: options.discoveryRoot ?? env.AGENTS_COMM_BUS_DISCOVERY_ROOT
+  });
   if (argv.includes("--print-paths")) {
-    console.log(JSON.stringify(paths, null, 2));
+    console.log(JSON.stringify({ ...paths, discovery: discoveryPaths }, null, 2));
     return;
   }
   await mkdir6(paths.root, { recursive: true });
+  await mkdir6(discoveryPaths.root, { recursive: true });
   const storage = await openSqliteStorage(paths.database);
   const transcripts = new JsonlTranscriptStore(paths.root);
   const audit = new JsonlAuditStore(paths.root);
@@ -6274,7 +6304,7 @@ async function runDaemon(options) {
     }
   });
   console.error(
-    `agents-comm-bus ${DAEMON_VERSION} starting: stateRoot=${paths.root} checkoutRoot=${checkoutRoot ?? "?"} daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} home=${os3.homedir()}`
+    `agents-comm-bus ${DAEMON_VERSION} starting: stateRoot=${paths.root} discoveryRoot=${discoveryPaths.root} checkoutRoot=${checkoutRoot ?? "?"} daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} home=${os3.homedir()}`
   );
   const comms = [];
   const bus = new MessageBus({
@@ -6434,7 +6464,11 @@ async function runDaemon(options) {
     }
   });
   try {
-    await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
+    await writeDaemonDiscoveryFiles({
+      stateRoot: paths.root,
+      discoveryRoot: discoveryPaths.root,
+      port: server.port
+    });
   } catch (error) {
     await server.close();
     throw error;
@@ -6442,7 +6476,8 @@ async function runDaemon(options) {
   await bus.start();
   startDaemonPidWatchdog({
     stateRoot: paths.root,
-    pidFile: paths.pidFile,
+    discoveryRoot: discoveryPaths.root,
+    pidFile: discoveryPaths.pidFile,
     port: server.port,
     audit,
     stopDaemon: async () => {

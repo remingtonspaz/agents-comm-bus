@@ -29,6 +29,8 @@ export interface RunDaemonOptions {
     env?: NodeJS.ProcessEnv;
     /** Override the path resolver's state-root selection. */
     stateRoot?: string;
+    /** Override the runtime discovery-root selection (pid/port/spawn-lock only). */
+    discoveryRoot?: string;
 }
 /**
  * Generic daemon entry point. Knows nothing about specific agents or

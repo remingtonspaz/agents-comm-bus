@@ -1,5 +1,6 @@
 {
   "_note": "LOCAL DEV ONLY. Copy this to .agents-comm-bus-dev.json (gitignored) to mark THIS checkout as source/dev mode: the install hooks + MCP shim then skip central install and run the daemon from source. This marker is never shipped; production/marketplace installs rely on staged plugin artifacts + install-stamp.json, never on this file. It resolves into the env-only source-mode contract (sets AGENTS_COMM_BUS_BIN) -- it is not itself a second 'skip install' switch.",
-  "_optional": "stateRoot and adaptersDir are optional overrides (AGENTS_COMM_BUS_ROOT / AGENTS_COMM_BUS_ADAPTERS_DIR). Leave stateRoot UNSET when multiple agents share one daemon on this machine (e.g. Claude + Codex both on ~/.agents-comm-bus) -- setting it would split them onto separate state roots.",
-  "daemonBin": "agents-comm-bus/dist/core-daemon/serve.js"
+  "_optional": "discoveryRoot, stateRoot, and adaptersDir are optional overrides (AGENTS_COMM_BUS_DISCOVERY_ROOT / AGENTS_COMM_BUS_ROOT / AGENTS_COMM_BUS_ADAPTERS_DIR). Leave stateRoot UNSET when multiple agents share one durable DB/tokens root on this machine (e.g. Claude + Codex both on ~/.agents-comm-bus) -- setting it would split them onto separate durable state roots. Set discoveryRoot to a gitignored workspace folder so this dev checkout has its own pid/port/spawn-lock and can live alongside production.",
+  "daemonBin": "agents-comm-bus/dist/core-daemon/serve.js",
+  "discoveryRoot": ".agents-comm-bus-discovery"
 }

@@ -77,7 +77,12 @@ export async function checkDaemonPidOwnership(options) {
     const pidFile = await read(options.pidFile);
     if (pidFile.status === "missing") {
         try {
-            await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+            await writeDiscovery({
+                stateRoot: options.stateRoot,
+                discoveryRoot: options.discoveryRoot,
+                pid: selfPid,
+                port: options.port,
+            });
             return { status: "reclaimed", selfPid, reason: "missing" };
         }
         catch (error) {
@@ -125,7 +130,12 @@ export async function checkDaemonPidOwnership(options) {
         return { status: "superseded", selfPid, ownerPid: pidFile.pid };
     }
     try {
-        await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+        await writeDiscovery({
+            stateRoot: options.stateRoot,
+            discoveryRoot: options.discoveryRoot,
+            pid: selfPid,
+            port: options.port,
+        });
         return {
             status: "reclaimed",
             selfPid,

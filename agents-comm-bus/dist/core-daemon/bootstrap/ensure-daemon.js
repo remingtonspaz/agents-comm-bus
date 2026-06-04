@@ -2,12 +2,25 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, isProtocolCompatible, protocolMajor, } from "../config.js";
-import { resolveStatePaths } from "../paths.js";
+import { resolveDiscoveryPaths, resolveStatePaths, } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
 import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
 export async function ensureDaemon(options = {}) {
-    const paths = resolveStatePaths(options);
+    const env = options.env ?? process.env;
+    const stateRoot = options.stateRoot ?? env.AGENTS_COMM_BUS_ROOT ?? env.AGENTS_COMM_BUS_STATE_ROOT;
+    const paths = resolveStatePaths({ stateRoot });
+    const discoveryPaths = resolveDiscoveryPaths({
+        stateRoot: paths.root,
+        discoveryRoot: options.discoveryRoot ?? env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+    });
     await mkdir(paths.root, { recursive: true });
+    await mkdir(discoveryPaths.root, { recursive: true });
+    warnIfSourceModeSharesDiscoveryRoot({
+        stateRoot: paths.root,
+        discoveryRoot: discoveryPaths.root,
+        env,
+        log: options.log ?? console.error,
+    });
     const timeoutMs = options.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
     const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
     const clientProtocolVersion = options.protocolVersion ?? IPC_PROTOCOL_VERSION;
@@ -26,7 +39,7 @@ export async function ensureDaemon(options = {}) {
     // The old exact daemon-version equality (in BOTH directions) is what let two
     // shims at different patch versions terminate each other's daemon forever.
     // See AGENTS.md "Daemon version vs IPC protocol".
-    const existing = await probeFromPortFile(paths.portFile, probe);
+    const existing = await probeFromPortFile(discoveryPaths.portFile, probe);
     if (existing) {
         const reuse = classifyDaemonReuse(existing.hello.protocolVersion, clientProtocolVersion);
         if (reuse === "compatible") {
@@ -38,7 +51,7 @@ export async function ensureDaemon(options = {}) {
         }
         // reuse === "daemon_older": incompatible OLDER protocol — terminate + respawn.
         await terminateMismatchedDaemon({
-            paths,
+            paths: discoveryPaths,
             livePort: existing.port,
             liveProtocol: existing.hello.protocolVersion,
             clientProtocol: clientProtocolVersion,
@@ -47,30 +60,30 @@ export async function ensureDaemon(options = {}) {
             retryMs,
         });
     }
-    const afterTerminate = await probeFromPortFile(paths.portFile, probe);
+    const afterTerminate = await probeFromPortFile(discoveryPaths.portFile, probe);
     if (afterTerminate &&
         classifyDaemonReuse(afterTerminate.hello.protocolVersion, clientProtocolVersion) === "compatible") {
         return { ...afterTerminate, spawned: false };
     }
     await cleanupStalePidAndPort({
-        pidFile: paths.pidFile,
-        portFile: paths.portFile,
+        pidFile: discoveryPaths.pidFile,
+        portFile: discoveryPaths.portFile,
         isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
     });
     let spawned = false;
     while (Date.now() <= deadline) {
-        const lock = await tryAcquireSpawnLock(paths.spawnLock);
+        const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock);
         if (lock) {
             try {
-                const recheck = await probeFromPortFile(paths.portFile, probe);
+                const recheck = await probeFromPortFile(discoveryPaths.portFile, probe);
                 if (recheck) {
                     return { ...recheck, spawned };
                 }
                 if (options.spawnDaemon) {
-                    await options.spawnDaemon(paths);
+                    await options.spawnDaemon(paths, discoveryPaths);
                 }
                 else {
-                    defaultSpawnDaemon(paths, options.env ?? process.env);
+                    defaultSpawnDaemon(paths, discoveryPaths, env);
                 }
                 spawned = true;
             }
@@ -78,18 +91,18 @@ export async function ensureDaemon(options = {}) {
                 await lock.release();
             }
         }
-        const found = await waitForDaemon(paths.portFile, probe, deadline, retryMs);
+        const found = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
         if (found) {
             return { ...found, spawned };
         }
         await cleanupStalePidAndPort({
-            pidFile: paths.pidFile,
-            portFile: paths.portFile,
+            pidFile: discoveryPaths.pidFile,
+            portFile: discoveryPaths.portFile,
             isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
         });
-        await removeSpawnLock(paths.spawnLock);
+        await removeSpawnLock(discoveryPaths.spawnLock);
     }
-    throw new Error(`Timed out starting agents-comm-bus daemon under ${paths.root}.`);
+    throw new Error(`Timed out starting agents-comm-bus daemon under ${discoveryPaths.root}.`);
 }
 /**
  * Classify a running daemon's IPC protocol against this client's, for the reuse
@@ -190,7 +203,7 @@ function defaultTerminateDaemon(pid) {
     }
     process.kill(pid, "SIGTERM");
 }
-function defaultSpawnDaemon(paths, env = process.env) {
+function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
     // Source/dev mode is signalled by AGENTS_COMM_BUS_BIN (the authoritative
     // source switch, same one resolveInstallMode keys on): run the daemon from
     // the project's source entry. Otherwise this is a production/central install,
@@ -209,15 +222,28 @@ function defaultSpawnDaemon(paths, env = process.env) {
         env: {
             ...env,
             AGENTS_COMM_BUS_STATE_ROOT: paths.root,
+            AGENTS_COMM_BUS_DISCOVERY_ROOT: discoveryPaths.root,
         },
     });
     child.unref();
+}
+function warnIfSourceModeSharesDiscoveryRoot(input) {
+    if (!input.env.AGENTS_COMM_BUS_BIN)
+        return;
+    if (path.resolve(input.stateRoot) !== path.resolve(input.discoveryRoot))
+        return;
+    input.log("agents-comm-bus: source/dev daemon is sharing the production discovery root; " +
+        "set discoveryRoot in .agents-comm-bus-dev.json (for example " +
+        ".agents-comm-bus-discovery/) to let dev and prod daemons coexist.");
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 export async function writeDaemonDiscoveryFiles(input) {
-    const paths = resolveStatePaths({ stateRoot: input.stateRoot });
+    const paths = resolveDiscoveryPaths({
+        stateRoot: input.stateRoot,
+        discoveryRoot: input.discoveryRoot,
+    });
     await mkdir(paths.root, { recursive: true });
     const existingPort = await readPortFile(paths.portFile);
     if (existingPort !== undefined && existingPort !== input.port) {

@@ -119,6 +119,11 @@ describe("entryEnsures — canonical stateRoot derivation", () => {
 
     assert.equal(result.centralInstall.mode, "production");
     assert.equal(daemon.lastOpts?.stateRoot, envRoot, "daemon got the env-derived canonical root");
+    assert.equal(
+      daemon.lastOpts?.discoveryRoot,
+      envRoot,
+      "discovery root defaults to the canonical state root",
+    );
     const paths = resolveCentralPaths(envRoot, "telegram");
     const { readFile } = await import("node:fs/promises");
     assert.equal(await readFile(paths.daemonBundle, "utf8"), "DAEMON_BUNDLE_v1.0.0");
@@ -142,6 +147,7 @@ describe("entryEnsures — canonical stateRoot derivation", () => {
 
     assert.equal(result.centralInstall.mode, "production");
     assert.equal(daemon.lastOpts?.stateRoot, defaultRoot, "fell back to the injected default root");
+    assert.equal(daemon.lastOpts?.discoveryRoot, defaultRoot, "default discovery root mirrors state root");
     const { access } = await import("node:fs/promises");
     await access(resolveCentralPaths(defaultRoot, "telegram").daemonBundle); // throws if not installed
   });
@@ -176,6 +182,45 @@ describe("entryEnsures — canonical stateRoot derivation", () => {
       (daemon.lastOpts?.env as Record<string, string> | undefined)?.AGENTS_COMM_BUS_BIN,
       path.join(projectRoot, binRel),
       "marker-resolved daemonBin reached the daemon spawn env",
+    );
+  });
+
+  it("propagates a dev-marker discoveryRoot separately from durable stateRoot", async () => {
+    const daemon = spyEnsureDaemon();
+    const projectRoot = await tempDir("acb-ee-disc-");
+    const binRel = "agents-comm-bus/dist/core-daemon/serve.js";
+    await mkdir(path.join(projectRoot, path.dirname(binRel)), { recursive: true });
+    await writeFile(path.join(projectRoot, binRel), "// daemon\n", "utf8");
+    await writeFile(
+      path.join(projectRoot, DEV_MARKER_NAME),
+      JSON.stringify({
+        daemonBin: binRel,
+        discoveryRoot: ".agents-comm-bus-discovery",
+      }),
+      "utf8",
+    );
+
+    await entryEnsures({
+      agent: "claude",
+      comm: "telegram",
+      projectRoot,
+      env: {},
+      deps: {
+        ensureDaemon: daemon.fn,
+        resolveStatePaths: (() => ({ root: path.join(projectRoot, "durable-default") })) as never,
+      },
+    });
+
+    assert.equal(daemon.lastOpts?.stateRoot, path.join(projectRoot, "durable-default"));
+    assert.equal(
+      daemon.lastOpts?.discoveryRoot,
+      path.join(projectRoot, ".agents-comm-bus-discovery"),
+      "marker-resolved discoveryRoot reached the daemon ensure",
+    );
+    assert.equal(
+      (daemon.lastOpts?.env as Record<string, string> | undefined)?.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+      path.join(projectRoot, ".agents-comm-bus-discovery"),
+      "marker-resolved discoveryRoot reached the daemon spawn env",
     );
   });
 });
@@ -256,5 +301,6 @@ describe("entryEnsures — source/dev mode", () => {
       path.join(projectRoot, binRel),
       "marker-derived source-mode daemonBin reached ensureDaemon",
     );
+    assert.equal(daemon.lastOpts?.discoveryRoot, stateRoot, "without marker discoveryRoot, default mirrors stateRoot");
   });
 });

@@ -21,6 +21,7 @@
  *   {
  *     "daemonBin":   "agents-comm-bus/dist/core-daemon/serve.js",  // required, repo-relative or absolute-inside-root
  *     "stateRoot":   ".agents-comm-bus-dev",                       // optional
+ *     "discoveryRoot": ".agents-comm-bus-discovery",                // optional, pid/port/spawn-lock only
  *     "adaptersDir": "adapters"                                     // optional
  *   }
  */
@@ -92,6 +93,11 @@ export function resolveDevConfig(projectRoot, deps = {}) {
     const stateRoot = path.resolve(projectRoot, parsed.stateRoot);
     if (isInside(projectRoot, stateRoot)) env.AGENTS_COMM_BUS_ROOT = stateRoot;
     else reasons.push(`ignoring stateRoot outside project root: ${parsed.stateRoot}`);
+  }
+  if (typeof parsed.discoveryRoot === "string" && parsed.discoveryRoot.length > 0) {
+    const discoveryRoot = path.resolve(projectRoot, parsed.discoveryRoot);
+    if (isInside(projectRoot, discoveryRoot)) env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot;
+    else reasons.push(`ignoring discoveryRoot outside project root: ${parsed.discoveryRoot}`);
   }
   if (typeof parsed.adaptersDir === "string" && parsed.adaptersDir.length > 0) {
     const adaptersDir = path.resolve(projectRoot, parsed.adaptersDir);

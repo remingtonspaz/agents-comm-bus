@@ -6,7 +6,11 @@ import assert from "node:assert/strict";
 
 import { ensureDaemon, writeDaemonDiscoveryFiles } from "../../core-daemon/bootstrap/ensure-daemon.js";
 import { DAEMON_VERSION, IPC_PROTOCOL_VERSION } from "../../core-daemon/config.js";
-import { resolveConversationPaths, resolveStatePaths } from "../../core-daemon/paths.js";
+import {
+  resolveConversationPaths,
+  resolveDiscoveryPaths,
+  resolveStatePaths,
+} from "../../core-daemon/paths.js";
 import type { DaemonHello } from "../../core-daemon/ipc/protocol.js";
 
 function daemonHello(): DaemonHello {
@@ -37,6 +41,29 @@ describe("agents-comm-bus path layout", () => {
     assert.equal(paths.pidFile, path.join(paths.root, "daemon.pid"));
     assert.equal(paths.portFile, path.join(paths.root, "port"));
     assert.equal(paths.spawnLock, path.join(paths.root, ".spawn.lock"));
+  });
+
+  it("defaults discovery paths to the durable state root", () => {
+    const stateRoot = path.join(os.tmpdir(), "state-root");
+    const discovery = resolveDiscoveryPaths({ stateRoot });
+
+    assert.equal(discovery.root, stateRoot);
+    assert.equal(discovery.pidFile, path.join(stateRoot, "daemon.pid"));
+    assert.equal(discovery.portFile, path.join(stateRoot, "port"));
+    assert.equal(discovery.spawnLock, path.join(stateRoot, ".spawn.lock"));
+  });
+
+  it("can split discovery files from durable state", () => {
+    const stateRoot = path.join(os.tmpdir(), "state-root");
+    const discoveryRoot = path.join(os.tmpdir(), "checkout", ".agents-comm-bus-discovery");
+    const state = resolveStatePaths({ stateRoot });
+    const discovery = resolveDiscoveryPaths({ stateRoot, discoveryRoot });
+
+    assert.equal(state.database, path.join(stateRoot, "agents-comm-bus.db"));
+    assert.equal(discovery.root, discoveryRoot);
+    assert.equal(discovery.pidFile, path.join(discoveryRoot, "daemon.pid"));
+    assert.equal(discovery.portFile, path.join(discoveryRoot, "port"));
+    assert.equal(discovery.spawnLock, path.join(discoveryRoot, ".spawn.lock"));
   });
 
   it("resolves transcript and attachment paths per conversation inventory id", () => {
@@ -112,6 +139,51 @@ describe("ensureDaemon", () => {
     assert.equal(spawned, true);
     assert.equal(result.port, port);
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(port));
+  });
+
+  it("does not reuse or terminate a compatible daemon in another discovery root", async () => {
+    const stateRoot = await tempStateRoot();
+    const prodDiscovery = path.join(stateRoot, "prod-discovery");
+    const devDiscovery = path.join(stateRoot, "dev-discovery");
+    const prodPaths = resolveDiscoveryPaths({ stateRoot, discoveryRoot: prodDiscovery });
+    const devPaths = resolveDiscoveryPaths({ stateRoot, discoveryRoot: devDiscovery });
+    await mkdir(prodPaths.root, { recursive: true });
+    await writeFile(prodPaths.pidFile, "12345\n", "utf8");
+    await writeFile(prodPaths.portFile, "41131\n", "utf8");
+
+    let terminated = false;
+    let spawned = false;
+    const result = await ensureDaemon({
+      stateRoot,
+      discoveryRoot: devDiscovery,
+      isPidAlive: () => true,
+      terminateDaemon: () => {
+        terminated = true;
+      },
+      probeDaemon: async (candidatePort) => {
+        assert.notEqual(candidatePort, 41_131, "dev slot must not probe prod port");
+        assert.equal(candidatePort, 41_132);
+        return daemonHello();
+      },
+      spawnDaemon: async (_statePaths, discoveryPaths) => {
+        spawned = true;
+        assert.equal(discoveryPaths.root, devDiscovery);
+        await writeDaemonDiscoveryFiles({
+          stateRoot,
+          discoveryRoot: devDiscovery,
+          pid: process.pid,
+          port: 41_132,
+        });
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.equal(terminated, false, "cross-root daemon must never be terminated");
+    assert.equal(spawned, true, "empty dev discovery root should spawn dev daemon");
+    assert.equal(result.port, 41_132);
+    assert.equal((await readFile(prodPaths.portFile, "utf8")).trim(), "41131");
+    assert.equal((await readFile(devPaths.portFile, "utf8")).trim(), "41132");
   });
 
   it("reuses a daemon with a different bundle version when the IPC protocol is compatible", async () => {
@@ -190,6 +262,132 @@ describe("ensureDaemon", () => {
     assert.equal(result.spawned, true);
     assert.equal(result.port, newPort);
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), String(newPort));
+  });
+
+  it("terminates protocol mismatches only within the same discovery root", async () => {
+    const stateRoot = await tempStateRoot();
+    const prodDiscovery = path.join(stateRoot, "prod-discovery");
+    const devDiscovery = path.join(stateRoot, "dev-discovery");
+    const prodPaths = resolveDiscoveryPaths({ stateRoot, discoveryRoot: prodDiscovery });
+    const devPaths = resolveDiscoveryPaths({ stateRoot, discoveryRoot: devDiscovery });
+    await mkdir(prodPaths.root, { recursive: true });
+    await writeFile(prodPaths.pidFile, "12345\n", "utf8");
+    await writeFile(prodPaths.portFile, "41133\n", "utf8");
+
+    let terminated = false;
+    const result = await ensureDaemon({
+      stateRoot,
+      discoveryRoot: devDiscovery,
+      isPidAlive: () => true,
+      terminateDaemon: () => {
+        terminated = true;
+      },
+      probeDaemon: async (candidatePort) => {
+        assert.equal(candidatePort, 41_134);
+        return daemonHello();
+      },
+      spawnDaemon: async () => {
+        await writeDaemonDiscoveryFiles({
+          stateRoot,
+          discoveryRoot: devDiscovery,
+          pid: process.pid,
+          port: 41_134,
+        });
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.equal(terminated, false);
+    assert.equal(result.port, 41_134);
+    assert.equal((await readFile(prodPaths.portFile, "utf8")).trim(), "41133");
+    assert.equal((await readFile(devPaths.portFile, "utf8")).trim(), "41134");
+  });
+
+  it("logs a loud warning when source mode shares the durable discovery root", async () => {
+    const stateRoot = await tempStateRoot();
+    const messages: string[] = [];
+
+    await ensureDaemon({
+      stateRoot,
+      env: { AGENTS_COMM_BUS_BIN: path.join(stateRoot, "serve.js") },
+      log: (message) => messages.push(message),
+      probeDaemon: async (candidatePort) => {
+        assert.equal(candidatePort, 41_135);
+        return daemonHello();
+      },
+      spawnDaemon: async () => {
+        await writeDaemonDiscoveryFiles({
+          stateRoot,
+          pid: process.pid,
+          port: 41_135,
+        });
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.match(messages.join("\n"), /source\/dev daemon is sharing the production discovery root/);
+  });
+
+  it("does not warn when source mode has its own discovery root", async () => {
+    const stateRoot = await tempStateRoot();
+    const discoveryRoot = path.join(stateRoot, ".agents-comm-bus-discovery");
+    const messages: string[] = [];
+
+    await ensureDaemon({
+      stateRoot,
+      discoveryRoot,
+      env: { AGENTS_COMM_BUS_BIN: path.join(stateRoot, "serve.js") },
+      log: (message) => messages.push(message),
+      probeDaemon: async (candidatePort) => {
+        assert.equal(candidatePort, 41_136);
+        return daemonHello();
+      },
+      spawnDaemon: async () => {
+        await writeDaemonDiscoveryFiles({
+          stateRoot,
+          discoveryRoot,
+          pid: process.pid,
+          port: 41_136,
+        });
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.deepEqual(messages, []);
+  });
+
+  it("honors env-provided discovery root for direct ensureDaemon callers", async () => {
+    const stateRoot = await tempStateRoot();
+    const discoveryRoot = path.join(stateRoot, "direct-caller-discovery");
+    const discoveryPaths = resolveDiscoveryPaths({ stateRoot, discoveryRoot });
+
+    const result = await ensureDaemon({
+      env: {
+        AGENTS_COMM_BUS_STATE_ROOT: stateRoot,
+        AGENTS_COMM_BUS_DISCOVERY_ROOT: discoveryRoot,
+      },
+      probeDaemon: async (candidatePort) => {
+        assert.equal(candidatePort, 41_137);
+        return daemonHello();
+      },
+      spawnDaemon: async (_statePaths, actualDiscoveryPaths) => {
+        assert.equal(actualDiscoveryPaths.root, discoveryRoot);
+        await writeDaemonDiscoveryFiles({
+          stateRoot,
+          discoveryRoot,
+          pid: process.pid,
+          port: 41_137,
+        });
+      },
+      timeoutMs: 1_000,
+      retryMs: 5,
+    });
+
+    assert.equal(result.port, 41_137);
+    assert.equal((await readFile(discoveryPaths.portFile, "utf8")).trim(), "41137");
   });
 
   it("refuses to downgrade a daemon speaking a newer IPC protocol", async () => {

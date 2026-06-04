@@ -2,6 +2,9 @@ export interface StatePathOptions {
     homeDir?: string;
     stateRoot?: string;
 }
+export interface DiscoveryPathOptions extends StatePathOptions {
+    discoveryRoot?: string;
+}
 export interface ConversationPathOptions extends StatePathOptions {
     conversationId: string;
 }
@@ -13,6 +16,12 @@ export interface AgentsCommBusPaths {
     auditDir: string;
     chatsDir: string;
     tokensDir: string;
+    pidFile: string;
+    portFile: string;
+    spawnLock: string;
+}
+export interface AgentsCommBusDiscoveryPaths {
+    root: string;
     pidFile: string;
     portFile: string;
     spawnLock: string;
@@ -30,6 +39,8 @@ export interface TokenFilePathOptions extends StatePathOptions {
 }
 export declare function stateRoot(options?: StatePathOptions): string;
 export declare function resolveStatePaths(options?: StatePathOptions): AgentsCommBusPaths;
+export declare function discoveryRoot(options?: DiscoveryPathOptions): string;
+export declare function resolveDiscoveryPaths(options?: DiscoveryPathOptions): AgentsCommBusDiscoveryPaths;
 export declare function resolveConversationPaths(options: ConversationPathOptions): ConversationPaths;
 export declare function resolveTokenFilePath(options: TokenFilePathOptions): string;
 //# sourceMappingURL=paths.d.ts.map

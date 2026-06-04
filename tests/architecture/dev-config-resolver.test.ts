@@ -52,14 +52,19 @@ describe("resolveDevConfig — valid marker", () => {
     assert.equal(r.env.AGENTS_COMM_BUS_BIN, path.join(root, "agents-comm-bus/dist/core-daemon/serve.js"));
   });
 
-  it("includes optional stateRoot / adaptersDir when they resolve inside the root", async () => {
+  it("includes optional discoveryRoot / stateRoot / adaptersDir when they resolve inside the root", async () => {
     const root = await project({
       daemonBin: "agents-comm-bus/dist/core-daemon/serve.js",
+      discoveryRoot: ".agents-comm-bus-discovery",
       stateRoot: ".agents-comm-bus-dev",
       adaptersDir: "adapters",
     });
     const r = resolveDevConfig(root);
     assert.equal(r.status, "applied");
+    assert.equal(
+      r.env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+      path.join(root, ".agents-comm-bus-discovery"),
+    );
     assert.equal(r.env.AGENTS_COMM_BUS_ROOT, path.join(root, ".agents-comm-bus-dev"));
     assert.equal(r.env.AGENTS_COMM_BUS_ADAPTERS_DIR, path.join(root, "adapters"));
   });
@@ -68,11 +73,17 @@ describe("resolveDevConfig — valid marker", () => {
     const root = await project({
       daemonBin: "agents-comm-bus/dist/core-daemon/serve.js",
       stateRoot: "../escaping-state",
+      discoveryRoot: "../escaping-discovery",
     });
     const r = resolveDevConfig(root);
     assert.equal(r.status, "applied");
     assert.ok(r.env.AGENTS_COMM_BUS_BIN);
     assert.equal(r.env.AGENTS_COMM_BUS_ROOT, undefined, "escaping stateRoot must be dropped");
+    assert.equal(
+      r.env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+      undefined,
+      "escaping discoveryRoot must be dropped",
+    );
   });
 
   it("tolerates a leading UTF-8 BOM (Windows editors / PowerShell write one)", async () => {
