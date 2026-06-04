@@ -3,7 +3,7 @@
   "agent": "claude",
   "comm": "telegram",
   "plugin_version": "0.1.1",
-  "daemon_bundle_version": "0.2.10",
+  "daemon_bundle_version": "0.2.11",
   "adapter_bundle_version": "0.1.3",
   "daemon_sidecars": [
     "001_initial.sql",

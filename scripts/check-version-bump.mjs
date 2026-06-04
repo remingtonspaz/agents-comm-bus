@@ -13,13 +13,15 @@
 // version stays 100% trustworthy).
 //
 // Usage: node scripts/check-version-bump.mjs [baseRef]
-//   baseRef defaults to env BASE_REF, else origin/universal-overhaul.
+//   baseRef defaults to env BASE_REF, else origin/main (the integration branch
+//   since the 2026-06-02 flip; the old origin/universal-overhaul default made
+//   local runs silently SKIP once that ref disappeared — an AGE-10-review find).
 import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const baseRef = process.argv[2] || process.env.BASE_REF || "origin/universal-overhaul";
+const baseRef = process.argv[2] || process.env.BASE_REF || "origin/main";
 
 function git(args) {
   return execSync(`git ${args}`, { cwd: repoRoot, encoding: "utf8" });
