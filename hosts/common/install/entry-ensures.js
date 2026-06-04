@@ -70,6 +70,7 @@ function findAncestorContaining(dir, name, exists) {
  * @property {string} agent
  * @property {string} comm
  * @property {string} [stateRoot]
+ * @property {string} [discoveryRoot]
  * @property {string} [projectRoot]          repo/worktree root for the dev marker lookup
  * @property {string} [pluginInstallDir]     plugin artifact dir (production stamp source)
  * @property {Record<string,string|undefined>} [env]   defaults to process.env (outermost only)
@@ -97,6 +98,7 @@ export async function entryEnsures(options) {
     agent,
     comm,
     stateRoot,
+    discoveryRoot,
     fromDir,
     projectRoot,
     pluginInstallDir,
@@ -139,6 +141,11 @@ export async function entryEnsures(options) {
     stateRoot ??
     resolvedEnv.AGENTS_COMM_BUS_ROOT ??
     resolveStatePathsFn({ stateRoot: resolvedEnv.AGENTS_COMM_BUS_STATE_ROOT }).root;
+  const canonicalDiscoveryRoot =
+    ensureDaemonOptions.discoveryRoot ??
+    discoveryRoot ??
+    resolvedEnv.AGENTS_COMM_BUS_DISCOVERY_ROOT ??
+    canonicalStateRoot;
 
   // 2. Central install FIRST — production failures throw here, before any spawn.
   const centralInstall = await ensureCentralInstallFn({
@@ -157,7 +164,11 @@ export async function entryEnsures(options) {
   const daemon = await ensureDaemonFn({
     ...ensureDaemonOptions,
     stateRoot: canonicalStateRoot,
-    env: resolvedEnv,
+    discoveryRoot: canonicalDiscoveryRoot,
+    env: {
+      ...resolvedEnv,
+      AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot,
+    },
   });
   return { ...daemon, centralInstall };
 }

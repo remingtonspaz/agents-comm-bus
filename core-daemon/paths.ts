@@ -9,6 +9,10 @@ export interface StatePathOptions {
   stateRoot?: string;
 }
 
+export interface DiscoveryPathOptions extends StatePathOptions {
+  discoveryRoot?: string;
+}
+
 export interface ConversationPathOptions extends StatePathOptions {
   conversationId: string;
 }
@@ -21,6 +25,13 @@ export interface AgentsCommBusPaths {
   auditDir: string;
   chatsDir: string;
   tokensDir: string;
+  pidFile: string;
+  portFile: string;
+  spawnLock: string;
+}
+
+export interface AgentsCommBusDiscoveryPaths {
+  root: string;
   pidFile: string;
   portFile: string;
   spawnLock: string;
@@ -55,6 +66,22 @@ export function resolveStatePaths(options: StatePathOptions = {}): AgentsCommBus
     auditDir: path.join(root, "audit"),
     chatsDir: path.join(root, "chats"),
     tokensDir: path.join(root, "tokens"),
+    pidFile: path.join(root, "daemon.pid"),
+    portFile: path.join(root, "port"),
+    spawnLock: path.join(root, ".spawn.lock"),
+  };
+}
+
+export function discoveryRoot(options: DiscoveryPathOptions = {}): string {
+  return path.resolve(options.discoveryRoot ?? stateRoot(options));
+}
+
+export function resolveDiscoveryPaths(
+  options: DiscoveryPathOptions = {},
+): AgentsCommBusDiscoveryPaths {
+  const root = discoveryRoot(options);
+  return {
+    root,
     pidFile: path.join(root, "daemon.pid"),
     portFile: path.join(root, "port"),
     spawnLock: path.join(root, ".spawn.lock"),

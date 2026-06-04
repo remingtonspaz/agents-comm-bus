@@ -15,6 +15,7 @@ node_modules/
 
 # Local source-mode switch for central-install development
 .agents-comm-bus-dev.json
+.agents-comm-bus-discovery/
 
 # Local team scratchpad: the canvas + its seed sidecar are local-only
 docs/Command Center.html

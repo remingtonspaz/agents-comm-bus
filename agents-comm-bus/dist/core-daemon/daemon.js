@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import { DAEMON_VERSION } from "./config.js";
-import { resolveStatePaths } from "./paths.js";
+import { resolveDiscoveryPaths, resolveStatePaths } from "./paths.js";
 import { CommLeaseArbiter, inferAuthorityRank, wrapWithLease, } from "./runtime/comm-lease.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
@@ -32,11 +32,16 @@ export async function runDaemon(options) {
     const argv = options.argv ?? process.argv.slice(2);
     const env = options.env ?? process.env;
     const paths = resolveStatePaths({ stateRoot: options.stateRoot ?? env.AGENTS_COMM_BUS_STATE_ROOT });
+    const discoveryPaths = resolveDiscoveryPaths({
+        stateRoot: paths.root,
+        discoveryRoot: options.discoveryRoot ?? env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+    });
     if (argv.includes("--print-paths")) {
-        console.log(JSON.stringify(paths, null, 2));
+        console.log(JSON.stringify({ ...paths, discovery: discoveryPaths }, null, 2));
         return;
     }
     await mkdir(paths.root, { recursive: true });
+    await mkdir(discoveryPaths.root, { recursive: true });
     const storage = await openSqliteStorage(paths.database);
     const transcripts = new JsonlTranscriptStore(paths.root);
     const audit = new JsonlAuditStore(paths.root);
@@ -79,7 +84,8 @@ export async function runDaemon(options) {
     });
     // Startup banner: make the contending daemon's identity unmistakable in logs.
     console.error(`agents-comm-bus ${DAEMON_VERSION} starting: ` +
-        `stateRoot=${paths.root} checkoutRoot=${checkoutRoot ?? "?"} ` +
+        `stateRoot=${paths.root} discoveryRoot=${discoveryPaths.root} ` +
+        `checkoutRoot=${checkoutRoot ?? "?"} ` +
         `daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} ` +
         `home=${os.homedir()}`);
     // AGE-38: lazy, session-triggered comm-adapter instantiation. The daemon no
@@ -263,7 +269,11 @@ export async function runDaemon(options) {
         },
     });
     try {
-        await writeDaemonDiscoveryFiles({ stateRoot: paths.root, port: server.port });
+        await writeDaemonDiscoveryFiles({
+            stateRoot: paths.root,
+            discoveryRoot: discoveryPaths.root,
+            port: server.port,
+        });
     }
     catch (error) {
         await server.close();
@@ -272,7 +282,8 @@ export async function runDaemon(options) {
     await bus.start();
     startDaemonPidWatchdog({
         stateRoot: paths.root,
-        pidFile: paths.pidFile,
+        discoveryRoot: discoveryPaths.root,
+        pidFile: discoveryPaths.pidFile,
         port: server.port,
         audit,
         stopDaemon: async () => {

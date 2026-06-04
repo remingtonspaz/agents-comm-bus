@@ -229,9 +229,9 @@ CLI should auto-receive the corresponding digit + Enter.
 
 ## Running the daemon
 
-The daemon is per-user, not per-project. It bootstraps lazily — any hook or
-MCP-server call to `ensureDaemon()` spawns it if not already running. State
-root is `~/.agents-comm-bus/`.
+The daemon is per-user, not per-project. It bootstraps lazily; any hook or
+MCP-server call to `ensureDaemon()` spawns it if not already running. Durable
+state root is `~/.agents-comm-bus/` by default.
 
 Entry point: `agents-comm-bus/dist/core-daemon/serve.js`. Spawning is automatic; for
 manual debugging:
@@ -240,9 +240,14 @@ manual debugging:
 node agents-comm-bus\dist\core-daemon\serve.js
 ```
 
-Discovery files: `~/.agents-comm-bus/port` (listening port), `~/.agents-comm-bus/daemon.pid`
-(the running daemon's PID). `ensure-daemon.ts` probes the port for a
-version-compatible handshake before deciding whether to reuse or respawn.
+Production/default discovery files live at `~/.agents-comm-bus/port`,
+`~/.agents-comm-bus/daemon.pid`, and `~/.agents-comm-bus/.spawn.lock`. Source
+checkouts can split only these runtime discovery files by setting
+`discoveryRoot` in `.agents-comm-bus-dev.json`; this repo uses the gitignored
+workspace folder `.agents-comm-bus-discovery/` so a dev daemon can live
+alongside the production daemon while sharing the durable DB/tokens root.
+`ensure-daemon.ts` probes the discovery-root port for a protocol-compatible
+handshake before deciding whether to reuse or spawn.
 
 ## Adding a new comm adapter
 
@@ -527,14 +532,17 @@ version-compatible handshake before deciding whether to reuse or respawn.
 
 ## State paths
 
-All state under `~/.agents-comm-bus/` (per-user, never per-project):
+Durable state lives under `~/.agents-comm-bus/` by default (per-user, never
+per-project). Production/default discovery also uses this root; source/dev
+checkouts may put only `port` / `daemon.pid` / `.spawn.lock` under a separate
+gitignored `discoveryRoot`.
 
 | Path | What's there |
 |------|--------------|
 | `agents-comm-bus.db` | SQLite DB: accounts, conversations, sessions, queries, idempotency, transcript+blob refs |
 | `port` | Daemon's listening WebSocket port |
 | `daemon.pid` | Daemon process id |
-| `spawn-lock*` | Bootstrap-race lock file |
+| `.spawn.lock` | Bootstrap-race lock file |
 | `bin/daemon.js` (+ `package.json`, `*.sql`) | Central-installed self-contained daemon bundle + ESM pin + migration sidecars (AGE-23) |
 | `bin/cli.js` + `agents-comm` / `agents-comm-bus` (`.cmd`) | Central-installed admin CLI bundle + launcher shims; add `bin/` to PATH (AGE-30) |
 | `bin/version.json` | Daemon (incl. CLI) bundle version + ref-count provenance |
@@ -548,6 +556,15 @@ All state under `~/.agents-comm-bus/` (per-user, never per-project):
 | `claude-wake/sessions/<key>/watcher.pid` | Watcher process id |
 | `claude-wake/sessions/<key>/debug.log` | Watcher debug log |
 | `claude-wake/sessions/<key>/watcher.lock` | Spawn-race lock for the watcher |
+
+When `.agents-comm-bus-dev.json` includes
+`"discoveryRoot": ".agents-comm-bus-discovery"`, that folder contains the dev
+daemon's `port`, `daemon.pid`, and `.spawn.lock`. It does not contain DB,
+tokens, transcripts, central-install bundles, or comm locks. Comm-resource
+leases stay homedir/global, so prod and dev daemons still arbitrate exclusive
+single-consumer resources even while using separate discovery roots. There is no
+central enumeration of all discovery roots in v1; the global comm locks are the
+central ownership view.
 
 `<key>` is `<basename(project)>-<8-char-fnv1a-hash(project)>`. Computed by
 `claudeWakeDirForProject` in `core-daemon/bridges/claude/wake.ts`

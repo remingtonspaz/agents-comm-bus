@@ -21,6 +21,18 @@ export function resolveStatePaths(options = {}) {
         spawnLock: path.join(root, ".spawn.lock"),
     };
 }
+export function discoveryRoot(options = {}) {
+    return path.resolve(options.discoveryRoot ?? stateRoot(options));
+}
+export function resolveDiscoveryPaths(options = {}) {
+    const root = discoveryRoot(options);
+    return {
+        root,
+        pidFile: path.join(root, "daemon.pid"),
+        portFile: path.join(root, "port"),
+        spawnLock: path.join(root, ".spawn.lock"),
+    };
+}
 export function resolveConversationPaths(options) {
     const paths = resolveStatePaths(options);
     const safeConversationId = encodeURIComponent(options.conversationId);

@@ -17,6 +17,7 @@ export type PidFileRead =
 
 export interface DaemonPidWatchdogCheckOptions {
   stateRoot?: string;
+  discoveryRoot?: string;
   pidFile: string;
   port: number;
   selfPid?: number;
@@ -131,7 +132,12 @@ export async function checkDaemonPidOwnership(
   const pidFile = await read(options.pidFile);
   if (pidFile.status === "missing") {
     try {
-      await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+      await writeDiscovery({
+        stateRoot: options.stateRoot,
+        discoveryRoot: options.discoveryRoot,
+        pid: selfPid,
+        port: options.port,
+      });
       return { status: "reclaimed", selfPid, reason: "missing" };
     } catch (error) {
       return {
@@ -183,7 +189,12 @@ export async function checkDaemonPidOwnership(
   }
 
   try {
-    await writeDiscovery({ stateRoot: options.stateRoot, pid: selfPid, port: options.port });
+    await writeDiscovery({
+      stateRoot: options.stateRoot,
+      discoveryRoot: options.discoveryRoot,
+      pid: selfPid,
+      port: options.port,
+    });
     return {
       status: "reclaimed",
       selfPid,

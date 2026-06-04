@@ -33,6 +33,7 @@ export type PidFileRead = {
 };
 export interface DaemonPidWatchdogCheckOptions {
     stateRoot?: string;
+    discoveryRoot?: string;
     pidFile: string;
     port: number;
     selfPid?: number;

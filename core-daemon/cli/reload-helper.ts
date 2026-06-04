@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { DAEMON_VERSION } from "../config.js";
 import { connectIpc } from "../ipc/client.js";
-import { resolveStatePaths } from "../paths.js";
+import { resolveDiscoveryPaths, resolveStatePaths } from "../paths.js";
 
 export interface ReloadResult {
   attempted: boolean;
@@ -28,7 +28,13 @@ export async function reloadDaemonRegistrations(options: {
   timeoutMs?: number;
   forceCredentialRefresh?: ForceCredentialRefreshTarget[];
 } = {}): Promise<ReloadResult> {
-  const paths = resolveStatePaths();
+  const statePaths = resolveStatePaths({
+    stateRoot: process.env.AGENTS_COMM_BUS_ROOT ?? process.env.AGENTS_COMM_BUS_STATE_ROOT,
+  });
+  const paths = resolveDiscoveryPaths({
+    stateRoot: statePaths.root,
+    discoveryRoot: process.env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+  });
   const port = await readPortFile(paths.portFile);
   if (port === undefined) {
     return { attempted: false, reason: "no daemon port file" };

@@ -236,12 +236,16 @@ All durable state is per-user:
 | `~/.agents-comm-bus/tokens/` | Daemon-owned Telegram token files |
 | `~/.agents-comm-bus/chats/<conversation_id>/transcript.jsonl` | Per-conversation transcripts |
 | `~/.agents-comm-bus/audit/<date>.jsonl` | Audit log |
-| `~/.agents-comm-bus/port` | Daemon IPC port discovery |
-| `~/.agents-comm-bus/daemon.pid` | Daemon process discovery |
+| `~/.agents-comm-bus/port` | Production/default daemon IPC port discovery |
+| `~/.agents-comm-bus/daemon.pid` | Production/default daemon process discovery |
 | `~/.agents-comm-bus/claude-wake/` | Claude watcher trigger/response files |
 
 State never lives under a plugin install directory, so it survives plugin
 reinstalls and upgrades.
+Source/dev checkouts can keep durable state shared while moving only runtime
+discovery files (`port`, `daemon.pid`, `.spawn.lock`) into a gitignored
+workspace folder such as `.agents-comm-bus-discovery/` via
+`.agents-comm-bus-dev.json`.
 
 ## Troubleshooting
 
@@ -251,9 +255,11 @@ Restart the host agent session. MCP servers are loaded at session start.
 
 ### Telegram messages are not received
 
-Check `~/.agents-comm-bus/daemon.pid`, `~/.agents-comm-bus/port`, and the daily
-audit log. A `409 Conflict` from Telegram means another process is polling the
-same bot token.
+Check the active discovery root's `daemon.pid` and `port` files, plus the daily
+audit log under `~/.agents-comm-bus/audit/`. Production/default discovery uses
+`~/.agents-comm-bus/`; source/dev checkouts may use `.agents-comm-bus-discovery/`.
+A `409 Conflict` from Telegram means another process is polling the same bot
+token.
 
 ### Sends use the wrong bot
 
@@ -262,9 +268,9 @@ aliases and can be ambiguous across agents.
 
 ### Daemon code changed but behavior did not
 
-Restart the daemon by stopping the PID in `~/.agents-comm-bus/daemon.pid` and
-deleting the stale `port` and `daemon.pid` files. The next hook or MCP call will
-spawn a fresh daemon.
+Restart the daemon by stopping the PID in the active discovery root's
+`daemon.pid` and deleting the stale `port` and `daemon.pid` files. The next hook
+or MCP call will spawn a fresh daemon.
 
 ## License
 
