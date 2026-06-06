@@ -1,0 +1,63 @@
+{
+  "generated": "2026-06-06T00:00:00Z",
+  "target_runtime": "Node.js >=22, TypeScript ESM",
+  "candidates": [
+    {
+      "name": "matrix-bot-sdk",
+      "repo": "https://github.com/turt2live/matrix-bot-sdk",
+      "npm": "https://www.npmjs.com/package/matrix-bot-sdk",
+      "language": "TypeScript",
+      "license": "MIT",
+      "stars": 268,
+      "last_commit": "2026-03-27",
+      "maintenance": "active (author-led)",
+      "e2ee": true,
+      "bot_helpers": true,
+      "appservice_support": true,
+      "fit": "High — purpose-built for bots/bridges, smaller dep graph, good TS ergonomics"
+    },
+    {
+      "name": "matrix-js-sdk",
+      "repo": "https://github.com/matrix-org/matrix-js-sdk",
+      "npm": "https://www.npmjs.com/package/matrix-js-sdk",
+      "language": "TypeScript",
+      "license": "Apache-2.0",
+      "stars": 2129,
+      "last_commit": "2026-06-05",
+      "maintenance": "very active (Element-sponsored)",
+      "e2ee": true,
+      "bot_helpers": false,
+      "appservice_support": "community modules",
+      "fit": "High — full spec coverage, best long-term maintenance, heavier deps and more boilerplate"
+    },
+    {
+      "name": "matrix-rust-sdk",
+      "repo": "https://github.com/matrix-org/matrix-rust-sdk",
+      "npm": null,
+      "language": "Rust",
+      "license": "Apache-2.0",
+      "stars": 2145,
+      "last_commit": "2026-06-05",
+      "maintenance": "very active (Element core)",
+      "e2ee": true,
+      "bot_helpers": false,
+      "appservice_support": false,
+      "fit": "Low as direct dep — usable only via crypto bindings consumed by the Node SDKs above"
+    },
+    {
+      "name": "matrix-nio",
+      "repo": "https://github.com/matrix-nio/matrix-nio",
+      "npm": null,
+      "language": "Python",
+      "license": "ambiguous",
+      "stars": 702,
+      "last_commit": "2026-02-16",
+      "maintenance": "moderate",
+      "e2ee": true,
+      "bot_helpers": false,
+      "appservice_support": false,
+      "fit": "None — wrong runtime (Python) for the TypeScript daemon"
+    }
+  ],
+  "recommendation": "matrix-bot-sdk for initial adapter; matrix-js-sdk for future full-client or deep E2EE requirements"
+}

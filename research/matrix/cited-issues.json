@@ -1,0 +1,129 @@
+{
+  "meta": {
+    "generated": "2026-06-06",
+    "tool": "github-api-curl+python"
+  },
+  "issues": [
+    {
+      "repo": "matrix-org/matrix-js-sdk",
+      "number": 2415,
+      "title": "TypeError: this.opts.request is not a function when running client in Node.js; reopen issue #1191",
+      "state": "closed",
+      "comments": 39,
+      "labels": [],
+      "url": "https://github.com/matrix-org/matrix-js-sdk/issues/2415"
+    },
+    {
+      "repo": "matrix-org/matrix-js-sdk",
+      "number": 5304,
+      "title": "matrix-js-sdk requires `.well-known/openid-configuration` endpoint to log in with OAuth",
+      "state": "open",
+      "comments": 10,
+      "labels": [],
+      "url": "https://github.com/matrix-org/matrix-js-sdk/issues/5304"
+    },
+    {
+      "repo": "matrix-org/matrix-js-sdk",
+      "number": 3325,
+      "title": "Several places in the code use timestamp to determine event order",
+      "state": "open",
+      "comments": 9,
+      "labels": [
+        "T-Task"
+      ],
+      "url": "https://github.com/matrix-org/matrix-js-sdk/issues/3325"
+    },
+    {
+      "repo": "matrix-org/matrix-js-sdk",
+      "number": 1758,
+      "title": "GetRooms on \"matrix-js-sdk\": \"^11.2.0\" and \"^12.0.0\" getting only one room but on \"^9.11.0\" and \"^10.1.0\" is getting all the rooms",
+      "state": "open",
+      "comments": 10,
+      "labels": [],
+      "url": "https://github.com/matrix-org/matrix-js-sdk/issues/1758"
+    },
+    {
+      "repo": "matrix-org/matrix-js-sdk",
+      "number": 3463,
+      "title": "MaxListenersExceededWarning on threads; many redundant fetches of thread root event",
+      "state": "open",
+      "comments": 9,
+      "labels": [],
+      "url": "https://github.com/matrix-org/matrix-js-sdk/issues/3463"
+    },
+    {
+      "repo": "matrix-org/matrix-js-sdk",
+      "number": 2092,
+      "title": "Error uploading one-time keys TypeError: account.unpublished_fallback_key is not a function",
+      "state": "open",
+      "comments": 10,
+      "labels": [],
+      "url": "https://github.com/matrix-org/matrix-js-sdk/issues/2092"
+    },
+    {
+      "repo": "turt2live/matrix-bot-sdk",
+      "number": 363,
+      "title": "Encrypted rooms does not works",
+      "state": "closed",
+      "comments": 4,
+      "labels": [
+        "bug"
+      ],
+      "url": "https://github.com/turt2live/matrix-bot-sdk/issues/363"
+    },
+    {
+      "repo": "turt2live/matrix-bot-sdk",
+      "number": 210,
+      "title": "Using a client with encryption crashes with 'One time key already signed'",
+      "state": "closed",
+      "comments": 6,
+      "labels": [],
+      "url": "https://github.com/turt2live/matrix-bot-sdk/issues/210"
+    },
+    {
+      "repo": "turt2live/matrix-bot-sdk",
+      "number": 333,
+      "title": "Encryption doesn't seem to work on Dendrite",
+      "state": "open",
+      "comments": 4,
+      "labels": [
+        "bug"
+      ],
+      "url": "https://github.com/turt2live/matrix-bot-sdk/issues/333"
+    },
+    {
+      "repo": "turt2live/matrix-bot-sdk",
+      "number": 293,
+      "title": "E2BE-enabled AppServices crash a while (IO error: could not acquire lock)",
+      "state": "open",
+      "comments": 11,
+      "labels": [
+        "bug",
+        "type:appservices"
+      ],
+      "url": "https://github.com/turt2live/matrix-bot-sdk/issues/293"
+    },
+    {
+      "repo": "turt2live/matrix-bot-sdk",
+      "number": 298,
+      "title": "Support refresh tokens/OIDC login & registration",
+      "state": "open",
+      "comments": 3,
+      "labels": [
+        "enhancement"
+      ],
+      "url": "https://github.com/turt2live/matrix-bot-sdk/issues/298"
+    },
+    {
+      "repo": "turt2live/matrix-bot-sdk",
+      "number": 256,
+      "title": "Bot becomes stuck with error \"Error handling sync Error: Expect value to be String, but received Undefined\"",
+      "state": "closed",
+      "comments": 14,
+      "labels": [
+        "bug"
+      ],
+      "url": "https://github.com/turt2live/matrix-bot-sdk/issues/256"
+    }
+  ]
+}
