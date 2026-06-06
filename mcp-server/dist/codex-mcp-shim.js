@@ -24795,7 +24795,7 @@ import path3 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.12";
+var DAEMON_VERSION = "0.2.13";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -25587,7 +25587,7 @@ async function readInstallStamp(pluginInstallDir, deps = {}) {
   try {
     const raw = await read(path7.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
     const parsed = JSON.parse(stripBom(raw));
-    if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string") {
+    if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string" || !isValidAdapterBundleVersionsMap(parsed.adapter_bundle_versions)) {
       return null;
     }
     return parsed;
@@ -25617,6 +25617,7 @@ Fix one of:
   }
   const resolvedAgent = options.agent ?? stamp.agent;
   const resolvedComm = options.comm ?? stamp.comm;
+  const resolvedAdapterBundleVersion = resolveAdapterBundleVersion(stamp, resolvedComm);
   if (typeof resolvedAgent !== "string" || resolvedAgent.length === 0 || typeof resolvedComm !== "string" || resolvedComm.length === 0) {
     throw new Error(
       `central install (production mode): install stamp resolved an invalid actor identity (agent=${JSON.stringify(resolvedAgent)}, comm=${JSON.stringify(resolvedComm)}). The stamp must carry agent + comm, or the caller must supply them.`
@@ -25630,12 +25631,18 @@ Fix one of:
     comm: resolvedComm,
     pluginVersion: stamp.plugin_version,
     daemonBundleVersion: stamp.daemon_bundle_version,
-    adapterBundleVersion: stamp.adapter_bundle_version,
+    adapterBundleVersion: resolvedAdapterBundleVersion,
     pluginInstallDir: options.pluginInstallDir,
     installedAt: options.installedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
     ...Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}
   };
-  if (await centralInstallContentIsCurrent(options.stateRoot, resolvedComm, stamp, options.deps)) {
+  if (await centralInstallContentIsCurrent(
+    options.stateRoot,
+    resolvedComm,
+    stamp,
+    resolvedAdapterBundleVersion,
+    options.deps
+  )) {
     return { mode: "production", actor, skipped: true };
   }
   if (options.readOnlyIfCentralInstalled && await centralInstallHasRunnableContent(options.stateRoot, resolvedComm, options.deps)) {
@@ -25649,16 +25656,30 @@ Fix one of:
   });
   return { mode: "production", actor, ...outcome };
 }
-async function centralInstallContentIsCurrent(stateRoot2, comm, stamp, deps = {}) {
+async function centralInstallContentIsCurrent(stateRoot2, comm, stamp, adapterBundleVersion, deps = {}) {
   const readState = deps.readCentralState ?? readCentralState;
   try {
     const state = await readState(stateRoot2, comm);
     return Boolean(
-      state.daemonExists && state.adapterExists && state.daemonVersionFile?.content_version === stamp.daemon_bundle_version && state.adapterVersionFile?.content_version === stamp.adapter_bundle_version
+      state.daemonExists && state.adapterExists && state.daemonVersionFile?.content_version === stamp.daemon_bundle_version && state.adapterVersionFile?.content_version === adapterBundleVersion
     );
   } catch {
     return false;
   }
+}
+function resolveAdapterBundleVersion(stamp, comm) {
+  const fromMap = stamp.adapter_bundle_versions?.[comm];
+  if (typeof fromMap === "string" && fromMap.length > 0) {
+    return fromMap;
+  }
+  return stamp.adapter_bundle_version;
+}
+function isValidAdapterBundleVersionsMap(value) {
+  if (value === void 0) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.entries(value).every(
+    ([k, v]) => typeof k === "string" && k.length > 0 && typeof v === "string" && v.length > 0
+  );
 }
 async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
   const readState = deps.readCentralState ?? readCentralState;
