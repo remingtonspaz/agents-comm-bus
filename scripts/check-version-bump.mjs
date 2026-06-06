@@ -20,6 +20,13 @@ import { execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  adapterBumpNpmScript,
+  adapterBundlePathMatcher,
+  adapterVersionRelPath,
+  discoverCommAdapters,
+} from "./comm-adapters.mjs";
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseRef = process.argv[2] || process.env.BASE_REF || "origin/main";
 
@@ -44,6 +51,7 @@ function readConst(content, name) {
 // Each shipped, centrally-superseded artifact: the version source that gates its
 // supersede, and a matcher for the staged bundle whose change signals "bytes
 // changed". (The CLI bundle is NOT here — it is not centrally superseded.)
+/** @type {Array<{label:string, versionFile:string, versionConst:string, match:(f:string)=>boolean, bumpCmd:string}>} */
 const SURFACES = [
   {
     // The admin CLI rides under the daemon version (AGE-30): it ships from the
@@ -55,14 +63,17 @@ const SURFACES = [
     match: (f) => /(^|\/)(daemon|cli)\.bundle\.js$/.test(f),
     bumpCmd: "npm run bump:daemon",
   },
-  {
-    label: "telegram adapter",
-    versionFile: "adapters/telegram/version.ts",
-    versionConst: "ADAPTER_VERSION",
-    match: (f) => /(^|\/)telegram\.adapter\.bundle\.js$/.test(f),
-    bumpCmd: "npm run bump:adapter",
-  },
 ];
+
+for (const comm of await discoverCommAdapters(repoRoot)) {
+  SURFACES.push({
+    label: `${comm} adapter`,
+    versionFile: adapterVersionRelPath(comm),
+    versionConst: "ADAPTER_VERSION",
+    match: (f) => adapterBundlePathMatcher(comm).test(f),
+    bumpCmd: adapterBumpNpmScript(comm),
+  });
+}
 
 let baseSha;
 try {
@@ -97,7 +108,7 @@ if (failures.length > 0) {
     );
     console.error(`    changed: ${f.files.join(", ")}`);
     console.error(
-      `    fix: \`${f.bumpCmd} [patch|minor|major]\` (edits ${f.versionConst} in ${f.versionFile}),\n` +
+      `    fix: \`${f.bumpCmd}\` (edits ${f.versionConst} in ${f.versionFile}),\n` +
         `         then \`npm run verify:clean-build\` to restage with the new version.\n`,
     );
   }

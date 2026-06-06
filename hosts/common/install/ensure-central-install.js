@@ -48,7 +48,9 @@ export const INSTALL_STAMP_NAME = "install-stamp.json";
  * @property {string} [comm]    identity; may be omitted if the caller supplies options.comm
  * @property {string} plugin_version          provenance only
  * @property {string} daemon_bundle_version   bin/daemon.js replace key
- * @property {string} adapter_bundle_version  adapters/<comm>.js replace key
+ * @property {string} adapter_bundle_version  adapters/<comm>.js replace key (transition field)
+ * @property {Record<string, string>} [adapter_bundle_versions]
+ *   per-comm adapter content versions; when present, preferred for the stamped comm
  * @property {string[]} [daemon_sidecars]     basenames copied next to bin/daemon.js (e.g. migration *.sql)
  *
  * @typedef {"source" | "production"} InstallMode
@@ -116,7 +118,8 @@ export async function readInstallStamp(pluginInstallDir, deps = {}) {
       parsed.schema_version !== 1 ||
       typeof parsed.plugin_version !== "string" ||
       typeof parsed.daemon_bundle_version !== "string" ||
-      typeof parsed.adapter_bundle_version !== "string"
+      typeof parsed.adapter_bundle_version !== "string" ||
+      !isValidAdapterBundleVersionsMap(parsed.adapter_bundle_versions)
     ) {
       return null;
     }
@@ -171,6 +174,7 @@ export async function ensureCentralInstall(options) {
   // adapters/undefined.js or metadata with an undefined comm.
   const resolvedAgent = options.agent ?? stamp.agent;
   const resolvedComm = options.comm ?? stamp.comm;
+  const resolvedAdapterBundleVersion = resolveAdapterBundleVersion(stamp, resolvedComm);
   if (
     typeof resolvedAgent !== "string" ||
     resolvedAgent.length === 0 ||
@@ -190,13 +194,21 @@ export async function ensureCentralInstall(options) {
     comm: resolvedComm,
     pluginVersion: stamp.plugin_version,
     daemonBundleVersion: stamp.daemon_bundle_version,
-    adapterBundleVersion: stamp.adapter_bundle_version,
+    adapterBundleVersion: resolvedAdapterBundleVersion,
     pluginInstallDir: options.pluginInstallDir,
     installedAt: options.installedAt ?? new Date().toISOString(),
     ...(Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}),
   };
 
-  if (await centralInstallContentIsCurrent(options.stateRoot, resolvedComm, stamp, options.deps)) {
+  if (
+    await centralInstallContentIsCurrent(
+      options.stateRoot,
+      resolvedComm,
+      stamp,
+      resolvedAdapterBundleVersion,
+      options.deps,
+    )
+  ) {
     return { mode: "production", actor, skipped: true };
   }
 
@@ -230,10 +242,11 @@ export async function ensureCentralInstall(options) {
  * @param {string} stateRoot
  * @param {string} comm
  * @param {InstallStamp} stamp
+ * @param {string} adapterBundleVersion
  * @param {EnsureCentralInstallDeps} [deps]
  * @returns {Promise<boolean>}
  */
-async function centralInstallContentIsCurrent(stateRoot, comm, stamp, deps = {}) {
+async function centralInstallContentIsCurrent(stateRoot, comm, stamp, adapterBundleVersion, deps = {}) {
   const readState = deps.readCentralState ?? defaultReadCentralState;
   try {
     const state = await readState(stateRoot, comm);
@@ -241,11 +254,41 @@ async function centralInstallContentIsCurrent(stateRoot, comm, stamp, deps = {})
       state.daemonExists &&
         state.adapterExists &&
         state.daemonVersionFile?.content_version === stamp.daemon_bundle_version &&
-        state.adapterVersionFile?.content_version === stamp.adapter_bundle_version,
+        state.adapterVersionFile?.content_version === adapterBundleVersion,
     );
   } catch {
     return false;
   }
+}
+
+/**
+ * Resolve the adapter bundle version for a comm from the stamp. During the
+ * transition, stamps carry both the singular field and the per-comm map; the
+ * map wins when it has an entry for the comm, otherwise the singular field is
+ * used (legacy stamps).
+ *
+ * @param {InstallStamp} stamp
+ * @param {string} comm
+ * @returns {string}
+ */
+export function resolveAdapterBundleVersion(stamp, comm) {
+  const fromMap = stamp.adapter_bundle_versions?.[comm];
+  if (typeof fromMap === "string" && fromMap.length > 0) {
+    return fromMap;
+  }
+  return stamp.adapter_bundle_version;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isValidAdapterBundleVersionsMap(value) {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.entries(value).every(
+    ([k, v]) => typeof k === "string" && k.length > 0 && typeof v === "string" && v.length > 0,
+  );
 }
 
 /**

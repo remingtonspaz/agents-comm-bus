@@ -8,6 +8,7 @@ import {
   ensureCentralInstall,
   resolveInstallMode,
   readInstallStamp,
+  resolveAdapterBundleVersion,
   INSTALL_STAMP_NAME,
 } from "../../hosts/common/install/ensure-central-install.js";
 import { resolveCentralPaths } from "../../hosts/common/install/node-fs-seam.js";
@@ -83,6 +84,45 @@ describe("readInstallStamp", () => {
     const stamp = await readInstallStamp(dir);
     assert.ok(stamp);
     assert.equal(stamp.daemon_bundle_version, "1.0.0");
+  });
+
+  it("parses a stamp carrying adapter_bundle_versions when the map is well-formed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "mapstamp-"));
+    await writeFile(
+      path.join(dir, INSTALL_STAMP_NAME),
+      JSON.stringify({
+        schema_version: 1,
+        agent: "claude",
+        comm: "telegram",
+        plugin_version: "1.0.0",
+        daemon_bundle_version: "1.0.0",
+        adapter_bundle_version: "1.0.0",
+        adapter_bundle_versions: { telegram: "1.0.0" },
+      }),
+      "utf8",
+    );
+    const stamp = await readInstallStamp(dir);
+    assert.ok(stamp);
+    assert.deepEqual(stamp.adapter_bundle_versions, { telegram: "1.0.0" });
+    assert.equal(resolveAdapterBundleVersion(stamp, "telegram"), "1.0.0");
+  });
+
+  it("rejects adapter_bundle_versions when values are not non-empty strings", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "badmap-"));
+    await writeFile(
+      path.join(dir, INSTALL_STAMP_NAME),
+      JSON.stringify({
+        schema_version: 1,
+        agent: "claude",
+        comm: "telegram",
+        plugin_version: "1.0.0",
+        daemon_bundle_version: "1.0.0",
+        adapter_bundle_version: "1.0.0",
+        adapter_bundle_versions: { telegram: 1 },
+      }),
+      "utf8",
+    );
+    assert.equal(await readInstallStamp(dir), null);
   });
 });
 

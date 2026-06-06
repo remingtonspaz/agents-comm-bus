@@ -49,6 +49,7 @@ async function assertInstallStamp(base: string, agent: "claude" | "codex") {
     plugin_version: plugin.version,
     daemon_bundle_version: daemonVersion,
     adapter_bundle_version: adapterVersion,
+    adapter_bundle_versions: { telegram: adapterVersion },
     daemon_sidecars: [
       "001_initial.sql",
       "002_conversation_agent_identity.sql",

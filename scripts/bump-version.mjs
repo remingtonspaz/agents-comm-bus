@@ -7,8 +7,8 @@
 //
 // Usage:
 //   node scripts/bump-version.mjs daemon  [patch|minor|major]
-//   node scripts/bump-version.mjs adapter [patch|minor|major]   (telegram)
-// (npm run bump:daemon / bump:adapter -- [level])
+//   node scripts/bump-version.mjs adapter <comm> [patch|minor|major]
+// (npm run bump:daemon / bump:adapter -- <comm> [level])
 //
 // After bumping, run `npm run verify:clean-build` to restage artifacts (the new
 // version is embedded into plugins/**/install-stamp.json).
@@ -16,21 +16,49 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  adapterBumpNpmScript,
+  adapterVersionRelPath,
+  discoverCommAdapters,
+} from "./comm-adapters.mjs";
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const SURFACES = {
-  daemon: { file: "core-daemon/config.ts", konst: "DAEMON_VERSION" },
-  adapter: { file: "adapters/telegram/version.ts", konst: "ADAPTER_VERSION" },
-};
+const DAEMON_SURFACE = { file: "core-daemon/config.ts", konst: "DAEMON_VERSION" };
 
 const surfaceArg = process.argv[2];
-const level = process.argv[3] ?? "patch";
+const commArg = process.argv[3];
+const levelArg = process.argv[4];
 
-const surface = SURFACES[surfaceArg];
-if (!surface) {
-  console.error(`bump-version: first arg must be one of: ${Object.keys(SURFACES).join(", ")}`);
+let surface;
+let level;
+
+if (surfaceArg === "daemon") {
+  surface = DAEMON_SURFACE;
+  level = commArg ?? "patch";
+} else if (surfaceArg === "adapter") {
+  const comms = await discoverCommAdapters(repoRoot);
+  if (comms.length === 0) {
+    console.error("bump-version: no comm adapters discovered under adapters/<comm>/");
+    process.exit(1);
+  }
+  const comm = commArg && !["patch", "minor", "major"].includes(commArg) ? commArg : comms[0];
+  if (!comms.includes(comm)) {
+    console.error(`bump-version: unknown comm "${comm}" (discovered: ${comms.join(", ")})`);
+    process.exit(1);
+  }
+  surface = { file: adapterVersionRelPath(comm), konst: "ADAPTER_VERSION", comm };
+  level =
+    commArg && ["patch", "minor", "major"].includes(commArg)
+      ? commArg
+      : levelArg && ["patch", "minor", "major"].includes(levelArg)
+        ? levelArg
+        : "patch";
+} else {
+  console.error('bump-version: first arg must be "daemon" or "adapter"');
   process.exit(2);
 }
+
 if (!["patch", "minor", "major"].includes(level)) {
   console.error(`bump-version: level must be patch | minor | major (got "${level}")`);
   process.exit(2);
@@ -60,5 +88,9 @@ const current = m[2];
 const next = nextVersion(current, level);
 await writeFile(absFile, content.replace(re, `$1${next}$3`), "utf8");
 
-console.log(`[bump-version] ${surface.konst}: ${current} -> ${next} (${level}) in ${surface.file}`);
+const label = surface.comm ? `${surface.comm} adapter` : "daemon";
+console.log(`[bump-version] ${label} ${surface.konst}: ${current} -> ${next} (${level}) in ${surface.file}`);
 console.log("Next: run `npm run verify:clean-build` to restage artifacts with the new version.");
+if (surface.comm) {
+  console.log(`(equivalent: \`${adapterBumpNpmScript(surface.comm, level)}\`)`);
+}

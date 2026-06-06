@@ -25,20 +25,46 @@ export const INSTALL_STAMP_SCHEMA = 1;
  * @param {string} fields.pluginVersion        provenance (from the plugin manifest)
  * @param {string} fields.daemonBundleVersion   content key (DAEMON_VERSION)
  * @param {string} fields.adapterBundleVersion  content key (per-comm ADAPTER_VERSION)
+ * @param {Record<string, string>} [fields.adapterBundleVersions]
+ *   per-comm adapter content versions. When omitted, defaults to
+ *   `{ [comm]: adapterBundleVersion }`. The singular `adapter_bundle_version`
+ *   is preserved during the transition so existing readers keep working.
  * @param {string[]} [fields.daemonSidecars]    basenames of files that must be
  *   copied next to bin/daemon.js (e.g. the migration *.sql the runner reads
  *   relative to its own module dir). Optional; defaults to none.
- * @returns {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string, daemon_sidecars?:string[]}}
+ * @returns {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string, adapter_bundle_versions:Record<string,string>, daemon_sidecars?:string[]}}
  */
 export function buildInstallStamp(fields) {
-  const { agent, comm, pluginVersion, daemonBundleVersion, adapterBundleVersion, daemonSidecars } =
-    fields ?? {};
+  const {
+    agent,
+    comm,
+    pluginVersion,
+    daemonBundleVersion,
+    adapterBundleVersion,
+    adapterBundleVersions,
+    daemonSidecars,
+  } = fields ?? {};
   requireString("agent", agent);
   requireString("comm", comm);
   requireString("pluginVersion", pluginVersion);
   requireString("daemonBundleVersion", daemonBundleVersion);
   requireString("adapterBundleVersion", adapterBundleVersion);
-  /** @type {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string, daemon_sidecars?:string[]}} */
+
+  const versionsMap = adapterBundleVersions ?? { [comm]: adapterBundleVersion };
+  if (
+    typeof versionsMap !== "object" ||
+    versionsMap === null ||
+    Object.entries(versionsMap).some(([k, v]) => typeof k !== "string" || typeof v !== "string" || v.length === 0)
+  ) {
+    throw new Error("buildInstallStamp: adapterBundleVersions must be a non-empty string→string map");
+  }
+  if (typeof versionsMap[comm] !== "string" || versionsMap[comm] !== adapterBundleVersion) {
+    throw new Error(
+      "buildInstallStamp: adapterBundleVersions must include the stamped comm with the same version as adapterBundleVersion",
+    );
+  }
+
+  /** @type {{schema_version:number, agent:string, comm:string, plugin_version:string, daemon_bundle_version:string, adapter_bundle_version:string, adapter_bundle_versions:Record<string,string>, daemon_sidecars?:string[]}} */
   const stamp = {
     schema_version: INSTALL_STAMP_SCHEMA,
     agent,
@@ -46,6 +72,7 @@ export function buildInstallStamp(fields) {
     plugin_version: pluginVersion,
     daemon_bundle_version: daemonBundleVersion,
     adapter_bundle_version: adapterBundleVersion,
+    adapter_bundle_versions: { ...versionsMap },
   };
   if (daemonSidecars !== undefined) {
     if (!Array.isArray(daemonSidecars) || daemonSidecars.some((s) => typeof s !== "string")) {

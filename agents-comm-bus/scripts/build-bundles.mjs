@@ -20,6 +20,11 @@ import { fileURLToPath } from "node:url";
 import { mkdir, readdir, copyFile } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  adapterBundleFileName,
+  discoverCommAdapters,
+} from "../../scripts/comm-adapters.mjs";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, ".."); // agents-comm-bus/
 const repoRoot = path.resolve(pkgRoot, ".."); // repo root (holds core-daemon/, adapters/, hosts/)
@@ -66,9 +71,15 @@ for (const f of sqlFiles) {
   await copyFile(path.join(schemaSrcDir, f), path.join(outDir, f));
 }
 
-// 2. Per-comm CommAdapter — the central adapters/<comm>.js copy loaded
-//    dynamically by the comm-agnostic daemon.
-await bundleOne(path.join("adapters", "telegram", "factory.ts"), "telegram.adapter.bundle.js");
+// 2. Per-comm CommAdapter bundles — one central adapters/<comm>.js copy per
+//    discovered comm (version.ts + factory.ts under adapters/<comm>/).
+const commAdapters = await discoverCommAdapters(repoRoot);
+if (commAdapters.length === 0) {
+  throw new Error("[build-bundles] no comm adapters discovered under adapters/<comm>/");
+}
+for (const comm of commAdapters) {
+  await bundleOne(path.join("adapters", comm, "factory.ts"), adapterBundleFileName(comm));
+}
 
 // 3. Admin CLI surface (account-add / allowlist / migrate ...). Shipped so a
 //    marketplace install can run it without a dist tree or npm link.
@@ -93,5 +104,5 @@ for (const [agent, files] of Object.entries(HOOKS)) {
 }
 
 console.log(
-  `[build-bundles] daemon + ${sqlFiles.length} schema .sql + telegram adapter + cli + ${hookCount} hooks -> ${path.relative(repoRoot, outDir)}`,
+  `[build-bundles] daemon + ${sqlFiles.length} schema .sql + ${commAdapters.length} adapter(s) [${commAdapters.join(", ")}] + cli + ${hookCount} hooks -> ${path.relative(repoRoot, outDir)}`,
 );

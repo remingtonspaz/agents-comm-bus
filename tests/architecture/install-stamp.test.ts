@@ -29,6 +29,7 @@ describe("buildInstallStamp", () => {
     assert.equal(stamp.plugin_version, "1.2.0");
     assert.equal(stamp.daemon_bundle_version, "2.0.0");
     assert.equal(stamp.adapter_bundle_version, "0.1.0");
+    assert.deepEqual(stamp.adapter_bundle_versions, { telegram: "0.1.0" });
   });
 
   it("keeps the three versions independent — none derived from another", () => {
@@ -47,6 +48,27 @@ describe("buildInstallStamp", () => {
     // The content keys must NOT equal the (higher) plugin_version.
     assert.notEqual(stamp.daemon_bundle_version, stamp.plugin_version);
     assert.notEqual(stamp.adapter_bundle_version, stamp.plugin_version);
+    assert.deepEqual(stamp.adapter_bundle_versions, { telegram: "0.1.0" });
+  });
+
+  it("accepts an explicit adapterBundleVersions map when it matches the stamped comm", () => {
+    const stamp = buildInstallStamp({
+      ...VALID,
+      adapterBundleVersions: { telegram: "0.1.0", discord: "0.2.0" },
+    });
+    assert.equal(stamp.adapter_bundle_version, "0.1.0");
+    assert.deepEqual(stamp.adapter_bundle_versions, { telegram: "0.1.0", discord: "0.2.0" });
+  });
+
+  it("throws when adapterBundleVersions disagrees with adapterBundleVersion for the stamped comm", () => {
+    assert.throws(
+      () =>
+        buildInstallStamp({
+          ...VALID,
+          adapterBundleVersions: { telegram: "9.9.9" },
+        }),
+      /adapterBundleVersions must include the stamped comm/,
+    );
   });
 
   it("produces a stamp readInstallStamp accepts (schema_version === 1, three version strings)", () => {
