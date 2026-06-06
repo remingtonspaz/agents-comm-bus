@@ -455,11 +455,11 @@ async function stagePair(agent, comm) {
     if (agent === "codex") {
       manifest.mcpServers = "./.mcp.json";
       manifest.hooks = "./hooks/hooks.json";
-    } else if (manifest.mcpServers?.telegram?.args) {
+    } else if (manifest.mcpServers?.[comm]?.args) {
       // ${CLAUDE_PLUGIN_ROOT}-rooted, NOT relative: Claude runs the plugin MCP
       // server from the session cwd, so "./" would resolve against the project
       // dir and fail to start (MCP "disconnected"). See transformClaudeHooksJson.
-      manifest.mcpServers.telegram.args = ["${CLAUDE_PLUGIN_ROOT}/" + bundledShimName];
+      manifest.mcpServers[comm].args = ["${CLAUDE_PLUGIN_ROOT}/" + bundledShimName];
     }
     // Ensure skills field points to local skills dir
     manifest.skills = "./skills/";
@@ -608,13 +608,15 @@ async function verifyPair(agent, comm) {
         checks.push({ label: "codex manifest points hooks at ./hooks/hooks.json", ok: false, path: manifestPath });
       }
     }
-    const args = manifest.mcpServers?.telegram?.args ?? [];
-    for (const arg of args) {
-      if (arg.includes("hosts/") || arg.startsWith("/")) {
-        checks.push({ label: `manifest arg artifact-local (${arg})`, ok: false, path: manifestPath });
-      }
-      if (agent === "claude" && !arg.startsWith("${CLAUDE_PLUGIN_ROOT}/")) {
-        checks.push({ label: `manifest MCP arg must be \${CLAUDE_PLUGIN_ROOT}-rooted (${arg})`, ok: false, path: manifestPath });
+    if (agent === "claude") {
+      const args = manifest.mcpServers?.[comm]?.args ?? [];
+      for (const arg of args) {
+        if (arg.includes("hosts/") || arg.startsWith("/")) {
+          checks.push({ label: `manifest arg artifact-local (${arg})`, ok: false, path: manifestPath });
+        }
+        if (!arg.startsWith("${CLAUDE_PLUGIN_ROOT}/")) {
+          checks.push({ label: `manifest MCP arg must be \${CLAUDE_PLUGIN_ROOT}-rooted (${arg})`, ok: false, path: manifestPath });
+        }
       }
     }
   }
@@ -642,16 +644,18 @@ async function verifyPair(agent, comm) {
     const mcpPath = resolve(outDir, ".mcp.json");
     if (await pathExists(mcpPath)) {
       const mcp = await readJson(mcpPath);
-      const args = mcp.telegram?.args ?? [];
-      if (mcp.telegram?.command !== "node" || args[0] !== "-e") {
+      const mcpServer = mcp[comm];
+      const args = mcpServer?.args ?? [];
+      if (mcpServer?.command !== "node" || args[0] !== "-e") {
         checks.push({ label: "codex MCP uses cwd-independent launcher", ok: false, path: mcpPath });
       }
       const launcher = String(args[1] ?? "");
+      const bundledShimName = `${agent}-mcp-shim.js`;
       if (
         !launcher.includes("'plugins','cache'") ||
         !launcher.includes("agents-comm-bus-codex") ||
-        !launcher.includes("telegram") ||
-        !launcher.includes("codex-mcp-shim.js") ||
+        !launcher.includes(comm) ||
+        !launcher.includes(bundledShimName) ||
         !launcher.includes("pathToFileURL")
       ) {
         checks.push({ label: "codex MCP launcher resolves installed plugin cache", ok: false, path: mcpPath });

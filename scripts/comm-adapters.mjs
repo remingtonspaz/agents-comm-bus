@@ -11,6 +11,19 @@ import { fileURLToPath } from "node:url";
 const defaultRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
+ * @param {string} filePath
+ * @returns {Promise<boolean>}
+ */
+async function fileExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {string} [repoRoot]
  * @returns {Promise<string[]>} sorted comm ids (e.g. ["telegram"])
  */
@@ -26,14 +39,24 @@ export async function discoverCommAdapters(repoRoot = defaultRepoRoot) {
   const comms = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const adapterDir = `adapters/${entry.name}`;
     const base = path.join(adaptersDir, entry.name);
-    try {
-      await access(path.join(base, "version.ts"));
-      await access(path.join(base, "factory.ts"));
+    const hasVersion = await fileExists(path.join(base, "version.ts"));
+    const hasFactory = await fileExists(path.join(base, "factory.ts"));
+
+    if (hasVersion && hasFactory) {
       comms.push(entry.name);
-    } catch {
-      // Not a shippable adapter surface — skip.
+      continue;
     }
+    if (hasVersion || hasFactory) {
+      const present = hasVersion ? "version.ts" : "factory.ts";
+      const missing = hasVersion ? "factory.ts" : "version.ts";
+      throw new Error(
+        `${adapterDir}: partial comm adapter — found ${present} but missing ${missing}. ` +
+          `Add ${adapterDir}/${missing} or remove the orphan ${present}.`,
+      );
+    }
+    // Neither file — not adapter-shaped; skip silently.
   }
   return comms.toSorted();
 }
