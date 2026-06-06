@@ -87,6 +87,80 @@ function die(msg) {
   process.exit(1);
 }
 
+/** @param {string} agent @param {string} bundledShimName */
+function claudeExpectedMcpArg(agent, bundledShimName) {
+  return `\${CLAUDE_PLUGIN_ROOT}/${bundledShimName}`;
+}
+
+/**
+ * Validate Claude plugin manifest MCP wiring for a staged comm.
+ *
+ * @param {object} manifest
+ * @param {string} comm
+ * @param {string} agent
+ * @param {string} manifestLabel  provenance path for error messages
+ * @param {"stage" | "verify"} mode  stage checks source shape; verify checks staged output
+ */
+function validateClaudeMcpServerManifest(manifest, comm, agent, manifestLabel, mode) {
+  const bundledShimName = `${agent}-mcp-shim.js`;
+  const expectedArg = claudeExpectedMcpArg(agent, bundledShimName);
+  const prefix = `stage-plugins (claude/${comm}): ${manifestLabel}`;
+
+  const fail = (detail) => {
+    const fix =
+      `Fix: declare mcpServers.${comm} with { "command": "node", "args": ["${expectedArg}"] } ` +
+      `in .claude-plugin/plugin.json.`;
+    throw new Error(`${prefix} — ${detail}\n  ${fix}`);
+  };
+
+  const mcpServers = manifest.mcpServers;
+  if (!mcpServers || typeof mcpServers !== "object" || Array.isArray(mcpServers)) {
+    fail(`mcpServers must be an object with a "${comm}" entry`);
+  }
+  const entry = mcpServers[comm];
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    fail(`missing mcpServers.${comm}`);
+  }
+  if (entry.command !== "node") {
+    fail(`mcpServers.${comm}.command must be "node" (got ${JSON.stringify(entry.command)})`);
+  }
+  if (!Array.isArray(entry.args)) {
+    fail(`mcpServers.${comm}.args must be an array`);
+  }
+
+  if (mode === "verify") {
+    if (entry.args.length === 0) {
+      return {
+        ok: false,
+        label: `claude manifest declares mcpServers.${comm} with rooted ${bundledShimName} arg`,
+      };
+    }
+    const primary = entry.args[0];
+    if (primary !== expectedArg) {
+      return {
+        ok: false,
+        label: `claude manifest mcpServers.${comm} args must be ["${expectedArg}"] (got ${JSON.stringify(primary)})`,
+      };
+    }
+    for (const arg of entry.args) {
+      if (typeof arg !== "string") {
+        return { ok: false, label: `claude manifest mcpServers.${comm}.args must be strings` };
+      }
+      if (arg.includes("hosts/") || arg.startsWith("/")) {
+        return { ok: false, label: `manifest arg artifact-local (${arg})` };
+      }
+      if (!arg.startsWith("${CLAUDE_PLUGIN_ROOT}/")) {
+        return {
+          ok: false,
+          label: `manifest MCP arg must be \${CLAUDE_PLUGIN_ROOT}-rooted (${arg})`,
+        };
+      }
+    }
+  }
+
+  return { ok: true, label: `claude manifest declares mcpServers.${comm}` };
+}
+
 async function pathExists(p) {
   try {
     await access(p);
@@ -455,7 +529,8 @@ async function stagePair(agent, comm) {
     if (agent === "codex") {
       manifest.mcpServers = "./.mcp.json";
       manifest.hooks = "./hooks/hooks.json";
-    } else if (manifest.mcpServers?.[comm]?.args) {
+    } else {
+      validateClaudeMcpServerManifest(manifest, comm, agent, repoRelative(manifestSrc), "stage");
       // ${CLAUDE_PLUGIN_ROOT}-rooted, NOT relative: Claude runs the plugin MCP
       // server from the session cwd, so "./" would resolve against the project
       // dir and fail to start (MCP "disconnected"). See transformClaudeHooksJson.
@@ -609,14 +684,21 @@ async function verifyPair(agent, comm) {
       }
     }
     if (agent === "claude") {
-      const args = manifest.mcpServers?.[comm]?.args ?? [];
-      for (const arg of args) {
-        if (arg.includes("hosts/") || arg.startsWith("/")) {
-          checks.push({ label: `manifest arg artifact-local (${arg})`, ok: false, path: manifestPath });
-        }
-        if (!arg.startsWith("${CLAUDE_PLUGIN_ROOT}/")) {
-          checks.push({ label: `manifest MCP arg must be \${CLAUDE_PLUGIN_ROOT}-rooted (${arg})`, ok: false, path: manifestPath });
-        }
+      try {
+        const mcpCheck = validateClaudeMcpServerManifest(
+          manifest,
+          comm,
+          agent,
+          repoRelative(manifestPath),
+          "verify",
+        );
+        checks.push({ ...mcpCheck, path: manifestPath });
+      } catch (err) {
+        checks.push({
+          label: err instanceof Error ? err.message : String(err),
+          ok: false,
+          path: manifestPath,
+        });
       }
     }
   }
