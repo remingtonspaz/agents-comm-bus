@@ -1,5 +1,6 @@
 import type { AccountId, AccountRegistration, CommAdapter, CommId } from "agents-comm-bus-core";
-import type { CommAdapterFactory, CommAdapterCreateContext, CommAdapterFactoryEnv, ResolveCredentialsContext } from "../../core-daemon/runtime/comm-factory.js";
+import type { CommAdapterFactory, CommAdapterCreateContext, CommAdapterFactoryEnv, CommIpcDeps, ResolveCredentialsContext } from "../../core-daemon/runtime/comm-factory.js";
+import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
 import { type MatrixIdentityClient } from "./adapter.js";
 export type EncryptedRoomPolicy = "decline";
 export interface MatrixCredentials {
@@ -27,6 +28,7 @@ export declare class MatrixCommAdapterFactory implements CommAdapterFactory {
         accountUsername?: string | null;
     }>;
     create(credentials: Record<string, unknown>, accountId: AccountId, _context?: CommAdapterCreateContext): CommAdapter;
+    ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }
 export declare function createCommAdapterFactory(options?: MatrixCommAdapterFactoryOptions): CommAdapterFactory;
 //# sourceMappingURL=factory.d.ts.map

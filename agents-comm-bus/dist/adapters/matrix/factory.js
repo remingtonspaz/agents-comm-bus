@@ -51,9 +51,92 @@ export class MatrixCommAdapterFactory {
             encryptedRoomPolicy: parsed.encryptedRoomPolicy,
         });
     }
+    ipcMethods(deps) {
+        return new Map([
+            [
+                "matrix_send",
+                async (params) => sendMatrix(deps, params),
+            ],
+        ]);
+    }
 }
 export function createCommAdapterFactory(options) {
     return new MatrixCommAdapterFactory(options);
+}
+async function sendMatrix(deps, params) {
+    const chatNativeId = extractChatNativeId(params);
+    const target = chatNativeId === null
+        ? undefined
+        : await targetFromParams(deps.storage, params, chatNativeId);
+    const sent = await deps.bus.send({
+        session: String(params.session ?? "mcp"),
+        comm: MATRIX_COMM_ID,
+        target,
+        payload: { text: String(params.message ?? "") },
+        idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
+    });
+    return { message_id: sent };
+}
+function extractChatNativeId(params) {
+    if (params.room_id != null)
+        return String(params.room_id);
+    const target = params.target;
+    if (target && typeof target === "object" && "chat_native_id" in target) {
+        const value = target.chat_native_id;
+        if (value != null)
+            return String(value);
+    }
+    if (target && typeof target === "object" && "room_id" in target) {
+        const value = target.room_id;
+        if (value != null)
+            return String(value);
+    }
+    return null;
+}
+async function targetFromParams(storage, params, chatNativeId) {
+    const explicitAccount = extractTargetAccount(params);
+    if (explicitAccount != null) {
+        rejectAccountLabel(explicitAccount);
+        return {
+            comm: MATRIX_COMM_ID,
+            account: explicitAccount,
+            chat_native_id: chatNativeId,
+        };
+    }
+    const session = typeof params.session === "string"
+        ? await storage.getSession(params.session)
+        : null;
+    const scoped = session
+        ? await storage.listAccountRegistrations({
+            project: session.project,
+            comm: MATRIX_COMM_ID,
+            agent: session.agent,
+        })
+        : [];
+    const registration = scoped[0] ?? (await storage.listAccountRegistrations({ comm: MATRIX_COMM_ID }))[0];
+    if (!registration) {
+        throw new Error("no Matrix account registration exists; run agents-comm account-add first");
+    }
+    return {
+        comm: MATRIX_COMM_ID,
+        account: registration.bot_user_id,
+        chat_native_id: chatNativeId,
+    };
+}
+function extractTargetAccount(params) {
+    const target = params.target;
+    if (target && typeof target === "object" && "account" in target) {
+        const value = target.account;
+        if (value != null)
+            return String(value);
+    }
+    return undefined;
+}
+function rejectAccountLabel(account) {
+    if (!isMatrixMxid(account)) {
+        throw new Error(`target.account "${account}" is not a Matrix MXID — labels like "main" are not accepted; ` +
+            `use the concrete bot_user_id (MXID) from account-add or list_conversations`);
+    }
 }
 function parseResolvedCredentials(credentials) {
     const homeserverUrl = typeof credentials.homeserverUrl === "string"

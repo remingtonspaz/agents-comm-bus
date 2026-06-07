@@ -15,8 +15,12 @@ import type {
   AccountRegistration,
   AgentId,
   CommId,
+  Session,
+  SessionId,
+  Storage,
 } from "../../packages/core-contracts/src/index.js";
 import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/index.js";
+import type { SendRequest } from "../../core-daemon/bus.js";
 import { discoverCommAdapters } from "../../scripts/comm-adapters.mjs";
 import type { MatrixIdentityClient } from "../../adapters/matrix/adapter.js";
 
@@ -85,6 +89,7 @@ describe("Matrix factory discovery and shape", () => {
     assert.equal(typeof factory.resolveCredentials, "function");
     assert.equal(typeof factory.probeIdentity, "function");
     assert.equal(typeof factory.create, "function");
+    assert.equal(typeof factory.ipcMethods, "function");
   });
 });
 
@@ -228,3 +233,161 @@ describe("Matrix factory probeIdentity", () => {
     );
   });
 });
+
+describe("matrix_send IPC handler", () => {
+  const ROOM_ID = "!room:matrix.example.org";
+  const OTHER_BOT_MXID = "@acb-codex:matrix.satriodewantono.com";
+
+  function makeSession(overrides: Partial<Session> = {}): Session {
+    return {
+      session_id: "matrix_session" as SessionId,
+      agent: CLAUDE,
+      project: "D:\\repo",
+      schema_version: 1,
+      created_at: 1,
+      lease_holder_connection_id: null,
+      lease_acquired_at: null,
+      lease_released_at: null,
+      lease_owner_process_pid: null,
+      lease_owner_process_label: null,
+      lease_owner_process_registered_at: null,
+      most_recent_inbound_conversation_id: null,
+      status: "active",
+      ...overrides,
+    };
+  }
+
+  it("routes text through bus.send with comm matrix", async () => {
+    const bus = new RecordingBus();
+    const factory = new MatrixCommAdapterFactory();
+    const handler = factory.ipcMethods({
+      bus: bus as never,
+      storage: new TargetStorage([], makeSession()) as never,
+      pendingInbound: [],
+    } as never).get("matrix_send");
+
+    assert.ok(handler);
+    await handler({
+      session: "matrix_session",
+      message: "probe",
+      target: {
+        account: OTHER_BOT_MXID,
+        chat_native_id: ROOM_ID,
+      },
+    });
+
+    assert.equal(bus.lastSend?.comm, "matrix");
+    assert.equal(bus.lastSend?.payload?.text, "probe");
+    assert.equal(bus.lastSend?.session, "matrix_session");
+  });
+
+  it("preserves explicit Matrix MXID account and room id", async () => {
+    const bus = new RecordingBus();
+    const factory = new MatrixCommAdapterFactory();
+    const handler = factory.ipcMethods({
+      bus: bus as never,
+      storage: new TargetStorage([], makeSession()) as never,
+      pendingInbound: [],
+    } as never).get("matrix_send");
+
+    assert.ok(handler);
+    await handler({
+      message: "hello room",
+      target: {
+        account: OTHER_BOT_MXID,
+        room_id: ROOM_ID,
+      },
+    });
+
+    assert.equal(bus.lastSend?.comm, "matrix");
+    assert.equal(bus.lastSend?.target?.account, OTHER_BOT_MXID);
+    assert.equal(bus.lastSend?.target?.chat_native_id, ROOM_ID);
+    assert.equal(bus.lastSend?.session, "mcp");
+  });
+
+  it("resolves omitted target account from the caller session scoped registration", async () => {
+    const storage = new TargetStorage([
+      makeRegistration({
+        project: "D:\\repo",
+        bot_user_id: BOT_MXID,
+      }),
+    ], makeSession());
+    const bus = new RecordingBus();
+    const factory = new MatrixCommAdapterFactory();
+    const handler = factory.ipcMethods({
+      bus: bus as never,
+      storage: storage as never,
+      pendingInbound: [],
+    } as never).get("matrix_send");
+
+    assert.ok(handler);
+    await handler({
+      session: "matrix_session",
+      message: "scoped send",
+      target: {
+        chat_native_id: ROOM_ID,
+      },
+    });
+
+    assert.equal(bus.lastSend?.target?.account, BOT_MXID);
+    assert.equal(bus.lastSend?.target?.chat_native_id, ROOM_ID);
+  });
+
+  it("rejects account labels before bus.send", async () => {
+    const bus = new RecordingBus();
+    const factory = new MatrixCommAdapterFactory();
+    const handler = factory.ipcMethods({
+      bus: bus as never,
+      storage: new TargetStorage([], makeSession()) as never,
+      pendingInbound: [],
+    } as never).get("matrix_send");
+
+    assert.ok(handler);
+    await assert.rejects(
+      () =>
+        handler({
+          session: "matrix_session",
+          message: "nope",
+          target: {
+            account: "main",
+            chat_native_id: ROOM_ID,
+          },
+        }),
+      /not a Matrix MXID/i,
+    );
+    assert.equal(bus.lastSend, null);
+  });
+});
+
+class RecordingBus {
+  lastSend: SendRequest | null = null;
+
+  async send(request: SendRequest): Promise<string> {
+    this.lastSend = request;
+    return "matrix:evt_1";
+  }
+}
+
+class TargetStorage implements Partial<Storage> {
+  constructor(
+    private readonly registrations: AccountRegistration[],
+    private readonly session: Session,
+  ) {}
+
+  async getSession(session: SessionId): Promise<Session | null> {
+    return session === this.session.session_id ? this.session : null;
+  }
+
+  async listAccountRegistrations(filter?: {
+    project?: string;
+    comm?: CommId;
+    agent?: AgentId;
+  }): Promise<AccountRegistration[]> {
+    return this.registrations.filter((registration) => {
+      if (filter?.project !== undefined && registration.project !== filter.project) return false;
+      if (filter?.comm !== undefined && registration.comm !== filter.comm) return false;
+      if (filter?.agent !== undefined && registration.agent !== filter.agent) return false;
+      return true;
+    });
+  }
+}
