@@ -7,6 +7,52 @@ export interface MatrixWhoamiResponse {
 export interface MatrixIdentityClient {
     whoami(homeserverUrl: string, accessToken: string): Promise<MatrixWhoamiResponse>;
 }
+export interface MatrixEventContent {
+    msgtype?: string;
+    body?: string;
+    "m.relates_to"?: {
+        "m.in_reply_to"?: {
+            event_id?: string;
+        };
+    };
+    [key: string]: unknown;
+}
+export interface MatrixEvent {
+    type?: string;
+    event_id?: string;
+    sender?: string;
+    origin_server_ts?: number;
+    content?: MatrixEventContent;
+}
+export interface MatrixSyncResponse {
+    next_batch?: string;
+    rooms?: {
+        join?: Record<string, {
+            timeline?: {
+                events?: MatrixEvent[];
+            };
+            state?: {
+                events?: MatrixEvent[];
+            };
+        }>;
+        invite?: Record<string, unknown>;
+    };
+}
+export interface MatrixSyncHandlers {
+    onSyncResponse(response: MatrixSyncResponse): Promise<void>;
+    onError(error: unknown): void;
+}
+export interface MatrixSyncClient {
+    start(handlers: MatrixSyncHandlers): Promise<void>;
+    stop(): Promise<void>;
+}
+export interface FetchMatrixSyncClientOptions {
+    /** Matrix /sync long-poll timeout in milliseconds (query param). */
+    timeoutMs?: number;
+    /** Backoff after retryable loop errors before the next /sync attempt. */
+    retryDelayMs?: number;
+    fetchFn?: typeof fetch;
+}
 export interface MatrixCommAdapterOptions {
     homeserverUrl: string;
     accessToken: string;
@@ -17,7 +63,10 @@ export interface MatrixCommAdapterOptions {
     allowedRoomIds?: readonly string[];
     autoJoinInvites?: boolean;
     encryptedRoomPolicy?: "decline";
+    syncClient?: MatrixSyncClient;
+    now?: () => number;
 }
+export declare function createFetchMatrixSyncClient(homeserverUrl: string, accessToken: string, options?: FetchMatrixSyncClientOptions): MatrixSyncClient;
 export declare class MatrixCommAdapter implements CommAdapter {
     private readonly options;
     readonly id: CommId;
@@ -25,7 +74,10 @@ export declare class MatrixCommAdapter implements CommAdapter {
     private readonly homeserverUrl;
     private readonly accessToken;
     private readonly userId;
+    private readonly syncClient;
+    private readonly now;
     private allowedUserIds;
+    private allowedRoomIds;
     private inboundHandler;
     private stateHandler;
     private filterDropHandler;
@@ -48,7 +100,10 @@ export declare class MatrixCommAdapter implements CommAdapter {
         rateLimited: boolean;
     };
     classifyFailure(error: unknown): FailureClassification;
+    private processSyncResponse;
+    private handleTimelineEvent;
     private emitState;
+    private emitFilterDrop;
 }
 export declare function mxidLocalpart(userId: string): string | null;
 export declare function isMatrixMxid(value: string): boolean;
