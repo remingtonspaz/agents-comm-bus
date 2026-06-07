@@ -1,4 +1,5 @@
 import type { AccountId, ChatRef, CommConnectionState, CommAdapter, FailureClassification, FilterDropEvent, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
+import { type DiscordGatewayLike } from "./gateway.js";
 /** Injectable REST surface for tests and production. */
 export interface DiscordRestLike {
     post(route: `/${string}`, options: {
@@ -12,11 +13,17 @@ export interface DiscordCommAdapterOptions {
     botToken: string;
     applicationId?: string;
     accountId: AccountId;
-    /** Resolved allowlist ids (wired on inbound in a later phase). */
     allowedUserIds?: readonly string[];
     rest?: DiscordRestLike;
+    gateway?: DiscordGatewayLike;
     now?: () => number;
     sleep?: (ms: number) => Promise<void>;
+    /**
+     * AGE-10: verbose allowlist-filter tracing. When true, every inbound
+     * allowlist evaluation (pass AND drop) logs one line via `log`.
+     */
+    filterTrace?: boolean;
+    log?: (message: string) => void;
 }
 export declare class DiscordCommAdapter implements CommAdapter {
     private readonly options;
@@ -24,14 +31,22 @@ export declare class DiscordCommAdapter implements CommAdapter {
     readonly accountId: AccountId;
     private readonly now;
     private readonly sleep;
+    private readonly filterTrace;
+    private readonly log;
+    private allowedUserIds;
     private readonly sentByKey;
     private inboundHandler;
     private filterDropHandler;
     private stateHandler;
     private connectionState;
     private rest;
+    private restForGateway;
+    private gateway;
+    private botUserId;
     private rateLimited;
     constructor(options: DiscordCommAdapterOptions);
+    get allowedSenderIds(): readonly string[];
+    updateAllowedSenderIds(ids: readonly string[]): void;
     exclusiveResource(): {
         resourceId: string;
     } | null;
@@ -46,8 +61,12 @@ export declare class DiscordCommAdapter implements CommAdapter {
         rateLimited: boolean;
     };
     classifyFailure(error: unknown): FailureClassification;
+    private handleDiscordMessageCreate;
+    private rememberSent;
     private requireRest;
     private emitState;
+    private emitFilterDrop;
+    private traceFilterPass;
 }
 export declare function discordMessageBody(payload: OutboundPayload): Record<string, unknown>;
 export declare function probeDiscordIdentity(botToken: string, rest?: DiscordRestLike): Promise<{
