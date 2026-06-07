@@ -16,8 +16,11 @@ function stripTags(text) {
 function decodeCommonEntities(text) {
   return text.replace(/<br\s*\/?>/gi, "\n").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
+function newlinesToBr(html) {
+  return html.replace(/\r?\n/g, "<br/>");
+}
 function htmlToMatrixFormatted(html) {
-  const formatted_body = html.trim();
+  const formatted_body = newlinesToBr(html.trim());
   let body = html;
   body = body.replace(/<br\s*\/?>/gi, "\n");
   body = stripTags(body);

@@ -4,9 +4,9 @@
   "comm": "matrix",
   "plugin_version": "0.1.0",
   "daemon_bundle_version": "0.2.14",
-  "adapter_bundle_version": "0.2.3",
+  "adapter_bundle_version": "0.2.4",
   "adapter_bundle_versions": {
-    "matrix": "0.2.3"
+    "matrix": "0.2.4"
   },
   "daemon_sidecars": [
     "001_initial.sql",

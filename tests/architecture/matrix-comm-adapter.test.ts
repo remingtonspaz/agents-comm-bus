@@ -1052,6 +1052,29 @@ describe("MatrixCommAdapter P4 html helpers", () => {
     );
   });
 
+  it("htmlToMatrixFormatted converts literal newlines to br tags for multiline prompts", () => {
+    const html =
+      "❓ <b>Question 1/1:</b> Pick one\n\n<b>1.</b> Alpha\n    <i>First option</i>\n<b>2.</b> Beta\n<b>3.</b> Other (custom text)\n\nReply with <b>number</b> to select";
+    const result = htmlToMatrixFormatted(html);
+    assert.match(result.formatted_body, /<br\/>/);
+    assert.doesNotMatch(result.formatted_body, /\n/);
+    assert.equal(
+      result.formatted_body,
+      "❓ <b>Question 1/1:</b> Pick one<br/><br/><b>1.</b> Alpha<br/>    <i>First option</i><br/><b>2.</b> Beta<br/><b>3.</b> Other (custom text)<br/><br/>Reply with <b>number</b> to select",
+    );
+    assert.equal(
+      result.body,
+      "❓ Question 1/1: Pick one\n\n1. Alpha\n    First option\n2. Beta\n3. Other (custom text)\n\nReply with number to select",
+    );
+  });
+
+  it("htmlToMatrixFormatted does not double-convert existing br tags", () => {
+    const once = htmlToMatrixFormatted("<b>Line A</b>\n<b>Line B</b>");
+    const twice = htmlToMatrixFormatted(once.formatted_body);
+    assert.equal(once.formatted_body, twice.formatted_body);
+    assert.equal(once.formatted_body, "<b>Line A</b><br/><b>Line B</b>");
+  });
+
   it("matrixOutboundMessageContent maps html payloads to Matrix custom HTML", () => {
     assert.deepEqual(
       matrixOutboundMessageContent({ text: "<b>x</b>", format: "html" }),
