@@ -2,6 +2,7 @@ import { createRequire as __acbCreateRequire } from 'module'; const require = __
 
 // ../adapters/matrix/factory.ts
 import { readFile as readFile2 } from "node:fs/promises";
+import path2 from "node:path";
 
 // ../adapters/matrix/adapter.ts
 import { createHash } from "node:crypto";
@@ -529,8 +530,16 @@ var MatrixCommAdapter = class {
         info
       }
     };
-    if (!mxcUri || !parseMxcUri(mxcUri) || !this.attachmentBlobStore) {
-      return base;
+    const mxcLocation = mxcUri ? parseMxcUri(mxcUri) : null;
+    if (!mxcUri || !mxcLocation || !this.attachmentBlobStore) {
+      const retrievalError = !mxcUri ? "missing MXC URI" : !mxcLocation ? `Invalid Matrix MXC URI: ${mxcUri}` : "blob store unavailable";
+      return {
+        ...base,
+        platform_metadata: {
+          ...base.platform_metadata,
+          retrieval_error: retrievalError
+        }
+      };
     }
     try {
       const downloaded = await this.mediaClient.download(mxcUri);
@@ -758,6 +767,17 @@ var MatrixCommAdapterFactory = class {
 function createCommAdapterFactory(options) {
   return new MatrixCommAdapterFactory(options);
 }
+var IMAGE_EXTENSION_MIME = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp"
+};
+function inferImageMimeFromPath(localPath) {
+  const ext = path2.extname(localPath).slice(1).toLowerCase();
+  return IMAGE_EXTENSION_MIME[ext] ?? "application/octet-stream";
+}
 async function sendMatrix(deps, params, image) {
   const chatNativeId = extractChatNativeId(params);
   const target = chatNativeId === null ? void 0 : await targetFromParams(deps.storage, params, chatNativeId);
@@ -772,7 +792,7 @@ async function sendMatrix(deps, params, image) {
         {
           filename: uploadFilenameFromLocalPath(localPath),
           local_path: localPath,
-          mime: "application/octet-stream",
+          mime: inferImageMimeFromPath(localPath),
           size: 0
         }
       ]
@@ -921,5 +941,6 @@ async function readJsonMatrixConfig(filePath) {
 }
 export {
   MatrixCommAdapterFactory,
-  createCommAdapterFactory
+  createCommAdapterFactory,
+  inferImageMimeFromPath
 };
