@@ -11,6 +11,7 @@ import {
   type DiscordRestLike,
 } from "../../adapters/discord/adapter.js";
 import { DiscordCommAdapterFactory } from "../../adapters/discord/factory.js";
+import { writeTokenFile } from "../../core-daemon/cli/token-file.js";
 import type { SendRequest } from "../../core-daemon/bus.js";
 import type {
   AccountRegistration,
@@ -55,23 +56,62 @@ describe("DiscordCommAdapterFactory contract", () => {
     assert.equal(factory.commId, "discord");
   });
 
-  it("resolves credentials from a daemon-owned file ref", async () => {
+  it("resolves credentials from a writeTokenFile-shaped daemon-owned file ref", async () => {
     const dir = await mkdtemp(join(tmpdir(), "acb-discord-cred-"));
     const factory = new DiscordCommAdapterFactory();
+    const credentialsRef = await writeTokenFile({
+      stateRoot: dir,
+      comm: DISCORD,
+      project: "/tmp/project-discord-test",
+      agent: CLAUDE,
+      accountId: "123456789012345678",
+      botToken: "test-token",
+    });
     const resolved = await factory.resolveCredentials(
-      makeRegistration({
-        credentials_ref: await writeCredentialFile(dir, {
-          bot_token: "test-token",
-          application_id: "app-1",
-          bot_user_id: "123456789012345678",
-        }),
-      }),
+      makeRegistration({ credentials_ref: credentialsRef }),
       {},
     );
     assert.deepEqual(resolved?.credentials, {
       botToken: "test-token",
-      applicationId: "app-1",
-      botUserId: "123456789012345678",
+      allowedUserIds: [],
+    });
+  });
+
+  it("merges userId from the token file with env allowlist entries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-discord-cred-allowlist-"));
+    const factory = new DiscordCommAdapterFactory();
+    const credentialsRef = await writeTokenFile({
+      stateRoot: dir,
+      comm: DISCORD,
+      project: "/tmp/project-discord-test",
+      agent: CLAUDE,
+      accountId: "123456789012345678",
+      botToken: "test-token",
+      userId: ["123"],
+    });
+    const resolved = await factory.resolveCredentials(
+      makeRegistration({ credentials_ref: credentialsRef }),
+      { DISCORD_USER_ID: "env-sender-1,env-sender-2" },
+    );
+    assert.deepEqual(resolved?.credentials.botToken, "test-token");
+    assert.deepEqual(
+      [...(resolved?.credentials.allowedUserIds as string[])].sort(),
+      ["123", "env-sender-1", "env-sender-2"].sort(),
+    );
+  });
+
+  it("accepts bot_token as a tolerated alias in hand-written credential files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-discord-cred-alias-"));
+    const factory = new DiscordCommAdapterFactory();
+    const resolved = await factory.resolveCredentials(
+      makeRegistration({
+        credentials_ref: await writeCredentialFile(dir, { bot_token: "alias-token" }),
+      }),
+      {},
+    );
+    assert.deepEqual(resolved?.credentials, {
+      botToken: "alias-token",
+      allowedUserIds: [],
     });
   });
 
@@ -99,7 +139,7 @@ describe("DiscordCommAdapterFactory contract", () => {
   it("create() wires exclusiveResource to the bot user id", () => {
     const factory = new DiscordCommAdapterFactory();
     const adapter = factory.create(
-      { botToken: "test-token", applicationId: "app-1" },
+      { botToken: "test-token" },
       "123456789012345678" as never,
     );
     assert.deepEqual(adapter.exclusiveResource?.(), { resourceId: "123456789012345678" });

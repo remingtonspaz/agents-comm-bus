@@ -26,6 +26,8 @@ export interface DiscordCommAdapterOptions {
   botToken: string;
   applicationId?: string;
   accountId: AccountId;
+  /** Resolved allowlist ids (wired on inbound in a later phase). */
+  allowedUserIds?: readonly string[];
   rest?: DiscordRestLike;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;

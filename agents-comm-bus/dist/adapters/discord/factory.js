@@ -6,11 +6,13 @@ import { DiscordCommAdapter, probeDiscordIdentity } from "./adapter.js";
 const DISCORD_COMM_ID = "discord";
 export class DiscordCommAdapterFactory {
     commId = DISCORD_COMM_ID;
-    async resolveCredentials(registration, _env, _context) {
+    async resolveCredentials(registration, env, context) {
         const ref = registration.credentials_ref ?? "";
         if (!ref.startsWith("file:")) {
             return undefined;
         }
+        const envAllowed = normalizeCsv(env.DISCORD_USER_ID);
+        const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
         const fromFile = await readJsonDiscordConfig(ref.slice("file:".length));
         if (!fromFile?.botToken) {
             return undefined;
@@ -18,8 +20,7 @@ export class DiscordCommAdapterFactory {
         return {
             credentials: {
                 botToken: fromFile.botToken,
-                applicationId: fromFile.applicationId,
-                botUserId: fromFile.botUserId,
+                allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
             },
         };
     }
@@ -40,10 +41,14 @@ export class DiscordCommAdapterFactory {
             throw new Error("DiscordCommAdapterFactory.create: credentials.botToken is required");
         }
         const applicationId = typeof credentials.applicationId === "string" ? credentials.applicationId : undefined;
+        const allowed = Array.isArray(credentials.allowedUserIds)
+            ? credentials.allowedUserIds.map(String)
+            : [];
         return new DiscordCommAdapter({
             botToken,
             applicationId,
             accountId,
+            allowedUserIds: allowed,
         });
     }
     ipcMethods(deps) {
@@ -128,20 +133,71 @@ function rejectAccountLabel(account) {
             `use the concrete bot_user_id from account-add or list_conversations`);
     }
 }
+function normalizeCsv(value) {
+    return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+function mergeAllowed(fromEnv, fromFile, fromDb = undefined) {
+    const out = [...fromEnv];
+    const sources = [fromFile, fromDb];
+    for (const source of sources) {
+        if (!source)
+            continue;
+        for (const id of source) {
+            if (!out.includes(id))
+                out.push(id);
+        }
+    }
+    return out;
+}
+async function readAllowlistFromDb(context, bot_user_id) {
+    if (!context?.storage)
+        return [];
+    const [globals, perBot] = await Promise.all([
+        context.storage.listAllowlistGlobal({ comm: DISCORD_COMM_ID }),
+        context.storage.listAllowlistPerBot({ comm: DISCORD_COMM_ID, bot_user_id }),
+    ]);
+    const out = [];
+    for (const row of globals) {
+        if (!out.includes(row.sender_id))
+            out.push(row.sender_id);
+    }
+    for (const row of perBot) {
+        if (!out.includes(row.sender_id))
+            out.push(row.sender_id);
+    }
+    return out;
+}
 async function readJsonDiscordConfig(filePath) {
     try {
         const raw = await readFile(filePath, "utf8");
         const parsed = JSON.parse(raw);
-        const botToken = typeof parsed.bot_token === "string" ? parsed.bot_token : undefined;
-        const applicationId = typeof parsed.application_id === "string" ? parsed.application_id : undefined;
-        const botUserId = typeof parsed.bot_user_id === "string" ? parsed.bot_user_id : undefined;
-        if (!botToken && !applicationId && !botUserId) {
+        const botToken = typeof parsed.botToken === "string"
+            ? parsed.botToken
+            : typeof parsed.bot_token === "string"
+                ? parsed.bot_token
+                : undefined;
+        const userId = normalizeUserIdField(parsed.userId);
+        if (!botToken && userId.length === 0)
             return undefined;
-        }
-        return { botToken, applicationId, botUserId };
+        return { botToken, userId: userId.length > 0 ? userId : undefined };
     }
     catch {
         return undefined;
     }
+}
+function normalizeUserIdField(raw) {
+    if (raw == null)
+        return [];
+    if (Array.isArray(raw)) {
+        return raw
+            .map((v) => (typeof v === "string" || typeof v === "number" ? String(v) : ""))
+            .map((s) => s.trim())
+            .filter(Boolean);
+    }
+    if (typeof raw === "string")
+        return [raw.trim()].filter(Boolean);
+    if (typeof raw === "number")
+        return [String(raw)];
+    return [];
 }
 //# sourceMappingURL=factory.js.map

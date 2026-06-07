@@ -3,12 +3,12 @@ import type { CommAdapterFactory, CommAdapterCreateContext, CommAdapterFactoryEn
 import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
 export interface DiscordCredentials {
     botToken: string;
+    allowedUserIds: string[];
     applicationId?: string;
-    botUserId?: string;
 }
 export declare class DiscordCommAdapterFactory implements CommAdapterFactory {
     readonly commId: CommId;
-    resolveCredentials(registration: AccountRegistration, _env: CommAdapterFactoryEnv, _context?: ResolveCredentialsContext): Promise<{
+    resolveCredentials(registration: AccountRegistration, env: CommAdapterFactoryEnv, context?: ResolveCredentialsContext): Promise<{
         credentials: Record<string, unknown>;
     } | undefined>;
     probeIdentity(credentials: Record<string, unknown>): Promise<{
