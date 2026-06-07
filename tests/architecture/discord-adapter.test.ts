@@ -75,31 +75,25 @@ describe("DiscordCommAdapterFactory contract", () => {
     });
   });
 
-  it("throws when the credentials file is missing", async () => {
+  it("returns undefined when the credentials file is missing", async () => {
     const factory = new DiscordCommAdapterFactory();
-    await assert.rejects(
-      () =>
-        factory.resolveCredentials(
-          makeRegistration({ credentials_ref: "file:/no/such/discord.json" }),
-          {},
-        ),
-      /credentials file not found/i,
+    const resolved = await factory.resolveCredentials(
+      makeRegistration({ credentials_ref: "file:/no/such/discord.json" }),
+      {},
     );
+    assert.equal(resolved, undefined);
   });
 
-  it("throws when the credentials file contains malformed JSON", async () => {
+  it("returns undefined when the credentials file contains malformed JSON", async () => {
     const dir = await mkdtemp(join(tmpdir(), "acb-discord-bad-json-"));
     const path = join(dir, "bad.json");
     await writeFile(path, "{not-json");
     const factory = new DiscordCommAdapterFactory();
-    await assert.rejects(
-      () =>
-        factory.resolveCredentials(
-          makeRegistration({ credentials_ref: `file:${path}` }),
-          {},
-        ),
-      /malformed JSON/i,
+    const resolved = await factory.resolveCredentials(
+      makeRegistration({ credentials_ref: `file:${path}` }),
+      {},
     );
+    assert.equal(resolved, undefined);
   });
 
   it("create() wires exclusiveResource to the bot user id", () => {

@@ -129,34 +129,19 @@ function rejectAccountLabel(account) {
     }
 }
 async function readJsonDiscordConfig(filePath) {
-    let raw;
     try {
-        raw = await readFile(filePath, "utf8");
-    }
-    catch (error) {
-        const code = error?.code;
-        if (code === "ENOENT") {
-            throw new Error(`agents-comm-bus discord: credentials file not found at ${filePath} (credentials_ref file:...)`);
+        const raw = await readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw);
+        const botToken = typeof parsed.bot_token === "string" ? parsed.bot_token : undefined;
+        const applicationId = typeof parsed.application_id === "string" ? parsed.application_id : undefined;
+        const botUserId = typeof parsed.bot_user_id === "string" ? parsed.bot_user_id : undefined;
+        if (!botToken && !applicationId && !botUserId) {
+            return undefined;
         }
-        throw error;
-    }
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
+        return { botToken, applicationId, botUserId };
     }
     catch {
-        throw new Error(`agents-comm-bus discord: malformed JSON in credentials file ${filePath}`);
-    }
-    if (!parsed || typeof parsed !== "object") {
-        throw new Error(`agents-comm-bus discord: credentials file ${filePath} must be a JSON object`);
-    }
-    const record = parsed;
-    const botToken = typeof record.bot_token === "string" ? record.bot_token : undefined;
-    const applicationId = typeof record.application_id === "string" ? record.application_id : undefined;
-    const botUserId = typeof record.bot_user_id === "string" ? record.bot_user_id : undefined;
-    if (!botToken && !applicationId && !botUserId) {
         return undefined;
     }
-    return { botToken, applicationId, botUserId };
 }
 //# sourceMappingURL=factory.js.map

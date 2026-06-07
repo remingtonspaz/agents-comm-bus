@@ -40,14 +40,7 @@ async function assertInstallStamp(base: string, agent: "claude" | "codex") {
   const stamp = await readJson(resolve(base, "install-stamp.json"));
   const plugin = await readJson(resolve(base, `${manifestName}/plugin.json`));
   const daemonVersion = await readSourceConst(resolve(repoRoot, "core-daemon/config.ts"), "DAEMON_VERSION");
-  const telegramAdapterVersion = await readSourceConst(
-    resolve(repoRoot, "adapters/telegram/version.ts"),
-    "ADAPTER_VERSION",
-  );
-  const discordAdapterVersion = await readSourceConst(
-    resolve(repoRoot, "adapters/discord/version.ts"),
-    "ADAPTER_VERSION",
-  );
+  const adapterVersion = await readSourceConst(resolve(repoRoot, "adapters/telegram/version.ts"), "ADAPTER_VERSION");
 
   assert.deepStrictEqual(stamp, {
     schema_version: 1,
@@ -55,11 +48,8 @@ async function assertInstallStamp(base: string, agent: "claude" | "codex") {
     comm: "telegram",
     plugin_version: plugin.version,
     daemon_bundle_version: daemonVersion,
-    adapter_bundle_version: telegramAdapterVersion,
-    adapter_bundle_versions: {
-      telegram: telegramAdapterVersion,
-      discord: discordAdapterVersion,
-    },
+    adapter_bundle_version: adapterVersion,
+    adapter_bundle_versions: { telegram: adapterVersion },
     daemon_sidecars: [
       "001_initial.sql",
       "002_conversation_agent_identity.sql",

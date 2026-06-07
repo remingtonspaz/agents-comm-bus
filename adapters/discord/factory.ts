@@ -190,41 +190,18 @@ function rejectAccountLabel(account: string): void {
 async function readJsonDiscordConfig(
   filePath: string,
 ): Promise<{ botToken?: string; applicationId?: string; botUserId?: string } | undefined> {
-  let raw: string;
   try {
-    raw = await readFile(filePath, "utf8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT") {
-      throw new Error(
-        `agents-comm-bus discord: credentials file not found at ${filePath} (credentials_ref file:...)`,
-      );
+    const raw = await readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const botToken = typeof parsed.bot_token === "string" ? parsed.bot_token : undefined;
+    const applicationId =
+      typeof parsed.application_id === "string" ? parsed.application_id : undefined;
+    const botUserId = typeof parsed.bot_user_id === "string" ? parsed.bot_user_id : undefined;
+    if (!botToken && !applicationId && !botUserId) {
+      return undefined;
     }
-    throw error;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
+    return { botToken, applicationId, botUserId };
   } catch {
-    throw new Error(
-      `agents-comm-bus discord: malformed JSON in credentials file ${filePath}`,
-    );
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error(
-      `agents-comm-bus discord: credentials file ${filePath} must be a JSON object`,
-    );
-  }
-
-  const record = parsed as Record<string, unknown>;
-  const botToken = typeof record.bot_token === "string" ? record.bot_token : undefined;
-  const applicationId =
-    typeof record.application_id === "string" ? record.application_id : undefined;
-  const botUserId = typeof record.bot_user_id === "string" ? record.bot_user_id : undefined;
-  if (!botToken && !applicationId && !botUserId) {
     return undefined;
   }
-  return { botToken, applicationId, botUserId };
 }

@@ -25,7 +25,6 @@ import { pathToFileURL } from "node:url";
 import { pipeline } from "node:stream/promises";
 
 import { buildInstallStamp } from "../hosts/common/install/install-stamp.js";
-import { discoverCommAdapters } from "./comm-adapters.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const DEFAULT_OUTPUT_DIR = resolve(REPO_ROOT, "plugins");
@@ -555,13 +554,6 @@ async function stagePair(agent, comm) {
     `agents-comm-bus/dist/adapters/${comm}/version.js`,
     "ADAPTER_VERSION",
   );
-  const adapterBundleVersions = {};
-  for (const discoveredComm of await discoverCommAdapters(REPO_ROOT)) {
-    adapterBundleVersions[discoveredComm] = await loadDistExport(
-      `agents-comm-bus/dist/adapters/${discoveredComm}/version.js`,
-      "ADAPTER_VERSION",
-    );
-  }
   const stampDst = resolve(outDir, "install-stamp.json");
   await writeJson(
     stampDst,
@@ -571,13 +563,11 @@ async function stagePair(agent, comm) {
       pluginVersion,
       daemonBundleVersion,
       adapterBundleVersion,
-      adapterBundleVersions,
       daemonSidecars: schemaFiles,
     }),
   );
   mapping.artifacts.push({
-    source:
-      `core-daemon/config.ts (DAEMON_VERSION) + adapters/*/version.ts (ADAPTER_VERSION) + ${manifestName}/plugin.json (version)`,
+    source: `core-daemon/config.ts (DAEMON_VERSION) + adapters/${comm}/version.ts (ADAPTER_VERSION) + ${manifestName}/plugin.json (version)`,
     artifact: repoRelative(stampDst),
     type: "install-stamp",
   });
