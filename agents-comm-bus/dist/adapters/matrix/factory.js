@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { isMatrixMxid, MatrixCommAdapter, probeMatrixIdentity, uploadFilenameFromLocalPath, } from "./adapter.js";
 const MATRIX_COMM_ID = "matrix";
 export class MatrixCommAdapterFactory {
@@ -68,6 +69,17 @@ export class MatrixCommAdapterFactory {
 export function createCommAdapterFactory(options) {
     return new MatrixCommAdapterFactory(options);
 }
+const IMAGE_EXTENSION_MIME = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+};
+export function inferImageMimeFromPath(localPath) {
+    const ext = path.extname(localPath).slice(1).toLowerCase();
+    return IMAGE_EXTENSION_MIME[ext] ?? "application/octet-stream";
+}
 async function sendMatrix(deps, params, image) {
     const chatNativeId = extractChatNativeId(params);
     const target = chatNativeId === null
@@ -85,7 +97,7 @@ async function sendMatrix(deps, params, image) {
                     {
                         filename: uploadFilenameFromLocalPath(localPath),
                         local_path: localPath,
-                        mime: "application/octet-stream",
+                        mime: inferImageMimeFromPath(localPath),
                         size: 0,
                     },
                 ],

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import type {
   AccountId,
@@ -133,6 +134,19 @@ export function createCommAdapterFactory(
   return new MatrixCommAdapterFactory(options);
 }
 
+const IMAGE_EXTENSION_MIME: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
+export function inferImageMimeFromPath(localPath: string): string {
+  const ext = path.extname(localPath).slice(1).toLowerCase();
+  return IMAGE_EXTENSION_MIME[ext] ?? "application/octet-stream";
+}
+
 async function sendMatrix(
   deps: CommIpcDeps,
   params: Record<string, unknown>,
@@ -154,7 +168,7 @@ async function sendMatrix(
             {
               filename: uploadFilenameFromLocalPath(localPath!),
               local_path: localPath!,
-              mime: "application/octet-stream",
+              mime: inferImageMimeFromPath(localPath!),
               size: 0,
             },
           ],

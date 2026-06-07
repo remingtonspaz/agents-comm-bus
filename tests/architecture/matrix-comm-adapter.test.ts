@@ -919,6 +919,58 @@ describe("MatrixCommAdapter P4 inbound media", () => {
     );
   });
 
+  it("metadata-only attachments without blob store include retrieval_error", async () => {
+    const syncClient = createFakeSyncClient();
+    const mediaClient = createRecordingMediaClient({});
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({
+      syncClient,
+      mediaClient,
+    }));
+    const received: Message[] = [];
+    adapter.onInbound(async (msg) => {
+      received.push(msg);
+    });
+
+    await adapter.start();
+    await syncClient.pushSync(syncWithEvents(ROOM_ID, [mediaMessageEvent()]));
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.attachments?.[0]?.blob_hash, undefined);
+    assert.equal(
+      received[0]!.attachments?.[0]?.platform_metadata?.retrieval_error,
+      "blob store unavailable",
+    );
+    assert.equal(mediaClient.downloads.length, 0);
+  });
+
+  it("metadata-only attachments with invalid MXC URI include retrieval_error", async () => {
+    const syncClient = createFakeSyncClient();
+    const blobs = new FakeBlobStore();
+    const mediaClient = createRecordingMediaClient({});
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({
+      syncClient,
+      attachmentBlobStore: blobs,
+      mediaClient,
+    }));
+    const received: Message[] = [];
+    adapter.onInbound(async (msg) => {
+      received.push(msg);
+    });
+
+    await adapter.start();
+    await syncClient.pushSync(syncWithEvents(ROOM_ID, [
+      mediaMessageEvent({ url: "not-an-mxc-uri" }),
+    ]));
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.attachments?.[0]?.blob_hash, undefined);
+    assert.match(
+      String(received[0]!.attachments?.[0]?.platform_metadata?.retrieval_error),
+      /Invalid Matrix MXC URI/,
+    );
+    assert.equal(mediaClient.downloads.length, 0);
+  });
+
   it("still delivers metadata-only attachments when media download fails", async () => {
     const syncClient = createFakeSyncClient();
     const blobs = new FakeBlobStore();

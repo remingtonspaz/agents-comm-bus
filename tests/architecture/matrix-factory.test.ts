@@ -22,7 +22,13 @@ import type {
 import { SCHEMA_VERSION_ACCOUNT } from "../../packages/core-contracts/src/index.js";
 import type { SendRequest } from "../../core-daemon/bus.js";
 import { discoverCommAdapters } from "../../scripts/comm-adapters.mjs";
-import type { MatrixIdentityClient } from "../../adapters/matrix/adapter.js";
+import {
+  MatrixCommAdapter,
+  type MatrixIdentityClient,
+  type MatrixSendClient,
+  type MatrixSendMessageRequest,
+} from "../../adapters/matrix/adapter.js";
+import type { MatrixMediaClient } from "../../adapters/matrix/media.js";
 
 const MATRIX = "matrix" as CommId;
 const CLAUDE = "claude" as AgentId;
@@ -356,7 +362,62 @@ describe("matrix_send IPC handler", () => {
     assert.equal(bus.lastSend?.comm, "matrix");
     assert.equal(bus.lastSend?.payload?.attachments?.[0]?.local_path, "D:\\tmp\\diagram.png");
     assert.equal(bus.lastSend?.payload?.attachments?.[0]?.filename, "diagram.png");
+    assert.equal(bus.lastSend?.payload?.attachments?.[0]?.mime, "image/png");
     assert.equal(bus.lastSend?.payload?.text, "see attached");
+  });
+
+  it("matrix_send_image inferred image/png reaches adapter upload as m.image", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-matrix-factory-image-"));
+    try {
+      const filePath = join(dir, "diagram.png");
+      await writeFile(filePath, "png bytes");
+
+      const bus = new RecordingBus();
+      const factory = new MatrixCommAdapterFactory();
+      const handler = factory.ipcMethods({
+        bus: bus as never,
+        storage: new TargetStorage([], makeSession()) as never,
+        pendingInbound: [],
+      } as never).get("matrix_send_image");
+
+      assert.ok(handler);
+      await handler({
+        session: "matrix_session",
+        path: filePath,
+        target: {
+          account: OTHER_BOT_MXID,
+          chat_native_id: ROOM_ID,
+        },
+      });
+
+      assert.equal(bus.lastSend?.payload?.attachments?.[0]?.mime, "image/png");
+
+      const sendClient = createRecordingSendClient(async () => ({ event_id: "$factory_image_evt" }));
+      const mediaClient = createRecordingMediaClient({});
+      const adapter = new MatrixCommAdapter({
+        homeserverUrl: "https://matrix.example.org",
+        accessToken: "syt_test_token",
+        userId: BOT_MXID,
+        accountId: BOT_MXID as never,
+        sendClient,
+        mediaClient,
+      });
+
+      await adapter.send(
+        {
+          comm: MATRIX,
+          account: OTHER_BOT_MXID as never,
+          chat_native_id: ROOM_ID,
+        },
+        { attachments: bus.lastSend!.payload!.attachments! },
+        "idem-factory-image",
+      );
+
+      assert.equal(mediaClient.uploads[0]!.mime, "image/png");
+      assert.equal(sendClient.calls[0]!.content.msgtype, "m.image");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects account labels before bus.send", async () => {
@@ -384,6 +445,35 @@ describe("matrix_send IPC handler", () => {
     assert.equal(bus.lastSend, null);
   });
 });
+
+function createRecordingSendClient(
+  handler: (request: MatrixSendMessageRequest) => Promise<{ event_id: string }>,
+): MatrixSendClient & { calls: MatrixSendMessageRequest[] } {
+  const calls: MatrixSendMessageRequest[] = [];
+  return {
+    calls,
+    async sendMessage(request) {
+      calls.push(request);
+      return await handler(request);
+    },
+  };
+}
+
+function createRecordingMediaClient(): MatrixMediaClient & {
+  uploads: Array<{ mime: string; filename?: string }>;
+} {
+  const uploads: Array<{ mime: string; filename?: string }> = [];
+  return {
+    uploads,
+    async download() {
+      return { content: new TextEncoder().encode("media-bytes"), mime: "image/png" };
+    },
+    async upload(request) {
+      uploads.push({ mime: request.mime, filename: request.filename });
+      return "mxc://matrix.example.org/uploaded123";
+    },
+  };
+}
 
 class RecordingBus {
   lastSend: SendRequest | null = null;

@@ -683,8 +683,20 @@ export class MatrixCommAdapter implements CommAdapter {
       },
     };
 
-    if (!mxcUri || !parseMxcUri(mxcUri) || !this.attachmentBlobStore) {
-      return base;
+    const mxcLocation = mxcUri ? parseMxcUri(mxcUri) : null;
+    if (!mxcUri || !mxcLocation || !this.attachmentBlobStore) {
+      const retrievalError = !mxcUri
+        ? "missing MXC URI"
+        : !mxcLocation
+          ? `Invalid Matrix MXC URI: ${mxcUri}`
+          : "blob store unavailable";
+      return {
+        ...base,
+        platform_metadata: {
+          ...base.platform_metadata,
+          retrieval_error: retrievalError,
+        },
+      };
     }
 
     try {

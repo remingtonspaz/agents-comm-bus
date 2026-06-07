@@ -31,4 +31,5 @@ export declare class MatrixCommAdapterFactory implements CommAdapterFactory {
     ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }
 export declare function createCommAdapterFactory(options?: MatrixCommAdapterFactoryOptions): CommAdapterFactory;
+export declare function inferImageMimeFromPath(localPath: string): string;
 //# sourceMappingURL=factory.d.ts.map
