@@ -37,9 +37,11 @@
     "bump:adapter": "node scripts/bump-version.mjs adapter telegram"
   },
   "dependencies": {
+    "@discordjs/rest": "^2.6.1",
+    "@discordjs/ws": "^2.0.4",
+    "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
-    "ws": "^8.18.0",
-    "dotenv": "^16.4.5"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "22.19.19",

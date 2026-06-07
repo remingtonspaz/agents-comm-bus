@@ -15,10 +15,11 @@ import {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("comm-adapters discovery", () => {
-  it("discovers shippable comm adapters", async () => {
+  it("discovers all shippable comm adapters", async () => {
     const comms = await discoverCommAdapters(repoRoot);
     assert.ok(comms.includes("telegram"), `expected telegram in ${JSON.stringify(comms)}`);
     assert.ok(comms.includes("matrix"), `expected matrix in ${JSON.stringify(comms)}`);
+    assert.ok(comms.includes("discord"), `expected discord in ${JSON.stringify(comms)}`);
   });
 
   it("exposes stable path helpers for release tooling", () => {
