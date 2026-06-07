@@ -833,14 +833,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port}`;
-        let path2 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path3 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path2 && path2[0] !== "/") {
-          path2 = `/${path2}`;
+        if (path3 && path3[0] !== "/") {
+          path3 = `/${path3}`;
         }
-        return new URL(`${origin}${path2}`);
+        return new URL(`${origin}${path3}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -1291,39 +1291,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path2, origin }
+          request: { method, path: path3, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path2);
+        debuglog("sending request to %s %s/%s", method, origin, path3);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path2, origin },
+          request: { method, path: path3, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path2,
+          path3,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path2, origin }
+          request: { method, path: path3, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path2);
+        debuglog("trailers received from %s %s/%s", method, origin, path3);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path2, origin },
+          request: { method, path: path3, origin },
           error
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path2,
+          path3,
           error.message
         );
       });
@@ -1372,9 +1372,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path2, origin }
+            request: { method, path: path3, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path2);
+          debuglog("sending request to %s %s/%s", method, origin, path3);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -1437,7 +1437,7 @@ var require_request = __commonJS({
     var kHandler = /* @__PURE__ */ Symbol("handler");
     var Request = class {
       constructor(origin, {
-        path: path2,
+        path: path3,
         method,
         body,
         headers,
@@ -1452,11 +1452,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path2 !== "string") {
+        if (typeof path3 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path2[0] !== "/" && !(path2.startsWith("http://") || path2.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path3[0] !== "/" && !(path3.startsWith("http://") || path3.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path2)) {
+        } else if (invalidPathRegex.test(path3)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -1522,7 +1522,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path2, query) : path2;
+        this.path = query ? buildURL(path3, query) : path3;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -6041,7 +6041,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request2) {
-      const { method, path: path2, host, upgrade, blocking, reset } = request2;
+      const { method, path: path3, host, upgrade, blocking, reset } = request2;
       let { body, headers, contentLength } = request2;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -6107,7 +6107,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path2} HTTP/1.1\r
+      let header = `${method} ${path3} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -6633,7 +6633,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request2) {
       const session = client[kHTTP2Session];
-      const { method, path: path2, host, upgrade, expectContinue, signal, headers: reqHeaders } = request2;
+      const { method, path: path3, host, upgrade, expectContinue, signal, headers: reqHeaders } = request2;
       let { body } = request2;
       if (upgrade) {
         util.errorRequest(client, request2, new Error("Upgrade not supported for H2"));
@@ -6700,7 +6700,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path2;
+      headers[HTTP2_HEADER_PATH] = path3;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -7053,9 +7053,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path2 = search ? `${pathname}${search}` : pathname;
+        const path3 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path2;
+        this.opts.path = path3;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -8289,10 +8289,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path2 = "/",
+          path: path3 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path2;
+        opts.path = origin + path3;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host } = new URL2(origin);
           headers.host = host;
@@ -10213,20 +10213,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path2) {
-      if (typeof path2 !== "string") {
-        return path2;
+    function safeUrl(path3) {
+      if (typeof path3 !== "string") {
+        return path3;
       }
-      const pathSegments = path2.split("?");
+      const pathSegments = path3.split("?");
       if (pathSegments.length !== 2) {
-        return path2;
+        return path3;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path2, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path2);
+    function matchKey(mockDispatch2, { path: path3, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path3);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -10248,7 +10248,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path2 }) => matchValue(safeUrl(path2), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path3 }) => matchValue(safeUrl(path3), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -10286,9 +10286,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path2, method, body, headers, query } = opts;
+      const { path: path3, method, body, headers, query } = opts;
       return {
-        path: path2,
+        path: path3,
         method,
         body,
         headers,
@@ -10751,10 +10751,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path2, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path3, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path2,
+            Path: path3,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -15635,9 +15635,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path2) {
-      for (let i = 0; i < path2.length; ++i) {
-        const code = path2.charCodeAt(i);
+    function validateCookiePath(path3) {
+      for (let i = 0; i < path3.length; ++i) {
+        const code = path3.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code === 127 || // DEL
         code === 59) {
@@ -18277,11 +18277,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path2 = opts.path;
+          let path3 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path2 = `/${path2}`;
+            path3 = `/${path3}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path2);
+          url = new URL(util.parseOrigin(url).origin + path3);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -22135,13 +22135,13 @@ var require_tree2 = __commonJS({
       mime: leaf.info.mime,
       extension: leaf.info.extension
     });
-    var isLeafNode = (tree, path2) => tree && path2.length === 0;
+    var isLeafNode = (tree, path3) => tree && path3.length === 0;
     var merge = (node, tree) => {
       if (node.bytes.length === 0)
         return tree;
-      const [currentByte, ...path2] = node.bytes;
+      const [currentByte, ...path3] = node.bytes;
       const currentTree = tree.bytes[currentByte];
-      if (isLeafNode(currentTree, path2)) {
+      if (isLeafNode(currentTree, path3)) {
         const matchingNode = tree.bytes[currentByte];
         tree.bytes[currentByte] = {
           ...matchingNode,
@@ -22153,9 +22153,9 @@ var require_tree2 = __commonJS({
         return tree;
       }
       if (tree.bytes[currentByte]) {
-        tree.bytes[currentByte] = exports.merge(exports.createNode(node.typename, path2, node.info), tree.bytes[currentByte]);
+        tree.bytes[currentByte] = exports.merge(exports.createNode(node.typename, path3, node.info), tree.bytes[currentByte]);
       } else {
-        tree.bytes[currentByte] = exports.createComplexNode(node.typename, path2, node.info);
+        tree.bytes[currentByte] = exports.createComplexNode(node.typename, path3, node.info);
       }
       return tree;
     };
@@ -22169,7 +22169,7 @@ var require_tree2 = __commonJS({
         bytes: {},
         matches: void 0
       };
-      const [currentKey, ...path2] = bytes;
+      const [currentKey, ...path3] = bytes;
       if (bytes.length === 0) {
         return {
           matches: [
@@ -22181,7 +22181,7 @@ var require_tree2 = __commonJS({
           bytes: {}
         };
       }
-      obj.bytes[currentKey] = exports.createComplexNode(typename, path2, info);
+      obj.bytes[currentKey] = exports.createComplexNode(typename, path3, info);
       return obj;
     };
     exports.createComplexNode = createComplexNode;
@@ -27036,6 +27036,7 @@ import { readFile as readFile2 } from "node:fs/promises";
 
 // ../adapters/discord/adapter.ts
 import { readFile } from "node:fs/promises";
+import path2 from "node:path";
 
 // ../node_modules/@discordjs/rest/dist/index.mjs
 import { Blob as Blob2 } from "buffer";
@@ -32515,20 +32516,20 @@ var WorkerShardingStrategy = class {
     }
   }
   resolveWorkerPath() {
-    const path2 = this.options.workerPath;
-    if (!path2) {
+    const path22 = this.options.workerPath;
+    if (!path22) {
       return join(__dirname, "defaultWorker.js");
     }
-    if (isAbsolute(path2)) {
-      return path2;
+    if (isAbsolute(path22)) {
+      return path22;
     }
-    if (/^\.\.?[/\\]/.test(path2)) {
-      return resolve(path2);
+    if (/^\.\.?[/\\]/.test(path22)) {
+      return resolve(path22);
     }
     try {
-      return __require2.resolve(path2);
+      return __require2.resolve(path22);
     } catch {
-      return resolve(path2);
+      return resolve(path22);
     }
   }
   async waitForWorkerReady(worker) {
@@ -34286,13 +34287,19 @@ function discordMessageBody(payload, idempotencyKey) {
   }
   return body;
 }
+function uploadFilenameFromLocalPath(localPath) {
+  const name = path2.win32.basename(localPath);
+  if (name && name !== "." && name !== "..") return name;
+  const posixName = path2.posix.basename(localPath);
+  return posixName && posixName !== "." && posixName !== ".." ? posixName : "attachment";
+}
 async function discordOutboundFiles(payload) {
   const files = [];
   for (const attachment of payload.attachments ?? []) {
     if (!attachment.local_path) continue;
     const data = await readFile(attachment.local_path);
     files.push({
-      name: attachment.filename || "attachment",
+      name: attachment.filename ?? uploadFilenameFromLocalPath(attachment.local_path),
       data,
       contentType: attachment.mime || void 0
     });
@@ -34372,6 +34379,7 @@ function createCommAdapterFactory() {
 async function sendDiscord(deps, params, image) {
   const chatNativeId = extractChatNativeId(params);
   const target = chatNativeId === null ? void 0 : await targetFromParams(deps.storage, params, chatNativeId);
+  const localPath = image ? String(params.path) : null;
   const sent = await deps.bus.send({
     session: String(params.session ?? "mcp"),
     comm: DISCORD_COMM_ID,
@@ -34380,8 +34388,8 @@ async function sendDiscord(deps, params, image) {
       text: typeof params.caption === "string" ? params.caption : void 0,
       attachments: [
         {
-          filename: String(params.path),
-          local_path: String(params.path),
+          filename: uploadFilenameFromLocalPath(localPath),
+          local_path: localPath,
           mime: "application/octet-stream",
           size: 0
         }
