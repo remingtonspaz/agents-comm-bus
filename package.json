@@ -39,6 +39,7 @@
   "dependencies": {
     "@discordjs/rest": "^2.6.1",
     "@discordjs/ws": "^2.0.4",
+    "discord-api-types": "^0.38.48",
     "dotenv": "^16.4.5",
     "node-telegram-bot-api": "^0.66.0",
     "ws": "^8.18.0"

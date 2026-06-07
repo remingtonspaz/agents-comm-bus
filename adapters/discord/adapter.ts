@@ -1,5 +1,6 @@
 import { REST, RateLimitError } from "@discordjs/rest";
 import { Routes } from "discord-api-types/v10";
+import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
 
 import type {
   AccountId,
@@ -14,6 +15,9 @@ import type {
   CommId,
 } from "agents-comm-bus-core";
 
+import { DiscordGateway, type DiscordGatewayLike } from "./gateway.js";
+import { buildMessageFromDiscordCreate } from "./normalize.js";
+
 /** Injectable REST surface for tests and production. */
 export interface DiscordRestLike {
   post(route: `/${string}`, options: { body: Record<string, unknown> }): Promise<unknown>;
@@ -26,14 +30,21 @@ export interface DiscordCommAdapterOptions {
   botToken: string;
   applicationId?: string;
   accountId: AccountId;
-  /** Resolved allowlist ids (wired on inbound in a later phase). */
   allowedUserIds?: readonly string[];
   rest?: DiscordRestLike;
+  gateway?: DiscordGatewayLike;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * AGE-10: verbose allowlist-filter tracing. When true, every inbound
+   * allowlist evaluation (pass AND drop) logs one line via `log`.
+   */
+  filterTrace?: boolean;
+  log?: (message: string) => void;
 }
 
 const EMPTY_ALLOWED_MENTIONS = { parse: [] as string[] };
+const IDEMPOTENCY_CACHE_MAX = 256;
 
 export class DiscordCommAdapter implements CommAdapter {
   readonly id = "discord" as CommId;
@@ -41,18 +52,35 @@ export class DiscordCommAdapter implements CommAdapter {
 
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly filterTrace: boolean;
+  private readonly log: (message: string) => void;
+  private allowedUserIds: Set<string>;
   private readonly sentByKey = new Map<string, SendResult>();
   private inboundHandler: ((msg: Message) => Promise<void>) | null = null;
   private filterDropHandler: ((event: FilterDropEvent) => void) | null = null;
   private stateHandler: ((state: CommConnectionState) => void) | null = null;
   private connectionState: CommConnectionState | null = null;
   private rest: DiscordRestLike | null = null;
+  private restForGateway: REST | null = null;
+  private gateway: DiscordGatewayLike | null = null;
+  private botUserId: string | null = null;
   private rateLimited = false;
 
   constructor(private readonly options: DiscordCommAdapterOptions) {
     this.accountId = options.accountId;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.allowedUserIds = new Set(options.allowedUserIds ?? []);
+    this.filterTrace = options.filterTrace ?? process.env.AGENTS_COMM_BUS_FILTER_TRACE === "1";
+    this.log = options.log ?? ((message) => console.error(message));
+  }
+
+  get allowedSenderIds(): readonly string[] {
+    return Array.from(this.allowedUserIds);
+  }
+
+  updateAllowedSenderIds(ids: readonly string[]): void {
+    this.allowedUserIds = new Set(ids);
   }
 
   exclusiveResource(): { resourceId: string } | null {
@@ -62,15 +90,47 @@ export class DiscordCommAdapter implements CommAdapter {
   async start(): Promise<void> {
     this.emitState("connecting");
     if (!this.rest) {
-      this.rest = this.options.rest ?? (new REST({ version: "10" }).setToken(this.options.botToken) as unknown as DiscordRestLike);
+      if (this.options.rest) {
+        this.rest = this.options.rest;
+      } else {
+        this.restForGateway = new REST({ version: "10" }).setToken(this.options.botToken);
+        this.rest = this.restForGateway as unknown as DiscordRestLike;
+      }
     }
-    await this.rest.get(Routes.user("@me"));
-    this.emitState("connected");
+    if (!this.restForGateway) {
+      this.restForGateway = new REST({ version: "10" }).setToken(this.options.botToken);
+    }
+
+    const me = (await this.rest.get(Routes.user("@me"))) as { id: string };
+    this.botUserId = String(me.id);
+
+    if (!this.gateway) {
+      this.gateway = this.options.gateway ?? new DiscordGateway({
+        token: this.options.botToken,
+        rest: this.restForGateway,
+      });
+    }
+
+    this.gateway.onConnectionState((state) => this.emitState(state));
+    this.gateway.onDispatch((payload) => {
+      if (payload.t !== GatewayDispatchEvents.MessageCreate) return;
+      void this.handleDiscordMessageCreate(payload.d as APIMessage)
+        .then(() => this.emitState("connected"))
+        .catch(() => this.emitState("degraded"));
+    });
+
+    await this.gateway.connect();
   }
 
   async stop(): Promise<void> {
+    if (this.gateway) {
+      await this.gateway.destroy();
+      this.gateway = null;
+    }
     this.rest?.destroy?.();
     this.rest = null;
+    this.restForGateway = null;
+    this.botUserId = null;
     this.rateLimited = false;
     this.emitState("disconnected");
   }
@@ -110,7 +170,7 @@ export class DiscordCommAdapter implements CommAdapter {
           platform_message_id: platformMessageId,
           sent_at: this.now(),
         };
-        this.sentByKey.set(idempotencyKey, result);
+        this.rememberSent(idempotencyKey, result);
         this.rateLimited = false;
         this.emitState("connected");
         return result;
@@ -157,6 +217,46 @@ export class DiscordCommAdapter implements CommAdapter {
     return "transient";
   }
 
+  private async handleDiscordMessageCreate(raw: APIMessage): Promise<void> {
+    if (!this.inboundHandler) return;
+    const fromId = raw.author?.id == null ? null : String(raw.author.id);
+    if (this.allowedUserIds.size > 0 && (!fromId || !this.allowedUserIds.has(fromId))) {
+      this.emitFilterDrop({
+        reason: fromId ? "sender_not_allowed" : "missing_sender_id",
+        update_kind: "message",
+        sender_id: fromId ?? undefined,
+        chat_native_id: String(raw.channel_id),
+        platform_message_id: String(raw.id),
+      });
+      return;
+    }
+    this.traceFilterPass("message", fromId);
+    const botUserId = this.botUserId;
+    if (!botUserId) throw new Error("Discord adapter has no bot identity");
+
+    const threadParent = this.gateway?.threadParentChannelId(String(raw.channel_id));
+    const message = buildMessageFromDiscordCreate(raw, {
+      commId: this.id,
+      botUserId,
+      accountId: this.accountId,
+      threadParentChannelId: threadParent,
+      now: this.now,
+    });
+    if (!message) return;
+
+    await this.inboundHandler(message);
+  }
+
+  private rememberSent(idempotencyKey: string, result: SendResult): void {
+    if (this.sentByKey.size >= IDEMPOTENCY_CACHE_MAX) {
+      const oldest = this.sentByKey.keys().next().value;
+      if (oldest !== undefined) {
+        this.sentByKey.delete(oldest);
+      }
+    }
+    this.sentByKey.set(idempotencyKey, result);
+  }
+
   private requireRest(): DiscordRestLike {
     if (!this.rest) throw new Error("Discord adapter is not started");
     return this.rest;
@@ -166,6 +266,30 @@ export class DiscordCommAdapter implements CommAdapter {
     if (this.connectionState === state) return;
     this.connectionState = state;
     this.stateHandler?.(state);
+  }
+
+  private emitFilterDrop(event: FilterDropEvent): void {
+    try {
+      this.filterDropHandler?.(event);
+    } catch {
+      // Observability must never break inbound handling.
+    }
+    if (this.filterTrace) {
+      this.log(
+        `agents-comm-bus discord[${this.accountId}] FILTER DROP: ${event.update_kind} ` +
+          `sender=${event.sender_id ?? "<none>"} chat=${event.chat_native_id ?? "?"} ` +
+          `msg=${event.platform_message_id ?? "?"} reason=${event.reason} ` +
+          `(allowlist size=${this.allowedUserIds.size})`,
+      );
+    }
+  }
+
+  private traceFilterPass(updateKind: string, senderId: string | null): void {
+    if (!this.filterTrace) return;
+    this.log(
+      `agents-comm-bus discord[${this.accountId}] filter pass: ${updateKind} ` +
+        `sender=${senderId ?? "<none>"} (allowlist size=${this.allowedUserIds.size})`,
+    );
   }
 }
 

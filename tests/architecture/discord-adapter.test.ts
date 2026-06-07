@@ -10,6 +10,9 @@ import {
   discordMessageBody,
   type DiscordRestLike,
 } from "../../adapters/discord/adapter.js";
+import type { DiscordGatewayLike } from "../../adapters/discord/gateway.js";
+import type { CommConnectionState } from "../../packages/core-contracts/src/index.js";
+import type { GatewayDispatchPayload } from "discord-api-types/v10";
 import { DiscordCommAdapterFactory } from "../../adapters/discord/factory.js";
 import { writeTokenFile } from "../../core-daemon/cli/token-file.js";
 import type { SendRequest } from "../../core-daemon/bus.js";
@@ -159,6 +162,7 @@ describe("DiscordCommAdapter REST send", () => {
       botToken: "test",
       accountId: "123456789012345678" as never,
       rest,
+      gateway: new NoopDiscordGateway(),
     });
     await adapter.start();
 
@@ -211,6 +215,7 @@ describe("DiscordCommAdapter REST send", () => {
       botToken: "test",
       accountId: "123456789012345678" as never,
       rest,
+      gateway: new NoopDiscordGateway(),
       sleep: async (ms) => {
         sleeps.push(ms);
       },
@@ -244,6 +249,7 @@ describe("DiscordCommAdapter REST send", () => {
       botToken: "test",
       accountId: "123456789012345678" as never,
       rest,
+      gateway: new NoopDiscordGateway(),
     });
     await adapter.start();
 
@@ -358,6 +364,16 @@ describe("discord_send IPC handler", () => {
     assert.equal(bus.lastSend, null);
   });
 });
+
+class NoopDiscordGateway implements DiscordGatewayLike {
+  async connect(): Promise<void> {}
+  async destroy(): Promise<void> {}
+  onDispatch(_handler: (payload: GatewayDispatchPayload) => void): void {}
+  onConnectionState(_handler: (state: CommConnectionState) => void): void {}
+  threadParentChannelId(): string | undefined {
+    return undefined;
+  }
+}
 
 function makeFakeRest(handlers: {
   post: DiscordRestLike["post"];
