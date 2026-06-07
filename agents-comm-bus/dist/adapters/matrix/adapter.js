@@ -33,6 +33,7 @@ export function createFetchMatrixSyncClient(homeserverUrl, accessToken, options 
         abortController = new AbortController();
         const signal = abortController.signal;
         const timeout = setTimeout(() => abortController?.abort(), timeoutMs + 5_000);
+        const isInitialSync = nextBatch == null;
         try {
             const url = new URL(`${baseUrl}/_matrix/client/v3/sync`);
             url.searchParams.set("timeout", String(timeoutMs));
@@ -50,7 +51,10 @@ export function createFetchMatrixSyncClient(homeserverUrl, accessToken, options 
                 Object.assign(error, { status: response.status });
                 throw error;
             }
-            return await response.json();
+            return {
+                response: await response.json(),
+                isInitialSync,
+            };
         }
         finally {
             clearTimeout(timeout);
@@ -59,13 +63,13 @@ export function createFetchMatrixSyncClient(homeserverUrl, accessToken, options 
     const runLoop = async (handlers) => {
         while (!stopped) {
             try {
-                const response = await fetchSync();
+                const { response, isInitialSync } = await fetchSync();
                 if (stopped)
                     break;
                 if (response.next_batch) {
                     nextBatch = response.next_batch;
                 }
-                await handlers.onSyncResponse(response);
+                await handlers.onSyncResponse(response, { isInitialSync });
             }
             catch (error) {
                 if (stopped)
@@ -136,9 +140,9 @@ export class MatrixCommAdapter {
         this.emitState("connecting");
         try {
             await this.syncClient.start({
-                onSyncResponse: async (response) => {
+                onSyncResponse: async (response, context) => {
                     try {
-                        await this.processSyncResponse(response);
+                        await this.processSyncResponse(response, context?.isInitialSync ?? false);
                         this.emitState("connected");
                     }
                     catch {
@@ -214,7 +218,11 @@ export class MatrixCommAdapter {
         }
         return "transient";
     }
-    async processSyncResponse(response) {
+    async processSyncResponse(response, isInitialSync) {
+        // The first Matrix /sync response without a since cursor is history catch-up.
+        // Delivering it as fresh inbound would replay recent room history on every daemon restart.
+        if (isInitialSync)
+            return;
         const joined = response.rooms?.join;
         if (!joined)
             return;

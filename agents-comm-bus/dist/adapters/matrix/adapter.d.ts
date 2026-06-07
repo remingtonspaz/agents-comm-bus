@@ -39,8 +39,12 @@ export interface MatrixSyncResponse {
     };
 }
 export interface MatrixSyncHandlers {
-    onSyncResponse(response: MatrixSyncResponse): Promise<void>;
+    onSyncResponse(response: MatrixSyncResponse, context?: MatrixSyncContext): Promise<void>;
     onError(error: unknown): void;
+}
+export interface MatrixSyncContext {
+    /** True for the first catch-up response before the client has a since cursor. */
+    isInitialSync: boolean;
 }
 export interface MatrixSyncClient {
     start(handlers: MatrixSyncHandlers): Promise<void>;

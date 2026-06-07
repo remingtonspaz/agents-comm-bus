@@ -187,7 +187,7 @@ describe("MatrixCommAdapter P1 skeleton", () => {
 
 describe("MatrixCommAdapter P2 default sync client", () => {
   it("issues GET /sync and delivers responses to the adapter", async () => {
-    let fetchUrl: string | undefined;
+    const fetchUrls: string[] = [];
     let authHeader: string | undefined;
     let callCount = 0;
     const originalFetch = globalThis.fetch;
@@ -200,15 +200,21 @@ describe("MatrixCommAdapter P2 default sync client", () => {
         : input instanceof URL
           ? input.href
           : input.url;
-      fetchUrl = url;
+      fetchUrls.push(url);
       authHeader = new Headers(init?.headers).get("Authorization") ?? undefined;
 
-      const payload = syncWithEvents(ROOM_ID, [
-        textMessageEvent({ event_id: "$fetch_evt", body: "from default sync" }),
-      ]);
-
       if (callCount === 1) {
-        return new Response(JSON.stringify(payload), {
+        return new Response(JSON.stringify(syncWithEvents(ROOM_ID, [
+          textMessageEvent({ event_id: "$initial_evt", body: "history catch-up" }),
+        ])), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (callCount === 2) {
+        return new Response(JSON.stringify(syncWithEvents(ROOM_ID, [
+          textMessageEvent({ event_id: "$fetch_evt", body: "from default sync" }),
+        ])), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -234,10 +240,12 @@ describe("MatrixCommAdapter P2 default sync client", () => {
       });
 
       await adapter.start();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-      assert.ok(fetchUrl?.includes("/_matrix/client/v3/sync"));
-      assert.match(fetchUrl ?? "", /timeout=\d+/);
+      assert.ok(fetchUrls[0]?.includes("/_matrix/client/v3/sync"));
+      assert.match(fetchUrls[0] ?? "", /timeout=\d+/);
+      assert.doesNotMatch(fetchUrls[0] ?? "", /since=/);
+      assert.match(fetchUrls[1] ?? "", /since=s0_1_2_3/);
       assert.equal(authHeader, "Bearer syt_test_token");
       assert.equal(received.length, 1);
       assert.equal(received[0]!.message_id, "matrix:$fetch_evt");
