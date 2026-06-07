@@ -1,0 +1,34 @@
+{
+  "name": "discord",
+  "version": "0.1.0",
+  "description": "Bidirectional Discord messaging for Codex through the shared agents-comm-bus daemon.",
+  "author": {
+    "name": "Satrio"
+  },
+  "homepage": "https://github.com/remingtonspaz/claude-code-telegram",
+  "repository": "https://github.com/remingtonspaz/claude-code-telegram",
+  "license": "MIT",
+  "keywords": [
+    "discord",
+    "messaging",
+    "remote-control",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Discord",
+    "shortDescription": "Talk to Codex from Discord",
+    "longDescription": "Bidirectional Discord messaging for Codex. Send progress updates and results to Discord; reply on Discord to start or steer a turn and approve or deny tool permissions through the shared agents-comm-bus daemon.",
+    "developerName": "Satrio",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Send a status update to my Discord"
+    ]
+  }
+}

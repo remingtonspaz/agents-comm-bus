@@ -520,7 +520,10 @@ async function stagePair(agent, comm) {
   /* 4. Plugin manifest */
   const manifestName = agent === "claude" ? ".claude-plugin" : ".codex-plugin";
   const manifestSrcDir = resolve(REPO_ROOT, manifestName);
-  const manifestSrc = resolve(manifestSrcDir, "plugin.json");
+  const perCommManifest = resolve(manifestSrcDir, `plugin.${comm}.json`);
+  const manifestSrc = (await pathExists(perCommManifest))
+    ? perCommManifest
+    : resolve(manifestSrcDir, "plugin.json");
   const manifestDst = resolve(outDir, manifestName, "plugin.json");
   let pluginVersion = null;
   if (await pathExists(manifestSrc)) {

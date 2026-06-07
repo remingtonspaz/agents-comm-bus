@@ -1,0 +1,15 @@
+-- AGE-9: allow multiple concurrent open queries per session.
+--
+-- The partial unique index was the one-open-per-session backstop. Callers now
+-- choose their policy explicitly: the Claude/Codex hook paths keep calling
+-- supersedeOpenQueriesForSession() before opening (Claude's local UI is
+-- exclusive, so a new local prompt always moots the prior one), while
+-- deliberate multi-open callers (the AGE-37 question sequencer, future fan-out
+-- flows) skip the supersede.
+--
+-- Mixed-fleet note: this migration only LOOSENS a constraint, so an older
+-- daemon running against the migrated DB keeps working — its own supersede-
+-- before-open discipline preserves one-open for its sessions. (The index was
+-- also a hard race guard for that older code's non-atomic supersede+insert;
+-- roll the prod daemon reasonably soon after this migrates.)
+DROP INDEX IF EXISTS idx_queries_one_open_per_session;

@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "agent": "claude",
+  "comm": "discord",
+  "artifacts": [
+    {
+      "source": "hosts/claude/skills/discord/SKILL.md",
+      "artifact": "plugins/claude/discord/skills/discord/SKILL.md",
+      "type": "assembled-skill"
+    },
+    {
+      "source": "mcp-server/dist/claude-mcp-shim.js",
+      "artifact": "plugins/claude/discord/claude-mcp-shim.js",
+      "type": "bundled-mcp-shim"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/daemon.bundle.js",
+      "artifact": "plugins/claude/discord/daemon.bundle.js",
+      "type": "runtime-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/discord.adapter.bundle.js",
+      "artifact": "plugins/claude/discord/discord.adapter.bundle.js",
+      "type": "runtime-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/cli.bundle.js",
+      "artifact": "plugins/claude/discord/cli.bundle.js",
+      "type": "runtime-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/001_initial.sql",
+      "artifact": "plugins/claude/discord/001_initial.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/002_conversation_agent_identity.sql",
+      "artifact": "plugins/claude/discord/002_conversation_agent_identity.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/003_allowlist.sql",
+      "artifact": "plugins/claude/discord/003_allowlist.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/004_session_owner_process.sql",
+      "artifact": "plugins/claude/discord/004_session_owner_process.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/005_conversation_bot_identity.sql",
+      "artifact": "plugins/claude/discord/005_conversation_bot_identity.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/006_registration_identity.sql",
+      "artifact": "plugins/claude/discord/006_registration_identity.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/007_registration_pk.sql",
+      "artifact": "plugins/claude/discord/007_registration_pk.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/008_conversation_registration_key.sql",
+      "artifact": "plugins/claude/discord/008_conversation_registration_key.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/009_multi_open_queries.sql",
+      "artifact": "plugins/claude/discord/009_multi_open_queries.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "(generated)",
+      "artifact": "plugins/claude/discord/package.json",
+      "type": "package-json"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/hooks/claude/permission-request.js",
+      "artifact": "plugins/claude/discord/hooks/permission-request.js",
+      "type": "hook-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/hooks/claude/session-start.js",
+      "artifact": "plugins/claude/discord/hooks/session-start.js",
+      "type": "hook-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/hooks/claude/user-prompt-submit.js",
+      "artifact": "plugins/claude/discord/hooks/user-prompt-submit.js",
+      "type": "hook-bundle"
+    },
+    {
+      "source": "hosts/claude/hooks/hooks.json",
+      "artifact": "plugins/claude/discord/hooks/hooks.json",
+      "type": "hook"
+    },
+    {
+      "source": ".claude-plugin/plugin.discord.json",
+      "artifact": "plugins/claude/discord/.claude-plugin/plugin.json",
+      "type": "manifest"
+    },
+    {
+      "source": "core-daemon/config.ts (DAEMON_VERSION) + adapters/discord/version.ts (ADAPTER_VERSION) + .claude-plugin/plugin.json (version)",
+      "artifact": "plugins/claude/discord/install-stamp.json",
+      "type": "install-stamp"
+    },
+    {
+      "source": "scripts/enter-watcher.ps1",
+      "artifact": "plugins/claude/discord/scripts/enter-watcher.ps1",
+      "type": "supporting-script"
+    }
+  ]
+}
