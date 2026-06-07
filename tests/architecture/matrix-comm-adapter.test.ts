@@ -3,14 +3,19 @@ import assert from "node:assert/strict";
 
 import {
   MatrixCommAdapter,
+  matrixTxnIdFromIdempotencyKey,
+  type MatrixSendClient,
+  type MatrixSendMessageRequest,
   type MatrixSyncClient,
   type MatrixSyncHandlers,
   type MatrixSyncResponse,
 } from "../../adapters/matrix/adapter.js";
 import type {
+  ChatRef,
   CommConnectionState,
   FilterDropEvent,
   Message,
+  OutboundPayload,
 } from "../../packages/core-contracts/src/index.js";
 
 const BOT_MXID = "@agents-comm-bot:matrix.example.org";
@@ -138,28 +143,6 @@ describe("MatrixCommAdapter P1 skeleton", () => {
     assert.deepEqual(states, ["connecting", "connected", "disconnected"]);
   });
 
-  it("send fails loud as unsupported and classifies permanent", async () => {
-    const adapter = new MatrixCommAdapter(baseAdapterOptions());
-    try {
-      await adapter.send(
-        {
-          comm: "matrix",
-          account: BOT_MXID as any,
-          chat_native_id: ROOM_ID,
-        },
-        { text: "hello" },
-        "idem-1",
-      );
-      assert.fail("expected send to throw");
-    } catch (error) {
-      assert.match(
-        error instanceof Error ? error.message : String(error),
-        /not implemented/i,
-      );
-      assert.equal(adapter.classifyFailure(error), "permanent");
-    }
-  });
-
   it("classifyFailure covers permanent, rate-limited, and transient examples", () => {
     const adapter = new MatrixCommAdapter(baseAdapterOptions());
 
@@ -179,9 +162,176 @@ describe("MatrixCommAdapter P1 skeleton", () => {
     assert.equal(adapter.classifyFailure(new Error("something else")), "transient");
   });
 
-  it("reportPressure returns zero backlog", () => {
+  it("reportPressure returns zero backlog when not rate-limited", () => {
     const adapter = new MatrixCommAdapter(baseAdapterOptions());
     assert.deepEqual(adapter.reportPressure(), { backlog: 0, rateLimited: false });
+  });
+});
+
+function matrixChatTarget(): ChatRef {
+  return {
+    comm: "matrix",
+    account: BOT_MXID as any,
+    chat_native_id: ROOM_ID,
+  };
+}
+
+function createRecordingSendClient(
+  handler: (request: MatrixSendMessageRequest) => Promise<{ event_id: string }>,
+): MatrixSendClient & { calls: MatrixSendMessageRequest[] } {
+  const calls: MatrixSendMessageRequest[] = [];
+  return {
+    calls,
+    async sendMessage(request) {
+      calls.push(request);
+      return await handler(request);
+    },
+  };
+}
+
+describe("MatrixCommAdapter P3 outbound send", () => {
+  it("successful send hits the Matrix endpoint with Authorization and returns event id", async () => {
+    const fetchUrls: string[] = [];
+    let authHeader: string | undefined;
+    let method: string | undefined;
+    let requestBody: unknown;
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+      fetchUrls.push(url);
+      method = init?.method;
+      authHeader = new Headers(init?.headers).get("Authorization") ?? undefined;
+      requestBody = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return new Response(JSON.stringify({ event_id: "$sent_evt" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    try {
+      const adapter = new MatrixCommAdapter(baseAdapterOptions({ now: () => 1_900_000_000_000 }));
+      const result = await adapter.send(matrixChatTarget(), { text: "hello matrix" }, "idem-send-1");
+
+      assert.equal(method, "PUT");
+      assert.equal(
+        fetchUrls[0],
+        `https://matrix.example.org/_matrix/client/v3/rooms/${encodeURIComponent(ROOM_ID)}/send/m.room.message/${encodeURIComponent(matrixTxnIdFromIdempotencyKey("idem-send-1"))}`,
+      );
+      assert.equal(authHeader, "Bearer syt_test_token");
+      assert.deepEqual(requestBody, { msgtype: "m.text", body: "hello matrix" });
+      assert.deepEqual(result, {
+        platform_message_id: "$sent_evt",
+        sent_at: 1_900_000_000_000,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("same idempotency key produces a stable txn path and skips duplicate requests", async () => {
+    const sendClient = createRecordingSendClient(async () => ({ event_id: "$cached_evt" }));
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient }));
+
+    const target = matrixChatTarget();
+    const payload: OutboundPayload = { text: "once" };
+    const first = await adapter.send(target, payload, "idem-stable");
+    const second = await adapter.send(target, payload, "idem-stable");
+
+    assert.equal(sendClient.calls.length, 1);
+    assert.equal(
+      sendClient.calls[0]!.txnId,
+      matrixTxnIdFromIdempotencyKey("idem-stable"),
+    );
+    assert.deepEqual(second, first);
+  });
+
+  it("reply_to maps to Matrix reply metadata", async () => {
+    const sendClient = createRecordingSendClient(async () => ({ event_id: "$reply_evt" }));
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient }));
+
+    await adapter.send(
+      matrixChatTarget(),
+      { text: "in reply", reply_to: "matrix:$parent_evt" as any },
+      "idem-reply",
+    );
+
+    assert.deepEqual(sendClient.calls[0]!.content, {
+      msgtype: "m.text",
+      body: "in reply",
+      "m.relates_to": {
+        "m.in_reply_to": { event_id: "$parent_evt" },
+      },
+    });
+  });
+
+  it("html format sends plain text body only", async () => {
+    const sendClient = createRecordingSendClient(async () => ({ event_id: "$html_evt" }));
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient }));
+
+    await adapter.send(
+      matrixChatTarget(),
+      { text: "plain only", format: "html" },
+      "idem-html",
+    );
+
+    assert.deepEqual(sendClient.calls[0]!.content, {
+      msgtype: "m.text",
+      body: "plain only",
+    });
+  });
+
+  it("429 with retry_after_ms retries once, reports pressure during sleep, then succeeds", async () => {
+    let attempt = 0;
+    let sleptMs: number | null = null;
+    let pressureWhileSleeping = false;
+    const sendClient = createRecordingSendClient(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        const error = new Error("Matrix send failed: HTTP 429 {\"errcode\":\"M_LIMIT_EXCEEDED\",\"retry_after_ms\":25}");
+        Object.assign(error, {
+          status: 429,
+          errcode: "M_LIMIT_EXCEEDED",
+          retry_after_ms: 25,
+        });
+        throw error;
+      }
+      return { event_id: "$after_retry" };
+    });
+    let adapter: MatrixCommAdapter;
+    adapter = new MatrixCommAdapter(baseAdapterOptions({
+      sendClient,
+      sleep: async (ms) => {
+        sleptMs = ms;
+        pressureWhileSleeping = adapter.reportPressure().rateLimited;
+      },
+    }));
+
+    const result = await adapter.send(matrixChatTarget(), { text: "retry me" }, "idem-429");
+
+    assert.equal(attempt, 2);
+    assert.equal(sendClient.calls.length, 2);
+    assert.equal(sleptMs, 25);
+    assert.equal(pressureWhileSleeping, true);
+    assert.deepEqual(adapter.reportPressure(), { backlog: 0, rateLimited: false });
+    assert.equal(result.platform_message_id, "$after_retry");
+  });
+
+  it("401 and 403 classify as permanent failures", () => {
+    const adapter = new MatrixCommAdapter(baseAdapterOptions());
+    assert.equal(adapter.classifyFailure({ status: 401, message: "Unauthorized" }), "permanent");
+    assert.equal(adapter.classifyFailure({ status: 403, message: "Forbidden" }), "permanent");
+  });
+
+  it("5xx responses classify as transient failures", () => {
+    const adapter = new MatrixCommAdapter(baseAdapterOptions());
+    assert.equal(adapter.classifyFailure({ status: 500, message: "Internal Server Error" }), "transient");
+    assert.equal(adapter.classifyFailure({ status: 502, message: "Bad Gateway" }), "transient");
+    assert.equal(adapter.classifyFailure(new Error("ECONNRESET")), "transient");
   });
 });
 

@@ -5,5 +5,5 @@
  * `DAEMON_VERSION` and plugin package versions. Bump when shipped Matrix adapter
  * behavior changes.
  */
-export const ADAPTER_VERSION = "0.2.1";
+export const ADAPTER_VERSION = "0.2.2";
 //# sourceMappingURL=version.js.map

@@ -1,4 +1,4 @@
-import type { AccountId, ChatRef, CommAdapter, CommConnectionState, CommId, FailureClassification, FilterDropEvent, Message, OutboundPayload, SendResult } from "agents-comm-bus-core";
+import type { AccountId, ChatRef, CommAdapter, CommConnectionState, CommId, FailureClassification, FilterDropEvent, Message, MessageId, OutboundPayload, SendResult } from "agents-comm-bus-core";
 export interface MatrixWhoamiResponse {
     user_id: string;
     device_id?: string;
@@ -50,6 +50,25 @@ export interface MatrixSyncClient {
     start(handlers: MatrixSyncHandlers): Promise<void>;
     stop(): Promise<void>;
 }
+export interface MatrixSendMessageRequest {
+    roomId: string;
+    txnId: string;
+    content: MatrixEventContent;
+}
+export interface MatrixSendMessageResponse {
+    event_id: string;
+}
+export interface MatrixSendClient {
+    sendMessage(request: MatrixSendMessageRequest): Promise<MatrixSendMessageResponse>;
+}
+export interface FetchMatrixSendClientOptions {
+    fetchFn?: typeof fetch;
+}
+export interface MatrixErrorBody {
+    errcode?: string;
+    error?: string;
+    retry_after_ms?: number;
+}
 export interface FetchMatrixSyncClientOptions {
     /** Matrix /sync long-poll timeout in milliseconds (query param). */
     timeoutMs?: number;
@@ -68,9 +87,15 @@ export interface MatrixCommAdapterOptions {
     autoJoinInvites?: boolean;
     encryptedRoomPolicy?: "decline";
     syncClient?: MatrixSyncClient;
+    sendClient?: MatrixSendClient;
+    sleep?: (ms: number) => Promise<void>;
     now?: () => number;
 }
 export declare function createFetchMatrixSyncClient(homeserverUrl: string, accessToken: string, options?: FetchMatrixSyncClientOptions): MatrixSyncClient;
+export declare function matrixTxnIdFromIdempotencyKey(idempotencyKey: string): string;
+export declare function matrixReplyEventId(replyTo: MessageId | undefined): string | undefined;
+export declare function matrixOutboundMessageContent(payload: OutboundPayload): MatrixEventContent;
+export declare function createFetchMatrixSendClient(homeserverUrl: string, accessToken: string, options?: FetchMatrixSendClientOptions): MatrixSendClient;
 export declare class MatrixCommAdapter implements CommAdapter {
     private readonly options;
     readonly id: CommId;
@@ -79,7 +104,10 @@ export declare class MatrixCommAdapter implements CommAdapter {
     private readonly accessToken;
     private readonly userId;
     private readonly syncClient;
+    private readonly sendClient;
+    private readonly sleep;
     private readonly now;
+    private readonly sentByKey;
     private allowedUserIds;
     private allowedRoomIds;
     private inboundHandler;
@@ -87,6 +115,7 @@ export declare class MatrixCommAdapter implements CommAdapter {
     private filterDropHandler;
     private connectionState;
     private started;
+    private rateLimited;
     constructor(options: MatrixCommAdapterOptions);
     get allowedSenderIds(): readonly string[];
     updateAllowedSenderIds(ids: readonly string[]): void;
@@ -98,7 +127,7 @@ export declare class MatrixCommAdapter implements CommAdapter {
     onInbound(handler: (msg: Message) => Promise<void>): void;
     onConnectionState(handler: (state: CommConnectionState) => void): void;
     onFilterDrop(handler: (event: FilterDropEvent) => void): void;
-    send(_target: ChatRef, _payload: OutboundPayload, _idempotencyKey: string): Promise<SendResult>;
+    send(target: ChatRef, payload: OutboundPayload, idempotencyKey: string): Promise<SendResult>;
     reportPressure(): {
         backlog: number;
         rateLimited: boolean;

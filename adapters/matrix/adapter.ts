@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   AccountId,
   ChatRef,
@@ -67,6 +69,30 @@ export interface MatrixSyncClient {
   stop(): Promise<void>;
 }
 
+export interface MatrixSendMessageRequest {
+  roomId: string;
+  txnId: string;
+  content: MatrixEventContent;
+}
+
+export interface MatrixSendMessageResponse {
+  event_id: string;
+}
+
+export interface MatrixSendClient {
+  sendMessage(request: MatrixSendMessageRequest): Promise<MatrixSendMessageResponse>;
+}
+
+export interface FetchMatrixSendClientOptions {
+  fetchFn?: typeof fetch;
+}
+
+export interface MatrixErrorBody {
+  errcode?: string;
+  error?: string;
+  retry_after_ms?: number;
+}
+
 export interface FetchMatrixSyncClientOptions {
   /** Matrix /sync long-poll timeout in milliseconds (query param). */
   timeoutMs?: number;
@@ -86,6 +112,8 @@ export interface MatrixCommAdapterOptions {
   autoJoinInvites?: boolean;
   encryptedRoomPolicy?: "decline";
   syncClient?: MatrixSyncClient;
+  sendClient?: MatrixSendClient;
+  sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
 
@@ -203,6 +231,89 @@ export function createFetchMatrixSyncClient(
   };
 }
 
+export function matrixTxnIdFromIdempotencyKey(idempotencyKey: string): string {
+  return createHash("sha256").update(idempotencyKey).digest("hex");
+}
+
+export function matrixReplyEventId(replyTo: MessageId | undefined): string | undefined {
+  if (!replyTo) return undefined;
+  return replyTo.startsWith("matrix:") ? replyTo.slice("matrix:".length) : replyTo;
+}
+
+export function matrixOutboundMessageContent(payload: OutboundPayload): MatrixEventContent {
+  const content: MatrixEventContent = {
+    msgtype: "m.text",
+    body: payload.text ?? "",
+  };
+  const replyEventId = matrixReplyEventId(payload.reply_to);
+  if (replyEventId) {
+    content["m.relates_to"] = {
+      "m.in_reply_to": { event_id: replyEventId },
+    };
+  }
+  return content;
+}
+
+export function createFetchMatrixSendClient(
+  homeserverUrl: string,
+  accessToken: string,
+  options: FetchMatrixSendClientOptions = {},
+): MatrixSendClient {
+  const fetchFn = options.fetchFn ?? fetch;
+  const baseUrl = homeserverUrl.replace(/\/+$/, "");
+
+  return {
+    async sendMessage(request: MatrixSendMessageRequest): Promise<MatrixSendMessageResponse> {
+      const roomId = encodeURIComponent(request.roomId);
+      const txnId = encodeURIComponent(request.txnId);
+      const url = `${baseUrl}/_matrix/client/v3/rooms/${roomId}/send/m.room.message/${txnId}`;
+      const response = await fetchFn(url, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request.content),
+      });
+
+      const bodyText = await response.text().catch(() => "");
+      if (!response.ok) {
+        throw matrixSendHttpError(response.status, bodyText);
+      }
+
+      const body = bodyText ? JSON.parse(bodyText) as { event_id?: string } : {};
+      if (!body.event_id) {
+        throw new Error("Matrix send succeeded but response omitted event_id");
+      }
+      return { event_id: body.event_id };
+    },
+  };
+}
+
+function matrixSendHttpError(status: number, bodyText: string): Error {
+  let body: MatrixErrorBody = {};
+  if (bodyText) {
+    try {
+      body = JSON.parse(bodyText) as MatrixErrorBody;
+    } catch {
+      // Keep the raw body in the message below.
+    }
+  }
+  const error = new Error(
+    `Matrix send failed: HTTP ${status}${bodyText ? ` ${bodyText}` : ""}`,
+  );
+  Object.assign(error, {
+    status,
+    errcode: body.errcode,
+    retry_after_ms: body.retry_after_ms,
+  });
+  return error;
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => {
+  setTimeout(resolve, ms);
+});
+
 export class MatrixCommAdapter implements CommAdapter {
   readonly id = "matrix" as CommId;
   readonly accountId: AccountId;
@@ -211,7 +322,10 @@ export class MatrixCommAdapter implements CommAdapter {
   private readonly accessToken: string;
   private readonly userId: string;
   private readonly syncClient: MatrixSyncClient;
+  private readonly sendClient: MatrixSendClient;
+  private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
+  private readonly sentByKey = new Map<string, SendResult>();
   private allowedUserIds: Set<string>;
   private allowedRoomIds: Set<string>;
   private inboundHandler: ((msg: Message) => Promise<void>) | null = null;
@@ -219,6 +333,7 @@ export class MatrixCommAdapter implements CommAdapter {
   private filterDropHandler: ((event: FilterDropEvent) => void) | null = null;
   private connectionState: CommConnectionState | null = null;
   private started = false;
+  private rateLimited = false;
 
   constructor(private readonly options: MatrixCommAdapterOptions) {
     this.accountId = options.accountId;
@@ -229,6 +344,11 @@ export class MatrixCommAdapter implements CommAdapter {
       options.homeserverUrl,
       options.accessToken,
     );
+    this.sendClient = options.sendClient ?? createFetchMatrixSendClient(
+      options.homeserverUrl,
+      options.accessToken,
+    );
+    this.sleep = options.sleep ?? defaultSleep;
     this.now = options.now ?? Date.now;
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
     this.allowedRoomIds = new Set(options.allowedRoomIds ?? []);
@@ -278,6 +398,7 @@ export class MatrixCommAdapter implements CommAdapter {
       await this.syncClient.stop().catch(() => {});
     }
     this.started = false;
+    this.rateLimited = false;
     this.emitState("disconnected");
   }
 
@@ -297,17 +418,49 @@ export class MatrixCommAdapter implements CommAdapter {
   }
 
   async send(
-    _target: ChatRef,
-    _payload: OutboundPayload,
-    _idempotencyKey: string,
+    target: ChatRef,
+    payload: OutboundPayload,
+    idempotencyKey: string,
   ): Promise<SendResult> {
-    const error = new Error("Matrix outbound send is not implemented (P1 skeleton)");
-    Object.assign(error, { status: 501 });
-    throw error;
+    const cached = this.sentByKey.get(idempotencyKey);
+    if (cached) return cached;
+
+    const txnId = matrixTxnIdFromIdempotencyKey(idempotencyKey);
+    const content = matrixOutboundMessageContent(payload);
+    let retried429 = false;
+
+    while (true) {
+      try {
+        const response = await this.sendClient.sendMessage({
+          roomId: target.chat_native_id,
+          txnId,
+          content,
+        });
+        const result = {
+          platform_message_id: response.event_id,
+          sent_at: this.now(),
+        };
+        this.sentByKey.set(idempotencyKey, result);
+        this.rateLimited = false;
+        this.emitState("connected");
+        return result;
+      } catch (error) {
+        if (!retried429 && this.classifyFailure(error) === "rate_limited") {
+          retried429 = true;
+          this.rateLimited = true;
+          const retryAfterMs = (error as { retry_after_ms?: number }).retry_after_ms;
+          if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+            await this.sleep(retryAfterMs);
+          }
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   reportPressure(): { backlog: number; rateLimited: boolean } {
-    return { backlog: 0, rateLimited: false };
+    return { backlog: 0, rateLimited: this.rateLimited };
   }
 
   classifyFailure(error: unknown): FailureClassification {
@@ -340,9 +493,6 @@ export class MatrixCommAdapter implements CommAdapter {
       || /rate.?limit|too many requests|M_LIMIT_EXCEEDED|M_USER_LIMIT_EXCEEDED/i.test(message)
     ) {
       return "rate_limited";
-    }
-    if (status === 501 || /not implemented/i.test(message)) {
-      return "permanent";
     }
     if ((status != null && status >= 500) || /ECONNRESET|ETIMEDOUT|ENOTFOUND|network/i.test(message)) {
       return "transient";

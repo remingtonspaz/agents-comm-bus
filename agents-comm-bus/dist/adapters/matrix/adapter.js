@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 const DEFAULT_SYNC_RETRY_DELAY_MS = 1_000;
 export function createFetchMatrixSyncClient(homeserverUrl, accessToken, options = {}) {
@@ -98,6 +99,76 @@ export function createFetchMatrixSyncClient(homeserverUrl, accessToken, options 
         },
     };
 }
+export function matrixTxnIdFromIdempotencyKey(idempotencyKey) {
+    return createHash("sha256").update(idempotencyKey).digest("hex");
+}
+export function matrixReplyEventId(replyTo) {
+    if (!replyTo)
+        return undefined;
+    return replyTo.startsWith("matrix:") ? replyTo.slice("matrix:".length) : replyTo;
+}
+export function matrixOutboundMessageContent(payload) {
+    const content = {
+        msgtype: "m.text",
+        body: payload.text ?? "",
+    };
+    const replyEventId = matrixReplyEventId(payload.reply_to);
+    if (replyEventId) {
+        content["m.relates_to"] = {
+            "m.in_reply_to": { event_id: replyEventId },
+        };
+    }
+    return content;
+}
+export function createFetchMatrixSendClient(homeserverUrl, accessToken, options = {}) {
+    const fetchFn = options.fetchFn ?? fetch;
+    const baseUrl = homeserverUrl.replace(/\/+$/, "");
+    return {
+        async sendMessage(request) {
+            const roomId = encodeURIComponent(request.roomId);
+            const txnId = encodeURIComponent(request.txnId);
+            const url = `${baseUrl}/_matrix/client/v3/rooms/${roomId}/send/m.room.message/${txnId}`;
+            const response = await fetchFn(url, {
+                method: "PUT",
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(request.content),
+            });
+            const bodyText = await response.text().catch(() => "");
+            if (!response.ok) {
+                throw matrixSendHttpError(response.status, bodyText);
+            }
+            const body = bodyText ? JSON.parse(bodyText) : {};
+            if (!body.event_id) {
+                throw new Error("Matrix send succeeded but response omitted event_id");
+            }
+            return { event_id: body.event_id };
+        },
+    };
+}
+function matrixSendHttpError(status, bodyText) {
+    let body = {};
+    if (bodyText) {
+        try {
+            body = JSON.parse(bodyText);
+        }
+        catch {
+            // Keep the raw body in the message below.
+        }
+    }
+    const error = new Error(`Matrix send failed: HTTP ${status}${bodyText ? ` ${bodyText}` : ""}`);
+    Object.assign(error, {
+        status,
+        errcode: body.errcode,
+        retry_after_ms: body.retry_after_ms,
+    });
+    return error;
+}
+const defaultSleep = (ms) => new Promise((resolve) => {
+    setTimeout(resolve, ms);
+});
 export class MatrixCommAdapter {
     options;
     id = "matrix";
@@ -106,7 +177,10 @@ export class MatrixCommAdapter {
     accessToken;
     userId;
     syncClient;
+    sendClient;
+    sleep;
     now;
+    sentByKey = new Map();
     allowedUserIds;
     allowedRoomIds;
     inboundHandler = null;
@@ -114,6 +188,7 @@ export class MatrixCommAdapter {
     filterDropHandler = null;
     connectionState = null;
     started = false;
+    rateLimited = false;
     constructor(options) {
         this.options = options;
         this.accountId = options.accountId;
@@ -121,6 +196,8 @@ export class MatrixCommAdapter {
         this.accessToken = options.accessToken;
         this.userId = options.userId;
         this.syncClient = options.syncClient ?? createFetchMatrixSyncClient(options.homeserverUrl, options.accessToken);
+        this.sendClient = options.sendClient ?? createFetchMatrixSendClient(options.homeserverUrl, options.accessToken);
+        this.sleep = options.sleep ?? defaultSleep;
         this.now = options.now ?? Date.now;
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
         this.allowedRoomIds = new Set(options.allowedRoomIds ?? []);
@@ -169,6 +246,7 @@ export class MatrixCommAdapter {
             await this.syncClient.stop().catch(() => { });
         }
         this.started = false;
+        this.rateLimited = false;
         this.emitState("disconnected");
     }
     onInbound(handler) {
@@ -183,13 +261,45 @@ export class MatrixCommAdapter {
     onFilterDrop(handler) {
         this.filterDropHandler = handler;
     }
-    async send(_target, _payload, _idempotencyKey) {
-        const error = new Error("Matrix outbound send is not implemented (P1 skeleton)");
-        Object.assign(error, { status: 501 });
-        throw error;
+    async send(target, payload, idempotencyKey) {
+        const cached = this.sentByKey.get(idempotencyKey);
+        if (cached)
+            return cached;
+        const txnId = matrixTxnIdFromIdempotencyKey(idempotencyKey);
+        const content = matrixOutboundMessageContent(payload);
+        let retried429 = false;
+        while (true) {
+            try {
+                const response = await this.sendClient.sendMessage({
+                    roomId: target.chat_native_id,
+                    txnId,
+                    content,
+                });
+                const result = {
+                    platform_message_id: response.event_id,
+                    sent_at: this.now(),
+                };
+                this.sentByKey.set(idempotencyKey, result);
+                this.rateLimited = false;
+                this.emitState("connected");
+                return result;
+            }
+            catch (error) {
+                if (!retried429 && this.classifyFailure(error) === "rate_limited") {
+                    retried429 = true;
+                    this.rateLimited = true;
+                    const retryAfterMs = error.retry_after_ms;
+                    if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+                        await this.sleep(retryAfterMs);
+                    }
+                    continue;
+                }
+                throw error;
+            }
+        }
     }
     reportPressure() {
-        return { backlog: 0, rateLimited: false };
+        return { backlog: 0, rateLimited: this.rateLimited };
     }
     classifyFailure(error) {
         const anyError = error;
@@ -209,9 +319,6 @@ export class MatrixCommAdapter {
             || errcode === "M_USER_LIMIT_EXCEEDED"
             || /rate.?limit|too many requests|M_LIMIT_EXCEEDED|M_USER_LIMIT_EXCEEDED/i.test(message)) {
             return "rate_limited";
-        }
-        if (status === 501 || /not implemented/i.test(message)) {
-            return "permanent";
         }
         if ((status != null && status >= 500) || /ECONNRESET|ETIMEDOUT|ENOTFOUND|network/i.test(message)) {
             return "transient";
