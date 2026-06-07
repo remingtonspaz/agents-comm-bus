@@ -26,6 +26,7 @@ import {
   adapterVersionRelPath,
   discoverCommAdapters,
 } from "./comm-adapters.mjs";
+import { evaluateVersionBump } from "./check-version-bump-lib.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const baseRef = process.argv[2] || process.env.BASE_REF || "origin/main";
@@ -36,16 +37,14 @@ function git(args) {
 
 function fileAtRef(ref, file) {
   try {
-    return git(`show ${ref}:${file}`);
+    return execSync(`git show ${ref}:${file}`, {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
   } catch {
-    return null; // file absent at that ref (e.g. a brand-new surface)
+    return null; // file absent at that ref (e.g. first-ship bundle path)
   }
-}
-
-function readConst(content, name) {
-  if (content == null) return null;
-  const m = content.match(new RegExp(`export const ${name}\\s*=\\s*"([^"]+)"`));
-  return m ? m[1] : null;
 }
 
 // Each shipped, centrally-superseded artifact: the version source that gates its
@@ -86,19 +85,12 @@ try {
 
 const changed = git(`diff --name-only ${baseSha} HEAD`).trim().split("\n").filter(Boolean);
 
-const failures = [];
-for (const s of SURFACES) {
-  const files = changed.filter(s.match);
-  if (files.length === 0) continue; // artifact bytes unchanged → no bump required
-
-  const baseVer = readConst(fileAtRef(baseSha, s.versionFile), s.versionConst);
-  const headVer = readConst(fileAtRef("HEAD", s.versionFile), s.versionConst);
-  if (baseVer == null) continue; // surface did not exist at base → nothing to supersede
-
-  if (baseVer === headVer) {
-    failures.push({ ...s, baseVer, files });
-  }
-}
+const failures = evaluateVersionBump({
+  changed,
+  baseRef: baseSha,
+  surfaces: SURFACES,
+  fileAtRef,
+});
 
 if (failures.length > 0) {
   console.error("\n[check-version-bump] ✖ VERSION NOT BUMPED\n");
