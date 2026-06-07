@@ -135,6 +135,7 @@ export declare class MatrixCommAdapter implements CommAdapter {
     classifyFailure(error: unknown): FailureClassification;
     private processSyncResponse;
     private handleTimelineEvent;
+    private rememberSent;
     private emitState;
     private emitFilterDrop;
 }

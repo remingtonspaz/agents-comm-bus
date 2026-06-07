@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 const DEFAULT_SYNC_RETRY_DELAY_MS = 1_000;
+const IDEMPOTENCY_CACHE_MAX = 256;
 export function createFetchMatrixSyncClient(homeserverUrl, accessToken, options = {}) {
     const timeoutMs = options.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS;
     const retryDelayMs = options.retryDelayMs ?? DEFAULT_SYNC_RETRY_DELAY_MS;
@@ -279,20 +280,24 @@ export class MatrixCommAdapter {
                     platform_message_id: response.event_id,
                     sent_at: this.now(),
                 };
-                this.sentByKey.set(idempotencyKey, result);
+                this.rememberSent(idempotencyKey, result);
                 this.rateLimited = false;
                 this.emitState("connected");
                 return result;
             }
             catch (error) {
                 if (!retried429 && this.classifyFailure(error) === "rate_limited") {
-                    retried429 = true;
-                    this.rateLimited = true;
                     const retryAfterMs = error.retry_after_ms;
-                    if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
-                        await this.sleep(retryAfterMs);
+                    if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+                        retried429 = true;
+                        this.rateLimited = true;
+                        if (retryAfterMs > 0) {
+                            await this.sleep(retryAfterMs);
+                        }
+                        continue;
                     }
-                    continue;
+                    this.rateLimited = true;
+                    throw error;
                 }
                 throw error;
             }
@@ -414,6 +419,15 @@ export class MatrixCommAdapter {
                 ? event.origin_server_ts
                 : this.now(),
         });
+    }
+    rememberSent(idempotencyKey, result) {
+        if (this.sentByKey.size >= IDEMPOTENCY_CACHE_MAX) {
+            const oldest = this.sentByKey.keys().next().value;
+            if (oldest !== undefined) {
+                this.sentByKey.delete(oldest);
+            }
+        }
+        this.sentByKey.set(idempotencyKey, result);
     }
     emitState(state) {
         if (this.connectionState === state)

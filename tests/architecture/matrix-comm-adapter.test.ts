@@ -285,6 +285,48 @@ describe("MatrixCommAdapter P3 outbound send", () => {
     });
   });
 
+  it("evicts oldest idempotency cache entries at the FIFO cap and resends evicted keys", async () => {
+    const cacheMax = 256;
+    const sendClient = createRecordingSendClient(async () => ({ event_id: "$evict_evt" }));
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient }));
+    const target = matrixChatTarget();
+    const payload: OutboundPayload = { text: "x" };
+
+    for (let i = 0; i < cacheMax; i++) {
+      await adapter.send(target, payload, `idem-evict-${i}`);
+    }
+    assert.equal(sendClient.calls.length, cacheMax);
+
+    await adapter.send(target, payload, "idem-evict-overflow");
+    assert.equal(sendClient.calls.length, cacheMax + 1);
+
+    const callsBeforeResend = sendClient.calls.length;
+    await adapter.send(target, payload, "idem-evict-0");
+    assert.equal(sendClient.calls.length, callsBeforeResend + 1);
+  });
+
+  it("429 without retry_after_ms does not retry and leaves rateLimited pressure set", async () => {
+    let attempt = 0;
+    const sendClient = createRecordingSendClient(async () => {
+      attempt += 1;
+      const error = new Error("Matrix send failed: HTTP 429 {\"errcode\":\"M_LIMIT_EXCEEDED\"}");
+      Object.assign(error, {
+        status: 429,
+        errcode: "M_LIMIT_EXCEEDED",
+      });
+      throw error;
+    });
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient }));
+
+    await assert.rejects(
+      () => adapter.send(matrixChatTarget(), { text: "no retry" }, "idem-no-retry-ms"),
+      /429|M_LIMIT_EXCEEDED/i,
+    );
+    assert.equal(attempt, 1);
+    assert.equal(sendClient.calls.length, 1);
+    assert.deepEqual(adapter.reportPressure(), { backlog: 0, rateLimited: true });
+  });
+
   it("429 with retry_after_ms retries once, reports pressure during sleep, then succeeds", async () => {
     let attempt = 0;
     let sleptMs: number | null = null;
