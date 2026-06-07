@@ -33,4 +33,9 @@ export declare class DiscordGateway implements DiscordGatewayLike {
     private trackThreadParents;
     private emitState;
 }
+/**
+ * Update the thread-id → parent-channel-id cache from gateway dispatches.
+ * Exported for harness tests that replay GUILD_CREATE / THREAD_LIST_SYNC payloads.
+ */
+export declare function trackThreadParentDispatch(threadParents: Map<string, string>, payload: GatewayDispatchPayload): void;
 //# sourceMappingURL=gateway.d.ts.map

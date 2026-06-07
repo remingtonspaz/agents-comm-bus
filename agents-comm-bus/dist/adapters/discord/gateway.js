@@ -71,32 +71,56 @@ export class DiscordGateway {
         this.stateHandler = null;
     }
     trackThreadParents(payload) {
-        if (payload.t === GatewayDispatchEvents.ThreadCreate) {
-            const thread = payload.d;
-            if (thread.parent_id) {
-                this.threadParents.set(thread.id, thread.parent_id);
-            }
-            return;
-        }
-        if (payload.t === GatewayDispatchEvents.ThreadDelete) {
-            const thread = payload.d;
-            this.threadParents.delete(thread.id);
-            return;
-        }
-        if (payload.t === GatewayDispatchEvents.ChannelCreate) {
-            const channel = payload.d;
-            if (isThreadChannelType(channel.type) && channel.parent_id) {
-                this.threadParents.set(channel.id, channel.parent_id);
-            }
-            return;
-        }
-        if (payload.t === GatewayDispatchEvents.ChannelDelete) {
-            const channel = payload.d;
-            this.threadParents.delete(channel.id);
-        }
+        trackThreadParentDispatch(this.threadParents, payload);
     }
     emitState(state) {
         this.stateHandler?.(state);
+    }
+}
+/**
+ * Update the thread-id → parent-channel-id cache from gateway dispatches.
+ * Exported for harness tests that replay GUILD_CREATE / THREAD_LIST_SYNC payloads.
+ */
+export function trackThreadParentDispatch(threadParents, payload) {
+    if (payload.t === GatewayDispatchEvents.GuildCreate) {
+        const guild = payload.d;
+        rememberThreadParents(threadParents, guild.threads ?? []);
+        return;
+    }
+    if (payload.t === GatewayDispatchEvents.ThreadListSync) {
+        const sync = payload.d;
+        rememberThreadParents(threadParents, sync.threads ?? []);
+        return;
+    }
+    if (payload.t === GatewayDispatchEvents.ThreadCreate || payload.t === GatewayDispatchEvents.ThreadUpdate) {
+        rememberThreadParent(threadParents, payload.d);
+        return;
+    }
+    if (payload.t === GatewayDispatchEvents.ThreadDelete) {
+        const thread = payload.d;
+        threadParents.delete(thread.id);
+        return;
+    }
+    if (payload.t === GatewayDispatchEvents.ChannelCreate) {
+        const channel = payload.d;
+        if (isThreadChannelType(channel.type)) {
+            rememberThreadParent(threadParents, channel);
+        }
+        return;
+    }
+    if (payload.t === GatewayDispatchEvents.ChannelDelete) {
+        const channel = payload.d;
+        threadParents.delete(channel.id);
+    }
+}
+function rememberThreadParents(threadParents, threads) {
+    for (const thread of threads) {
+        rememberThreadParent(threadParents, thread);
+    }
+}
+function rememberThreadParent(threadParents, thread) {
+    if (thread.parent_id) {
+        threadParents.set(thread.id, thread.parent_id);
     }
 }
 function isThreadChannelType(type) {

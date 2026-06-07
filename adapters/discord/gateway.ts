@@ -4,7 +4,6 @@ import {
   ChannelType,
   GatewayDispatchEvents,
   GatewayIntentBits,
-  type APIMessage,
   type APIThreadChannel,
   type GatewayDispatchPayload,
 } from "discord-api-types/v10";
@@ -105,33 +104,69 @@ export class DiscordGateway implements DiscordGatewayLike {
   }
 
   private trackThreadParents(payload: GatewayDispatchPayload): void {
-    if (payload.t === GatewayDispatchEvents.ThreadCreate) {
-      const thread = payload.d as APIThreadChannel;
-      if (thread.parent_id) {
-        this.threadParents.set(thread.id, thread.parent_id);
-      }
-      return;
-    }
-    if (payload.t === GatewayDispatchEvents.ThreadDelete) {
-      const thread = payload.d as { id: string };
-      this.threadParents.delete(thread.id);
-      return;
-    }
-    if (payload.t === GatewayDispatchEvents.ChannelCreate) {
-      const channel = payload.d as { id: string; type: ChannelType; parent_id?: string };
-      if (isThreadChannelType(channel.type) && channel.parent_id) {
-        this.threadParents.set(channel.id, channel.parent_id);
-      }
-      return;
-    }
-    if (payload.t === GatewayDispatchEvents.ChannelDelete) {
-      const channel = payload.d as { id: string };
-      this.threadParents.delete(channel.id);
-    }
+    trackThreadParentDispatch(this.threadParents, payload);
   }
 
   private emitState(state: CommConnectionState): void {
     this.stateHandler?.(state);
+  }
+}
+
+/**
+ * Update the thread-id → parent-channel-id cache from gateway dispatches.
+ * Exported for harness tests that replay GUILD_CREATE / THREAD_LIST_SYNC payloads.
+ */
+export function trackThreadParentDispatch(
+  threadParents: Map<string, string>,
+  payload: GatewayDispatchPayload,
+): void {
+  if (payload.t === GatewayDispatchEvents.GuildCreate) {
+    const guild = payload.d as { threads?: ReadonlyArray<{ id: string; parent_id?: string }> };
+    rememberThreadParents(threadParents, guild.threads ?? []);
+    return;
+  }
+  if (payload.t === GatewayDispatchEvents.ThreadListSync) {
+    const sync = payload.d as { threads?: ReadonlyArray<{ id: string; parent_id?: string }> };
+    rememberThreadParents(threadParents, sync.threads ?? []);
+    return;
+  }
+  if (payload.t === GatewayDispatchEvents.ThreadCreate || payload.t === GatewayDispatchEvents.ThreadUpdate) {
+    rememberThreadParent(threadParents, payload.d as APIThreadChannel);
+    return;
+  }
+  if (payload.t === GatewayDispatchEvents.ThreadDelete) {
+    const thread = payload.d as { id: string };
+    threadParents.delete(thread.id);
+    return;
+  }
+  if (payload.t === GatewayDispatchEvents.ChannelCreate) {
+    const channel = payload.d as { id: string; type: ChannelType; parent_id?: string };
+    if (isThreadChannelType(channel.type)) {
+      rememberThreadParent(threadParents, channel);
+    }
+    return;
+  }
+  if (payload.t === GatewayDispatchEvents.ChannelDelete) {
+    const channel = payload.d as { id: string };
+    threadParents.delete(channel.id);
+  }
+}
+
+function rememberThreadParents(
+  threadParents: Map<string, string>,
+  threads: ReadonlyArray<{ id: string; parent_id?: string }>,
+): void {
+  for (const thread of threads) {
+    rememberThreadParent(threadParents, thread);
+  }
+}
+
+function rememberThreadParent(
+  threadParents: Map<string, string>,
+  thread: { id: string; parent_id?: string },
+): void {
+  if (thread.parent_id) {
+    threadParents.set(thread.id, thread.parent_id);
   }
 }
 

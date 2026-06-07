@@ -8,7 +8,11 @@ import {
 } from "discord-api-types/v10";
 
 import { DiscordCommAdapter } from "../../adapters/discord/adapter.js";
-import { DISCORD_GATEWAY_INTENTS, type DiscordGatewayLike } from "../../adapters/discord/gateway.js";
+import {
+  DISCORD_GATEWAY_INTENTS,
+  trackThreadParentDispatch,
+  type DiscordGatewayLike,
+} from "../../adapters/discord/gateway.js";
 import { buildMessageFromDiscordCreate } from "../../adapters/discord/normalize.js";
 import type { CommConnectionState, CommId, FilterDropEvent, Message } from "../../packages/core-contracts/src/index.js";
 
@@ -125,6 +129,42 @@ describe("Discord MESSAGE_CREATE normalization", () => {
       baseContext,
     );
     assert.equal(message, null);
+  });
+});
+
+describe("Discord thread-parent cache cold start", () => {
+  it("GUILD_CREATE threads seed parent map before MESSAGE_CREATE in that thread", async () => {
+    const gateway = new FakeDiscordGateway();
+    const received: Message[] = [];
+    const adapter = makeInboundAdapter(gateway, received);
+    await adapter.start();
+
+    await gateway.emitGuildCreate([{ id: "thread-1", parent_id: "parent-chan" }]);
+    await gateway.emitMessageCreate(
+      discordMessage({ id: "60", channel_id: "thread-1", content: "cold guild create" }),
+    );
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.chat.chat_native_id, "parent-chan");
+    assert.equal(received[0]!.chat.thread_native_id, "thread-1");
+    await adapter.stop();
+  });
+
+  it("THREAD_LIST_SYNC threads seed parent map before MESSAGE_CREATE in that thread", async () => {
+    const gateway = new FakeDiscordGateway();
+    const received: Message[] = [];
+    const adapter = makeInboundAdapter(gateway, received);
+    await adapter.start();
+
+    await gateway.emitThreadListSync([{ id: "thread-2", parent_id: "parent-chan-2" }]);
+    await gateway.emitMessageCreate(
+      discordMessage({ id: "61", channel_id: "thread-2", content: "cold thread list sync" }),
+    );
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.chat.chat_native_id, "parent-chan-2");
+    assert.equal(received[0]!.chat.thread_native_id, "thread-2");
+    await adapter.stop();
   });
 });
 
@@ -283,6 +323,22 @@ function discordMessage(
   } as APIMessage;
 }
 
+function makeInboundAdapter(
+  gateway: FakeDiscordGateway,
+  received: Message[],
+): DiscordCommAdapter {
+  const adapter = new DiscordCommAdapter({
+    botToken: "test",
+    accountId: BOT_ID as never,
+    rest: makeFakeRest(),
+    gateway,
+  });
+  adapter.onInbound(async (message) => {
+    received.push(message);
+  });
+  return adapter;
+}
+
 function makeFakeRest() {
   return {
     setToken() {
@@ -327,16 +383,44 @@ class FakeDiscordGateway implements DiscordGatewayLike {
     this.stateHandler?.(state);
   }
 
+  async emitGuildCreate(threads: Array<{ id: string; parent_id: string }>): Promise<void> {
+    this.emitTracked({
+      t: GatewayDispatchEvents.GuildCreate,
+      s: 1,
+      op: 0,
+      d: { threads },
+    });
+  }
+
+  async emitThreadListSync(threads: Array<{ id: string; parent_id: string }>): Promise<void> {
+    this.emitTracked({
+      t: GatewayDispatchEvents.ThreadListSync,
+      s: 1,
+      op: 0,
+      d: { guild_id: "guild-1", threads, members: [] },
+    });
+  }
+
   async emitMessageCreate(raw: APIMessage, options?: { threadParentChannelId?: string }): Promise<void> {
     if (options?.threadParentChannelId) {
-      this.threadParents.set(String(raw.channel_id), options.threadParentChannelId);
+      trackThreadParentDispatch(this.threadParents, {
+        t: GatewayDispatchEvents.ThreadCreate,
+        s: 1,
+        op: 0,
+        d: { id: String(raw.channel_id), parent_id: options.threadParentChannelId },
+      });
     }
-    this.dispatchHandler?.({
+    this.emitTracked({
       t: GatewayDispatchEvents.MessageCreate,
       s: 1,
       op: 0,
       d: raw,
     });
     await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  private emitTracked(payload: GatewayDispatchPayload): void {
+    trackThreadParentDispatch(this.threadParents, payload);
+    this.dispatchHandler?.(payload);
   }
 }
