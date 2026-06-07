@@ -1,4 +1,5 @@
-import type { AccountId, ChatRef, CommAdapter, CommConnectionState, CommId, FailureClassification, FilterDropEvent, Message, MessageId, OutboundPayload, SendResult } from "agents-comm-bus-core";
+import type { AccountId, BlobStore, ChatRef, CommAdapter, CommConnectionState, CommId, FailureClassification, FilterDropEvent, Message, MessageId, OutboundPayload, SendResult } from "agents-comm-bus-core";
+import { type MatrixMediaClient } from "./media.js";
 export interface MatrixWhoamiResponse {
     user_id: string;
     device_id?: string;
@@ -10,6 +11,14 @@ export interface MatrixIdentityClient {
 export interface MatrixEventContent {
     msgtype?: string;
     body?: string;
+    url?: string;
+    format?: string;
+    formatted_body?: string;
+    info?: {
+        mimetype?: string;
+        size?: number;
+        [key: string]: unknown;
+    };
     "m.relates_to"?: {
         "m.in_reply_to"?: {
             event_id?: string;
@@ -88,6 +97,8 @@ export interface MatrixCommAdapterOptions {
     encryptedRoomPolicy?: "decline";
     syncClient?: MatrixSyncClient;
     sendClient?: MatrixSendClient;
+    mediaClient?: MatrixMediaClient;
+    attachmentBlobStore?: BlobStore;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
 }
@@ -95,6 +106,11 @@ export declare function createFetchMatrixSyncClient(homeserverUrl: string, acces
 export declare function matrixTxnIdFromIdempotencyKey(idempotencyKey: string): string;
 export declare function matrixReplyEventId(replyTo: MessageId | undefined): string | undefined;
 export declare function matrixOutboundMessageContent(payload: OutboundPayload): MatrixEventContent;
+/**
+ * Matrix upload names must not leak caller local paths to room recipients.
+ */
+export declare function uploadFilenameFromLocalPath(localPath: string): string;
+export declare function matrixAttachmentTxnSuffix(idempotencyKey: string, index: number): string;
 export declare function createFetchMatrixSendClient(homeserverUrl: string, accessToken: string, options?: FetchMatrixSendClientOptions): MatrixSendClient;
 export declare class MatrixCommAdapter implements CommAdapter {
     private readonly options;
@@ -105,6 +121,8 @@ export declare class MatrixCommAdapter implements CommAdapter {
     private readonly userId;
     private readonly syncClient;
     private readonly sendClient;
+    private readonly mediaClient;
+    private readonly attachmentBlobStore?;
     private readonly sleep;
     private readonly now;
     private readonly sentByKey;
@@ -135,6 +153,9 @@ export declare class MatrixCommAdapter implements CommAdapter {
     classifyFailure(error: unknown): FailureClassification;
     private processSyncResponse;
     private handleTimelineEvent;
+    private buildInboundMediaAttachment;
+    private buildOutboundMediaContent;
+    private sendMessageWithRetry;
     private rememberSent;
     private emitState;
     private emitFilterDrop;

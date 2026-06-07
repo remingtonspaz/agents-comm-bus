@@ -1,16 +1,26 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
 import {
   MatrixCommAdapter,
+  matrixOutboundMessageContent,
   matrixTxnIdFromIdempotencyKey,
+  uploadFilenameFromLocalPath,
   type MatrixSendClient,
   type MatrixSendMessageRequest,
   type MatrixSyncClient,
   type MatrixSyncHandlers,
   type MatrixSyncResponse,
 } from "../../adapters/matrix/adapter.js";
+import { htmlToMatrixFormatted } from "../../adapters/matrix/html.js";
+import type { MatrixMediaClient } from "../../adapters/matrix/media.js";
 import type {
+  BlobRef,
+  BlobStore,
   ChatRef,
   CommConnectionState,
   FilterDropEvent,
@@ -269,19 +279,21 @@ describe("MatrixCommAdapter P3 outbound send", () => {
     });
   });
 
-  it("html format sends plain text body only", async () => {
+  it("html format sends Matrix custom HTML with a plain fallback body", async () => {
     const sendClient = createRecordingSendClient(async () => ({ event_id: "$html_evt" }));
     const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient }));
 
     await adapter.send(
       matrixChatTarget(),
-      { text: "plain only", format: "html" },
+      { text: "<b>Allow?</b><br>Pick one", format: "html" },
       "idem-html",
     );
 
     assert.deepEqual(sendClient.calls[0]!.content, {
       msgtype: "m.text",
-      body: "plain only",
+      format: "org.matrix.custom.html",
+      formatted_body: "<b>Allow?</b><br>Pick one",
+      body: "Allow?\nPick one",
     });
   });
 
@@ -724,7 +736,7 @@ describe("MatrixCommAdapter P2 unsupported and malformed events", () => {
 
     await adapter.start();
     await syncClient.pushSync(syncWithEvents(ROOM_ID, [
-      textMessageEvent({ msgtype: "m.image", body: "ignored" }),
+      textMessageEvent({ msgtype: "m.location", body: "ignored" }),
     ]));
 
     assert.equal(received.length, 0);
@@ -806,6 +818,198 @@ describe("MatrixCommAdapter P2 unsupported and malformed events", () => {
     ]));
 
     assert.equal(received.length, 0);
+  });
+});
+
+function mediaMessageEvent(overrides: {
+  event_id?: string;
+  sender?: string;
+  body?: string;
+  msgtype?: string;
+  url?: string;
+  info?: Record<string, unknown>;
+} = {}) {
+  return {
+    type: "m.room.message",
+    event_id: overrides.event_id ?? "$media_evt",
+    sender: overrides.sender ?? ALICE_MXID,
+    origin_server_ts: 1_700_000_000_000,
+    content: {
+      msgtype: overrides.msgtype ?? "m.image",
+      body: overrides.body ?? "photo.png",
+      url: overrides.url ?? "mxc://matrix.example.org/media123",
+      info: overrides.info ?? {
+        mimetype: "image/png",
+        size: 42,
+      },
+    },
+  };
+}
+
+class FakeBlobStore implements BlobStore {
+  readonly contents: Uint8Array[] = [];
+
+  async put(content: Uint8Array, mime?: string): Promise<BlobRef> {
+    void mime;
+    this.contents.push(content);
+    return { hash: `hash-${this.contents.length}`, size: content.byteLength, mime };
+  }
+
+  pathFor(ref: BlobRef): string {
+    return `D:\\tmp\\${ref.hash}`;
+  }
+}
+
+function createRecordingMediaClient(
+  handler: {
+    download?: (mxcUri: string) => Promise<{ content: Uint8Array; mime?: string }>;
+    upload?: (request: { content: Uint8Array; mime: string; filename?: string }) => Promise<string>;
+  },
+): MatrixMediaClient & { downloads: string[]; uploads: Array<{ mime: string; filename?: string }> } {
+  const downloads: string[] = [];
+  const uploads: Array<{ mime: string; filename?: string }> = [];
+  return {
+    downloads,
+    uploads,
+    async download(mxcUri) {
+      downloads.push(mxcUri);
+      if (handler.download) return await handler.download(mxcUri);
+      return { content: new TextEncoder().encode("media-bytes"), mime: "image/png" };
+    },
+    async upload(request) {
+      uploads.push({ mime: request.mime, filename: request.filename });
+      if (handler.upload) return await handler.upload(request);
+      return "mxc://matrix.example.org/uploaded123";
+    },
+  };
+}
+
+describe("MatrixCommAdapter P4 inbound media", () => {
+  it("downloads m.image MXC media into the blob store with blob_hash and local_path", async () => {
+    const syncClient = createFakeSyncClient();
+    const blobs = new FakeBlobStore();
+    const mediaClient = createRecordingMediaClient({
+      download: async () => ({
+        content: new TextEncoder().encode("png-bytes"),
+        mime: "image/png",
+      }),
+    });
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({
+      syncClient,
+      attachmentBlobStore: blobs,
+      mediaClient,
+    }));
+    const received: Message[] = [];
+    adapter.onInbound(async (msg) => {
+      received.push(msg);
+    });
+
+    await adapter.start();
+    await syncClient.pushSync(syncWithEvents(ROOM_ID, [mediaMessageEvent()]));
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.text, "photo.png");
+    assert.equal(received[0]!.attachments?.length, 1);
+    assert.equal(received[0]!.attachments?.[0]?.blob_hash, "hash-1");
+    assert.equal(received[0]!.attachments?.[0]?.local_path, "D:\\tmp\\hash-1");
+    assert.equal(mediaClient.downloads[0], "mxc://matrix.example.org/media123");
+    assert.equal(
+      received[0]!.attachments?.[0]?.platform_metadata?.mxc_uri,
+      "mxc://matrix.example.org/media123",
+    );
+  });
+
+  it("still delivers metadata-only attachments when media download fails", async () => {
+    const syncClient = createFakeSyncClient();
+    const blobs = new FakeBlobStore();
+    const mediaClient = createRecordingMediaClient({
+      download: async () => {
+        throw new Error("HTTP 404");
+      },
+    });
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({
+      syncClient,
+      attachmentBlobStore: blobs,
+      mediaClient,
+    }));
+    const received: Message[] = [];
+    adapter.onInbound(async (msg) => {
+      received.push(msg);
+    });
+
+    await adapter.start();
+    await syncClient.pushSync(syncWithEvents(ROOM_ID, [mediaMessageEvent()]));
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.attachments?.[0]?.blob_hash, undefined);
+    assert.match(
+      String(received[0]!.attachments?.[0]?.platform_metadata?.retrieval_error),
+      /HTTP 404/,
+    );
+  });
+});
+
+describe("MatrixCommAdapter P4 outbound media", () => {
+  it("uploads attachments and sends m.room.message with msgtype, url, and info", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-matrix-outbound-"));
+    const filePath = join(dir, "diagram.png");
+    await writeFile(filePath, "attachment bytes");
+
+    const sendClient = createRecordingSendClient(async () => ({ event_id: "$media_sent" }));
+    const mediaClient = createRecordingMediaClient({});
+    const adapter = new MatrixCommAdapter(baseAdapterOptions({ sendClient, mediaClient }));
+
+    await adapter.send(
+      matrixChatTarget(),
+      {
+        attachments: [
+          {
+            filename: uploadFilenameFromLocalPath(filePath),
+            local_path: filePath,
+            mime: "image/png",
+            size: 16,
+          },
+        ],
+      },
+      "idem-media-out",
+    );
+
+    assert.equal(mediaClient.uploads.length, 1);
+    assert.equal(mediaClient.uploads[0]!.mime, "image/png");
+    assert.equal(mediaClient.uploads[0]!.filename, "diagram.png");
+    assert.deepEqual(sendClient.calls[0]!.content, {
+      msgtype: "m.image",
+      body: "diagram.png",
+      url: "mxc://matrix.example.org/uploaded123",
+      info: {
+        mimetype: "image/png",
+        size: 16,
+      },
+    });
+  });
+});
+
+describe("MatrixCommAdapter P4 html helpers", () => {
+  it("htmlToMatrixFormatted decodes common entities and br tags", () => {
+    assert.deepEqual(
+      htmlToMatrixFormatted("<b>Allow?</b><br>Pick &amp; go"),
+      {
+        formatted_body: "<b>Allow?</b><br>Pick &amp; go",
+        body: "Allow?\nPick & go",
+      },
+    );
+  });
+
+  it("matrixOutboundMessageContent maps html payloads to Matrix custom HTML", () => {
+    assert.deepEqual(
+      matrixOutboundMessageContent({ text: "<b>x</b>", format: "html" }),
+      {
+        msgtype: "m.text",
+        format: "org.matrix.custom.html",
+        formatted_body: "<b>x</b>",
+        body: "x",
+      },
+    );
   });
 });
 

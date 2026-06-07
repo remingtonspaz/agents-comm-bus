@@ -62,6 +62,18 @@ describe("stage-plugins --verify Claude MCP manifest guards", () => {
     assert.match(result.output, /\[OK\] claude\/discord/);
   });
 
+  it("passes for the committed claude/matrix staged manifest", () => {
+    const result = runVerify(join(repoRoot, "plugins"));
+    assert.equal(result.exitCode, 0, result.output);
+    assert.match(result.output, /\[OK\] claude\/matrix/);
+  });
+
+  it("passes for the committed codex/matrix staged manifest", () => {
+    const result = runVerify(join(repoRoot, "plugins"));
+    assert.equal(result.exitCode, 0, result.output);
+    assert.match(result.output, /\[OK\] codex\/matrix/);
+  });
+
   it("fails when the staged Claude manifest has no mcpServers entry for the comm", async () => {
     const result = await verifyWithClaudeManifest({});
     assert.notEqual(result.exitCode, 0, "expected verify to fail");

@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import type {
   AccountId,
+  Attachment,
+  BlobStore,
   ChatRef,
   CommAdapter,
   CommConnectionState,
@@ -13,6 +17,15 @@ import type {
   OutboundPayload,
   SendResult,
 } from "agents-comm-bus-core";
+
+import { htmlToMatrixFormatted } from "./html.js";
+import {
+  createFetchMatrixMediaClient,
+  matrixOutboundMsgtypeForMime,
+  MATRIX_MEDIA_MSGTYPES,
+  parseMxcUri,
+  type MatrixMediaClient,
+} from "./media.js";
 
 export interface MatrixWhoamiResponse {
   user_id: string;
@@ -27,6 +40,14 @@ export interface MatrixIdentityClient {
 export interface MatrixEventContent {
   msgtype?: string;
   body?: string;
+  url?: string;
+  format?: string;
+  formatted_body?: string;
+  info?: {
+    mimetype?: string;
+    size?: number;
+    [key: string]: unknown;
+  };
   "m.relates_to"?: {
     "m.in_reply_to"?: {
       event_id?: string;
@@ -113,6 +134,8 @@ export interface MatrixCommAdapterOptions {
   encryptedRoomPolicy?: "decline";
   syncClient?: MatrixSyncClient;
   sendClient?: MatrixSendClient;
+  mediaClient?: MatrixMediaClient;
+  attachmentBlobStore?: BlobStore;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -242,10 +265,20 @@ export function matrixReplyEventId(replyTo: MessageId | undefined): string | und
 }
 
 export function matrixOutboundMessageContent(payload: OutboundPayload): MatrixEventContent {
-  const content: MatrixEventContent = {
-    msgtype: "m.text",
-    body: payload.text ?? "",
-  };
+  const content: MatrixEventContent = payload.format === "html"
+    ? (() => {
+        const formatted = htmlToMatrixFormatted(payload.text ?? "");
+        return {
+          msgtype: "m.text",
+          format: "org.matrix.custom.html",
+          formatted_body: formatted.formatted_body,
+          body: formatted.body,
+        };
+      })()
+    : {
+        msgtype: "m.text",
+        body: payload.text ?? "",
+      };
   const replyEventId = matrixReplyEventId(payload.reply_to);
   if (replyEventId) {
     content["m.relates_to"] = {
@@ -253,6 +286,23 @@ export function matrixOutboundMessageContent(payload: OutboundPayload): MatrixEv
     };
   }
   return content;
+}
+
+/**
+ * Matrix upload names must not leak caller local paths to room recipients.
+ */
+export function uploadFilenameFromLocalPath(localPath: string): string {
+  const name = path.win32.basename(localPath);
+  if (name && name !== "." && name !== "..") return name;
+  const posixName = path.posix.basename(localPath);
+  return posixName && posixName !== "." && posixName !== ".." ? posixName : "attachment";
+}
+
+export function matrixAttachmentTxnSuffix(
+  idempotencyKey: string,
+  index: number,
+): string {
+  return `${matrixTxnIdFromIdempotencyKey(idempotencyKey)}-att-${index}`;
 }
 
 export function createFetchMatrixSendClient(
@@ -324,6 +374,8 @@ export class MatrixCommAdapter implements CommAdapter {
   private readonly userId: string;
   private readonly syncClient: MatrixSyncClient;
   private readonly sendClient: MatrixSendClient;
+  private readonly mediaClient: MatrixMediaClient;
+  private readonly attachmentBlobStore?: BlobStore;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
   private readonly sentByKey = new Map<string, SendResult>();
@@ -349,6 +401,11 @@ export class MatrixCommAdapter implements CommAdapter {
       options.homeserverUrl,
       options.accessToken,
     );
+    this.mediaClient = options.mediaClient ?? createFetchMatrixMediaClient(
+      options.homeserverUrl,
+      options.accessToken,
+    );
+    this.attachmentBlobStore = options.attachmentBlobStore;
     this.sleep = options.sleep ?? defaultSleep;
     this.now = options.now ?? Date.now;
     this.allowedUserIds = new Set(options.allowedUserIds ?? []);
@@ -426,42 +483,36 @@ export class MatrixCommAdapter implements CommAdapter {
     const cached = this.sentByKey.get(idempotencyKey);
     if (cached) return cached;
 
-    const txnId = matrixTxnIdFromIdempotencyKey(idempotencyKey);
-    const content = matrixOutboundMessageContent(payload);
-    let retried429 = false;
+    const uploadable = (payload.attachments ?? []).filter((attachment) => attachment.local_path);
+    let lastResult: SendResult | null = null;
 
-    while (true) {
-      try {
-        const response = await this.sendClient.sendMessage({
-          roomId: target.chat_native_id,
-          txnId,
-          content,
-        });
-        const result = {
-          platform_message_id: response.event_id,
-          sent_at: this.now(),
-        };
-        this.rememberSent(idempotencyKey, result);
-        this.rateLimited = false;
-        this.emitState("connected");
-        return result;
-      } catch (error) {
-        if (!retried429 && this.classifyFailure(error) === "rate_limited") {
-          const retryAfterMs = (error as { retry_after_ms?: number }).retry_after_ms;
-          if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
-            retried429 = true;
-            this.rateLimited = true;
-            if (retryAfterMs > 0) {
-              await this.sleep(retryAfterMs);
-            }
-            continue;
-          }
-          this.rateLimited = true;
-          throw error;
-        }
-        throw error;
-      }
+    if (payload.text) {
+      lastResult = await this.sendMessageWithRetry(
+        target,
+        matrixOutboundMessageContent(payload),
+        matrixTxnIdFromIdempotencyKey(idempotencyKey),
+      );
     }
+
+    for (let index = 0; index < uploadable.length; index++) {
+      const attachment = uploadable[index]!;
+      const mediaContent = await this.buildOutboundMediaContent(attachment, payload.reply_to);
+      const txnId = uploadable.length > 1 || payload.text
+        ? matrixAttachmentTxnSuffix(idempotencyKey, index)
+        : matrixTxnIdFromIdempotencyKey(idempotencyKey);
+      lastResult = await this.sendMessageWithRetry(target, mediaContent, txnId);
+    }
+
+    if (!lastResult) {
+      lastResult = await this.sendMessageWithRetry(
+        target,
+        matrixOutboundMessageContent(payload),
+        matrixTxnIdFromIdempotencyKey(idempotencyKey),
+      );
+    }
+
+    this.rememberSent(idempotencyKey, lastResult);
+    return lastResult;
   }
 
   reportPressure(): { backlog: number; rateLimited: boolean } {
@@ -534,12 +585,13 @@ export class MatrixCommAdapter implements CommAdapter {
     if (!content || typeof content !== "object") return;
 
     const msgtype = content.msgtype;
-    if (msgtype !== "m.text" && msgtype !== "m.notice") return;
+    const isText = msgtype === "m.text" || msgtype === "m.notice";
+    const isMedia = typeof msgtype === "string" && MATRIX_MEDIA_MSGTYPES.has(msgtype);
+    if (!isText && !isMedia) return;
 
     const eventId = event.event_id;
     const sender = event.sender;
-    const body = typeof content.body === "string" ? content.body : null;
-    if (!eventId || !body) return;
+    if (!eventId) return;
 
     if (!sender) {
       this.emitFilterDrop({
@@ -575,7 +627,13 @@ export class MatrixCommAdapter implements CommAdapter {
       return;
     }
 
+    const body = typeof content.body === "string" ? content.body : "";
+    if (isText && !body) return;
+
     const replyTo = matrixReplyToMessageId(content);
+    const attachments = isMedia
+      ? [await this.buildInboundMediaAttachment(content, msgtype!)]
+      : [];
 
     await this.inboundHandler({
       schema_version: 1,
@@ -593,7 +651,7 @@ export class MatrixCommAdapter implements CommAdapter {
       },
       origin: { comm: this.id },
       text: body,
-      attachments: [],
+      attachments,
       platform_message_id: eventId,
       reply_to: replyTo,
       hop_count: 0,
@@ -601,6 +659,131 @@ export class MatrixCommAdapter implements CommAdapter {
         ? event.origin_server_ts
         : this.now(),
     });
+  }
+
+  private async buildInboundMediaAttachment(
+    content: MatrixEventContent,
+    msgtype: string,
+  ): Promise<Attachment> {
+    const info = content.info && typeof content.info === "object" ? content.info : {};
+    const mxcUri = typeof content.url === "string" ? content.url : "";
+    const body = typeof content.body === "string" ? content.body : "";
+    const infoName = typeof info.name === "string" ? info.name : undefined;
+    const filename = body || infoName || "attachment";
+    const mime = typeof info.mimetype === "string" ? info.mimetype : "application/octet-stream";
+    const size = typeof info.size === "number" ? info.size : 0;
+    const base: Attachment = {
+      mime,
+      filename,
+      size,
+      platform_metadata: {
+        mxc_uri: mxcUri || undefined,
+        msgtype,
+        info,
+      },
+    };
+
+    if (!mxcUri || !parseMxcUri(mxcUri) || !this.attachmentBlobStore) {
+      return base;
+    }
+
+    try {
+      const downloaded = await this.mediaClient.download(mxcUri);
+      const ref = await this.attachmentBlobStore.put(
+        downloaded.content,
+        downloaded.mime ?? mime,
+      );
+      return {
+        ...base,
+        mime: downloaded.mime ?? mime,
+        size: size > 0 ? size : ref.size,
+        blob_hash: ref.hash,
+        local_path: this.attachmentBlobStore.pathFor(ref),
+        platform_metadata: {
+          ...base.platform_metadata,
+          retrieved_at: this.now(),
+        },
+      };
+    } catch (error) {
+      return {
+        ...base,
+        platform_metadata: {
+          ...base.platform_metadata,
+          retrieval_error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  private async buildOutboundMediaContent(
+    attachment: Attachment,
+    replyTo: MessageId | undefined,
+  ): Promise<MatrixEventContent> {
+    const localPath = attachment.local_path!;
+    const bytes = await readFile(localPath);
+    const mime = attachment.mime || "application/octet-stream";
+    const filename = attachment.filename || uploadFilenameFromLocalPath(localPath);
+    const mxcUri = await this.mediaClient.upload({
+      content: bytes,
+      mime,
+      filename,
+    });
+    const content: MatrixEventContent = {
+      msgtype: matrixOutboundMsgtypeForMime(mime),
+      body: filename,
+      url: mxcUri,
+      info: {
+        mimetype: mime,
+        size: attachment.size > 0 ? attachment.size : bytes.byteLength,
+      },
+    };
+    const replyEventId = matrixReplyEventId(replyTo);
+    if (replyEventId) {
+      content["m.relates_to"] = {
+        "m.in_reply_to": { event_id: replyEventId },
+      };
+    }
+    return content;
+  }
+
+  private async sendMessageWithRetry(
+    target: ChatRef,
+    content: MatrixEventContent,
+    txnId: string,
+  ): Promise<SendResult> {
+    let retried429 = false;
+
+    while (true) {
+      try {
+        const response = await this.sendClient.sendMessage({
+          roomId: target.chat_native_id,
+          txnId,
+          content,
+        });
+        const result = {
+          platform_message_id: response.event_id,
+          sent_at: this.now(),
+        };
+        this.rateLimited = false;
+        this.emitState("connected");
+        return result;
+      } catch (error) {
+        if (!retried429 && this.classifyFailure(error) === "rate_limited") {
+          const retryAfterMs = (error as { retry_after_ms?: number }).retry_after_ms;
+          if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+            retried429 = true;
+            this.rateLimited = true;
+            if (retryAfterMs > 0) {
+              await this.sleep(retryAfterMs);
+            }
+            continue;
+          }
+          this.rateLimited = true;
+          throw error;
+        }
+        throw error;
+      }
+    }
   }
 
   private rememberSent(idempotencyKey: string, result: SendResult): void {

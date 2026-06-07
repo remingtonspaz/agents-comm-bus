@@ -333,6 +333,32 @@ describe("matrix_send IPC handler", () => {
     assert.equal(bus.lastSend?.target?.chat_native_id, ROOM_ID);
   });
 
+  it("matrix_send_image routes attachment payloads through bus.send", async () => {
+    const bus = new RecordingBus();
+    const factory = new MatrixCommAdapterFactory();
+    const handler = factory.ipcMethods({
+      bus: bus as never,
+      storage: new TargetStorage([], makeSession()) as never,
+      pendingInbound: [],
+    } as never).get("matrix_send_image");
+
+    assert.ok(handler);
+    await handler({
+      session: "matrix_session",
+      path: "D:\\tmp\\diagram.png",
+      caption: "see attached",
+      target: {
+        account: OTHER_BOT_MXID,
+        chat_native_id: ROOM_ID,
+      },
+    });
+
+    assert.equal(bus.lastSend?.comm, "matrix");
+    assert.equal(bus.lastSend?.payload?.attachments?.[0]?.local_path, "D:\\tmp\\diagram.png");
+    assert.equal(bus.lastSend?.payload?.attachments?.[0]?.filename, "diagram.png");
+    assert.equal(bus.lastSend?.payload?.text, "see attached");
+  });
+
   it("rejects account labels before bus.send", async () => {
     const bus = new RecordingBus();
     const factory = new MatrixCommAdapterFactory();

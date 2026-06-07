@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { htmlToMatrixFormatted } from "./html.js";
+import { createFetchMatrixMediaClient, matrixOutboundMsgtypeForMime, MATRIX_MEDIA_MSGTYPES, parseMxcUri, } from "./media.js";
 const DEFAULT_SYNC_TIMEOUT_MS = 30_000;
 const DEFAULT_SYNC_RETRY_DELAY_MS = 1_000;
 const IDEMPOTENCY_CACHE_MAX = 256;
@@ -109,10 +113,20 @@ export function matrixReplyEventId(replyTo) {
     return replyTo.startsWith("matrix:") ? replyTo.slice("matrix:".length) : replyTo;
 }
 export function matrixOutboundMessageContent(payload) {
-    const content = {
-        msgtype: "m.text",
-        body: payload.text ?? "",
-    };
+    const content = payload.format === "html"
+        ? (() => {
+            const formatted = htmlToMatrixFormatted(payload.text ?? "");
+            return {
+                msgtype: "m.text",
+                format: "org.matrix.custom.html",
+                formatted_body: formatted.formatted_body,
+                body: formatted.body,
+            };
+        })()
+        : {
+            msgtype: "m.text",
+            body: payload.text ?? "",
+        };
     const replyEventId = matrixReplyEventId(payload.reply_to);
     if (replyEventId) {
         content["m.relates_to"] = {
@@ -120,6 +134,19 @@ export function matrixOutboundMessageContent(payload) {
         };
     }
     return content;
+}
+/**
+ * Matrix upload names must not leak caller local paths to room recipients.
+ */
+export function uploadFilenameFromLocalPath(localPath) {
+    const name = path.win32.basename(localPath);
+    if (name && name !== "." && name !== "..")
+        return name;
+    const posixName = path.posix.basename(localPath);
+    return posixName && posixName !== "." && posixName !== ".." ? posixName : "attachment";
+}
+export function matrixAttachmentTxnSuffix(idempotencyKey, index) {
+    return `${matrixTxnIdFromIdempotencyKey(idempotencyKey)}-att-${index}`;
 }
 export function createFetchMatrixSendClient(homeserverUrl, accessToken, options = {}) {
     const fetchFn = options.fetchFn ?? fetch;
@@ -179,6 +206,8 @@ export class MatrixCommAdapter {
     userId;
     syncClient;
     sendClient;
+    mediaClient;
+    attachmentBlobStore;
     sleep;
     now;
     sentByKey = new Map();
@@ -198,6 +227,8 @@ export class MatrixCommAdapter {
         this.userId = options.userId;
         this.syncClient = options.syncClient ?? createFetchMatrixSyncClient(options.homeserverUrl, options.accessToken);
         this.sendClient = options.sendClient ?? createFetchMatrixSendClient(options.homeserverUrl, options.accessToken);
+        this.mediaClient = options.mediaClient ?? createFetchMatrixMediaClient(options.homeserverUrl, options.accessToken);
+        this.attachmentBlobStore = options.attachmentBlobStore;
         this.sleep = options.sleep ?? defaultSleep;
         this.now = options.now ?? Date.now;
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
@@ -266,42 +297,24 @@ export class MatrixCommAdapter {
         const cached = this.sentByKey.get(idempotencyKey);
         if (cached)
             return cached;
-        const txnId = matrixTxnIdFromIdempotencyKey(idempotencyKey);
-        const content = matrixOutboundMessageContent(payload);
-        let retried429 = false;
-        while (true) {
-            try {
-                const response = await this.sendClient.sendMessage({
-                    roomId: target.chat_native_id,
-                    txnId,
-                    content,
-                });
-                const result = {
-                    platform_message_id: response.event_id,
-                    sent_at: this.now(),
-                };
-                this.rememberSent(idempotencyKey, result);
-                this.rateLimited = false;
-                this.emitState("connected");
-                return result;
-            }
-            catch (error) {
-                if (!retried429 && this.classifyFailure(error) === "rate_limited") {
-                    const retryAfterMs = error.retry_after_ms;
-                    if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
-                        retried429 = true;
-                        this.rateLimited = true;
-                        if (retryAfterMs > 0) {
-                            await this.sleep(retryAfterMs);
-                        }
-                        continue;
-                    }
-                    this.rateLimited = true;
-                    throw error;
-                }
-                throw error;
-            }
+        const uploadable = (payload.attachments ?? []).filter((attachment) => attachment.local_path);
+        let lastResult = null;
+        if (payload.text) {
+            lastResult = await this.sendMessageWithRetry(target, matrixOutboundMessageContent(payload), matrixTxnIdFromIdempotencyKey(idempotencyKey));
         }
+        for (let index = 0; index < uploadable.length; index++) {
+            const attachment = uploadable[index];
+            const mediaContent = await this.buildOutboundMediaContent(attachment, payload.reply_to);
+            const txnId = uploadable.length > 1 || payload.text
+                ? matrixAttachmentTxnSuffix(idempotencyKey, index)
+                : matrixTxnIdFromIdempotencyKey(idempotencyKey);
+            lastResult = await this.sendMessageWithRetry(target, mediaContent, txnId);
+        }
+        if (!lastResult) {
+            lastResult = await this.sendMessageWithRetry(target, matrixOutboundMessageContent(payload), matrixTxnIdFromIdempotencyKey(idempotencyKey));
+        }
+        this.rememberSent(idempotencyKey, lastResult);
+        return lastResult;
     }
     reportPressure() {
         return { backlog: 0, rateLimited: this.rateLimited };
@@ -356,12 +369,13 @@ export class MatrixCommAdapter {
         if (!content || typeof content !== "object")
             return;
         const msgtype = content.msgtype;
-        if (msgtype !== "m.text" && msgtype !== "m.notice")
+        const isText = msgtype === "m.text" || msgtype === "m.notice";
+        const isMedia = typeof msgtype === "string" && MATRIX_MEDIA_MSGTYPES.has(msgtype);
+        if (!isText && !isMedia)
             return;
         const eventId = event.event_id;
         const sender = event.sender;
-        const body = typeof content.body === "string" ? content.body : null;
-        if (!eventId || !body)
+        if (!eventId)
             return;
         if (!sender) {
             this.emitFilterDrop({
@@ -394,7 +408,13 @@ export class MatrixCommAdapter {
             });
             return;
         }
+        const body = typeof content.body === "string" ? content.body : "";
+        if (isText && !body)
+            return;
         const replyTo = matrixReplyToMessageId(content);
+        const attachments = isMedia
+            ? [await this.buildInboundMediaAttachment(content, msgtype)]
+            : [];
         await this.inboundHandler({
             schema_version: 1,
             message_id: `matrix:${eventId}`,
@@ -411,7 +431,7 @@ export class MatrixCommAdapter {
             },
             origin: { comm: this.id },
             text: body,
-            attachments: [],
+            attachments,
             platform_message_id: eventId,
             reply_to: replyTo,
             hop_count: 0,
@@ -419,6 +439,114 @@ export class MatrixCommAdapter {
                 ? event.origin_server_ts
                 : this.now(),
         });
+    }
+    async buildInboundMediaAttachment(content, msgtype) {
+        const info = content.info && typeof content.info === "object" ? content.info : {};
+        const mxcUri = typeof content.url === "string" ? content.url : "";
+        const body = typeof content.body === "string" ? content.body : "";
+        const infoName = typeof info.name === "string" ? info.name : undefined;
+        const filename = body || infoName || "attachment";
+        const mime = typeof info.mimetype === "string" ? info.mimetype : "application/octet-stream";
+        const size = typeof info.size === "number" ? info.size : 0;
+        const base = {
+            mime,
+            filename,
+            size,
+            platform_metadata: {
+                mxc_uri: mxcUri || undefined,
+                msgtype,
+                info,
+            },
+        };
+        if (!mxcUri || !parseMxcUri(mxcUri) || !this.attachmentBlobStore) {
+            return base;
+        }
+        try {
+            const downloaded = await this.mediaClient.download(mxcUri);
+            const ref = await this.attachmentBlobStore.put(downloaded.content, downloaded.mime ?? mime);
+            return {
+                ...base,
+                mime: downloaded.mime ?? mime,
+                size: size > 0 ? size : ref.size,
+                blob_hash: ref.hash,
+                local_path: this.attachmentBlobStore.pathFor(ref),
+                platform_metadata: {
+                    ...base.platform_metadata,
+                    retrieved_at: this.now(),
+                },
+            };
+        }
+        catch (error) {
+            return {
+                ...base,
+                platform_metadata: {
+                    ...base.platform_metadata,
+                    retrieval_error: error instanceof Error ? error.message : String(error),
+                },
+            };
+        }
+    }
+    async buildOutboundMediaContent(attachment, replyTo) {
+        const localPath = attachment.local_path;
+        const bytes = await readFile(localPath);
+        const mime = attachment.mime || "application/octet-stream";
+        const filename = attachment.filename || uploadFilenameFromLocalPath(localPath);
+        const mxcUri = await this.mediaClient.upload({
+            content: bytes,
+            mime,
+            filename,
+        });
+        const content = {
+            msgtype: matrixOutboundMsgtypeForMime(mime),
+            body: filename,
+            url: mxcUri,
+            info: {
+                mimetype: mime,
+                size: attachment.size > 0 ? attachment.size : bytes.byteLength,
+            },
+        };
+        const replyEventId = matrixReplyEventId(replyTo);
+        if (replyEventId) {
+            content["m.relates_to"] = {
+                "m.in_reply_to": { event_id: replyEventId },
+            };
+        }
+        return content;
+    }
+    async sendMessageWithRetry(target, content, txnId) {
+        let retried429 = false;
+        while (true) {
+            try {
+                const response = await this.sendClient.sendMessage({
+                    roomId: target.chat_native_id,
+                    txnId,
+                    content,
+                });
+                const result = {
+                    platform_message_id: response.event_id,
+                    sent_at: this.now(),
+                };
+                this.rateLimited = false;
+                this.emitState("connected");
+                return result;
+            }
+            catch (error) {
+                if (!retried429 && this.classifyFailure(error) === "rate_limited") {
+                    const retryAfterMs = error.retry_after_ms;
+                    if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+                        retried429 = true;
+                        this.rateLimited = true;
+                        if (retryAfterMs > 0) {
+                            await this.sleep(retryAfterMs);
+                        }
+                        continue;
+                    }
+                    this.rateLimited = true;
+                    throw error;
+                }
+                throw error;
+            }
+        }
     }
     rememberSent(idempotencyKey, result) {
         if (this.sentByKey.size >= IDEMPOTENCY_CACHE_MAX) {

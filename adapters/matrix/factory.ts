@@ -21,6 +21,7 @@ import {
   isMatrixMxid,
   MatrixCommAdapter,
   probeMatrixIdentity,
+  uploadFilenameFromLocalPath,
   type MatrixIdentityClient,
 } from "./adapter.js";
 
@@ -95,7 +96,7 @@ export class MatrixCommAdapterFactory implements CommAdapterFactory {
   create(
     credentials: Record<string, unknown>,
     accountId: AccountId,
-    _context?: CommAdapterCreateContext,
+    context?: CommAdapterCreateContext,
   ): CommAdapter {
     const parsed = parseResolvedCredentials(credentials);
     return new MatrixCommAdapter({
@@ -108,6 +109,7 @@ export class MatrixCommAdapterFactory implements CommAdapterFactory {
       allowedRoomIds: parsed.allowedRoomIds,
       autoJoinInvites: parsed.autoJoinInvites,
       encryptedRoomPolicy: parsed.encryptedRoomPolicy,
+      attachmentBlobStore: context?.blobs,
     });
   }
 
@@ -115,7 +117,11 @@ export class MatrixCommAdapterFactory implements CommAdapterFactory {
     return new Map<string, IpcMethodHandler>([
       [
         "matrix_send",
-        async (params: Record<string, unknown>) => sendMatrix(deps, params),
+        async (params: Record<string, unknown>) => sendMatrix(deps, params, false),
+      ],
+      [
+        "matrix_send_image",
+        async (params: Record<string, unknown>) => sendMatrix(deps, params, true),
       ],
     ]);
   }
@@ -130,16 +136,30 @@ export function createCommAdapterFactory(
 async function sendMatrix(
   deps: CommIpcDeps,
   params: Record<string, unknown>,
+  image: boolean,
 ): Promise<{ message_id: string }> {
   const chatNativeId = extractChatNativeId(params);
   const target = chatNativeId === null
     ? undefined
     : await targetFromParams(deps.storage, params, chatNativeId);
+  const localPath = image ? String(params.path) : null;
   const sent = await deps.bus.send({
     session: String(params.session ?? "mcp") as SessionId,
     comm: MATRIX_COMM_ID,
     target,
-    payload: { text: String(params.message ?? "") },
+    payload: image
+      ? {
+          text: typeof params.caption === "string" ? params.caption : undefined,
+          attachments: [
+            {
+              filename: uploadFilenameFromLocalPath(localPath!),
+              local_path: localPath!,
+              mime: "application/octet-stream",
+              size: 0,
+            },
+          ],
+        }
+      : { text: String(params.message ?? "") },
     idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
   });
   return { message_id: sent };

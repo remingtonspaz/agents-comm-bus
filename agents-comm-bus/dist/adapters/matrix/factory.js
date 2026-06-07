@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { isMatrixMxid, MatrixCommAdapter, probeMatrixIdentity, } from "./adapter.js";
+import { isMatrixMxid, MatrixCommAdapter, probeMatrixIdentity, uploadFilenameFromLocalPath, } from "./adapter.js";
 const MATRIX_COMM_ID = "matrix";
 export class MatrixCommAdapterFactory {
     options;
@@ -37,7 +37,7 @@ export class MatrixCommAdapterFactory {
             accountUsername: identity.localpart,
         };
     }
-    create(credentials, accountId, _context) {
+    create(credentials, accountId, context) {
         const parsed = parseResolvedCredentials(credentials);
         return new MatrixCommAdapter({
             homeserverUrl: parsed.homeserverUrl,
@@ -49,13 +49,18 @@ export class MatrixCommAdapterFactory {
             allowedRoomIds: parsed.allowedRoomIds,
             autoJoinInvites: parsed.autoJoinInvites,
             encryptedRoomPolicy: parsed.encryptedRoomPolicy,
+            attachmentBlobStore: context?.blobs,
         });
     }
     ipcMethods(deps) {
         return new Map([
             [
                 "matrix_send",
-                async (params) => sendMatrix(deps, params),
+                async (params) => sendMatrix(deps, params, false),
+            ],
+            [
+                "matrix_send_image",
+                async (params) => sendMatrix(deps, params, true),
             ],
         ]);
     }
@@ -63,16 +68,29 @@ export class MatrixCommAdapterFactory {
 export function createCommAdapterFactory(options) {
     return new MatrixCommAdapterFactory(options);
 }
-async function sendMatrix(deps, params) {
+async function sendMatrix(deps, params, image) {
     const chatNativeId = extractChatNativeId(params);
     const target = chatNativeId === null
         ? undefined
         : await targetFromParams(deps.storage, params, chatNativeId);
+    const localPath = image ? String(params.path) : null;
     const sent = await deps.bus.send({
         session: String(params.session ?? "mcp"),
         comm: MATRIX_COMM_ID,
         target,
-        payload: { text: String(params.message ?? "") },
+        payload: image
+            ? {
+                text: typeof params.caption === "string" ? params.caption : undefined,
+                attachments: [
+                    {
+                        filename: uploadFilenameFromLocalPath(localPath),
+                        local_path: localPath,
+                        mime: "application/octet-stream",
+                        size: 0,
+                    },
+                ],
+            }
+            : { text: String(params.message ?? "") },
         idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
     });
     return { message_id: sent };

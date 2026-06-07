@@ -27,7 +27,7 @@ export declare class MatrixCommAdapterFactory implements CommAdapterFactory {
         accountId: AccountId;
         accountUsername?: string | null;
     }>;
-    create(credentials: Record<string, unknown>, accountId: AccountId, _context?: CommAdapterCreateContext): CommAdapter;
+    create(credentials: Record<string, unknown>, accountId: AccountId, context?: CommAdapterCreateContext): CommAdapter;
     ipcMethods(deps: CommIpcDeps): Map<string, IpcMethodHandler>;
 }
 export declare function createCommAdapterFactory(options?: MatrixCommAdapterFactoryOptions): CommAdapterFactory;

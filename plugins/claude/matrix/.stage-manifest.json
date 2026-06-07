@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "agent": "claude",
+  "comm": "matrix",
+  "artifacts": [
+    {
+      "source": "hosts/claude/skills/matrix/SKILL.md",
+      "artifact": "plugins/claude/matrix/skills/matrix/SKILL.md",
+      "type": "assembled-skill"
+    },
+    {
+      "source": "mcp-server/dist/claude-mcp-shim.js",
+      "artifact": "plugins/claude/matrix/claude-mcp-shim.js",
+      "type": "bundled-mcp-shim"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/daemon.bundle.js",
+      "artifact": "plugins/claude/matrix/daemon.bundle.js",
+      "type": "runtime-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/matrix.adapter.bundle.js",
+      "artifact": "plugins/claude/matrix/matrix.adapter.bundle.js",
+      "type": "runtime-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/cli.bundle.js",
+      "artifact": "plugins/claude/matrix/cli.bundle.js",
+      "type": "runtime-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/001_initial.sql",
+      "artifact": "plugins/claude/matrix/001_initial.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/002_conversation_agent_identity.sql",
+      "artifact": "plugins/claude/matrix/002_conversation_agent_identity.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/003_allowlist.sql",
+      "artifact": "plugins/claude/matrix/003_allowlist.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/004_session_owner_process.sql",
+      "artifact": "plugins/claude/matrix/004_session_owner_process.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/005_conversation_bot_identity.sql",
+      "artifact": "plugins/claude/matrix/005_conversation_bot_identity.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/006_registration_identity.sql",
+      "artifact": "plugins/claude/matrix/006_registration_identity.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/007_registration_pk.sql",
+      "artifact": "plugins/claude/matrix/007_registration_pk.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/008_conversation_registration_key.sql",
+      "artifact": "plugins/claude/matrix/008_conversation_registration_key.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/009_multi_open_queries.sql",
+      "artifact": "plugins/claude/matrix/009_multi_open_queries.sql",
+      "type": "schema-sidecar"
+    },
+    {
+      "source": "(generated)",
+      "artifact": "plugins/claude/matrix/package.json",
+      "type": "package-json"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/hooks/claude/permission-request.js",
+      "artifact": "plugins/claude/matrix/hooks/permission-request.js",
+      "type": "hook-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/hooks/claude/session-start.js",
+      "artifact": "plugins/claude/matrix/hooks/session-start.js",
+      "type": "hook-bundle"
+    },
+    {
+      "source": "agents-comm-bus/dist-bundle/hooks/claude/user-prompt-submit.js",
+      "artifact": "plugins/claude/matrix/hooks/user-prompt-submit.js",
+      "type": "hook-bundle"
+    },
+    {
+      "source": "hosts/claude/hooks/hooks.json",
+      "artifact": "plugins/claude/matrix/hooks/hooks.json",
+      "type": "hook"
+    },
+    {
+      "source": ".claude-plugin/plugin.matrix.json",
+      "artifact": "plugins/claude/matrix/.claude-plugin/plugin.json",
+      "type": "manifest"
+    },
+    {
+      "source": "core-daemon/config.ts (DAEMON_VERSION) + adapters/matrix/version.ts (ADAPTER_VERSION) + .claude-plugin/plugin.json (version)",
+      "artifact": "plugins/claude/matrix/install-stamp.json",
+      "type": "install-stamp"
+    },
+    {
+      "source": "scripts/enter-watcher.ps1",
+      "artifact": "plugins/claude/matrix/scripts/enter-watcher.ps1",
+      "type": "supporting-script"
+    }
+  ]
+}
