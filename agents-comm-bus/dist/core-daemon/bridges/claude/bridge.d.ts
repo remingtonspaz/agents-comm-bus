@@ -92,6 +92,7 @@ export declare class ClaudeBridge implements AgentBridge {
      * Future-proofing for runtime registration would re-fetch on miss; left
      * as a follow-up.
      */
+    private ensureCommsBestEffort;
     private ownedAccountKeys;
     registerSession(params: Record<string, unknown>, socket?: {
         once(event: "close", handler: () => void): void;

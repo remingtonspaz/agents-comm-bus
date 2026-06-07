@@ -167,6 +167,9 @@ export class CodexBridge {
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
+        // AGE-45: every register attempt with a valid scope must refresh comm adapters,
+        // including held-lease refresh and terminal lease-conflict returns.
+        await this.ensureCommsBestEffort(project);
         const replaceExistingLease = params.replace_existing_lease === true ||
             params.persist_after_disconnect === true;
         const leaseOwner = sessionLeaseOwnerFromParams(params, "codex");
@@ -197,15 +200,6 @@ export class CodexBridge {
             this.adapter.setAppServerUrl(session, params.app_server_url);
         }
         this.trackSession(project, session);
-        // AGE-38: lazily bring up this project's comm adapters on session entry.
-        // Best-effort — a partial instantiation failure must not fail registration.
-        try {
-            await this.options.ensureCommsForSession?.(project, this.agentId);
-        }
-        catch (error) {
-            console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
-                `${error instanceof Error ? error.message : String(error)}`);
-        }
         const persistAfterDisconnect = params.persist_after_disconnect === true;
         const manageAppServerLifecycle = params.manage_app_server_lifecycle === true ||
             params.source === "mcp-server";
@@ -388,6 +382,15 @@ export class CodexBridge {
                 resolve(decision);
             });
         });
+    }
+    async ensureCommsBestEffort(project) {
+        try {
+            await this.options.ensureCommsForSession?.(project, this.agentId);
+        }
+        catch (error) {
+            console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        }
     }
     trackSession(project, session) {
         const sessions = this.sessionsByProject.get(project) ?? new Set();

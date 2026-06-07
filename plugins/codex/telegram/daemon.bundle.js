@@ -7253,6 +7253,15 @@ var ClaudeBridge = class {
    * Future-proofing for runtime registration would re-fetch on miss; left
    * as a follow-up.
    */
+  async ensureCommsBestEffort(project) {
+    try {
+      await this.options.ensureCommsForSession?.(project, this.agentId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
   async ownedAccountKeys(session) {
     if (session) {
       const sess = await this.options.storage.getSession(session);
@@ -7293,6 +7302,7 @@ var ClaudeBridge = class {
       most_recent_inbound_conversation_id: null,
       status: "active"
     });
+    await this.ensureCommsBestEffort(project);
     const acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
@@ -7306,13 +7316,6 @@ var ClaudeBridge = class {
     socket?.once("close", () => {
       void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
     });
-    try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
-    } catch (error) {
-      console.error(
-        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
     return { ok: true, wake_dir: registration.wakeDir };
   }
   async drainInbound(params) {
@@ -8571,6 +8574,7 @@ var CodexBridge = class {
       most_recent_inbound_conversation_id: null,
       status: "active"
     });
+    await this.ensureCommsBestEffort(project);
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
     const leaseOwner = sessionLeaseOwnerFromParams2(params, "codex");
     const acquired = await this.options.storage.acquireSessionLease(
@@ -8612,13 +8616,6 @@ var CodexBridge = class {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
     this.trackSession(project, session);
-    try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
-    } catch (error) {
-      console.error(
-        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle = params.manage_app_server_lifecycle === true || params.source === "mcp-server";
     const lease = {
@@ -8801,6 +8798,15 @@ var CodexBridge = class {
         resolve(decision);
       });
     });
+  }
+  async ensureCommsBestEffort(project) {
+    try {
+      await this.options.ensureCommsForSession?.(project, this.agentId);
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
   trackSession(project, session) {
     const sessions = this.sessionsByProject.get(project) ?? /* @__PURE__ */ new Set();

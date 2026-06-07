@@ -125,6 +125,15 @@ export class ClaudeBridge {
      * Future-proofing for runtime registration would re-fetch on miss; left
      * as a follow-up.
      */
+    async ensureCommsBestEffort(project) {
+        try {
+            await this.options.ensureCommsForSession?.(project, this.agentId);
+        }
+        catch (error) {
+            console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     async ownedAccountKeys(session) {
         // AGE-38: scope to the calling session's (project, agent), not agent-wide.
         // A daemon can serve live Claude sessions for multiple projects (distinct
@@ -177,6 +186,9 @@ export class ClaudeBridge {
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
+        // AGE-45: every register attempt with a valid scope must refresh comm adapters,
+        // including held-lease terminal returns.
+        await this.ensureCommsBestEffort(project);
         const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, sessionLeaseOwnerFromParams(params));
         if (!acquired) {
             return { ok: false, reason: "same-project claude session lease already held" };
@@ -185,15 +197,6 @@ export class ClaudeBridge {
         socket?.once("close", () => {
             void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
         });
-        // AGE-38: lazily bring up this project's comm adapters on session entry.
-        // Best-effort — a partial instantiation failure must not fail registration.
-        try {
-            await this.options.ensureCommsForSession?.(project, this.agentId);
-        }
-        catch (error) {
-            console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
-                `${error instanceof Error ? error.message : String(error)}`);
-        }
         return { ok: true, wake_dir: registration.wakeDir };
     }
     async drainInbound(params) {

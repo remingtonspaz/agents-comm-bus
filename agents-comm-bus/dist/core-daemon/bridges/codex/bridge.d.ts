@@ -70,6 +70,7 @@ export declare class CodexBridge implements AgentBridge {
     turnControl(params: Record<string, unknown>): Promise<unknown>;
     private handleCommCallback;
     private waitForResolution;
+    private ensureCommsBestEffort;
     private trackSession;
     private untrackSession;
     private releaseSessionLease;
