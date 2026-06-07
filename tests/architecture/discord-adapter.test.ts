@@ -10,7 +10,11 @@ import {
   discordMessageBody,
   type DiscordRestLike,
 } from "../../adapters/discord/adapter.js";
+import { htmlToDiscordMarkdown } from "../../adapters/discord/html.js";
+import { discordNonceFromIdempotencyKey } from "../../adapters/discord/nonce.js";
 import type { DiscordGatewayLike } from "../../adapters/discord/gateway.js";
+import { GatewayDispatchEvents, type APIMessage, type GatewayDispatchPayload } from "discord-api-types/v10";
+import type { BlobRef, BlobStore, Message } from "../../packages/core-contracts/src/index.js";
 import type { CommConnectionState } from "../../packages/core-contracts/src/index.js";
 import type { GatewayDispatchPayload } from "discord-api-types/v10";
 import { DiscordCommAdapterFactory } from "../../adapters/discord/factory.js";
@@ -325,6 +329,44 @@ describe("discord_send IPC handler", () => {
     assert.equal(bus.lastSend?.payload?.text, "probe");
   });
 
+  it("discord_send_image routes attachment payloads through bus.send", async () => {
+    const bus = new RecordingBus();
+    const factory = new DiscordCommAdapterFactory();
+    const handler = factory.ipcMethods({
+      bus: bus as never,
+      storage: new TargetStorage([], {
+        session_id: "discord_session" as SessionId,
+        agent: CLAUDE,
+        project: "D:\\repo",
+        schema_version: 1,
+        created_at: 1,
+        lease_holder_connection_id: null,
+        lease_acquired_at: null,
+        lease_released_at: null,
+        lease_owner_process_pid: null,
+        lease_owner_process_label: null,
+        lease_owner_process_registered_at: null,
+        most_recent_inbound_conversation_id: null,
+        status: "active",
+      }) as never,
+      pendingInbound: [],
+    } as never).get("discord_send_image");
+
+    assert.ok(handler);
+    await handler({
+      session: "discord_session",
+      path: "D:\\tmp\\diagram.png",
+      caption: "see attached",
+      target: {
+        account: "123456789012345678",
+        chat_native_id: "chan-77",
+      },
+    });
+
+    assert.equal(bus.lastSend?.payload?.attachments?.[0]?.local_path, "D:\\tmp\\diagram.png");
+    assert.equal(bus.lastSend?.payload?.text, "see attached");
+  });
+
   it("rejects account labels before bus.send", async () => {
     const bus = new RecordingBus();
     const factory = new DiscordCommAdapterFactory();
@@ -365,6 +407,238 @@ describe("discord_send IPC handler", () => {
   });
 });
 
+describe("Discord html → markdown conversion", () => {
+  const cases: Array<[string, string]> = [
+    ["<b>bold</b>", "**bold**"],
+    ["<strong>strong</strong>", "**strong**"],
+    ["<i>italic</i>", "*italic*"],
+    ["<em>emphasis</em>", "*emphasis*"],
+    ["<code>inline</code>", "`inline`"],
+    ["<pre>block</pre>", "```\nblock\n```"],
+    ['<a href="https://example.com">link</a>', "link (https://example.com)"],
+    ["plain &amp; &lt;tag&gt;", "plain & <tag>"],
+  ];
+
+  for (const [input, expected] of cases) {
+    it(`converts ${input}`, () => {
+      assert.equal(htmlToDiscordMarkdown(input), expected);
+    });
+  }
+
+  it("discordMessageBody converts html payloads", () => {
+    const body = discordMessageBody({ text: "<b>Allow?</b>", format: "html" });
+    assert.equal(body.content, "**Allow?**");
+    assert.deepEqual(body.allowed_mentions, { parse: [] });
+  });
+});
+
+describe("Discord send nonce mapping", () => {
+  it("maps idempotency keys to stable nonces of at most 25 chars", () => {
+    const key = "query:q_test-123";
+    const nonce = discordNonceFromIdempotencyKey(key);
+    assert.equal(nonce, discordNonceFromIdempotencyKey(key));
+    assert.ok(nonce.length <= 25);
+  });
+
+  it("includes enforce_nonce on outbound bodies", () => {
+    const body = discordMessageBody({ text: "hi" }, "idem-key-1");
+    assert.equal(body.nonce, discordNonceFromIdempotencyKey("idem-key-1"));
+    assert.equal(body.enforce_nonce, true);
+  });
+});
+
+describe("DiscordCommAdapter outbound attachments", () => {
+  it("uploads attachments via multipart while keeping allowed_mentions disabled", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-discord-out-attach-"));
+    const filePath = join(dir, "report.txt");
+    await writeFile(filePath, "attachment bytes");
+
+    const posts: Array<{ body: Record<string, unknown>; files?: Array<{ name: string; data: Buffer }> }> = [];
+    const rest = makeFakeRest({
+      post: async (_route, { body, files }) => {
+        posts.push({
+          body,
+          files: files?.map((file) => ({ name: file.name, data: Buffer.from(file.data as Buffer) })),
+        });
+        return { id: "attach-1" };
+      },
+    });
+    const adapter = new DiscordCommAdapter({
+      botToken: "test",
+      accountId: "123456789012345678" as never,
+      rest,
+      gateway: new NoopDiscordGateway(),
+    });
+    await adapter.start();
+
+    await adapter.send(
+      {
+        comm: DISCORD,
+        account: "123456789012345678" as never,
+        chat_native_id: "chan-1",
+      },
+      {
+        text: "see file",
+        attachments: [
+          {
+            filename: "report.txt",
+            local_path: filePath,
+            mime: "text/plain",
+            size: 16,
+          },
+        ],
+      },
+      "attach-idem",
+    );
+
+    assert.equal(posts.length, 1);
+    assert.deepEqual(posts[0]!.body.allowed_mentions, { parse: [] });
+    assert.equal(posts[0]!.body.content, "see file");
+    assert.equal(posts[0]!.files?.[0]?.name, "report.txt");
+    assert.equal(posts[0]!.files?.[0]?.data.toString(), "attachment bytes");
+  });
+});
+
+describe("DiscordCommAdapter inbound attachments", () => {
+  it("retrieves inbound attachments into the blob store at receipt", async () => {
+    const gateway = new InboundTestGateway();
+    const blobs = new FakeBlobStore();
+    const received: Message[] = [];
+    const adapter = new DiscordCommAdapter({
+      botToken: "test",
+      accountId: "123456789012345678" as never,
+      rest: makeFakeRest(),
+      gateway,
+      attachmentBlobStore: blobs,
+      fetch: async (url) => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new TextEncoder().encode(`bytes from ${url}`).buffer,
+      } as Response),
+    });
+    adapter.onInbound(async (message) => {
+      received.push(message);
+    });
+    await adapter.start();
+
+    await gateway.emitMessageCreate({
+      id: "55",
+      channel_id: "chan-1",
+      content: "screenshot",
+      attachments: [
+        {
+          id: "att-1",
+          filename: "shot.png",
+          content_type: "image/png",
+          size: 42,
+          url: "https://cdn.discordapp.com/attachments/1/shot.png",
+          proxy_url: "https://cdn.discordapp.com/attachments/1/shot.png",
+        },
+      ],
+    } as APIMessage);
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.attachments?.length, 1);
+    assert.equal(received[0]!.attachments?.[0]?.blob_hash, "hash-1");
+    assert.equal(received[0]!.attachments?.[0]?.local_path, "D:\\tmp\\hash-1");
+    assert.equal(blobs.contents[0], "bytes from https://cdn.discordapp.com/attachments/1/shot.png");
+  });
+
+  it("delivers metadata-only attachments when CDN download fails", async () => {
+    const gateway = new InboundTestGateway();
+    const blobs = new FakeBlobStore();
+    const received: Message[] = [];
+    const adapter = new DiscordCommAdapter({
+      botToken: "test",
+      accountId: "123456789012345678" as never,
+      rest: makeFakeRest(),
+      gateway,
+      attachmentBlobStore: blobs,
+      fetch: async () => ({
+        ok: false,
+        status: 404,
+        arrayBuffer: async () => new ArrayBuffer(0),
+      } as Response),
+    });
+    adapter.onInbound(async (message) => {
+      received.push(message);
+    });
+    await adapter.start();
+
+    await gateway.emitMessageCreate({
+      id: "56",
+      channel_id: "chan-1",
+      attachments: [
+        {
+          id: "att-2",
+          filename: "missing.bin",
+          content_type: "application/octet-stream",
+          size: 10,
+          url: "https://cdn.discordapp.com/attachments/1/missing.bin",
+          proxy_url: "https://cdn.discordapp.com/attachments/1/missing.bin",
+        },
+      ],
+    } as APIMessage);
+
+    assert.equal(received.length, 1);
+    assert.equal(received[0]!.attachments?.[0]?.blob_hash, undefined);
+    assert.match(
+      String(received[0]!.attachments?.[0]?.platform_metadata?.retrieval_error),
+      /HTTP 404/,
+    );
+  });
+});
+
+class InboundTestGateway implements DiscordGatewayLike {
+  private dispatchHandler: ((payload: GatewayDispatchPayload) => void) | null = null;
+
+  onDispatch(handler: (payload: GatewayDispatchPayload) => void): void {
+    this.dispatchHandler = handler;
+  }
+
+  onConnectionState(): void {}
+
+  threadParentChannelId(): string | undefined {
+    return undefined;
+  }
+
+  async connect(): Promise<void> {}
+
+  async destroy(): Promise<void> {}
+
+  async emitMessageCreate(raw: APIMessage): Promise<void> {
+    this.dispatchHandler?.({
+      t: GatewayDispatchEvents.MessageCreate,
+      s: 1,
+      op: 0,
+      d: raw,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+class FakeBlobStore implements BlobStore {
+  readonly contents: string[] = [];
+
+  async put(content: Uint8Array, mime?: string): Promise<BlobRef> {
+    void mime;
+    this.contents.push(new TextDecoder().decode(content));
+    return { hash: `hash-${this.contents.length}`, size: content.byteLength, mime };
+  }
+
+  async open(): Promise<ReadableStream<Uint8Array>> {
+    throw new Error("not implemented");
+  }
+
+  pathFor(ref: BlobRef): string {
+    return `D:\\tmp\\${ref.hash}`;
+  }
+
+  async exists(): Promise<boolean> {
+    return true;
+  }
+}
+
 class NoopDiscordGateway implements DiscordGatewayLike {
   async connect(): Promise<void> {}
   async destroy(): Promise<void> {}
@@ -375,8 +649,8 @@ class NoopDiscordGateway implements DiscordGatewayLike {
   }
 }
 
-function makeFakeRest(handlers: {
-  post: DiscordRestLike["post"];
+function makeFakeRest(handlers?: {
+  post?: DiscordRestLike["post"];
   get?: DiscordRestLike["get"];
 }): DiscordRestLike {
   return {
@@ -384,8 +658,8 @@ function makeFakeRest(handlers: {
       return this;
     },
     destroy() {},
-    get: handlers.get ?? (async () => ({ id: "123456789012345678" })),
-    post: handlers.post,
+    get: handlers?.get ?? (async () => ({ id: "123456789012345678" })),
+    post: handlers?.post ?? (async () => ({ id: "1" })),
   };
 }
 

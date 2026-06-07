@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const stagedClaudeTelegram = join(repoRoot, "plugins/claude/telegram");
+const stagedClaudeDiscord = join(repoRoot, "plugins/claude/discord");
 
 function runVerify(outputDir: string): { exitCode: number; output: string } {
   try {
@@ -36,11 +37,29 @@ async function verifyWithClaudeManifest(mcpServers: Record<string, unknown>) {
   return runVerify(outputDir);
 }
 
+async function verifyWithClaudeDiscordManifest(mcpServers: Record<string, unknown>) {
+  const outputDir = await mkdtemp(join(os.tmpdir(), "stage-plugins-verify-discord-"));
+  await cp(stagedClaudeDiscord, join(outputDir, "claude", "discord"), { recursive: true });
+
+  const manifestPath = join(outputDir, "claude", "discord", ".claude-plugin", "plugin.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
+  manifest.mcpServers = mcpServers;
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
+
+  return runVerify(outputDir);
+}
+
 describe("stage-plugins --verify Claude MCP manifest guards", () => {
   it("passes for the committed claude/telegram staged manifest", () => {
     const result = runVerify(join(repoRoot, "plugins"));
     assert.equal(result.exitCode, 0, result.output);
     assert.match(result.output, /\[OK\] claude\/telegram/);
+  });
+
+  it("passes for the committed claude/discord staged manifest", () => {
+    const result = runVerify(join(repoRoot, "plugins"));
+    assert.equal(result.exitCode, 0, result.output);
+    assert.match(result.output, /\[OK\] claude\/discord/);
   });
 
   it("fails when the staged Claude manifest has no mcpServers entry for the comm", async () => {
@@ -60,5 +79,12 @@ describe("stage-plugins --verify Claude MCP manifest guards", () => {
     assert.notEqual(result.exitCode, 0, "expected verify to fail");
     assert.match(result.output, /\[FAIL\] claude\/telegram/);
     assert.match(result.output, /mcpServers\.telegram/i);
+  });
+
+  it("fails when the staged Claude discord manifest has no mcpServers entry for the comm", async () => {
+    const result = await verifyWithClaudeDiscordManifest({});
+    assert.notEqual(result.exitCode, 0, "expected verify to fail");
+    assert.match(result.output, /\[FAIL\] claude\/discord/);
+    assert.match(result.output, /mcpServers\.discord/i);
   });
 });
