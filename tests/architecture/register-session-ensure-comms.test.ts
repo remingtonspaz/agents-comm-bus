@@ -9,13 +9,21 @@ import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
 import type { EnsureCommsForSession } from "../../core-daemon/runtime/agent-bridge.js";
 import type { AgentId, SessionId } from "../../packages/core-contracts/src/types.js";
 
-function recordingEnsure(): {
+interface EnsureCall {
+  project: string;
+  agent: AgentId;
+  bridgeReady: boolean;
+}
+
+function recordingEnsureWithReadiness(
+  bridgeReady: () => boolean,
+): {
   fn: EnsureCommsForSession;
-  calls: Array<[string, AgentId]>;
+  calls: EnsureCall[];
 } {
-  const calls: Array<[string, AgentId]> = [];
+  const calls: EnsureCall[] = [];
   const fn: EnsureCommsForSession = async (project, agent) => {
-    calls.push([project, agent]);
+    calls.push({ project, agent, bridgeReady: bridgeReady() });
   };
   return { fn, calls };
 }
@@ -23,11 +31,18 @@ function recordingEnsure(): {
 registerTempDirCleanup();
 
 describe("AGE-45 register-session ensureCommsForSession refresh", () => {
-  it("Codex acquired lease calls ensure and preserves response shape", async () => {
+  it("Codex acquired lease calls ensure after connect/trackSession and preserves response shape", async () => {
     const dir = await makeTempDir("acb-age45-codex-acquire-");
     const storage = await openSqliteStorage(join(dir, "storage.db"));
-    const { fn: ensureCommsForSession, calls } = recordingEnsure();
-    const bridge = new CodexBridge({
+    const session = "codex-s1" as SessionId;
+    let bridge!: CodexBridge;
+    const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
+      const tracked = (bridge as unknown as {
+        sessionsByProject: Map<string, Set<SessionId>>;
+      }).sessionsByProject.get("project-a")?.has(session);
+      return tracked === true;
+    });
+    bridge = new CodexBridge({
       storage,
       bus: {} as never,
       pendingInbound: [],
@@ -35,7 +50,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
     });
     try {
       const result = await bridge.registerSession({
-        session: "codex-s1" as SessionId,
+        session,
         project: "project-a",
         connection_id: "codex:conn-a",
       });
@@ -43,7 +58,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(result.ok, true);
       assert.ok(result.capabilities);
       assert.equal(result.reason, undefined);
-      assert.deepEqual(calls, [["project-a", "codex"]]);
+      assert.deepEqual(calls, [{ project: "project-a", agent: "codex", bridgeReady: true }]);
     } finally {
       await storage.close();
     }
@@ -52,15 +67,21 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
   it("Codex held lease refresh returns ok true but still calls ensure", async () => {
     const dir = await makeTempDir("acb-age45-codex-held-");
     const storage = await openSqliteStorage(join(dir, "storage.db"));
-    const { fn: ensureCommsForSession, calls } = recordingEnsure();
-    const bridge = new CodexBridge({
+    const session = "codex-s1" as SessionId;
+    let bridge!: CodexBridge;
+    const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
+      const tracked = (bridge as unknown as {
+        sessionsByProject: Map<string, Set<SessionId>>;
+      }).sessionsByProject.get("project-a")?.has(session);
+      return tracked === true;
+    });
+    bridge = new CodexBridge({
       storage,
       bus: {} as never,
       pendingInbound: [],
       ensureCommsForSession,
     });
     try {
-      const session = "codex-s1" as SessionId;
       const first = await bridge.registerSession({
         session,
         project: "project-a",
@@ -77,20 +98,27 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(held.ok, true);
       assert.equal(held.reason, "codex session lease already held; registration refreshed");
       assert.ok(held.capabilities);
-      assert.deepEqual(calls, [
-        ["project-a", "codex"],
-        ["project-a", "codex"],
-      ]);
+      assert.equal(calls.length, 2);
+      assert.equal(calls[0].bridgeReady, true, "acquired path ensures only after trackSession");
+      assert.equal(calls[1].project, "project-a");
+      assert.equal(calls[1].agent, "codex");
     } finally {
       await storage.close();
     }
   });
 
-  it("Claude acquired lease calls ensure and preserves response shape", async () => {
+  it("Claude acquired lease calls ensure after wake registration and preserves response shape", async () => {
     const dir = await makeTempDir("acb-age45-claude-acquire-");
     const storage = await openSqliteStorage(join(dir, "storage.db"));
-    const { fn: ensureCommsForSession, calls } = recordingEnsure();
-    const bridge = new ClaudeBridge({
+    const session = "claude-s1" as SessionId;
+    let bridge!: ClaudeBridge;
+    const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
+      const wake = (bridge as unknown as {
+        wake: { getForSession: (id: SessionId) => unknown };
+      }).wake.getForSession(session);
+      return wake !== undefined;
+    });
+    bridge = new ClaudeBridge({
       storage,
       bus: {} as never,
       pendingInbound: [],
@@ -98,7 +126,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
     });
     try {
       const result = await bridge.registerSession({
-        session: "claude-s1" as SessionId,
+        session,
         project: "project-a",
         connection_id: "claude:conn-a",
       });
@@ -107,7 +135,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(typeof result.wake_dir, "string");
       assert.ok(result.wake_dir!.length > 0);
       assert.equal(result.reason, undefined);
-      assert.deepEqual(calls, [["project-a", "claude"]]);
+      assert.deepEqual(calls, [{ project: "project-a", agent: "claude", bridgeReady: true }]);
     } finally {
       await storage.close();
     }
@@ -116,15 +144,21 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
   it("Claude held lease returns existing held result but still calls ensure", async () => {
     const dir = await makeTempDir("acb-age45-claude-held-");
     const storage = await openSqliteStorage(join(dir, "storage.db"));
-    const { fn: ensureCommsForSession, calls } = recordingEnsure();
-    const bridge = new ClaudeBridge({
+    const session = "claude-s1" as SessionId;
+    let bridge!: ClaudeBridge;
+    const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
+      const wake = (bridge as unknown as {
+        wake: { getForSession: (id: SessionId) => unknown };
+      }).wake.getForSession(session);
+      return wake !== undefined;
+    });
+    bridge = new ClaudeBridge({
       storage,
       bus: {} as never,
       pendingInbound: [],
       ensureCommsForSession,
     });
     try {
-      const session = "claude-s1" as SessionId;
       const first = await bridge.registerSession({
         session,
         project: "project-a",
@@ -141,10 +175,10 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(held.ok, false);
       assert.equal(held.reason, "same-project claude session lease already held");
       assert.equal(held.wake_dir, undefined);
-      assert.deepEqual(calls, [
-        ["project-a", "claude"],
-        ["project-a", "claude"],
-      ]);
+      assert.equal(calls.length, 2);
+      assert.equal(calls[0].bridgeReady, true, "acquired path ensures only after wake registration");
+      assert.equal(calls[1].project, "project-a");
+      assert.equal(calls[1].agent, "claude");
     } finally {
       await storage.close();
     }

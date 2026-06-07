@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.13";
+var DAEMON_VERSION = "0.2.14";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -7302,7 +7302,6 @@ var ClaudeBridge = class {
       most_recent_inbound_conversation_id: null,
       status: "active"
     });
-    await this.ensureCommsBestEffort(project);
     const acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
@@ -7310,12 +7309,14 @@ var ClaudeBridge = class {
       sessionLeaseOwnerFromParams(params)
     );
     if (!acquired) {
+      await this.ensureCommsBestEffort(project);
       return { ok: false, reason: "same-project claude session lease already held" };
     }
     const registration = this.wake.register({ session, project, wakeDir });
     socket?.once("close", () => {
       void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
     });
+    await this.ensureCommsBestEffort(project);
     return { ok: true, wake_dir: registration.wakeDir };
   }
   async drainInbound(params) {
@@ -8574,7 +8575,6 @@ var CodexBridge = class {
       most_recent_inbound_conversation_id: null,
       status: "active"
     });
-    await this.ensureCommsBestEffort(project);
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
     const leaseOwner = sessionLeaseOwnerFromParams2(params, "codex");
     const acquired = await this.options.storage.acquireSessionLease(
@@ -8598,15 +8598,18 @@ var CodexBridge = class {
           leaseOwner
         );
         if (!reacquired) {
+          await this.ensureCommsBestEffort(project);
           return { ok: false, reason: "same-project codex session lease already held" };
         }
       } else if (existing?.lease_holder_connection_id) {
+        await this.ensureCommsBestEffort(project);
         return {
           ok: true,
           reason: "codex session lease already held; registration refreshed",
           capabilities: this.adapter.capabilities
         };
       } else {
+        await this.ensureCommsBestEffort(project);
         return { ok: false, reason: "same-project codex session lease already held" };
       }
     }
@@ -8616,6 +8619,7 @@ var CodexBridge = class {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
     this.trackSession(project, session);
+    await this.ensureCommsBestEffort(project);
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle = params.manage_app_server_lifecycle === true || params.source === "mcp-server";
     const lease = {

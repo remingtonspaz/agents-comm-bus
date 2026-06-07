@@ -167,9 +167,6 @@ export class CodexBridge {
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
-        // AGE-45: every register attempt with a valid scope must refresh comm adapters,
-        // including held-lease refresh and terminal lease-conflict returns.
-        await this.ensureCommsBestEffort(project);
         const replaceExistingLease = params.replace_existing_lease === true ||
             params.persist_after_disconnect === true;
         const leaseOwner = sessionLeaseOwnerFromParams(params, "codex");
@@ -180,10 +177,12 @@ export class CodexBridge {
                 await this.options.storage.releaseSessionLease(session, existing.lease_holder_connection_id, now);
                 const reacquired = await this.options.storage.acquireSessionLease(session, connectionId, now, leaseOwner);
                 if (!reacquired) {
+                    await this.ensureCommsBestEffort(project);
                     return { ok: false, reason: "same-project codex session lease already held" };
                 }
             }
             else if (existing?.lease_holder_connection_id) {
+                await this.ensureCommsBestEffort(project);
                 return {
                     ok: true,
                     reason: "codex session lease already held; registration refreshed",
@@ -191,6 +190,7 @@ export class CodexBridge {
                 };
             }
             else {
+                await this.ensureCommsBestEffort(project);
                 return { ok: false, reason: "same-project codex session lease already held" };
             }
         }
@@ -200,6 +200,8 @@ export class CodexBridge {
             this.adapter.setAppServerUrl(session, params.app_server_url);
         }
         this.trackSession(project, session);
+        // AGE-38/AGE-45: after connect + trackSession so inbound cannot race ahead of setup.
+        await this.ensureCommsBestEffort(project);
         const persistAfterDisconnect = params.persist_after_disconnect === true;
         const manageAppServerLifecycle = params.manage_app_server_lifecycle === true ||
             params.source === "mcp-server";

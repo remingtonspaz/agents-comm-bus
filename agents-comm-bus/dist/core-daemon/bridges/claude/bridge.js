@@ -186,17 +186,17 @@ export class ClaudeBridge {
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
-        // AGE-45: every register attempt with a valid scope must refresh comm adapters,
-        // including held-lease terminal returns.
-        await this.ensureCommsBestEffort(project);
         const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, sessionLeaseOwnerFromParams(params));
         if (!acquired) {
+            await this.ensureCommsBestEffort(project);
             return { ok: false, reason: "same-project claude session lease already held" };
         }
         const registration = this.wake.register({ session, project, wakeDir });
         socket?.once("close", () => {
             void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
         });
+        // AGE-38/AGE-45: after wake registration + close handler so inbound cannot race ahead.
+        await this.ensureCommsBestEffort(project);
         return { ok: true, wake_dir: registration.wakeDir };
     }
     async drainInbound(params) {
