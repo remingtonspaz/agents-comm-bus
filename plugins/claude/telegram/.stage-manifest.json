@@ -109,7 +109,7 @@
       "type": "manifest"
     },
     {
-      "source": "core-daemon/config.ts (DAEMON_VERSION) + adapters/telegram/version.ts (ADAPTER_VERSION) + .claude-plugin/plugin.json (version)",
+      "source": "core-daemon/config.ts (DAEMON_VERSION) + adapters/*/version.ts (ADAPTER_VERSION) + .claude-plugin/plugin.json (version)",
       "artifact": "plugins/claude/telegram/install-stamp.json",
       "type": "install-stamp"
     },

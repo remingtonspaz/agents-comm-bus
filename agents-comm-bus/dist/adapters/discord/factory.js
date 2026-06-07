@@ -1,0 +1,162 @@
+/**
+ * Discord comm adapter factory + IPC method surface.
+ */
+import { readFile } from "node:fs/promises";
+import { DiscordCommAdapter, probeDiscordIdentity } from "./adapter.js";
+const DISCORD_COMM_ID = "discord";
+export class DiscordCommAdapterFactory {
+    commId = DISCORD_COMM_ID;
+    async resolveCredentials(registration, _env, _context) {
+        const ref = registration.credentials_ref ?? "";
+        if (!ref.startsWith("file:")) {
+            return undefined;
+        }
+        const fromFile = await readJsonDiscordConfig(ref.slice("file:".length));
+        if (!fromFile?.botToken) {
+            return undefined;
+        }
+        return {
+            credentials: {
+                botToken: fromFile.botToken,
+                applicationId: fromFile.applicationId,
+                botUserId: fromFile.botUserId,
+            },
+        };
+    }
+    async probeIdentity(credentials) {
+        const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
+        if (!botToken) {
+            throw new Error("DiscordCommAdapterFactory.probeIdentity: credentials.botToken is required");
+        }
+        const identity = await probeDiscordIdentity(botToken);
+        return {
+            accountId: identity.bot_user_id,
+            accountUsername: identity.bot_username ?? null,
+        };
+    }
+    create(credentials, accountId, _context) {
+        const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
+        if (!botToken) {
+            throw new Error("DiscordCommAdapterFactory.create: credentials.botToken is required");
+        }
+        const applicationId = typeof credentials.applicationId === "string" ? credentials.applicationId : undefined;
+        return new DiscordCommAdapter({
+            botToken,
+            applicationId,
+            accountId,
+        });
+    }
+    ipcMethods(deps) {
+        return new Map([
+            [
+                "discord_send",
+                async (params) => sendDiscord(deps, params),
+            ],
+        ]);
+    }
+}
+export function createCommAdapterFactory() {
+    return new DiscordCommAdapterFactory();
+}
+async function sendDiscord(deps, params) {
+    const chatNativeId = extractChatNativeId(params);
+    const target = chatNativeId === null
+        ? undefined
+        : await targetFromParams(deps.storage, params, chatNativeId);
+    const sent = await deps.bus.send({
+        session: String(params.session ?? "mcp"),
+        comm: DISCORD_COMM_ID,
+        target,
+        payload: { text: String(params.message ?? "") },
+        idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
+    });
+    return { message_id: sent };
+}
+function extractChatNativeId(params) {
+    if (params.channel_id != null)
+        return String(params.channel_id);
+    const target = params.target;
+    if (target && typeof target === "object" && "chat_native_id" in target) {
+        const value = target.chat_native_id;
+        if (value != null)
+            return String(value);
+    }
+    return null;
+}
+async function targetFromParams(storage, params, chatNativeId) {
+    const explicitAccount = extractTargetAccount(params);
+    if (explicitAccount != null) {
+        rejectAccountLabel(explicitAccount);
+        return {
+            comm: DISCORD_COMM_ID,
+            account: explicitAccount,
+            chat_native_id: chatNativeId,
+        };
+    }
+    const session = typeof params.session === "string"
+        ? await storage.getSession(params.session)
+        : null;
+    const scoped = session
+        ? await storage.listAccountRegistrations({
+            project: session.project,
+            comm: DISCORD_COMM_ID,
+            agent: session.agent,
+        })
+        : [];
+    const registration = scoped[0] ?? (await storage.listAccountRegistrations({ comm: DISCORD_COMM_ID }))[0];
+    if (!registration) {
+        throw new Error("no Discord account registration exists; run agents-comm account-add first");
+    }
+    return {
+        comm: DISCORD_COMM_ID,
+        account: registration.bot_user_id,
+        chat_native_id: chatNativeId,
+    };
+}
+function extractTargetAccount(params) {
+    const target = params.target;
+    if (target && typeof target === "object" && "account" in target) {
+        const value = target.account;
+        if (value != null)
+            return String(value);
+    }
+    return undefined;
+}
+function rejectAccountLabel(account) {
+    if (!/^\d+$/.test(account)) {
+        throw new Error(`target.account "${account}" is not a registered bot id — labels like "main" are not accepted; ` +
+            `use the concrete bot_user_id from account-add or list_conversations`);
+    }
+}
+async function readJsonDiscordConfig(filePath) {
+    let raw;
+    try {
+        raw = await readFile(filePath, "utf8");
+    }
+    catch (error) {
+        const code = error?.code;
+        if (code === "ENOENT") {
+            throw new Error(`agents-comm-bus discord: credentials file not found at ${filePath} (credentials_ref file:...)`);
+        }
+        throw error;
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch {
+        throw new Error(`agents-comm-bus discord: malformed JSON in credentials file ${filePath}`);
+    }
+    if (!parsed || typeof parsed !== "object") {
+        throw new Error(`agents-comm-bus discord: credentials file ${filePath} must be a JSON object`);
+    }
+    const record = parsed;
+    const botToken = typeof record.bot_token === "string" ? record.bot_token : undefined;
+    const applicationId = typeof record.application_id === "string" ? record.application_id : undefined;
+    const botUserId = typeof record.bot_user_id === "string" ? record.bot_user_id : undefined;
+    if (!botToken && !applicationId && !botUserId) {
+        return undefined;
+    }
+    return { botToken, applicationId, botUserId };
+}
+//# sourceMappingURL=factory.js.map
