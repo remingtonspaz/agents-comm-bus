@@ -75,7 +75,7 @@ export class DiscordCommAdapterFactory implements CommAdapterFactory {
   create(
     credentials: Record<string, unknown>,
     accountId: AccountId,
-    _context?: CommAdapterCreateContext,
+    context?: CommAdapterCreateContext,
   ): CommAdapter {
     const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
     if (!botToken) {
@@ -91,6 +91,7 @@ export class DiscordCommAdapterFactory implements CommAdapterFactory {
       applicationId,
       accountId,
       allowedUserIds: allowed,
+      attachmentBlobStore: context?.blobs,
     });
   }
 
@@ -98,7 +99,11 @@ export class DiscordCommAdapterFactory implements CommAdapterFactory {
     return new Map<string, IpcMethodHandler>([
       [
         "discord_send",
-        async (params: Record<string, unknown>) => sendDiscord(deps, params),
+        async (params: Record<string, unknown>) => sendDiscord(deps, params, false),
+      ],
+      [
+        "discord_send_image",
+        async (params: Record<string, unknown>) => sendDiscord(deps, params, true),
       ],
     ]);
   }
@@ -111,6 +116,7 @@ export function createCommAdapterFactory(): CommAdapterFactory {
 async function sendDiscord(
   deps: CommIpcDeps,
   params: Record<string, unknown>,
+  image: boolean,
 ): Promise<{ message_id: string }> {
   const chatNativeId = extractChatNativeId(params);
   const target = chatNativeId === null
@@ -120,7 +126,19 @@ async function sendDiscord(
     session: String(params.session ?? "mcp") as SessionId,
     comm: DISCORD_COMM_ID,
     target,
-    payload: { text: String(params.message ?? "") },
+    payload: image
+      ? {
+          text: typeof params.caption === "string" ? params.caption : undefined,
+          attachments: [
+            {
+              filename: String(params.path),
+              local_path: String(params.path),
+              mime: "application/octet-stream",
+              size: 0,
+            },
+          ],
+        }
+      : { text: String(params.message ?? "") },
     idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
   });
   return { message_id: sent };

@@ -35,7 +35,7 @@ export class DiscordCommAdapterFactory {
             accountUsername: identity.bot_username ?? null,
         };
     }
-    create(credentials, accountId, _context) {
+    create(credentials, accountId, context) {
         const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
         if (!botToken) {
             throw new Error("DiscordCommAdapterFactory.create: credentials.botToken is required");
@@ -49,13 +49,18 @@ export class DiscordCommAdapterFactory {
             applicationId,
             accountId,
             allowedUserIds: allowed,
+            attachmentBlobStore: context?.blobs,
         });
     }
     ipcMethods(deps) {
         return new Map([
             [
                 "discord_send",
-                async (params) => sendDiscord(deps, params),
+                async (params) => sendDiscord(deps, params, false),
+            ],
+            [
+                "discord_send_image",
+                async (params) => sendDiscord(deps, params, true),
             ],
         ]);
     }
@@ -63,7 +68,7 @@ export class DiscordCommAdapterFactory {
 export function createCommAdapterFactory() {
     return new DiscordCommAdapterFactory();
 }
-async function sendDiscord(deps, params) {
+async function sendDiscord(deps, params, image) {
     const chatNativeId = extractChatNativeId(params);
     const target = chatNativeId === null
         ? undefined
@@ -72,7 +77,19 @@ async function sendDiscord(deps, params) {
         session: String(params.session ?? "mcp"),
         comm: DISCORD_COMM_ID,
         target,
-        payload: { text: String(params.message ?? "") },
+        payload: image
+            ? {
+                text: typeof params.caption === "string" ? params.caption : undefined,
+                attachments: [
+                    {
+                        filename: String(params.path),
+                        local_path: String(params.path),
+                        mime: "application/octet-stream",
+                        size: 0,
+                    },
+                ],
+            }
+            : { text: String(params.message ?? "") },
         idempotencyKey: typeof params.idempotencyKey === "string" ? params.idempotencyKey : undefined,
     });
     return { message_id: sent };

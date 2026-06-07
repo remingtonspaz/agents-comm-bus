@@ -11,5 +11,5 @@ export interface DiscordInboundBuildContext {
 /**
  * Map a Discord MESSAGE_CREATE payload to a core bus Message (no adapter filtering).
  */
-export declare function buildMessageFromDiscordCreate(raw: APIMessage, context: DiscordInboundBuildContext): Message | null;
+export declare function buildMessageFromDiscordCreate(raw: APIMessage, context: DiscordInboundBuildContext, attachmentsOverride?: Attachment[]): Message | null;
 //# sourceMappingURL=normalize.d.ts.map

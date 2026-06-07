@@ -14,10 +14,10 @@ export function normalizeDiscordAttachments(raw) {
 /**
  * Map a Discord MESSAGE_CREATE payload to a core bus Message (no adapter filtering).
  */
-export function buildMessageFromDiscordCreate(raw, context) {
+export function buildMessageFromDiscordCreate(raw, context, attachmentsOverride) {
     const fromId = raw.author?.id == null ? null : String(raw.author.id);
     const text = raw.content ?? undefined;
-    const attachments = normalizeDiscordAttachments(raw);
+    const attachments = attachmentsOverride ?? normalizeDiscordAttachments(raw);
     if (!text && attachments.length === 0)
         return null;
     const threadParent = context.threadParentChannelId;

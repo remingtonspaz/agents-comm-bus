@@ -35,10 +35,11 @@ export interface DiscordInboundBuildContext {
 export function buildMessageFromDiscordCreate(
   raw: APIMessage,
   context: DiscordInboundBuildContext,
+  attachmentsOverride?: Attachment[],
 ): Message | null {
   const fromId = raw.author?.id == null ? null : String(raw.author.id);
   const text = raw.content ?? undefined;
-  const attachments = normalizeDiscordAttachments(raw);
+  const attachments = attachmentsOverride ?? normalizeDiscordAttachments(raw);
   if (!text && attachments.length === 0) return null;
 
   const threadParent = context.threadParentChannelId;

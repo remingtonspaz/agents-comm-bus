@@ -1,9 +1,11 @@
-import type { AccountId, ChatRef, CommConnectionState, CommAdapter, FailureClassification, FilterDropEvent, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
+import { type RawFile } from "@discordjs/rest";
+import type { AccountId, BlobStore, ChatRef, CommConnectionState, CommAdapter, FailureClassification, FilterDropEvent, Message, OutboundPayload, SendResult, CommId } from "agents-comm-bus-core";
 import { type DiscordGatewayLike } from "./gateway.js";
 /** Injectable REST surface for tests and production. */
 export interface DiscordRestLike {
     post(route: `/${string}`, options: {
         body: Record<string, unknown>;
+        files?: RawFile[];
     }): Promise<unknown>;
     get(route: `/${string}`): Promise<unknown>;
     setToken(token: string): this;
@@ -24,6 +26,8 @@ export interface DiscordCommAdapterOptions {
      */
     filterTrace?: boolean;
     log?: (message: string) => void;
+    attachmentBlobStore?: BlobStore;
+    fetch?: typeof fetch;
 }
 export declare class DiscordCommAdapter implements CommAdapter {
     private readonly options;
@@ -44,6 +48,7 @@ export declare class DiscordCommAdapter implements CommAdapter {
     private gateway;
     private botUserId;
     private rateLimited;
+    private readonly fetchImpl;
     constructor(options: DiscordCommAdapterOptions);
     get allowedSenderIds(): readonly string[];
     updateAllowedSenderIds(ids: readonly string[]): void;
@@ -62,13 +67,15 @@ export declare class DiscordCommAdapter implements CommAdapter {
     };
     classifyFailure(error: unknown): FailureClassification;
     private handleDiscordMessageCreate;
+    private enrichAttachments;
+    private retrieveAttachment;
     private rememberSent;
     private requireRest;
     private emitState;
     private emitFilterDrop;
     private traceFilterPass;
 }
-export declare function discordMessageBody(payload: OutboundPayload): Record<string, unknown>;
+export declare function discordMessageBody(payload: OutboundPayload, idempotencyKey?: string): Record<string, unknown>;
 export declare function probeDiscordIdentity(botToken: string, rest?: DiscordRestLike): Promise<{
     bot_user_id: string;
     bot_username?: string;

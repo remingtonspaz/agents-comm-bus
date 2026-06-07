@@ -1,8 +1,11 @@
+import { readFile } from "node:fs/promises";
 import { REST, RateLimitError } from "@discordjs/rest";
 import { Routes } from "discord-api-types/v10";
 import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { DiscordGateway } from "./gateway.js";
-import { buildMessageFromDiscordCreate } from "./normalize.js";
+import { htmlToDiscordMarkdown } from "./html.js";
+import { discordNonceFromIdempotencyKey } from "./nonce.js";
+import { buildMessageFromDiscordCreate, normalizeDiscordAttachments } from "./normalize.js";
 const EMPTY_ALLOWED_MENTIONS = { parse: [] };
 const IDEMPOTENCY_CACHE_MAX = 256;
 export class DiscordCommAdapter {
@@ -24,6 +27,7 @@ export class DiscordCommAdapter {
     gateway = null;
     botUserId = null;
     rateLimited = false;
+    fetchImpl;
     constructor(options) {
         this.options = options;
         this.accountId = options.accountId;
@@ -32,6 +36,7 @@ export class DiscordCommAdapter {
         this.allowedUserIds = new Set(options.allowedUserIds ?? []);
         this.filterTrace = options.filterTrace ?? process.env.AGENTS_COMM_BUS_FILTER_TRACE === "1";
         this.log = options.log ?? ((message) => console.error(message));
+        this.fetchImpl = options.fetch ?? fetch;
     }
     get allowedSenderIds() {
         return Array.from(this.allowedUserIds);
@@ -103,11 +108,15 @@ export class DiscordCommAdapter {
         if (cached)
             return cached;
         const rest = this.requireRest();
-        const body = discordMessageBody(payload);
+        const body = discordMessageBody(payload, idempotencyKey);
+        const files = await discordOutboundFiles(payload);
         let retried429 = false;
         while (true) {
             try {
-                const response = await rest.post(Routes.channelMessages(target.chat_native_id), { body });
+                const response = await rest.post(Routes.channelMessages(target.chat_native_id), {
+                    body,
+                    ...(files.length > 0 ? { files } : {}),
+                });
                 const platformMessageId = String(response.id);
                 const result = {
                     platform_message_id: platformMessageId,
@@ -170,16 +179,56 @@ export class DiscordCommAdapter {
         if (!botUserId)
             throw new Error("Discord adapter has no bot identity");
         const threadParent = this.gateway?.threadParentChannelId(String(raw.channel_id));
+        const baseAttachments = normalizeDiscordAttachments(raw);
+        const attachments = await this.enrichAttachments(baseAttachments);
         const message = buildMessageFromDiscordCreate(raw, {
             commId: this.id,
             botUserId,
             accountId: this.accountId,
             threadParentChannelId: threadParent,
             now: this.now,
-        });
+        }, attachments);
         if (!message)
             return;
         await this.inboundHandler(message);
+    }
+    async enrichAttachments(attachments) {
+        if (attachments.length === 0 || !this.options.attachmentBlobStore) {
+            return attachments;
+        }
+        return Promise.all(attachments.map((attachment) => this.retrieveAttachment(attachment)));
+    }
+    async retrieveAttachment(attachment) {
+        const url = attachment.platform_metadata?.url;
+        if (typeof url !== "string" || url.length === 0)
+            return attachment;
+        try {
+            const response = await this.fetchImpl(url);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const content = new Uint8Array(await response.arrayBuffer());
+            const ref = await this.options.attachmentBlobStore.put(content, attachment.mime);
+            return {
+                ...attachment,
+                size: attachment.size > 0 ? attachment.size : ref.size,
+                blob_hash: ref.hash,
+                local_path: this.options.attachmentBlobStore.pathFor(ref),
+                platform_metadata: {
+                    ...attachment.platform_metadata,
+                    retrieved_at: this.now(),
+                },
+            };
+        }
+        catch (error) {
+            return {
+                ...attachment,
+                platform_metadata: {
+                    ...attachment.platform_metadata,
+                    retrieval_error: error instanceof Error ? error.message : String(error),
+                },
+            };
+        }
     }
     rememberSent(idempotencyKey, result) {
         if (this.sentByKey.size >= IDEMPOTENCY_CACHE_MAX) {
@@ -222,9 +271,13 @@ export class DiscordCommAdapter {
             `sender=${senderId ?? "<none>"} (allowlist size=${this.allowedUserIds.size})`);
     }
 }
-export function discordMessageBody(payload) {
+export function discordMessageBody(payload, idempotencyKey) {
+    let content = payload.text ?? "";
+    if (payload.format === "html") {
+        content = htmlToDiscordMarkdown(content);
+    }
     const body = {
-        content: payload.text ?? "",
+        content,
         allowed_mentions: EMPTY_ALLOWED_MENTIONS,
     };
     if (payload.reply_to != null) {
@@ -232,7 +285,25 @@ export function discordMessageBody(payload) {
             message_id: String(payload.reply_to).replace(/^discord:/, ""),
         };
     }
+    if (idempotencyKey) {
+        body.nonce = discordNonceFromIdempotencyKey(idempotencyKey);
+        body.enforce_nonce = true;
+    }
     return body;
+}
+async function discordOutboundFiles(payload) {
+    const files = [];
+    for (const attachment of payload.attachments ?? []) {
+        if (!attachment.local_path)
+            continue;
+        const data = await readFile(attachment.local_path);
+        files.push({
+            name: attachment.filename || "attachment",
+            data,
+            contentType: attachment.mime || undefined,
+        });
+    }
+    return files;
 }
 export async function probeDiscordIdentity(botToken, rest) {
     const client = rest ?? new REST({ version: "10" }).setToken(botToken);
