@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import { REST, RateLimitError, type RawFile } from "@discordjs/rest";
 import { Routes } from "discord-api-types/v10";
@@ -374,13 +375,25 @@ export function discordMessageBody(
   return body;
 }
 
+/**
+ * Discord upload names must not leak caller local paths to chat recipients.
+ * win32.basename treats both \\ and / as separators, so IPC paths from either
+ * platform basename correctly on any host.
+ */
+export function uploadFilenameFromLocalPath(localPath: string): string {
+  const name = path.win32.basename(localPath);
+  if (name && name !== "." && name !== "..") return name;
+  const posixName = path.posix.basename(localPath);
+  return posixName && posixName !== "." && posixName !== ".." ? posixName : "attachment";
+}
+
 async function discordOutboundFiles(payload: OutboundPayload): Promise<RawFile[]> {
   const files: RawFile[] = [];
   for (const attachment of payload.attachments ?? []) {
     if (!attachment.local_path) continue;
     const data = await readFile(attachment.local_path);
     files.push({
-      name: attachment.filename || "attachment",
+      name: attachment.filename ?? uploadFilenameFromLocalPath(attachment.local_path),
       data,
       contentType: attachment.mime || undefined,
     });

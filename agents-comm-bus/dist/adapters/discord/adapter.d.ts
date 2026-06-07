@@ -76,6 +76,12 @@ export declare class DiscordCommAdapter implements CommAdapter {
     private traceFilterPass;
 }
 export declare function discordMessageBody(payload: OutboundPayload, idempotencyKey?: string): Record<string, unknown>;
+/**
+ * Discord upload names must not leak caller local paths to chat recipients.
+ * win32.basename treats both \\ and / as separators, so IPC paths from either
+ * platform basename correctly on any host.
+ */
+export declare function uploadFilenameFromLocalPath(localPath: string): string;
 export declare function probeDiscordIdentity(botToken: string, rest?: DiscordRestLike): Promise<{
     bot_user_id: string;
     bot_username?: string;

@@ -2,7 +2,7 @@
  * Discord comm adapter factory + IPC method surface.
  */
 import { readFile } from "node:fs/promises";
-import { DiscordCommAdapter, probeDiscordIdentity } from "./adapter.js";
+import { DiscordCommAdapter, probeDiscordIdentity, uploadFilenameFromLocalPath } from "./adapter.js";
 const DISCORD_COMM_ID = "discord";
 export class DiscordCommAdapterFactory {
     commId = DISCORD_COMM_ID;
@@ -73,6 +73,7 @@ async function sendDiscord(deps, params, image) {
     const target = chatNativeId === null
         ? undefined
         : await targetFromParams(deps.storage, params, chatNativeId);
+    const localPath = image ? String(params.path) : null;
     const sent = await deps.bus.send({
         session: String(params.session ?? "mcp"),
         comm: DISCORD_COMM_ID,
@@ -82,8 +83,8 @@ async function sendDiscord(deps, params, image) {
                 text: typeof params.caption === "string" ? params.caption : undefined,
                 attachments: [
                     {
-                        filename: String(params.path),
-                        local_path: String(params.path),
+                        filename: uploadFilenameFromLocalPath(localPath),
+                        local_path: localPath,
                         mime: "application/octet-stream",
                         size: 0,
                     },

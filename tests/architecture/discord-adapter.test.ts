@@ -8,6 +8,7 @@ import { RateLimitError } from "@discordjs/rest";
 import {
   DiscordCommAdapter,
   discordMessageBody,
+  uploadFilenameFromLocalPath,
   type DiscordRestLike,
 } from "../../adapters/discord/adapter.js";
 import { htmlToDiscordMarkdown } from "../../adapters/discord/html.js";
@@ -16,7 +17,6 @@ import type { DiscordGatewayLike } from "../../adapters/discord/gateway.js";
 import { GatewayDispatchEvents, type APIMessage, type GatewayDispatchPayload } from "discord-api-types/v10";
 import type { BlobRef, BlobStore, Message } from "../../packages/core-contracts/src/index.js";
 import type { CommConnectionState } from "../../packages/core-contracts/src/index.js";
-import type { GatewayDispatchPayload } from "discord-api-types/v10";
 import { DiscordCommAdapterFactory } from "../../adapters/discord/factory.js";
 import { writeTokenFile } from "../../core-daemon/cli/token-file.js";
 import type { SendRequest } from "../../core-daemon/bus.js";
@@ -364,6 +364,7 @@ describe("discord_send IPC handler", () => {
     });
 
     assert.equal(bus.lastSend?.payload?.attachments?.[0]?.local_path, "D:\\tmp\\diagram.png");
+    assert.equal(bus.lastSend?.payload?.attachments?.[0]?.filename, "diagram.png");
     assert.equal(bus.lastSend?.payload?.text, "see attached");
   });
 
@@ -448,6 +449,97 @@ describe("Discord send nonce mapping", () => {
 });
 
 describe("DiscordCommAdapter outbound attachments", () => {
+  it("uploadFilenameFromLocalPath strips Windows-style paths to basename only", () => {
+    assert.equal(uploadFilenameFromLocalPath("D:\\tmp\\diagram.png"), "diagram.png");
+    assert.equal(uploadFilenameFromLocalPath("D:/tmp/mixed/shot.png"), "shot.png");
+  });
+
+  it("multipart upload uses basename only, not the full caller local path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-discord-basename-"));
+    const filePath = join(dir, "diagram.png");
+    await writeFile(filePath, "png bytes");
+
+    const posts: Array<{ files?: Array<{ name: string }> }> = [];
+    const rest = makeFakeRest({
+      post: async (_route, { files }) => {
+        posts.push({ files: files?.map((file) => ({ name: file.name })) });
+        return { id: "basename-1" };
+      },
+    });
+    const adapter = new DiscordCommAdapter({
+      botToken: "test",
+      accountId: "123456789012345678" as never,
+      rest,
+      gateway: new NoopDiscordGateway(),
+    });
+    await adapter.start();
+
+    await adapter.send(
+      {
+        comm: DISCORD,
+        account: "123456789012345678" as never,
+        chat_native_id: "chan-1",
+      },
+      {
+        attachments: [
+          {
+            filename: uploadFilenameFromLocalPath("D:\\tmp\\diagram.png"),
+            local_path: filePath,
+            mime: "image/png",
+            size: 8,
+          },
+        ],
+      },
+      "basename-idem",
+    );
+
+    assert.equal(posts[0]!.files?.[0]?.name, "diagram.png");
+    assert.doesNotMatch(String(posts[0]!.files?.[0]?.name), /[\\/]/);
+    assert.notEqual(posts[0]!.files?.[0]?.name, filePath);
+  });
+
+  it("derives multipart basename from local_path when filename is omitted", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "acb-discord-derived-basename-"));
+    const filePath = join(dir, "shot.png");
+    await writeFile(filePath, "png bytes");
+
+    const posts: Array<{ files?: Array<{ name: string }> }> = [];
+    const rest = makeFakeRest({
+      post: async (_route, { files }) => {
+        posts.push({ files: files?.map((file) => ({ name: file.name })) });
+        return { id: "derived-1" };
+      },
+    });
+    const adapter = new DiscordCommAdapter({
+      botToken: "test",
+      accountId: "123456789012345678" as never,
+      rest,
+      gateway: new NoopDiscordGateway(),
+    });
+    await adapter.start();
+
+    await adapter.send(
+      {
+        comm: DISCORD,
+        account: "123456789012345678" as never,
+        chat_native_id: "chan-1",
+      },
+      {
+        attachments: [
+          {
+            local_path: filePath,
+            mime: "image/png",
+            size: 8,
+          },
+        ],
+      },
+      "derived-idem",
+    );
+
+    assert.equal(posts[0]!.files?.[0]?.name, "shot.png");
+    assert.doesNotMatch(String(posts[0]!.files?.[0]?.name), /[\\/]/);
+  });
+
   it("uploads attachments via multipart while keeping allowed_mentions disabled", async () => {
     const dir = await mkdtemp(join(tmpdir(), "acb-discord-out-attach-"));
     const filePath = join(dir, "report.txt");

@@ -21,7 +21,7 @@ import type {
   ResolveCredentialsContext,
 } from "../../core-daemon/runtime/comm-factory.js";
 import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
-import { DiscordCommAdapter, probeDiscordIdentity } from "./adapter.js";
+import { DiscordCommAdapter, probeDiscordIdentity, uploadFilenameFromLocalPath } from "./adapter.js";
 
 const DISCORD_COMM_ID = "discord" as CommId;
 
@@ -122,6 +122,7 @@ async function sendDiscord(
   const target = chatNativeId === null
     ? undefined
     : await targetFromParams(deps.storage, params, chatNativeId);
+  const localPath = image ? String(params.path) : null;
   const sent = await deps.bus.send({
     session: String(params.session ?? "mcp") as SessionId,
     comm: DISCORD_COMM_ID,
@@ -131,8 +132,8 @@ async function sendDiscord(
           text: typeof params.caption === "string" ? params.caption : undefined,
           attachments: [
             {
-              filename: String(params.path),
-              local_path: String(params.path),
+              filename: uploadFilenameFromLocalPath(localPath!),
+              local_path: localPath!,
               mime: "application/octet-stream",
               size: 0,
             },
