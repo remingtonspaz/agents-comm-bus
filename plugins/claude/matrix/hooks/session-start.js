@@ -5,12 +5,33 @@ import { createRequire as __acbCreateRequire } from 'module'; const require = __
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os2 from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // dist/core-daemon/bridges/claude/wake.js
 import os from "node:os";
+import path2 from "node:path";
+
+// dist/core-daemon/project-path.js
 import path from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path.resolve(project);
+  if (path.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path.sep || path.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
+// dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
   for (let i = 0; i < projectPath.length; i += 1) {
@@ -20,16 +41,16 @@ function hashProjectKey(projectPath) {
   return hash.toString(16).padStart(8, "0");
 }
 function claudeWakeDirForProject(projectPath, homeDir = os.homedir()) {
-  const resolved = path.resolve(projectPath);
-  const basename = path.basename(resolved) || "project";
-  return path.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(resolved)}`);
+  const canonical = normalizeProjectPath(projectPath);
+  const basename = path2.basename(canonical) || "project";
+  return path2.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
 }
 
 // ../hosts/claude/hooks/wake-support.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path2.dirname(__filename);
+var __dirname = path3.dirname(__filename);
 function resolveProjectPath() {
-  return path2.resolve(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
+  return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
 function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
   return claudeWakeDirForProject(projectPath);
@@ -45,7 +66,7 @@ function isPidAlive(pid) {
 }
 function readWatcherPid(wakeDir) {
   try {
-    const raw = fs.readFileSync(path2.join(wakeDir, "watcher.pid"), "utf8").trim();
+    const raw = fs.readFileSync(path3.join(wakeDir, "watcher.pid"), "utf8").trim();
     const pid = Number.parseInt(raw, 10);
     return Number.isInteger(pid) ? pid : null;
   } catch {
@@ -127,7 +148,7 @@ function buildStartProcessCommand(watcherScript, watcherArgs) {
   return `Start-Process -FilePath 'powershell' -ArgumentList ${argList} -WindowStyle Hidden -PassThru | Select-Object -ExpandProperty Id`;
 }
 function tryAcquireWatcherLock(wakeDir, log2) {
-  const lockFile = path2.join(wakeDir, "watcher.lock");
+  const lockFile = path3.join(wakeDir, "watcher.lock");
   try {
     fs.writeFileSync(lockFile, `${process.pid}
 `, { flag: "wx" });
@@ -164,8 +185,8 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, pid: existingPid, wakeDir, reason: "already_running" };
   }
   const watcherScript = [
-    path2.resolve(__dirname, "..", "scripts", "enter-watcher.ps1"),
-    path2.resolve(__dirname, "..", "..", "..", "scripts", "enter-watcher.ps1")
+    path3.resolve(__dirname, "..", "scripts", "enter-watcher.ps1"),
+    path3.resolve(__dirname, "..", "..", "..", "scripts", "enter-watcher.ps1")
   ].find((candidate) => fs.existsSync(candidate));
   if (!watcherScript) {
     log2("ERROR: Watcher script not found (enter-watcher.ps1) in any known layout");
@@ -202,7 +223,7 @@ function ensureClaudeWakeWatcher(options = {}) {
       log2(`Watcher spawn returned invalid pid: ${stdout.trim()}`);
       return { started: false, wakeDir, reason: "invalid_pid" };
     }
-    fs.writeFileSync(path2.join(wakeDir, "watcher.pid"), `${watcherPid}
+    fs.writeFileSync(path3.join(wakeDir, "watcher.pid"), `${watcherPid}
 `, "utf8");
     log2(
       `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, target=${cmdInfo?.hwnd ? `hwnd:${cmdInfo.hwnd}` : cmdInfo?.pid ? `pid:${cmdInfo.pid}` : "search"})`
@@ -212,7 +233,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     log2(`Watcher spawn error: ${error.message}`);
     try {
       fs.appendFileSync(
-        path2.join(wakeDir, "debug.log"),
+        path3.join(wakeDir, "debug.log"),
         `[${(/* @__PURE__ */ new Date()).toISOString()}] wake-support spawn error: ${error.message}
 `
       );

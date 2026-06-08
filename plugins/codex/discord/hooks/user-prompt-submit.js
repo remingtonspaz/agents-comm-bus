@@ -3662,7 +3662,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.14";
+var DAEMON_VERSION = "0.2.15";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4703,6 +4703,25 @@ async function entryEnsures(options) {
   };
 }
 
+// dist/core-daemon/project-path.js
+import path10 from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path10.resolve(project);
+  if (path10.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path10.sep || path10.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path10.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
 // ../hosts/codex/hooks/user-prompt-submit.js
 var CLIENT_VERSION = "codex-hook-phase3";
 function stableSessionId(hookInput) {
@@ -4791,7 +4810,7 @@ ${lines.join("\n")}
 async function main() {
   const hookInput = await readStdinJson();
   const session = stableSessionId(hookInput);
-  const project = process.cwd();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "hosts/codex/hooks/user-prompt-submit.js",
     agent: "codex",

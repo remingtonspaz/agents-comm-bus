@@ -6848,8 +6848,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path10) {
-      let input = path10;
+    function removeDotSegments(path11) {
+      let input = path11;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -7101,8 +7101,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path10, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path10 && path10 !== "/" ? path10 : void 0;
+        const [path11, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path11 && path11 !== "/" ? path11 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -16459,10 +16459,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path10) {
-  if (!path10)
+function getElementAtPath(obj, path11) {
+  if (!path11)
     return obj;
-  return path10.reduce((acc, key) => acc?.[key], obj);
+  return path11.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -16871,11 +16871,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path10, issues) {
+function prefixIssues(path11, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path10);
+    iss.path.unshift(path11);
     return iss;
   });
 }
@@ -17022,16 +17022,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path10 = []) => {
+  const processError = (error3, path11 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -24795,7 +24795,7 @@ import path3 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.14";
+var DAEMON_VERSION = "0.2.15";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -26298,6 +26298,25 @@ function installShutdownHandlers(close) {
   });
 }
 
+// ../agents-comm-bus/dist/core-daemon/project-path.js
+import path10 from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path10.resolve(project);
+  if (path10.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path10.sep || path10.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path10.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
 // codex/codex-mcp-shim.js
 var persistentRegistration = null;
 var codexRuntime = {
@@ -26499,18 +26518,19 @@ async function startPersistentCodexRegistration() {
   }
   if (persistentRegistration) return;
   const session = sessionInUse();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "agents-comm-mcp-shim/session-registration",
     agent: "codex",
-    project: process.cwd(),
+    project,
     session
   };
   const ownerProcess = discoverCodexOwnerProcess(appServerUrl);
   const registerParams = {
     agent: "codex",
     session,
-    project: process.cwd(),
-    cwd: process.cwd(),
+    project,
+    cwd: project,
     app_server_url: appServerUrl,
     owner_process_pid: ownerProcess.pid,
     owner_process_label: ownerProcess.label,

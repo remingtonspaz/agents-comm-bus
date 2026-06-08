@@ -3653,7 +3653,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os2 from "node:os";
-import path10 from "node:path";
+import path11 from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -3668,7 +3668,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.14";
+var DAEMON_VERSION = "0.2.15";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4709,6 +4709,25 @@ async function entryEnsures(options) {
   };
 }
 
+// dist/core-daemon/project-path.js
+import path10 from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path10.resolve(project);
+  if (path10.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path10.sep || path10.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path10.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
 // ../hosts/codex/hooks/session-start.js
 var CLIENT_VERSION = "codex-session-start-bootstrap";
 var RESTART_GUARD_MS = 6e4;
@@ -4719,11 +4738,11 @@ var watchdog = setTimeout(() => {
   process.exit(0);
 }, HOOK_TIMEOUT_MS);
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path10.dirname(__filename);
+var __dirname = path11.dirname(__filename);
 var bootstrapperPath = [
-  path10.resolve(__dirname, "..", "scripts", "bootstrap-codex-session.ps1"),
-  path10.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1")
-].find((candidate) => fs.existsSync(candidate)) ?? path10.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1");
+  path11.resolve(__dirname, "..", "scripts", "bootstrap-codex-session.ps1"),
+  path11.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1")
+].find((candidate) => fs.existsSync(candidate)) ?? path11.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1");
 function stableSessionId(hookInput) {
   if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
     return process.env.AGENTS_COMM_BUS_SESSION_ID;
@@ -4804,11 +4823,11 @@ function closeIpc(ipc) {
   }
 }
 function stateRoot2() {
-  return path10.join(os2.homedir(), ".agents-comm-bus", "codex-bootstrapper");
+  return path11.join(os2.homedir(), ".agents-comm-bus", "codex-bootstrapper");
 }
 function guardPath(project, session) {
   const hash = crypto.createHash("sha256").update(`${project}:${session}`).digest("hex").slice(0, 24);
-  return path10.join(stateRoot2(), "session-start", `${hash}.json`);
+  return path11.join(stateRoot2(), "session-start", `${hash}.json`);
 }
 function recentRestartAlreadyScheduled(project, session) {
   const file = guardPath(project, session);
@@ -4821,7 +4840,7 @@ function recentRestartAlreadyScheduled(project, session) {
 }
 function writeRestartMarker(project, session, status) {
   const file = guardPath(project, session);
-  fs.mkdirSync(path10.dirname(file), { recursive: true });
+  fs.mkdirSync(path11.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({
     project,
     session,
@@ -4874,7 +4893,7 @@ async function main() {
   const hookInput = await readStdinJson();
   const threadId = codexThreadId(hookInput);
   const session = stableSessionId(hookInput);
-  const project = process.cwd();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "hosts/codex/hooks/session-start.js",
     agent: "codex",

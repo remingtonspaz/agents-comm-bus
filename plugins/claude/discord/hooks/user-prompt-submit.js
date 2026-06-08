@@ -3662,7 +3662,7 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.14";
+var DAEMON_VERSION = "0.2.15";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4707,12 +4707,33 @@ async function entryEnsures(options) {
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os3 from "node:os";
-import path11 from "node:path";
+import path12 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // dist/core-daemon/bridges/claude/wake.js
 import os2 from "node:os";
+import path11 from "node:path";
+
+// dist/core-daemon/project-path.js
 import path10 from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path10.resolve(project);
+  if (path10.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path10.sep || path10.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path10.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
+// dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
   for (let i = 0; i < projectPath.length; i += 1) {
@@ -4722,16 +4743,16 @@ function hashProjectKey(projectPath) {
   return hash.toString(16).padStart(8, "0");
 }
 function claudeWakeDirForProject(projectPath, homeDir = os2.homedir()) {
-  const resolved = path10.resolve(projectPath);
-  const basename = path10.basename(resolved) || "project";
-  return path10.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(resolved)}`);
+  const canonical = normalizeProjectPath(projectPath);
+  const basename = path11.basename(canonical) || "project";
+  return path11.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
 }
 
 // ../hosts/claude/hooks/wake-support.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path11.dirname(__filename);
+var __dirname = path12.dirname(__filename);
 function resolveProjectPath() {
-  return path11.resolve(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
+  return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
 function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
   return claudeWakeDirForProject(projectPath);
@@ -4747,7 +4768,7 @@ function isPidAlive(pid) {
 }
 function readWatcherPid(wakeDir) {
   try {
-    const raw = fs.readFileSync(path11.join(wakeDir, "watcher.pid"), "utf8").trim();
+    const raw = fs.readFileSync(path12.join(wakeDir, "watcher.pid"), "utf8").trim();
     const pid = Number.parseInt(raw, 10);
     return Number.isInteger(pid) ? pid : null;
   } catch {
@@ -4829,7 +4850,7 @@ function buildStartProcessCommand(watcherScript, watcherArgs) {
   return `Start-Process -FilePath 'powershell' -ArgumentList ${argList} -WindowStyle Hidden -PassThru | Select-Object -ExpandProperty Id`;
 }
 function tryAcquireWatcherLock(wakeDir, log) {
-  const lockFile = path11.join(wakeDir, "watcher.lock");
+  const lockFile = path12.join(wakeDir, "watcher.lock");
   try {
     fs.writeFileSync(lockFile, `${process.pid}
 `, { flag: "wx" });
@@ -4866,8 +4887,8 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, pid: existingPid, wakeDir, reason: "already_running" };
   }
   const watcherScript = [
-    path11.resolve(__dirname, "..", "scripts", "enter-watcher.ps1"),
-    path11.resolve(__dirname, "..", "..", "..", "scripts", "enter-watcher.ps1")
+    path12.resolve(__dirname, "..", "scripts", "enter-watcher.ps1"),
+    path12.resolve(__dirname, "..", "..", "..", "scripts", "enter-watcher.ps1")
   ].find((candidate) => fs.existsSync(candidate));
   if (!watcherScript) {
     log("ERROR: Watcher script not found (enter-watcher.ps1) in any known layout");
@@ -4904,7 +4925,7 @@ function ensureClaudeWakeWatcher(options = {}) {
       log(`Watcher spawn returned invalid pid: ${stdout.trim()}`);
       return { started: false, wakeDir, reason: "invalid_pid" };
     }
-    fs.writeFileSync(path11.join(wakeDir, "watcher.pid"), `${watcherPid}
+    fs.writeFileSync(path12.join(wakeDir, "watcher.pid"), `${watcherPid}
 `, "utf8");
     log(
       `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, target=${cmdInfo?.hwnd ? `hwnd:${cmdInfo.hwnd}` : cmdInfo?.pid ? `pid:${cmdInfo.pid}` : "search"})`
@@ -4914,7 +4935,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     log(`Watcher spawn error: ${error.message}`);
     try {
       fs.appendFileSync(
-        path11.join(wakeDir, "debug.log"),
+        path12.join(wakeDir, "debug.log"),
         `[${(/* @__PURE__ */ new Date()).toISOString()}] wake-support spawn error: ${error.message}
 `
       );

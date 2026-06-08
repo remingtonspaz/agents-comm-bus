@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import os from "node:os";
 import { DAEMON_VERSION } from "./config.js";
+import { normalizeProjectPath } from "./project-path.js";
 import { resolveDiscoveryPaths, resolveStatePaths } from "./paths.js";
 import { CommLeaseArbiter, inferAuthorityRank, wrapWithLease, } from "./runtime/comm-lease.js";
 import { startIpcServer } from "./ipc/server.js";
@@ -98,7 +99,7 @@ export async function runDaemon(options) {
     // adapter count.
     const comms = [];
     const bus = new MessageBus({
-        project: process.cwd(),
+        project: normalizeProjectPath(process.cwd()),
         storage,
         transcripts,
         audit,
@@ -120,9 +121,11 @@ export async function runDaemon(options) {
     // project whose bots are usually already live anyway.
     const activeScopes = new Set();
     const ensureCommsForSessionFn = (project, agent) => {
-        activeScopes.add(scopeKey(agent, project));
+        const canonicalProject = normalizeProjectPath(project);
+        activeScopes.add(scopeKey(agent, canonicalProject));
         return ensureCommsForSession({
-            project,
+            project: canonicalProject,
+            requestedProject: project,
             agent,
             factories: options.commAdapterFactories,
             bus,
@@ -133,6 +136,7 @@ export async function runDaemon(options) {
             stateRoot: paths.root,
             leaseArbiter,
             inFlight: inFlightAdapters,
+            audit,
         });
     };
     bridges.push(...options.agentBridgeFactories.map((factory) => factory.create({
@@ -377,10 +381,21 @@ export async function addAdapterForRegistration(input) {
  * registration.
  */
 export async function ensureCommsForSession(input) {
+    const project = normalizeProjectPath(input.project);
     const registrations = await input.storage.listAccountRegistrations({
-        project: input.project,
+        project,
         agent: input.agent,
     });
+    if (registrations.length === 0) {
+        await reportRegistrationProjectNearMiss({
+            agent: input.agent,
+            requestedProject: input.requestedProject ?? input.project,
+            canonicalProject: project,
+            storage: input.storage,
+            audit: input.audit,
+        });
+        return;
+    }
     for (const registration of registrations) {
         const factory = input.factories.find((f) => f.commId === registration.comm);
         if (!factory)
@@ -748,7 +763,37 @@ function adapterMapKey(commId, accountId) {
 // hot-adds. A scope is "active" once a session for it has registered this
 // daemon-lifetime.
 function scopeKey(agent, project) {
-    return `${agent}:${project}`;
+    return `${agent}:${normalizeProjectPath(project)}`;
+}
+async function reportRegistrationProjectNearMiss(input) {
+    const allForAgent = await input.storage.listAccountRegistrations({ agent: input.agent });
+    const nearMatchProjects = [
+        ...new Set(allForAgent
+            .filter((reg) => normalizeProjectPath(reg.project) === input.canonicalProject)
+            .map((reg) => reg.project)),
+    ];
+    if (nearMatchProjects.length === 0)
+        return;
+    const detail = {
+        agent: input.agent,
+        requested_project: input.requestedProject,
+        canonical_project: input.canonicalProject,
+        near_match_projects: nearMatchProjects,
+    };
+    console.error(`agents-comm-bus: registration_project_near_miss for agent=${input.agent}: ` +
+        `requested=${JSON.stringify(input.requestedProject)} ` +
+        `canonical=${JSON.stringify(input.canonicalProject)} ` +
+        `near_matches=${JSON.stringify(nearMatchProjects)} ` +
+        `(run scripts/repair-project-paths.mjs to canonicalize stored rows)`);
+    if (input.audit) {
+        await input.audit
+            .append({
+            timestamp: Date.now(),
+            kind: "registration_project_near_miss",
+            detail,
+        })
+            .catch(() => { });
+    }
 }
 async function dispatchIpc(request, context) {
     const params = (request.params ?? {});

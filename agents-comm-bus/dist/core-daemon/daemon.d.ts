@@ -2,6 +2,7 @@ import { type AccountId, type AccountRegistration, type AgentId, type CommId, ty
 import { CommLeaseArbiter } from "./runtime/comm-lease.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
+import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import type { AgentBridge, AgentBridgeFactory } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
@@ -86,6 +87,8 @@ export declare function addAdapterForRegistration(input: {
  */
 export declare function ensureCommsForSession(input: {
     project: string;
+    /** Raw project from the client, for near-miss diagnostics when it differs. */
+    requestedProject?: string;
     agent: AgentId;
     factories: CommAdapterFactory[];
     bus: MessageBus;
@@ -96,6 +99,7 @@ export declare function ensureCommsForSession(input: {
     stateRoot: string;
     leaseArbiter: CommLeaseArbiter;
     inFlight: Set<string>;
+    audit?: JsonlAuditStore;
 }): Promise<void>;
 export interface ReloadSummary {
     ok: true;

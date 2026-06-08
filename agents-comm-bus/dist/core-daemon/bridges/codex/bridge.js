@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
+import { normalizeProjectPath } from "../../project-path.js";
 import { CodexAgentAdapter, codexDecisionFromResolution, codexHookDecision, } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
 const DEFAULT_TTL_SECONDS = 3600;
@@ -58,7 +59,7 @@ export class CodexBridge {
     async onInboundConversation(conversation) {
         if (conversation.agent !== this.agentId)
             return;
-        const sessions = this.sessionsByProject.get(conversation.project);
+        const sessions = this.sessionsByProject.get(normalizeProjectPath(conversation.project));
         const session = sessions?.values().next().value;
         if (!session) {
             await this.auditWake("agent_wake_skipped", conversation, undefined, {
@@ -118,7 +119,7 @@ export class CodexBridge {
         }
     }
     async bootstrapStatus(params) {
-        const project = requiredString(params.project, "project");
+        const project = normalizeProjectPath(requiredString(params.project, "project"));
         const registrations = await this.options.storage.listAccountRegistrations({
             project,
             agent: this.agentId,
@@ -147,7 +148,7 @@ export class CodexBridge {
     }
     async registerSession(params, socket) {
         const session = requiredString(params.session, "session");
-        const project = requiredString(params.project, "project");
+        const project = normalizeProjectPath(requiredString(params.project, "project"));
         const connectionId = typeof params.connection_id === "string"
             ? params.connection_id
             : `codex:${session}:${crypto.randomUUID()}`;

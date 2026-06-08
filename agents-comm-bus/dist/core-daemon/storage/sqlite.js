@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { normalizeProjectPath } from "../project-path.js";
 import { runStorageMigrations } from "./schema/runner.js";
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require("node:sqlite");
@@ -221,6 +222,7 @@ export class SqliteStorage {
         }
     }
     async upsertConversation(rec) {
+        rec = { ...rec, project: normalizeProjectPath(rec.project) };
         // AGE-20 Phase 2: resolve the existing conversation by its STABLE identity
         // (registration_id, chat, thread) and update it in place, PRESERVING its
         // conversation_id. This stops the drift: a registration field change (e.g.
@@ -333,7 +335,7 @@ export class SqliteStorage {
           WHERE c.project = ? AND c.agent = ? AND c.comm = ? AND c.bot_user_id = ?
             AND c.chat_native_id = ? AND c.thread_native_id = ?
         `)
-                .get(pk.project, pk.agent, pk.comm, pk.bot_user_id, pk.chat_native_id, dbThreadId(pk.thread_native_id));
+                .get(normalizeProjectPath(pk.project), pk.agent, pk.comm, pk.bot_user_id, pk.chat_native_id, dbThreadId(pk.thread_native_id));
             if (byBot)
                 return this.conversationFromRow(byBot);
         }
@@ -482,6 +484,7 @@ export class SqliteStorage {
         return Number(result.changes ?? 0) > 0;
     }
     async upsertSession(rec) {
+        const project = normalizeProjectPath(rec.project);
         this.db
             .prepare(`
         INSERT INTO sessions (
@@ -496,7 +499,7 @@ export class SqliteStorage {
           project = excluded.project,
           status = excluded.status
       `)
-            .run(rec.schema_version, rec.session_id, rec.agent, rec.project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.lease_owner_process_pid, rec.lease_owner_process_label, rec.lease_owner_process_registered_at, rec.most_recent_inbound_conversation_id, rec.status);
+            .run(rec.schema_version, rec.session_id, rec.agent, project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.lease_owner_process_pid, rec.lease_owner_process_label, rec.lease_owner_process_registered_at, rec.most_recent_inbound_conversation_id, rec.status);
     }
     async acquireSessionLease(session, connection_id, at, owner) {
         try {

@@ -3649,7 +3649,7 @@ var require_websocket_server = __commonJS({
 });
 
 // ../core-daemon/serve.ts
-import path6 from "node:path";
+import path7 from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // ../core-daemon/daemon.ts
@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.14";
+var DAEMON_VERSION = "0.2.15";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3668,38 +3668,57 @@ function isProtocolCompatible(daemonProtocolVersion, clientProtocolVersion) {
   return protocolMajor(daemonProtocolVersion) === protocolMajor(clientProtocolVersion);
 }
 
+// ../core-daemon/project-path.ts
+import path from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path.resolve(project);
+  if (path.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path.sep || path.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
 // ../core-daemon/paths.ts
 import os from "node:os";
-import path from "node:path";
+import path2 from "node:path";
 function stateRoot(options = {}) {
-  return path.resolve(options.stateRoot ?? path.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
+  return path2.resolve(options.stateRoot ?? path2.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
 }
 function resolveStatePaths(options = {}) {
   const root = stateRoot(options);
-  const database = path.join(root, `${DAEMON_NAME}.db`);
+  const database = path2.join(root, `${DAEMON_NAME}.db`);
   return {
     root,
     database,
     databaseWal: `${database}-wal`,
     databaseShm: `${database}-shm`,
-    auditDir: path.join(root, "audit"),
-    chatsDir: path.join(root, "chats"),
-    tokensDir: path.join(root, "tokens"),
-    pidFile: path.join(root, "daemon.pid"),
-    portFile: path.join(root, "port"),
-    spawnLock: path.join(root, ".spawn.lock")
+    auditDir: path2.join(root, "audit"),
+    chatsDir: path2.join(root, "chats"),
+    tokensDir: path2.join(root, "tokens"),
+    pidFile: path2.join(root, "daemon.pid"),
+    portFile: path2.join(root, "port"),
+    spawnLock: path2.join(root, ".spawn.lock")
   };
 }
 function discoveryRoot(options = {}) {
-  return path.resolve(options.discoveryRoot ?? stateRoot(options));
+  return path2.resolve(options.discoveryRoot ?? stateRoot(options));
 }
 function resolveDiscoveryPaths(options = {}) {
   const root = discoveryRoot(options);
   return {
     root,
-    pidFile: path.join(root, "daemon.pid"),
-    portFile: path.join(root, "port"),
-    spawnLock: path.join(root, ".spawn.lock")
+    pidFile: path2.join(root, "daemon.pid"),
+    portFile: path2.join(root, "port"),
+    spawnLock: path2.join(root, ".spawn.lock")
   };
 }
 
@@ -3707,7 +3726,7 @@ function resolveDiscoveryPaths(options = {}) {
 import { constants, existsSync, statSync } from "node:fs";
 import { open, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os2 from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 var DEFAULT_STALENESS_MS = 9e4;
 var DEFAULT_IPC_RECENCY_MARGIN_MS = 3e4;
 var AUTHORITY_RANK_ORDER = {
@@ -3716,7 +3735,7 @@ var AUTHORITY_RANK_ORDER = {
   worktree: 0
 };
 function commLeasePath(commId, resourceId, homeDir = os2.homedir()) {
-  return path2.join(
+  return path3.join(
     homeDir,
     `.${DAEMON_NAME}`,
     "comm-locks",
@@ -3731,20 +3750,20 @@ function inferAuthorityRank(input) {
   const homeDir = input.homeDir ?? os2.homedir();
   const fileExists = input.fileExists ?? defaultFileExists;
   const isDirectory = input.isDirectory ?? defaultIsDirectory;
-  const bin = input.daemonBin ? path2.resolve(input.daemonBin) : null;
+  const bin = input.daemonBin ? path3.resolve(input.daemonBin) : null;
   if (bin) {
-    const centralBinDir = path2.resolve(path2.join(homeDir, `.${DAEMON_NAME}`, "bin"));
+    const centralBinDir = path3.resolve(path3.join(homeDir, `.${DAEMON_NAME}`, "bin"));
     if (isUnder(bin, centralBinDir)) {
-      return { authorityRank: "production", checkoutRoot: path2.dirname(bin) };
+      return { authorityRank: "production", checkoutRoot: path3.dirname(bin) };
     }
   }
-  const startDirs = [bin ? path2.dirname(bin) : null, path2.resolve(input.cwd)].filter(
+  const startDirs = [bin ? path3.dirname(bin) : null, path3.resolve(input.cwd)].filter(
     (d) => d !== null
   );
   for (const start of startDirs) {
     const found = findGitRoot(start, fileExists);
     if (found) {
-      const gitPath = path2.join(found, ".git");
+      const gitPath = path3.join(found, ".git");
       const rank = isDirectory(gitPath) ? "main-dev" : "worktree";
       return { authorityRank: rank, checkoutRoot: found };
     }
@@ -3752,18 +3771,18 @@ function inferAuthorityRank(input) {
   return { authorityRank: "worktree", checkoutRoot: null };
 }
 function findGitRoot(start, fileExists) {
-  let current = path2.resolve(start);
+  let current = path3.resolve(start);
   for (let i = 0; i < 64; i += 1) {
-    if (fileExists(path2.join(current, ".git"))) return current;
-    const parent = path2.dirname(current);
+    if (fileExists(path3.join(current, ".git"))) return current;
+    const parent = path3.dirname(current);
     if (parent === current) return null;
     current = parent;
   }
   return null;
 }
 function isUnder(child, parent) {
-  const rel = path2.relative(parent, child);
-  return rel === "" || !rel.startsWith("..") && !path2.isAbsolute(rel);
+  const rel = path3.relative(parent, child);
+  return rel === "" || !rel.startsWith("..") && !path3.isAbsolute(rel);
 }
 function defaultFileExists(p) {
   try {
@@ -3984,7 +4003,7 @@ var CommLeaseArbiter = class {
     }
   }
   async writeRecord(leasePath, record) {
-    await mkdir(path2.dirname(leasePath), { recursive: true });
+    await mkdir(path3.dirname(leasePath), { recursive: true });
     const handle = await open(leasePath, constants.O_CREAT | constants.O_WRONLY | constants.O_TRUNC);
     try {
       await handle.writeFile(`${JSON.stringify(record, null, 2)}
@@ -4001,7 +4020,7 @@ var CommLeaseArbiter = class {
    */
   async acquireGuard(leasePath) {
     const guardPath = `${leasePath}.guard`;
-    await mkdir(path2.dirname(guardPath), { recursive: true });
+    await mkdir(path3.dirname(guardPath), { recursive: true });
     const token = `${this.self.pid}:${this.now()}`;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -5007,7 +5026,7 @@ var MessageBus = class {
       try {
         const registration = await this.registrationFor(query.origin_chat);
         const conversation = await this.options.storage.findConversation({
-          project: registration.project,
+          project: normalizeProjectPath(registration.project),
           agent: registration.agent,
           comm: query.origin_chat.comm,
           bot_user_id: registration.bot_user_id,
@@ -5219,7 +5238,7 @@ var MessageBus = class {
   async upsertConversation(registration, message) {
     const conversation = {
       schema_version: SCHEMA_VERSION_CONVERSATION,
-      project: registration.project,
+      project: normalizeProjectPath(registration.project),
       comm: registration.comm,
       account_label: registration.account_label,
       bot_user_id: registration.bot_user_id,
@@ -5262,7 +5281,7 @@ var MessageBus = class {
   async findConversationForTarget(target) {
     const registration = await this.registrationFor(target);
     const conversation = await this.options.storage.findConversation({
-      project: registration.project,
+      project: normalizeProjectPath(registration.project),
       agent: registration.agent,
       comm: target.comm,
       bot_user_id: registration.bot_user_id,
@@ -5273,7 +5292,7 @@ var MessageBus = class {
     if (!conversation) {
       const created = {
         schema_version: SCHEMA_VERSION_CONVERSATION,
-        project: registration.project,
+        project: normalizeProjectPath(registration.project),
         comm: registration.comm,
         account_label: registration.account_label,
         bot_user_id: registration.bot_user_id,
@@ -5544,8 +5563,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db = db;
   }
   db;
-  static async open(path7) {
-    const db = new DatabaseSync(path7);
+  static async open(path8) {
+    const db = new DatabaseSync(path8);
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
     await runStorageMigrations(db);
@@ -5738,6 +5757,7 @@ var SqliteStorage = class _SqliteStorage {
     }
   }
   async upsertConversation(rec) {
+    rec = { ...rec, project: normalizeProjectPath(rec.project) };
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const existingId = this.findExistingConversationId(rec);
@@ -5844,7 +5864,7 @@ var SqliteStorage = class _SqliteStorage {
           WHERE c.project = ? AND c.agent = ? AND c.comm = ? AND c.bot_user_id = ?
             AND c.chat_native_id = ? AND c.thread_native_id = ?
         `).get(
-        pk.project,
+        normalizeProjectPath(pk.project),
         pk.agent,
         pk.comm,
         pk.bot_user_id,
@@ -5981,6 +6001,7 @@ var SqliteStorage = class _SqliteStorage {
     return Number(result.changes ?? 0) > 0;
   }
   async upsertSession(rec) {
+    const project = normalizeProjectPath(rec.project);
     this.db.prepare(`
         INSERT INTO sessions (
           schema_version, session_id, agent, project, created_at,
@@ -5997,7 +6018,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.schema_version,
       rec.session_id,
       rec.agent,
-      rec.project,
+      project,
       rec.created_at,
       rec.lease_holder_connection_id,
       rec.lease_acquired_at,
@@ -6235,8 +6256,8 @@ var SqliteStorage = class _SqliteStorage {
     };
   }
 };
-async function openSqliteStorage(path7) {
-  return SqliteStorage.open(path7);
+async function openSqliteStorage(path8) {
+  return SqliteStorage.open(path8);
 }
 function isConstraintError(error) {
   const sqliteError = error;
@@ -6251,8 +6272,8 @@ import { createInterface } from "node:readline/promises";
 
 // ../core-daemon/storage/jsonl.ts
 import { open as open2 } from "node:fs/promises";
-async function appendJsonLine(path7, value) {
-  const handle = await open2(path7, "a");
+async function appendJsonLine(path8, value) {
+  const handle = await open2(path8, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -6272,20 +6293,20 @@ var JsonlTranscriptStore = class {
   }
   root;
   async append(entry) {
-    const path7 = this.pathFor(entry.conversation_id);
-    await mkdir3(dirname2(path7), { recursive: true });
-    await appendJsonLine(path7, entry);
+    const path8 = this.pathFor(entry.conversation_id);
+    await mkdir3(dirname2(path8), { recursive: true });
+    await appendJsonLine(path8, entry);
   }
   async *read(conversation_id, opts = {}) {
-    const path7 = this.pathFor(conversation_id);
+    const path8 = this.pathFor(conversation_id);
     try {
-      await stat2(path7);
+      await stat2(path8);
     } catch {
       return;
     }
     let yielded = 0;
     const lines = createInterface({
-      input: createReadStream(path7, { encoding: "utf8" }),
+      input: createReadStream(path8, { encoding: "utf8" }),
       crlfDelay: Infinity
     });
     for await (const line of lines) {
@@ -6314,9 +6335,9 @@ var JsonlAuditStore = class {
   }
   root;
   async append(event) {
-    const path7 = this.pathFor(event.timestamp);
-    await mkdir4(dirname3(path7), { recursive: true });
-    await appendJsonLine(path7, event);
+    const path8 = this.pathFor(event.timestamp);
+    await mkdir4(dirname3(path8), { recursive: true });
+    await appendJsonLine(path8, event);
   }
   pathFor(timestamp) {
     return join3(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
@@ -6337,11 +6358,11 @@ var ContentAddressedBlobStore = class {
   async put(content, mime) {
     const hash = createHash("sha256").update(content).digest("hex");
     const ref = { hash, size: content.byteLength, mime };
-    const path7 = this.pathFor(ref);
+    const path8 = this.pathFor(ref);
     await mkdir5(join4(this.root, "blobs", hash.slice(0, 2)), { recursive: true });
     let handle;
     try {
-      handle = await open3(path7, "wx");
+      handle = await open3(path8, "wx");
       await handle.writeFile(content);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
@@ -6417,7 +6438,7 @@ async function runDaemon(options) {
   );
   const comms = [];
   const bus = new MessageBus({
-    project: process.cwd(),
+    project: normalizeProjectPath(process.cwd()),
     storage,
     transcripts,
     audit,
@@ -6428,9 +6449,11 @@ async function runDaemon(options) {
   const inFlightAdapters = /* @__PURE__ */ new Set();
   const activeScopes = /* @__PURE__ */ new Set();
   const ensureCommsForSessionFn = (project, agent) => {
-    activeScopes.add(scopeKey(agent, project));
+    const canonicalProject = normalizeProjectPath(project);
+    activeScopes.add(scopeKey(agent, canonicalProject));
     return ensureCommsForSession({
-      project,
+      project: canonicalProject,
+      requestedProject: project,
       agent,
       factories: options.commAdapterFactories,
       bus,
@@ -6440,7 +6463,8 @@ async function runDaemon(options) {
       blobs,
       stateRoot: paths.root,
       leaseArbiter,
-      inFlight: inFlightAdapters
+      inFlight: inFlightAdapters,
+      audit
     });
   };
   bridges.push(
@@ -6663,10 +6687,21 @@ async function addAdapterForRegistration(input) {
   }
 }
 async function ensureCommsForSession(input) {
+  const project = normalizeProjectPath(input.project);
   const registrations = await input.storage.listAccountRegistrations({
-    project: input.project,
+    project,
     agent: input.agent
   });
+  if (registrations.length === 0) {
+    await reportRegistrationProjectNearMiss({
+      agent: input.agent,
+      requestedProject: input.requestedProject ?? input.project,
+      canonicalProject: project,
+      storage: input.storage,
+      audit: input.audit
+    });
+    return;
+  }
   for (const registration of registrations) {
     const factory = input.factories.find((f) => f.commId === registration.comm);
     if (!factory) continue;
@@ -6956,7 +6991,33 @@ function adapterMapKey(commId, accountId) {
   return `${commId}:${accountId}`;
 }
 function scopeKey(agent, project) {
-  return `${agent}:${project}`;
+  return `${agent}:${normalizeProjectPath(project)}`;
+}
+async function reportRegistrationProjectNearMiss(input) {
+  const allForAgent = await input.storage.listAccountRegistrations({ agent: input.agent });
+  const nearMatchProjects = [
+    ...new Set(
+      allForAgent.filter((reg) => normalizeProjectPath(reg.project) === input.canonicalProject).map((reg) => reg.project)
+    )
+  ];
+  if (nearMatchProjects.length === 0) return;
+  const detail = {
+    agent: input.agent,
+    requested_project: input.requestedProject,
+    canonical_project: input.canonicalProject,
+    near_match_projects: nearMatchProjects
+  };
+  console.error(
+    `agents-comm-bus: registration_project_near_miss for agent=${input.agent}: requested=${JSON.stringify(input.requestedProject)} canonical=${JSON.stringify(input.canonicalProject)} near_matches=${JSON.stringify(nearMatchProjects)} (run scripts/repair-project-paths.mjs to canonicalize stored rows)`
+  );
+  if (input.audit) {
+    await input.audit.append({
+      timestamp: Date.now(),
+      kind: "registration_project_near_miss",
+      detail
+    }).catch(() => {
+    });
+  }
 }
 async function dispatchIpc(request, context) {
   const params = request.params ?? {};
@@ -7026,7 +7087,7 @@ import crypto2 from "node:crypto";
 // ../core-daemon/bridges/claude/wake.ts
 import { mkdir as mkdir7, writeFile as writeFile2 } from "node:fs/promises";
 import os4 from "node:os";
-import path3 from "node:path";
+import path4 from "node:path";
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
   for (let i = 0; i < projectPath.length; i += 1) {
@@ -7036,25 +7097,25 @@ function hashProjectKey(projectPath) {
   return hash.toString(16).padStart(8, "0");
 }
 function claudeWakeDirForProject(projectPath, homeDir = os4.homedir()) {
-  const resolved = path3.resolve(projectPath);
-  const basename = path3.basename(resolved) || "project";
-  return path3.join(
+  const canonical = normalizeProjectPath(projectPath);
+  const basename = path4.basename(canonical) || "project";
+  return path4.join(
     homeDir,
     ".agents-comm-bus",
     "claude-wake",
     "sessions",
-    `${basename}-${hashProjectKey(resolved)}`
+    `${basename}-${hashProjectKey(canonical)}`
   );
 }
 async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
   await mkdir7(wakeDir, { recursive: true });
-  await writeFile2(path3.join(wakeDir, "trigger-enter"), `${now()}
+  await writeFile2(path4.join(wakeDir, "trigger-enter"), `${now()}
 `, "utf8");
 }
 async function writeClaudeWakeResponse(wakeDir, payload) {
   await mkdir7(wakeDir, { recursive: true });
   await writeFile2(
-    path3.join(wakeDir, "permission-response.json"),
+    path4.join(wakeDir, "permission-response.json"),
     JSON.stringify(payload),
     "utf8"
   );
@@ -7079,17 +7140,18 @@ var ClaudeWakeRegistry = class {
     this.storage = storage;
   }
   register(input) {
+    const project = normalizeProjectPath(input.project);
     const registration = {
       session: input.session,
-      project: path3.resolve(input.project),
-      wakeDir: input.wakeDir ?? claudeWakeDirForProject(input.project),
+      project,
+      wakeDir: input.wakeDir ?? claudeWakeDirForProject(project),
       registeredAt: this.now()
     };
     this.registrations.set(input.session, registration);
     return registration;
   }
   latestForProject(project) {
-    const resolved = path3.resolve(project);
+    const resolved = normalizeProjectPath(project);
     let latest;
     for (const registration of this.registrations.values()) {
       if (registration.project !== resolved) continue;
@@ -7124,7 +7186,7 @@ var ClaudeWakeRegistry = class {
    */
   async hydrateLatestForProject(project) {
     if (!this.storage) return void 0;
-    const resolved = path3.resolve(project);
+    const resolved = normalizeProjectPath(project);
     const sessions = await this.storage.listSessions({
       project: resolved,
       agent: "claude"
@@ -7283,7 +7345,7 @@ var ClaudeBridge = class {
   }
   async registerSession(params, socket) {
     const session = requiredString(params.session, "session");
-    const project = requiredString(params.project, "project");
+    const project = normalizeProjectPath(requiredString(params.project, "project"));
     const connectionId = typeof params.connection_id === "string" ? params.connection_id : `claude:${session}:${crypto2.randomUUID()}`;
     const now = Date.now();
     const wakeDir = typeof params.wake_dir === "string" ? params.wake_dir : typeof params.wakeDir === "string" ? params.wakeDir : void 0;
@@ -8289,7 +8351,7 @@ function recordOrEmpty2(value) {
 import { execFileSync } from "node:child_process";
 import { readFile as readFile5, writeFile as writeFile3 } from "node:fs/promises";
 import os5 from "node:os";
-import path4 from "node:path";
+import path5 from "node:path";
 var DEFAULT_STOPPED_BY = "codex-bridge-lease-release";
 async function cleanupManagedCodexAppServer(session, options = {}) {
   const statePath = managedCodexAppServerStatePath(session, options.stateRoot);
@@ -8324,8 +8386,8 @@ async function killTree(processManager, pid) {
   }
   return processManager.kill(pid);
 }
-function managedCodexAppServerStatePath(session, stateRoot2 = path4.join(os5.homedir(), ".agents-comm-bus", "codex-bootstrapper")) {
-  return path4.join(stateRoot2, "sessions", `${session}.json`);
+function managedCodexAppServerStatePath(session, stateRoot2 = path5.join(os5.homedir(), ".agents-comm-bus", "codex-bootstrapper")) {
+  return path5.join(stateRoot2, "sessions", `${session}.json`);
 }
 async function readManagedAppServerState(statePath) {
   try {
@@ -8473,7 +8535,7 @@ var CodexBridge = class {
   }
   async onInboundConversation(conversation) {
     if (conversation.agent !== this.agentId) return;
-    const sessions = this.sessionsByProject.get(conversation.project);
+    const sessions = this.sessionsByProject.get(normalizeProjectPath(conversation.project));
     const session = sessions?.values().next().value;
     if (!session) {
       await this.auditWake("agent_wake_skipped", conversation, void 0, {
@@ -8536,7 +8598,7 @@ var CodexBridge = class {
     }
   }
   async bootstrapStatus(params) {
-    const project = requiredString2(params.project, "project");
+    const project = normalizeProjectPath(requiredString2(params.project, "project"));
     const registrations = await this.options.storage.listAccountRegistrations({
       project,
       agent: this.agentId
@@ -8557,7 +8619,7 @@ var CodexBridge = class {
   }
   async registerSession(params, socket) {
     const session = requiredString2(params.session, "session");
-    const project = requiredString2(params.project, "project");
+    const project = normalizeProjectPath(requiredString2(params.project, "project"));
     const connectionId = typeof params.connection_id === "string" ? params.connection_id : `codex:${session}:${crypto4.randomUUID()}`;
     const now = Date.now();
     await this.options.storage.upsertSession({
@@ -9117,7 +9179,7 @@ var CodexBridgeFactory = class {
 
 // ../core-daemon/runtime/comm-adapter-loader.ts
 import { readdir, stat as stat4 } from "node:fs/promises";
-import path5 from "node:path";
+import path6 from "node:path";
 import { pathToFileURL } from "node:url";
 function defaultOnError({ modulePath, error }) {
   const message = error instanceof Error ? error.message : String(error);
@@ -9155,14 +9217,14 @@ async function loadCommAdapterFactories(options) {
   return factories;
 }
 async function resolveAdapterModulePath(adaptersDir, entry) {
-  const entryPath = path5.join(adaptersDir, entry);
+  const entryPath = path6.join(adaptersDir, entry);
   if (entry.endsWith(".js")) return entryPath;
   try {
     if (!(await stat4(entryPath)).isDirectory()) return null;
   } catch {
     return null;
   }
-  const factoryPath = path5.join(entryPath, "factory.js");
+  const factoryPath = path6.join(entryPath, "factory.js");
   try {
     if ((await stat4(factoryPath)).isFile()) return factoryPath;
   } catch {
@@ -9210,12 +9272,12 @@ async function startConfiguredDaemon() {
 }
 function resolveAdaptersDir(stateRoot2, env) {
   if (env.AGENTS_COMM_BUS_ADAPTERS_DIR) {
-    return path6.resolve(env.AGENTS_COMM_BUS_ADAPTERS_DIR);
+    return path7.resolve(env.AGENTS_COMM_BUS_ADAPTERS_DIR);
   }
   if (env.AGENTS_COMM_BUS_BIN) {
-    return path6.resolve(path6.dirname(env.AGENTS_COMM_BUS_BIN), "..", "adapters");
+    return path7.resolve(path7.dirname(env.AGENTS_COMM_BUS_BIN), "..", "adapters");
   }
-  return path6.join(stateRoot2, "adapters");
+  return path7.join(stateRoot2, "adapters");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL2(process.argv[1]).href) {
   startConfiguredDaemon().catch((error) => {

@@ -3655,55 +3655,74 @@ import { mkdir as mkdir6 } from "node:fs/promises";
 // ../packages/core-contracts/dist/types.js
 var SCHEMA_VERSION_ACCOUNT = 1;
 
+// ../core-daemon/project-path.ts
+import path from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path.resolve(project);
+  if (path.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path.sep || path.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
 // ../core-daemon/paths.ts
 import os from "node:os";
-import path from "node:path";
+import path2 from "node:path";
 import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.14";
+var DAEMON_VERSION = "0.2.15";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 
 // ../core-daemon/paths.ts
 function stateRoot(options = {}) {
-  return path.resolve(options.stateRoot ?? path.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
+  return path2.resolve(options.stateRoot ?? path2.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
 }
 function resolveStatePaths(options = {}) {
   const root = stateRoot(options);
-  const database = path.join(root, `${DAEMON_NAME}.db`);
+  const database = path2.join(root, `${DAEMON_NAME}.db`);
   return {
     root,
     database,
     databaseWal: `${database}-wal`,
     databaseShm: `${database}-shm`,
-    auditDir: path.join(root, "audit"),
-    chatsDir: path.join(root, "chats"),
-    tokensDir: path.join(root, "tokens"),
-    pidFile: path.join(root, "daemon.pid"),
-    portFile: path.join(root, "port"),
-    spawnLock: path.join(root, ".spawn.lock")
+    auditDir: path2.join(root, "audit"),
+    chatsDir: path2.join(root, "chats"),
+    tokensDir: path2.join(root, "tokens"),
+    pidFile: path2.join(root, "daemon.pid"),
+    portFile: path2.join(root, "port"),
+    spawnLock: path2.join(root, ".spawn.lock")
   };
 }
 function discoveryRoot(options = {}) {
-  return path.resolve(options.discoveryRoot ?? stateRoot(options));
+  return path2.resolve(options.discoveryRoot ?? stateRoot(options));
 }
 function resolveDiscoveryPaths(options = {}) {
   const root = discoveryRoot(options);
   return {
     root,
-    pidFile: path.join(root, "daemon.pid"),
-    portFile: path.join(root, "port"),
-    spawnLock: path.join(root, ".spawn.lock")
+    pidFile: path2.join(root, "daemon.pid"),
+    portFile: path2.join(root, "port"),
+    spawnLock: path2.join(root, ".spawn.lock")
   };
 }
 function resolveTokenFilePath(options) {
   const paths = resolveStatePaths(options);
-  const project = path.resolve(options.project);
-  const projectBase = safePathSegment(path.basename(project) || "project");
+  const project = path2.resolve(options.project);
+  const projectBase = safePathSegment(path2.basename(project) || "project");
   const projectHash = createHash("sha256").update(project).digest("hex").slice(0, 12);
-  return path.join(
+  return path2.join(
     paths.tokensDir,
     safePathSegment(options.comm),
     `${projectBase}-${projectHash}`,
@@ -3850,8 +3869,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db = db;
   }
   db;
-  static async open(path12) {
-    const db = new DatabaseSync(path12);
+  static async open(path13) {
+    const db = new DatabaseSync(path13);
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
     await runStorageMigrations(db);
@@ -4044,6 +4063,7 @@ var SqliteStorage = class _SqliteStorage {
     }
   }
   async upsertConversation(rec) {
+    rec = { ...rec, project: normalizeProjectPath(rec.project) };
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const existingId = this.findExistingConversationId(rec);
@@ -4150,7 +4170,7 @@ var SqliteStorage = class _SqliteStorage {
           WHERE c.project = ? AND c.agent = ? AND c.comm = ? AND c.bot_user_id = ?
             AND c.chat_native_id = ? AND c.thread_native_id = ?
         `).get(
-        pk.project,
+        normalizeProjectPath(pk.project),
         pk.agent,
         pk.comm,
         pk.bot_user_id,
@@ -4287,6 +4307,7 @@ var SqliteStorage = class _SqliteStorage {
     return Number(result.changes ?? 0) > 0;
   }
   async upsertSession(rec) {
+    const project = normalizeProjectPath(rec.project);
     this.db.prepare(`
         INSERT INTO sessions (
           schema_version, session_id, agent, project, created_at,
@@ -4303,7 +4324,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.schema_version,
       rec.session_id,
       rec.agent,
-      rec.project,
+      project,
       rec.created_at,
       rec.lease_holder_connection_id,
       rec.lease_acquired_at,
@@ -4541,8 +4562,8 @@ var SqliteStorage = class _SqliteStorage {
     };
   }
 };
-async function openSqliteStorage(path12) {
-  return SqliteStorage.open(path12);
+async function openSqliteStorage(path13) {
+  return SqliteStorage.open(path13);
 }
 function isConstraintError(error) {
   const sqliteError = error;
@@ -4677,16 +4698,16 @@ async function sendRequest(socket, request) {
 
 // ../hosts/common/install/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
-import path10 from "node:path";
+import path11 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { mkdir as mkdir2, readFile as readFile3, rm as rm2, writeFile } from "node:fs/promises";
-import path4 from "node:path";
+import path5 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.14";
+var DAEMON_VERSION2 = "0.2.15";
 var IPC_PROTOCOL_VERSION2 = "1.0.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4700,36 +4721,36 @@ function isProtocolCompatible2(daemonProtocolVersion, clientProtocolVersion) {
 
 // dist/core-daemon/paths.js
 import os2 from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 function stateRoot2(options = {}) {
-  return path2.resolve(options.stateRoot ?? path2.join(options.homeDir ?? os2.homedir(), `.${DAEMON_NAME2}`));
+  return path3.resolve(options.stateRoot ?? path3.join(options.homeDir ?? os2.homedir(), `.${DAEMON_NAME2}`));
 }
 function resolveStatePaths2(options = {}) {
   const root = stateRoot2(options);
-  const database = path2.join(root, `${DAEMON_NAME2}.db`);
+  const database = path3.join(root, `${DAEMON_NAME2}.db`);
   return {
     root,
     database,
     databaseWal: `${database}-wal`,
     databaseShm: `${database}-shm`,
-    auditDir: path2.join(root, "audit"),
-    chatsDir: path2.join(root, "chats"),
-    tokensDir: path2.join(root, "tokens"),
-    pidFile: path2.join(root, "daemon.pid"),
-    portFile: path2.join(root, "port"),
-    spawnLock: path2.join(root, ".spawn.lock")
+    auditDir: path3.join(root, "audit"),
+    chatsDir: path3.join(root, "chats"),
+    tokensDir: path3.join(root, "tokens"),
+    pidFile: path3.join(root, "daemon.pid"),
+    portFile: path3.join(root, "port"),
+    spawnLock: path3.join(root, ".spawn.lock")
   };
 }
 function discoveryRoot2(options = {}) {
-  return path2.resolve(options.discoveryRoot ?? stateRoot2(options));
+  return path3.resolve(options.discoveryRoot ?? stateRoot2(options));
 }
 function resolveDiscoveryPaths2(options = {}) {
   const root = discoveryRoot2(options);
   return {
     root,
-    pidFile: path2.join(root, "daemon.pid"),
-    portFile: path2.join(root, "port"),
-    spawnLock: path2.join(root, ".spawn.lock")
+    pidFile: path3.join(root, "daemon.pid"),
+    portFile: path3.join(root, "port"),
+    spawnLock: path3.join(root, ".spawn.lock")
   };
 }
 
@@ -4867,9 +4888,9 @@ async function probeDaemon(options) {
 // dist/core-daemon/bootstrap/spawn-lock.js
 import { constants } from "node:fs";
 import { open, mkdir, readFile as readFile2, rm } from "node:fs/promises";
-import path3 from "node:path";
+import path4 from "node:path";
 async function tryAcquireSpawnLock(lockPath) {
-  await mkdir(path3.dirname(lockPath), { recursive: true });
+  await mkdir(path4.dirname(lockPath), { recursive: true });
   try {
     const handle = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
     const token = `${process.pid}:${Date.now()}`;
@@ -5074,7 +5095,7 @@ function defaultTerminateDaemon(pid) {
 }
 function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const binOverride = env.AGENTS_COMM_BUS_BIN;
-  const daemonEntry = binOverride ? path4.resolve(binOverride) : path4.join(paths.root, "bin", "daemon.js");
+  const daemonEntry = binOverride ? path5.resolve(binOverride) : path5.join(paths.root, "bin", "daemon.js");
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
     stdio: "ignore",
@@ -5089,7 +5110,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
 function warnIfSourceModeSharesDiscoveryRoot(input) {
   if (!input.env.AGENTS_COMM_BUS_BIN)
     return;
-  if (path4.resolve(input.stateRoot) !== path4.resolve(input.discoveryRoot))
+  if (path5.resolve(input.stateRoot) !== path5.resolve(input.discoveryRoot))
     return;
   input.log("agents-comm-bus: source/dev daemon is sharing the production discovery root; set discoveryRoot in .agents-comm-bus-dev.json (for example .agents-comm-bus-discovery/) to let dev and prod daemons coexist.");
 }
@@ -5098,12 +5119,12 @@ function sleep(ms) {
 }
 
 // ../hosts/common/install/ensure-central-install.js
-import path8 from "node:path";
+import path9 from "node:path";
 import { existsSync as existsSync2 } from "node:fs";
 import { readFile as readFile6 } from "node:fs/promises";
 
 // ../hosts/common/install/run-central-install.js
-import path7 from "node:path";
+import path8 from "node:path";
 import { existsSync } from "node:fs";
 
 // ../hosts/common/install/reconcile-central-install.js
@@ -5308,7 +5329,7 @@ function join2(dir, name) {
 
 // ../hosts/common/install/node-fs-seam.js
 import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile4, chmod } from "node:fs/promises";
-import path5 from "node:path";
+import path6 from "node:path";
 
 // ../hosts/common/install/strip-bom.js
 function stripBom(text) {
@@ -5362,23 +5383,23 @@ async function readJsonOrNull(p) {
   }
 }
 function resolveCentralPaths(stateRoot3, comm) {
-  const bin = path5.join(stateRoot3, "bin");
-  const adapters = path5.join(stateRoot3, "adapters");
+  const bin = path6.join(stateRoot3, "bin");
+  const adapters = path6.join(stateRoot3, "adapters");
   return {
-    daemonBundle: path5.join(bin, "daemon.js"),
-    daemonVersionFile: path5.join(bin, "version.json"),
+    daemonBundle: path6.join(bin, "daemon.js"),
+    daemonVersionFile: path6.join(bin, "version.json"),
     // The admin CLI is centrally installed next to the daemon (it rides under
     // the daemon version) so `agents-comm` / `agents-comm-bus` work without npm.
-    cliBundle: path5.join(bin, "cli.js"),
-    adapterBundle: path5.join(adapters, `${comm}.js`),
-    adapterVersionFile: path5.join(adapters, `${comm}.version.json`)
+    cliBundle: path6.join(bin, "cli.js"),
+    adapterBundle: path6.join(adapters, `${comm}.js`),
+    adapterVersionFile: path6.join(adapters, `${comm}.version.json`)
   };
 }
 
 // ../hosts/common/install/install-lock.js
 import { constants as constants2 } from "node:fs";
 import { open as open2, readFile as readFile5, rm as rm3, mkdir as mkdir4, stat } from "node:fs/promises";
-import path6 from "node:path";
+import path7 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
 async function acquireInstallLock(lockPath, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs;
@@ -5386,7 +5407,7 @@ async function acquireInstallLock(lockPath, options = {}) {
   const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? Date.now;
   const sleep2 = options.sleep ?? defaultSleep;
-  await mkdir4(path6.dirname(lockPath), { recursive: true });
+  await mkdir4(path7.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
@@ -5446,7 +5467,7 @@ function isAlreadyExistsError2(error) {
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot3, actor, deps = {}) {
   const fs = deps.fs ?? createAtomicNodeFsSeam();
-  const lockPath = path7.join(stateRoot3, INSTALL_LOCK_NAME);
+  const lockPath = path8.join(stateRoot3, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
     const state = await readCentralState(stateRoot3, actor.comm);
@@ -5455,7 +5476,7 @@ async function runCentralInstall(stateRoot3, actor, deps = {}) {
     const paths = resolveCentralPaths(stateRoot3, actor.comm);
     const result = await executeInstallPlan(plan, actor, paths, fs);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
-      const cliSrc = path7.join(actor.pluginInstallDir, "cli.bundle.js");
+      const cliSrc = path8.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
         await installCliLaunchers(paths, cliSrc, fs);
         result.wroteBundles.push(paths.cliBundle);
@@ -5476,7 +5497,7 @@ async function readInstallStamp(pluginInstallDir, deps = {}) {
   if (!pluginInstallDir) return null;
   const read = deps.readFile ?? readFile6;
   try {
-    const raw = await read(path8.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
+    const raw = await read(path9.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
     const parsed = JSON.parse(stripBom(raw));
     if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string" || !isValidAdapterBundleVersionsMap(parsed.adapter_bundle_versions)) {
       return null;
@@ -5494,7 +5515,7 @@ async function ensureCentralInstall(options) {
   }
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
-    if (options.stateRoot && existsSync2(path8.join(options.stateRoot, "bin", "daemon.js"))) {
+    if (options.stateRoot && existsSync2(path9.join(options.stateRoot, "bin", "daemon.js"))) {
       return { mode: "production", skipped: true };
     }
     throw new Error(
@@ -5584,12 +5605,12 @@ async function centralInstallHasRunnableContent(stateRoot3, comm, deps = {}) {
 
 // ../hosts/common/install/dev-config-resolver.js
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 function resolveDevConfig(projectRoot, deps = {}) {
   const exists = deps.exists ?? existsSync3;
   const readFile9 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
-  const markerPath = path9.join(projectRoot, DEV_MARKER_NAME);
+  const markerPath = path10.join(projectRoot, DEV_MARKER_NAME);
   if (!exists(markerPath)) {
     return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
   }
@@ -5607,7 +5628,7 @@ function resolveDevConfig(projectRoot, deps = {}) {
   if (!daemonBinRaw) {
     return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
   }
-  const daemonBin = path9.resolve(projectRoot, daemonBinRaw);
+  const daemonBin = path10.resolve(projectRoot, daemonBinRaw);
   if (!isInside(projectRoot, daemonBin)) {
     return { env: {}, status: "rejected", reasons: [`dev marker daemonBin escapes project root: ${daemonBinRaw}`] };
   }
@@ -5617,17 +5638,17 @@ function resolveDevConfig(projectRoot, deps = {}) {
   const env = { AGENTS_COMM_BUS_BIN: daemonBin };
   const reasons = [`dev marker applied from ${markerPath}`];
   if (typeof parsed.stateRoot === "string" && parsed.stateRoot.length > 0) {
-    const stateRoot3 = path9.resolve(projectRoot, parsed.stateRoot);
+    const stateRoot3 = path10.resolve(projectRoot, parsed.stateRoot);
     if (isInside(projectRoot, stateRoot3)) env.AGENTS_COMM_BUS_ROOT = stateRoot3;
     else reasons.push(`ignoring stateRoot outside project root: ${parsed.stateRoot}`);
   }
   if (typeof parsed.discoveryRoot === "string" && parsed.discoveryRoot.length > 0) {
-    const discoveryRoot3 = path9.resolve(projectRoot, parsed.discoveryRoot);
+    const discoveryRoot3 = path10.resolve(projectRoot, parsed.discoveryRoot);
     if (isInside(projectRoot, discoveryRoot3)) env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot3;
     else reasons.push(`ignoring discoveryRoot outside project root: ${parsed.discoveryRoot}`);
   }
   if (typeof parsed.adaptersDir === "string" && parsed.adaptersDir.length > 0) {
-    const adaptersDir = path9.resolve(projectRoot, parsed.adaptersDir);
+    const adaptersDir = path10.resolve(projectRoot, parsed.adaptersDir);
     if (isInside(projectRoot, adaptersDir)) env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
     else reasons.push(`ignoring adaptersDir outside project root: ${parsed.adaptersDir}`);
   }
@@ -5638,9 +5659,9 @@ function applyDevConfig(baseEnv, projectRoot, deps = {}) {
   return { env: { ...baseEnv, ...devConfig.env }, devConfig };
 }
 function isInside(root, candidate) {
-  const rel = path9.relative(root, candidate);
+  const rel = path10.relative(root, candidate);
   if (rel === "") return true;
-  return !rel.startsWith("..") && !path9.isAbsolute(rel);
+  return !rel.startsWith("..") && !path10.isAbsolute(rel);
 }
 
 // ../hosts/common/install/entry-ensures.js
@@ -5652,10 +5673,10 @@ function resolveEntryContext(fromDir, deps = {}) {
   };
 }
 function findAncestorContaining(dir, name, exists) {
-  let current = path10.resolve(dir);
+  let current = path11.resolve(dir);
   for (; ; ) {
-    if (exists(path10.join(current, name))) return current;
-    const parent = path10.dirname(current);
+    if (exists(path11.join(current, name))) return current;
+    const parent = path11.dirname(current);
     if (parent === current) return void 0;
     current = parent;
   }
@@ -5764,7 +5785,7 @@ function parseProbeResult(result) {
 
 // ../core-daemon/cli/token-file.ts
 import { chmod as chmod2, mkdir as mkdir5, writeFile as writeFile3 } from "node:fs/promises";
-import path11 from "node:path";
+import path12 from "node:path";
 async function writeTokenFile(options) {
   const tokenFile = resolveTokenFilePath({
     stateRoot: options.stateRoot,
@@ -5773,7 +5794,7 @@ async function writeTokenFile(options) {
     agent: options.agent,
     accountId: options.accountId
   });
-  await mkdir5(path11.dirname(tokenFile), { recursive: true });
+  await mkdir5(path12.dirname(tokenFile), { recursive: true });
   const body = {
     botToken: options.botToken,
     ...options.userId && options.userId.length > 0 ? { userId: options.userId } : {}
@@ -5793,6 +5814,7 @@ async function writeTokenFile(options) {
 
 // ../core-daemon/cli/account-add.ts
 async function accountAdd(options) {
+  const project = normalizeProjectPath(options.project);
   const comm = options.comm ?? "telegram";
   const botToken = options.botToken;
   if (!botToken) {
@@ -5809,14 +5831,14 @@ async function accountAdd(options) {
   const storage = await openSqliteStorage(paths.database);
   try {
     const labelMatches = await storage.listAccountRegistrations({
-      project: options.project,
+      project,
       comm,
       agent: options.agent
     });
     const existingLabel = labelMatches.find((row) => row.account_label === options.accountLabel);
     if (existingLabel) {
       throw new Error(
-        `${comm} account label ${options.accountLabel} is already registered as bot_id=${existingLabel.bot_user_id} for project=${options.project}, agent=${options.agent}; use account-remove before re-adding, or an account-update command when available.`
+        `${comm} account label ${options.accountLabel} is already registered as bot_id=${existingLabel.bot_user_id} for project=${project}, agent=${options.agent}; use account-remove before re-adding, or an account-update command when available.`
       );
     }
     const existing = await storage.getAccountByBot(comm, identity.bot_user_id);
@@ -5828,7 +5850,7 @@ async function accountAdd(options) {
     const credentialsRef = await writeTokenFile({
       stateRoot: options.stateRoot,
       comm,
-      project: options.project,
+      project,
       agent: options.agent,
       accountId: identity.bot_user_id,
       botToken
@@ -5837,7 +5859,7 @@ async function accountAdd(options) {
     const registration = {
       schema_version: SCHEMA_VERSION_ACCOUNT,
       registration_id: `reg_${randomBytes(16).toString("hex")}`,
-      project: options.project,
+      project,
       comm,
       agent: options.agent,
       account_label: options.accountLabel,
@@ -5859,7 +5881,7 @@ async function accountAdd(options) {
 async function accountList(options = {}) {
   const storage = await openSqliteStorage(resolveStatePaths().database);
   const rows = await storage.listAccountRegistrations({
-    project: options.project,
+    project: options.project === void 0 ? void 0 : normalizeProjectPath(options.project),
     comm: options.comm,
     agent: options.agent
   });
@@ -6414,10 +6436,10 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
     }
     const expected = legacySessionDirForProject(projectRoot, agent, homeDir);
     for (const entry of entries) {
-      const path12 = join3(parent, entry);
+      const path13 = join3(parent, entry);
       let isDirectory = false;
       try {
-        isDirectory = statSync(path12).isDirectory();
+        isDirectory = statSync(path13).isDirectory();
       } catch {
         continue;
       }
@@ -6425,9 +6447,9 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
       roots.push({
         kind: "session-root",
         agent,
-        path: path12,
+        path: path13,
         projectHint: entry.replace(/-[0-9a-f]{6}$/i, ""),
-        expectedForProject: resolve(path12) === resolve(expected),
+        expectedForProject: resolve(path13) === resolve(expected),
         transition: TRANSITION_ONLY_MARKER,
         cleanupRelease: TRANSITION_CLEANUP_RELEASE
       });
@@ -6435,14 +6457,14 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
   }
   return roots;
 }
-function readLastChat(path12, agent, sessionRoot) {
-  const parsed = readOptionalObject(path12);
+function readLastChat(path13, agent, sessionRoot) {
+  const parsed = readOptionalObject(path13);
   if (!parsed.ok) return parsed;
   const chatId = stringValue(parsed.value.chat_id);
   if (!chatId) return { ok: false, exists: true, reason: "last-chat.json is missing chat_id" };
   return {
     ok: true,
-    file: stateFile("last-chat", agent, path12, sessionRoot, {
+    file: stateFile("last-chat", agent, path13, sessionRoot, {
       chat_id: chatId,
       message_thread_id: nullableString(parsed.value.message_thread_id),
       from_user_id: nullableString(parsed.value.from_user_id),
@@ -6450,8 +6472,8 @@ function readLastChat(path12, agent, sessionRoot) {
     })
   };
 }
-function readPendingPermission(path12, agent, sessionRoot, now, ttlMs) {
-  const parsed = readOptionalObject(path12);
+function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
+  const parsed = readOptionalObject(path13);
   if (!parsed.ok) return parsed;
   const timestamp = stringValue(parsed.value.timestamp);
   if (!timestamp) return { ok: false, exists: true, reason: "pending-permission.json is missing timestamp" };
@@ -6460,7 +6482,7 @@ function readPendingPermission(path12, agent, sessionRoot, now, ttlMs) {
   if (now - timestampMs >= ttlMs) return { ok: false, exists: true, reason: "pending permission is expired" };
   return {
     ok: true,
-    file: stateFile("pending-permission", agent, path12, sessionRoot, {
+    file: stateFile("pending-permission", agent, path13, sessionRoot, {
       timestamp,
       tool_name: nullableString(parsed.value.tool_name),
       tool_input: isObject(parsed.value.tool_input) ? parsed.value.tool_input : null,
@@ -6470,8 +6492,8 @@ function readPendingPermission(path12, agent, sessionRoot, now, ttlMs) {
     })
   };
 }
-function readQueue(path12, agent, sessionRoot) {
-  const parsed = readOptionalObject(path12);
+function readQueue(path13, agent, sessionRoot) {
+  const parsed = readOptionalObject(path13);
   if (!parsed.ok) return parsed;
   const rawMessages = Array.isArray(parsed.value.messages) ? parsed.value.messages : [];
   const messages = [];
@@ -6486,18 +6508,18 @@ function readQueue(path12, agent, sessionRoot) {
       imagePath: nullableString(raw.imagePath) ?? void 0
     });
   }
-  return { ok: true, file: stateFile("queue", agent, path12, sessionRoot, messages) };
+  return { ok: true, file: stateFile("queue", agent, path13, sessionRoot, messages) };
 }
-function readOptionalObject(path12) {
-  if (!existsSync5(path12)) return { ok: false, exists: false, reason: "file does not exist" };
-  const parsed = readJson(path12);
+function readOptionalObject(path13) {
+  if (!existsSync5(path13)) return { ok: false, exists: false, reason: "file does not exist" };
+  const parsed = readJson(path13);
   if (!parsed.ok) return { ok: false, exists: true, reason: parsed.reason };
   if (!isObject(parsed.value)) return { ok: false, exists: true, reason: "file is not a JSON object" };
   return { ok: true, value: parsed.value };
 }
-function readJson(path12) {
+function readJson(path13) {
   try {
-    return { ok: true, value: JSON.parse(readFileSync2(path12, "utf8")) };
+    return { ok: true, value: JSON.parse(readFileSync2(path13, "utf8")) };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "invalid JSON" };
   }
@@ -6506,22 +6528,22 @@ function normalizeUserIds(raw) {
   const values = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
   return values.map((value) => stringValue(value).trim()).filter(Boolean);
 }
-function stateFile(kind, agent, path12, sessionRoot, value) {
+function stateFile(kind, agent, path13, sessionRoot, value) {
   return {
     kind,
     agent,
-    path: path12,
+    path: path13,
     sessionRoot,
     value,
     transition: TRANSITION_ONLY_MARKER,
     cleanupRelease: TRANSITION_CLEANUP_RELEASE
   };
 }
-function skip(kind, agent, path12, reason) {
+function skip(kind, agent, path13, reason) {
   return {
     kind,
     agent,
-    path: path12,
+    path: path13,
     reason,
     transition: TRANSITION_ONLY_MARKER,
     cleanupRelease: TRANSITION_CLEANUP_RELEASE
@@ -6579,15 +6601,15 @@ function importLastChat(file, options) {
     }
   };
 }
-function skipped(path12, reason) {
+function skipped(path13, reason) {
   return {
     status: "skipped",
     reason,
-    source_file: path12,
+    source_file: path13,
     audit: {
       kind: "legacy_state_skipped",
       source: "last-chat",
-      path: path12,
+      path: path13,
       reason,
       detail: {},
       transition: TRANSITION_ONLY_MARKER,
@@ -6638,15 +6660,15 @@ function importPendingPermission(file, options) {
     }
   };
 }
-function skipped2(path12, reason) {
+function skipped2(path13, reason) {
   return {
     status: "skipped",
     reason,
-    source_file: path12,
+    source_file: path13,
     audit: {
       kind: "legacy_state_skipped",
       source: "pending-permission",
-      path: path12,
+      path: path13,
       reason,
       detail: {},
       transition: TRANSITION_ONLY_MARKER,

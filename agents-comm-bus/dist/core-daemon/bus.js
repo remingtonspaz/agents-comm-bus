@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeProjectPath } from "./project-path.js";
 import { SCHEMA_VERSION_CONVERSATION, SCHEMA_VERSION_QUERY, assertHasOrigin, isForeignBotAllowed, RecentSeenCache, tryResolve, } from "agents-comm-bus-core";
 export class MessageBus {
     options;
@@ -224,7 +225,7 @@ export class MessageBus {
             try {
                 const registration = await this.registrationFor(query.origin_chat);
                 const conversation = await this.options.storage.findConversation({
-                    project: registration.project,
+                    project: normalizeProjectPath(registration.project),
                     agent: registration.agent,
                     comm: query.origin_chat.comm,
                     bot_user_id: registration.bot_user_id,
@@ -446,7 +447,7 @@ export class MessageBus {
     async upsertConversation(registration, message) {
         const conversation = {
             schema_version: SCHEMA_VERSION_CONVERSATION,
-            project: registration.project,
+            project: normalizeProjectPath(registration.project),
             comm: registration.comm,
             account_label: registration.account_label,
             bot_user_id: registration.bot_user_id,
@@ -490,7 +491,7 @@ export class MessageBus {
     async findConversationForTarget(target) {
         const registration = await this.registrationFor(target);
         const conversation = await this.options.storage.findConversation({
-            project: registration.project,
+            project: normalizeProjectPath(registration.project),
             agent: registration.agent,
             comm: target.comm,
             bot_user_id: registration.bot_user_id,
@@ -501,7 +502,7 @@ export class MessageBus {
         if (!conversation) {
             const created = {
                 schema_version: SCHEMA_VERSION_CONVERSATION,
-                project: registration.project,
+                project: normalizeProjectPath(registration.project),
                 comm: registration.comm,
                 account_label: registration.account_label,
                 bot_user_id: registration.bot_user_id,

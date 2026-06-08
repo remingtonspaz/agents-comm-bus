@@ -10,6 +10,7 @@
  */
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
+import { normalizeProjectPath } from "../../project-path.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const CLAUDE_IPC_METHODS = new Set([
@@ -161,7 +162,7 @@ export class ClaudeBridge {
     }
     async registerSession(params, socket) {
         const session = requiredString(params.session, "session");
-        const project = requiredString(params.project, "project");
+        const project = normalizeProjectPath(requiredString(params.project, "project"));
         const connectionId = typeof params.connection_id === "string"
             ? params.connection_id
             : `claude:${session}:${crypto.randomUUID()}`;
