@@ -68,6 +68,7 @@ export class SqliteStorage implements Storage {
   }
 
   async putAccountRegistration(rec: AccountRegistration): Promise<void> {
+    const project = normalizeProjectPath(rec.project);
     this.db
       .prepare(`
         INSERT INTO account_registrations (
@@ -84,7 +85,7 @@ export class SqliteStorage implements Storage {
       .run(
         rec.schema_version,
         rec.registration_id ?? null,
-        rec.project,
+        project,
         rec.comm,
         rec.agent,
         rec.account_label,
@@ -112,12 +113,16 @@ export class SqliteStorage implements Storage {
     comm?: CommId;
     agent?: AgentId;
   } = {}): Promise<AccountRegistration[]> {
+    const normalizedFilter = {
+      ...filter,
+      project: filter.project === undefined ? undefined : normalizeProjectPath(filter.project),
+    };
     const clauses: string[] = [];
     const params: unknown[] = [];
     for (const key of ["project", "comm", "agent"] as const) {
-      if (filter[key] !== undefined) {
+      if (normalizedFilter[key] !== undefined) {
         clauses.push(`${key} = ?`);
-        params.push(filter[key]);
+        params.push(normalizedFilter[key]);
       }
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -138,7 +143,7 @@ export class SqliteStorage implements Storage {
         DELETE FROM account_registrations
         WHERE project = ? AND comm = ? AND agent = ? AND account_label = ?
       `)
-      .run(project, comm, agent, account_label);
+      .run(normalizeProjectPath(project), comm, agent, account_label);
   }
 
   async updateAccountRegistrationToken(
@@ -489,12 +494,16 @@ export class SqliteStorage implements Storage {
     agent?: AgentId;
     limit?: number;
   } = {}): Promise<Conversation[]> {
+    const normalizedFilter = {
+      ...filter,
+      project: filter.project === undefined ? undefined : normalizeProjectPath(filter.project),
+    };
     const clauses: string[] = [];
     const params: unknown[] = [];
     for (const key of ["project", "comm", "agent"] as const) {
-      if (filter[key] !== undefined) {
+      if (normalizedFilter[key] !== undefined) {
         clauses.push(`c.${key} = ?`);
-        params.push(filter[key]);
+        params.push(normalizedFilter[key]);
       }
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -782,7 +791,7 @@ export class SqliteStorage implements Storage {
     const params: unknown[] = [];
     if (filter.project !== undefined) {
       where.push("project = ?");
-      params.push(filter.project);
+      params.push(normalizeProjectPath(filter.project));
     }
     if (filter.agent !== undefined) {
       where.push("agent = ?");

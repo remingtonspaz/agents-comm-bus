@@ -105,148 +105,126 @@ function loadRows(db, table) {
   return db.prepare(`SELECT * FROM ${table}`).all();
 }
 
+function summarizeRow(row) {
+  return {
+    project: row.project,
+    canonical: normalizeProjectPath(row.project),
+  };
+}
+
 function planAccountRegistrationUpdates(rows) {
-  const updates = [];
-  const deletes = [];
-  const byTargetKey = new Map();
-
-  for (const row of rows) {
-    const canonical = normalizeProjectPath(row.project);
-    if (canonical === row.project) continue;
-    const targetKey = `${canonical}\0${row.comm}\0${row.agent}\0${row.account_label}`;
-    const existing = byTargetKey.get(targetKey);
-    if (!existing) {
-      byTargetKey.set(targetKey, row);
-      updates.push({ row, canonical });
-      continue;
-    }
-    const keepExisting =
-      Number(row.updated_at ?? row.created_at ?? 0) >
-      Number(existing.updated_at ?? existing.created_at ?? 0);
-    if (keepExisting) {
-      deletes.push({ row: existing, reason: "superseded by newer duplicate after canonicalize" });
-      byTargetKey.set(targetKey, row);
-      const idx = updates.findIndex((u) => u.row.registration_id === existing.registration_id);
-      if (idx >= 0) updates.splice(idx, 1);
-      updates.push({ row, canonical });
-      deletes.push({ row: existing, reason: "duplicate after canonicalize" });
-    } else {
-      deletes.push({ row, reason: "duplicate after canonicalize" });
-    }
-  }
-
-  const botCollisions = new Map();
-  for (const row of rows) {
-    const canonical = normalizeProjectPath(row.project);
-    const botKey = `${row.comm}\0${row.bot_user_id}`;
-    const list = botCollisions.get(botKey) ?? [];
-    list.push({ ...row, canonical });
-    botCollisions.set(botKey, list);
-  }
-  for (const [, group] of botCollisions) {
-    const canonicalProjects = new Set(group.map((r) => r.canonical));
-    if (canonicalProjects.size <= 1 && group.length <= 1) continue;
-    if (group.length > 1 && canonicalProjects.size === 1) {
-      const sorted = [...group].sort(
-        (a, b) => Number(b.updated_at ?? b.created_at ?? 0) - Number(a.updated_at ?? a.created_at ?? 0),
-      );
-      const keeper = sorted[0];
-      for (const loser of sorted.slice(1)) {
-        if (!deletes.some((d) => d.row.registration_id === loser.registration_id)) {
-          deletes.push({ row: loser, reason: "same bot after canonicalize; keeping newest" });
-        }
-        const updateIdx = updates.findIndex((u) => u.row.registration_id === loser.registration_id);
-        if (updateIdx >= 0) updates.splice(updateIdx, 1);
-      }
-      if (keeper.project !== keeper.canonical && !updates.some((u) => u.row.registration_id === keeper.registration_id)) {
-        updates.push({ row: keeper, canonical: keeper.canonical });
-      }
-    }
-  }
-
-  const ambiguous = [];
   const projected = rows.map((row) => ({
     ...row,
     canonical: normalizeProjectPath(row.project),
   }));
-  const labelGroups = new Map();
+  const collisions = [];
+
+  const byLabelKey = new Map();
   for (const row of projected) {
     const key = `${row.canonical}\0${row.comm}\0${row.agent}\0${row.account_label}`;
-    const list = labelGroups.get(key) ?? [];
+    const list = byLabelKey.get(key) ?? [];
     list.push(row);
-    labelGroups.set(key, list);
+    byLabelKey.set(key, list);
   }
-  for (const [key, group] of labelGroups) {
-    const bots = new Set(group.map((r) => r.bot_user_id));
-    if (bots.size > 1) {
-      ambiguous.push({
-        kind: "account_registrations",
-        key,
-        registration_ids: group.map((r) => r.registration_id),
-        bot_user_ids: [...bots],
-      });
-    }
+  for (const [key, group] of byLabelKey) {
+    if (group.length <= 1) continue;
+    const rawProjects = [...new Set(group.map((row) => row.project))];
+    collisions.push({
+      kind: "account_registrations",
+      unique_index: "UNIQUE(project, comm, agent, account_label)",
+      scope_key: key,
+      raw_projects: rawProjects,
+      rows: group.map((row) => ({
+        registration_id: row.registration_id,
+        ...summarizeRow(row),
+        comm: row.comm,
+        agent: row.agent,
+        account_label: row.account_label,
+        bot_user_id: row.bot_user_id,
+      })),
+    });
   }
 
-  return { updates, deletes, ambiguous };
+  const byBotKey = new Map();
+  for (const row of projected) {
+    const key = `${row.comm}\0${row.bot_user_id}`;
+    const list = byBotKey.get(key) ?? [];
+    list.push(row);
+    byBotKey.set(key, list);
+  }
+  for (const [key, group] of byBotKey) {
+    if (group.length <= 1) continue;
+    const rawProjects = [...new Set(group.map((row) => row.project))];
+    collisions.push({
+      kind: "account_registrations",
+      unique_index: "UNIQUE(comm, bot_user_id)",
+      scope_key: key,
+      raw_projects: rawProjects,
+      rows: group.map((row) => ({
+        registration_id: row.registration_id,
+        ...summarizeRow(row),
+        comm: row.comm,
+        agent: row.agent,
+        account_label: row.account_label,
+        bot_user_id: row.bot_user_id,
+      })),
+    });
+  }
+
+  const updates = projected
+    .filter((row) => row.project !== row.canonical)
+    .map((row) => ({ row, canonical: row.canonical }));
+
+  return { updates, collisions };
 }
 
 function planSessionUpdates(rows) {
-  const updates = [];
-  const deletes = [];
-  const ambiguous = [];
-
   const projected = rows.map((row) => ({
     ...row,
     canonical: normalizeProjectPath(row.project),
   }));
+  const collisions = [];
 
-  const leaseGroups = new Map();
-  for (const row of projected) {
-    if (row.status !== "active" || !row.lease_holder_connection_id) continue;
+  const activeLeased = projected.filter(
+    (row) => row.status === "active" && row.lease_holder_connection_id,
+  );
+  const byAgentProject = new Map();
+  for (const row of activeLeased) {
     const key = `${row.agent}\0${row.canonical}`;
-    const list = leaseGroups.get(key) ?? [];
+    const list = byAgentProject.get(key) ?? [];
     list.push(row);
-    leaseGroups.set(key, list);
+    byAgentProject.set(key, list);
   }
-  for (const [key, group] of leaseGroups) {
+  for (const [key, group] of byAgentProject) {
     if (group.length <= 1) continue;
-    const sorted = [...group].sort(
-      (a, b) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0),
-    );
-    const keeper = sorted[0];
-    for (const loser of sorted.slice(1)) {
-      deletes.push({ row: loser, reason: `active lease collision on ${key}; keeping ${keeper.session_id}` });
-    }
+    const rawProjects = [...new Set(group.map((row) => row.project))];
+    collisions.push({
+      kind: "sessions",
+      unique_index: "idx_sessions_one_live_lease_per_agent_project",
+      scope_key: key,
+      raw_projects: rawProjects,
+      rows: group.map((row) => ({
+        session_id: row.session_id,
+        ...summarizeRow(row),
+        agent: row.agent,
+        status: row.status,
+        lease_holder_connection_id: row.lease_holder_connection_id,
+      })),
+    });
   }
 
-  for (const row of projected) {
-    if (row.canonical === row.project) continue;
-    if (deletes.some((d) => d.row.session_id === row.session_id)) continue;
-    const key = `${row.agent}\0${row.canonical}`;
-    const activePeers = (leaseGroups.get(key) ?? []).filter((p) => p.session_id !== row.session_id);
-    if (
-      row.status === "active" &&
-      row.lease_holder_connection_id &&
-      activePeers.some((p) => !deletes.some((d) => d.row.session_id === p.session_id))
-    ) {
-      ambiguous.push({
-        kind: "sessions",
-        key,
-        session_ids: [row.session_id, ...activePeers.map((p) => p.session_id)],
-      });
-      continue;
-    }
-    updates.push({ row, canonical: row.canonical });
-  }
+  const updates = projected
+    .filter((row) => row.project !== row.canonical)
+    .map((row) => ({ row, canonical: row.canonical }));
 
-  return { updates, deletes, ambiguous };
+  return { updates, collisions };
 }
 
 function applyPlan(db, { accountPlan, sessionPlan, dryRun }) {
-  if (accountPlan.ambiguous.length > 0 || sessionPlan.ambiguous.length > 0) {
-    console.error("\nABORT: ambiguous collisions require manual remediation:");
-    for (const item of [...accountPlan.ambiguous, ...sessionPlan.ambiguous]) {
+  const collisions = [...accountPlan.collisions, ...sessionPlan.collisions];
+  if (collisions.length > 0) {
+    console.error("\nABORT: project-path collisions require manual remediation:");
+    for (const item of collisions) {
       console.error(JSON.stringify(item, null, 2));
     }
     process.exit(1);
@@ -254,28 +232,21 @@ function applyPlan(db, { accountPlan, sessionPlan, dryRun }) {
 
   console.log(`\n=== Apply plan (${dryRun ? "DRY-RUN" : "WRITING"}) ===`);
   for (const { row, canonical } of accountPlan.updates) {
-    console.log(`  UPDATE account_registrations ${row.registration_id}: ${JSON.stringify(row.project)} -> ${JSON.stringify(canonical)}`);
+    console.log(
+      `  UPDATE account_registrations ${row.registration_id}: ${JSON.stringify(row.project)} -> ${JSON.stringify(canonical)}`,
+    );
     if (!dryRun) {
-      db.prepare("UPDATE account_registrations SET project = ?, updated_at = ? WHERE registration_id = ?")
-        .run(canonical, Date.now(), row.registration_id);
-    }
-  }
-  for (const { row, reason } of accountPlan.deletes) {
-    console.log(`  DELETE account_registrations ${row.registration_id} (${reason})`);
-    if (!dryRun) {
-      db.prepare("DELETE FROM account_registrations WHERE registration_id = ?").run(row.registration_id);
+      db.prepare(
+        "UPDATE account_registrations SET project = ?, updated_at = ? WHERE registration_id = ?",
+      ).run(canonical, Date.now(), row.registration_id);
     }
   }
   for (const { row, canonical } of sessionPlan.updates) {
-    console.log(`  UPDATE sessions ${row.session_id}: ${JSON.stringify(row.project)} -> ${JSON.stringify(canonical)}`);
+    console.log(
+      `  UPDATE sessions ${row.session_id}: ${JSON.stringify(row.project)} -> ${JSON.stringify(canonical)}`,
+    );
     if (!dryRun) {
       db.prepare("UPDATE sessions SET project = ? WHERE session_id = ?").run(canonical, row.session_id);
-    }
-  }
-  for (const { row, reason } of sessionPlan.deletes) {
-    console.log(`  DELETE sessions ${row.session_id} (${reason})`);
-    if (!dryRun) {
-      db.prepare("DELETE FROM sessions WHERE session_id = ?").run(row.session_id);
     }
   }
 }
@@ -284,7 +255,9 @@ function main() {
   const flags = parseArgs(process.argv.slice(2));
   if (flags.apply && !flags.backupAck) {
     console.error("Refusing --apply without --i-have-a-backup.");
-    console.error(`Back up first:\n  Copy-Item "${flags.dbPath}" "${flags.dbPath}.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"`);
+    console.error(
+      `Back up first:\n  Copy-Item "${flags.dbPath}" "${flags.dbPath}.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"`,
+    );
     console.error("Stop the daemon before applying.");
     process.exit(1);
   }

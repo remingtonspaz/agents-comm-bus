@@ -3,8 +3,14 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { mkdtemp, readFile } from "node:fs/promises";
+
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require("node:sqlite") as {
+  DatabaseSync: new (path: string) => { prepare(sql: string): { run(...args: unknown[]): void }; close(): void };
+};
 
 import {
   isProjectPathNearMatch,
@@ -13,6 +19,7 @@ import {
 import { claudeWakeDirForProject, hashProjectKey } from "../../core-daemon/bridges/claude/wake.js";
 import { ensureCommsForSession } from "../../core-daemon/daemon.js";
 import { JsonlAuditStore } from "../../core-daemon/storage/audit.js";
+import { resolveAccountByLabel } from "../../core-daemon/cli/account-selector.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
 import { CommLeaseArbiter } from "../../core-daemon/runtime/comm-lease.js";
@@ -60,27 +67,37 @@ describe("isProjectPathNearMatch", () => {
 describe("ensureCommsForSession near-miss diagnostic", () => {
   it("audits registration_project_near_miss when casing differs from stored registration", { skip: os.platform() !== "win32" }, async () => {
     const dir = await mkdtemp(join(os.tmpdir(), "acb-near-miss-"));
-    const storage = await openSqliteStorage(join(dir, "db.sqlite"));
+    const dbPath = join(dir, "db.sqlite");
+    await openSqliteStorage(dbPath).then((storage) => storage.close());
     const audit = new JsonlAuditStore(dir);
     const blobs = new ContentAddressedBlobStore(dir);
     const canonical = normalizeProjectPath("D:\\work\\near-miss-project");
     const requested = canonical[0]!.toLowerCase() + canonical.slice(1);
     assert.notEqual(requested, canonical);
 
-    const registration: AccountRegistration = {
-      schema_version: SCHEMA_VERSION_ACCOUNT,
-      registration_id: "reg_near_miss",
-      project: requested,
-      comm: "telegram" as CommId,
-      agent: "claude" as AgentId,
-      account_label: "main",
-      bot_user_id: "bot-near-miss",
-      credentials_ref: "file:test",
-      created_at: 1,
-      updated_at: 1,
-      metadata: null,
-    };
-    await storage.putAccountRegistration(registration);
+    // Simulate a legacy row written before storage-boundary canonicalization.
+    const legacyDb = new DatabaseSync(dbPath);
+    legacyDb
+      .prepare(`
+        INSERT INTO account_registrations (
+          schema_version, registration_id, project, comm, agent, account_label,
+          bot_user_id, credentials_ref, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        SCHEMA_VERSION_ACCOUNT,
+        "reg_near_miss",
+        requested,
+        "telegram",
+        "claude",
+        "main",
+        "bot-near-miss",
+        "file:test",
+        1,
+        1,
+      );
+    legacyDb.close();
+    const storage = await openSqliteStorage(dbPath);
 
     let constructed = 0;
     const factory = {
@@ -126,6 +143,48 @@ describe("ensureCommsForSession near-miss diagnostic", () => {
       .find((event) => event.kind === "registration_project_near_miss");
     assert.ok(nearMiss, "expected registration_project_near_miss audit event");
     assert.deepEqual(nearMiss.detail?.near_match_projects, [requested]);
+    await storage.close();
+  });
+});
+
+describe("storage boundary project normalization", () => {
+  it("finds canonical registrations via non-canonical list filters", { skip: os.platform() !== "win32" }, async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), "acb-storage-project-"));
+    const storage = await openSqliteStorage(join(dir, "db.sqlite"));
+    const canonicalProject = normalizeProjectPath("D:\\Foo\\age52-storage-boundary");
+    const registration: AccountRegistration = {
+      schema_version: SCHEMA_VERSION_ACCOUNT,
+      registration_id: "reg_storage_boundary",
+      project: canonicalProject,
+      comm: "telegram" as CommId,
+      agent: "claude" as AgentId,
+      account_label: "main",
+      bot_user_id: "bot-storage-boundary",
+      credentials_ref: "file:test",
+      created_at: 1,
+      updated_at: 1,
+      metadata: null,
+    };
+    await storage.putAccountRegistration(registration);
+
+    const listed = await storage.listAccountRegistrations({
+      project: "d:\\Foo\\age52-storage-boundary",
+      comm: "telegram" as CommId,
+      agent: "claude" as AgentId,
+    });
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.registration_id, registration.registration_id);
+    assert.equal(listed[0]?.project, canonicalProject);
+
+    const resolved = await resolveAccountByLabel(storage, {
+      comm: "telegram" as CommId,
+      accountLabel: "main",
+      agent: "claude",
+      project: "d:\\Foo\\age52-storage-boundary",
+    });
+    assert.equal(resolved.registration_id, registration.registration_id);
+    assert.equal(resolved.project, canonicalProject);
+
     await storage.close();
   });
 });

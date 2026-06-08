@@ -35,6 +35,7 @@ export class SqliteStorage {
         return new SqliteStorage(db);
     }
     async putAccountRegistration(rec) {
+        const project = normalizeProjectPath(rec.project);
         this.db
             .prepare(`
         INSERT INTO account_registrations (
@@ -48,7 +49,7 @@ export class SqliteStorage {
           updated_at = excluded.updated_at,
           metadata_json = excluded.metadata_json
       `)
-            .run(rec.schema_version, rec.registration_id ?? null, rec.project, rec.comm, rec.agent, rec.account_label, rec.bot_user_id, rec.credentials_ref, rec.bot_username ?? null, rec.created_at, rec.updated_at, encodeJson(rec.metadata));
+            .run(rec.schema_version, rec.registration_id ?? null, project, rec.comm, rec.agent, rec.account_label, rec.bot_user_id, rec.credentials_ref, rec.bot_username ?? null, rec.created_at, rec.updated_at, encodeJson(rec.metadata));
     }
     async getAccountByBot(comm, bot_user_id) {
         const row = this.db
@@ -57,12 +58,16 @@ export class SqliteStorage {
         return row ? this.accountFromRow(row) : null;
     }
     async listAccountRegistrations(filter = {}) {
+        const normalizedFilter = {
+            ...filter,
+            project: filter.project === undefined ? undefined : normalizeProjectPath(filter.project),
+        };
         const clauses = [];
         const params = [];
         for (const key of ["project", "comm", "agent"]) {
-            if (filter[key] !== undefined) {
+            if (normalizedFilter[key] !== undefined) {
                 clauses.push(`${key} = ?`);
-                params.push(filter[key]);
+                params.push(normalizedFilter[key]);
             }
         }
         const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -77,7 +82,7 @@ export class SqliteStorage {
         DELETE FROM account_registrations
         WHERE project = ? AND comm = ? AND agent = ? AND account_label = ?
       `)
-            .run(project, comm, agent, account_label);
+            .run(normalizeProjectPath(project), comm, agent, account_label);
     }
     async updateAccountRegistrationToken(input) {
         this.db.exec("BEGIN IMMEDIATE");
@@ -342,12 +347,16 @@ export class SqliteStorage {
         return null;
     }
     async listConversations(filter = {}) {
+        const normalizedFilter = {
+            ...filter,
+            project: filter.project === undefined ? undefined : normalizeProjectPath(filter.project),
+        };
         const clauses = [];
         const params = [];
         for (const key of ["project", "comm", "agent"]) {
-            if (filter[key] !== undefined) {
+            if (normalizedFilter[key] !== undefined) {
                 clauses.push(`c.${key} = ?`);
-                params.push(filter[key]);
+                params.push(normalizedFilter[key]);
             }
         }
         const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -548,7 +557,7 @@ export class SqliteStorage {
         const params = [];
         if (filter.project !== undefined) {
             where.push("project = ?");
-            params.push(filter.project);
+            params.push(normalizeProjectPath(filter.project));
         }
         if (filter.agent !== undefined) {
             where.push("agent = ?");

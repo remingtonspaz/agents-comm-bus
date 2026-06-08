@@ -5571,6 +5571,7 @@ var SqliteStorage = class _SqliteStorage {
     return new _SqliteStorage(db);
   }
   async putAccountRegistration(rec) {
+    const project = normalizeProjectPath(rec.project);
     this.db.prepare(`
         INSERT INTO account_registrations (
           schema_version, registration_id, project, comm, agent, account_label,
@@ -5585,7 +5586,7 @@ var SqliteStorage = class _SqliteStorage {
       `).run(
       rec.schema_version,
       rec.registration_id ?? null,
-      rec.project,
+      project,
       rec.comm,
       rec.agent,
       rec.account_label,
@@ -5602,12 +5603,16 @@ var SqliteStorage = class _SqliteStorage {
     return row ? this.accountFromRow(row) : null;
   }
   async listAccountRegistrations(filter = {}) {
+    const normalizedFilter = {
+      ...filter,
+      project: filter.project === void 0 ? void 0 : normalizeProjectPath(filter.project)
+    };
     const clauses = [];
     const params = [];
     for (const key of ["project", "comm", "agent"]) {
-      if (filter[key] !== void 0) {
+      if (normalizedFilter[key] !== void 0) {
         clauses.push(`${key} = ?`);
-        params.push(filter[key]);
+        params.push(normalizedFilter[key]);
       }
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -5618,7 +5623,7 @@ var SqliteStorage = class _SqliteStorage {
     this.db.prepare(`
         DELETE FROM account_registrations
         WHERE project = ? AND comm = ? AND agent = ? AND account_label = ?
-      `).run(project, comm, agent, account_label);
+      `).run(normalizeProjectPath(project), comm, agent, account_label);
   }
   async updateAccountRegistrationToken(input) {
     this.db.exec("BEGIN IMMEDIATE");
@@ -5876,12 +5881,16 @@ var SqliteStorage = class _SqliteStorage {
     return null;
   }
   async listConversations(filter = {}) {
+    const normalizedFilter = {
+      ...filter,
+      project: filter.project === void 0 ? void 0 : normalizeProjectPath(filter.project)
+    };
     const clauses = [];
     const params = [];
     for (const key of ["project", "comm", "agent"]) {
-      if (filter[key] !== void 0) {
+      if (normalizedFilter[key] !== void 0) {
         clauses.push(`c.${key} = ?`);
-        params.push(filter[key]);
+        params.push(normalizedFilter[key]);
       }
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -6077,7 +6086,7 @@ var SqliteStorage = class _SqliteStorage {
     const params = [];
     if (filter.project !== void 0) {
       where.push("project = ?");
-      params.push(filter.project);
+      params.push(normalizeProjectPath(filter.project));
     }
     if (filter.agent !== void 0) {
       where.push("agent = ?");
