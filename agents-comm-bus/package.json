@@ -51,6 +51,10 @@
       "import": "./dist/core-daemon/bus.js",
       "types": "./dist/core-daemon/bus.d.ts"
     },
+    "./project-path": {
+      "import": "./dist/core-daemon/project-path.js",
+      "types": "./dist/core-daemon/project-path.d.ts"
+    },
     "./storage/sqlite": {
       "import": "./dist/core-daemon/storage/sqlite.js",
       "types": "./dist/core-daemon/storage/sqlite.d.ts"

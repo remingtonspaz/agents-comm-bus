@@ -37,6 +37,7 @@ import type {
   EnsureCommsForSession,
 } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
+import { normalizeProjectPath } from "../../project-path.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -277,7 +278,7 @@ export class ClaudeBridge implements AgentBridge {
     socket?: { once(event: "close", handler: () => void): void },
   ): Promise<RegisterSessionResult> {
     const session = requiredString(params.session, "session") as SessionId;
-    const project = requiredString(params.project, "project");
+    const project = normalizeProjectPath(requiredString(params.project, "project"));
     const connectionId = typeof params.connection_id === "string"
       ? params.connection_id
       : `claude:${session}:${crypto.randomUUID()}`;

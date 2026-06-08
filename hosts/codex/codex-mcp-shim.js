@@ -11,6 +11,7 @@ import {
   log,
   runMcpShim,
 } from "../common/mcp-shim-shared.js";
+import { normalizeProjectPath } from "../../agents-comm-bus/dist/core-daemon/project-path.js";
 
 let persistentRegistration = null;
 const codexRuntime = {
@@ -239,18 +240,19 @@ async function startPersistentCodexRegistration() {
   if (persistentRegistration) return;
 
   const session = sessionInUse();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "agents-comm-mcp-shim/session-registration",
     agent: "codex",
-    project: process.cwd(),
+    project,
     session,
   };
   const ownerProcess = discoverCodexOwnerProcess(appServerUrl);
   const registerParams = {
     agent: "codex",
     session,
-    project: process.cwd(),
-    cwd: process.cwd(),
+    project,
+    cwd: project,
     app_server_url: appServerUrl,
     owner_process_pid: ownerProcess.pid,
     owner_process_label: ownerProcess.label,

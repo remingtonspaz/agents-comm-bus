@@ -6,6 +6,7 @@ import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
 import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
+import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import type { EnsureCommsForSession } from "../../core-daemon/runtime/agent-bridge.js";
 import type { AgentId, SessionId } from "../../packages/core-contracts/src/types.js";
 
@@ -30,6 +31,8 @@ function recordingEnsureWithReadiness(
 
 registerTempDirCleanup();
 
+const PROJECT_A = normalizeProjectPath("project-a");
+
 describe("AGE-45 register-session ensureCommsForSession refresh", () => {
   it("Codex acquired lease calls ensure after connect/trackSession and preserves response shape", async () => {
     const dir = await makeTempDir("acb-age45-codex-acquire-");
@@ -39,7 +42,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
     const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
       const tracked = (bridge as unknown as {
         sessionsByProject: Map<string, Set<SessionId>>;
-      }).sessionsByProject.get("project-a")?.has(session);
+      }).sessionsByProject.get(PROJECT_A)?.has(session);
       return tracked === true;
     });
     bridge = new CodexBridge({
@@ -58,7 +61,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(result.ok, true);
       assert.ok(result.capabilities);
       assert.equal(result.reason, undefined);
-      assert.deepEqual(calls, [{ project: "project-a", agent: "codex", bridgeReady: true }]);
+      assert.deepEqual(calls, [{ project: PROJECT_A, agent: "codex", bridgeReady: true }]);
     } finally {
       await storage.close();
     }
@@ -72,7 +75,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
     const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
       const tracked = (bridge as unknown as {
         sessionsByProject: Map<string, Set<SessionId>>;
-      }).sessionsByProject.get("project-a")?.has(session);
+      }).sessionsByProject.get(PROJECT_A)?.has(session);
       return tracked === true;
     });
     bridge = new CodexBridge({
@@ -100,7 +103,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.ok(held.capabilities);
       assert.equal(calls.length, 2);
       assert.equal(calls[0].bridgeReady, true, "acquired path ensures only after trackSession");
-      assert.equal(calls[1].project, "project-a");
+      assert.equal(calls[1].project, PROJECT_A);
       assert.equal(calls[1].agent, "codex");
     } finally {
       await storage.close();
@@ -135,7 +138,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(typeof result.wake_dir, "string");
       assert.ok(result.wake_dir!.length > 0);
       assert.equal(result.reason, undefined);
-      assert.deepEqual(calls, [{ project: "project-a", agent: "claude", bridgeReady: true }]);
+      assert.deepEqual(calls, [{ project: PROJECT_A, agent: "claude", bridgeReady: true }]);
     } finally {
       await storage.close();
     }
@@ -177,7 +180,7 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       assert.equal(held.wake_dir, undefined);
       assert.equal(calls.length, 2);
       assert.equal(calls[0].bridgeReady, true, "acquired path ensures only after wake registration");
-      assert.equal(calls[1].project, "project-a");
+      assert.equal(calls[1].project, PROJECT_A);
       assert.equal(calls[1].agent, "claude");
     } finally {
       await storage.close();

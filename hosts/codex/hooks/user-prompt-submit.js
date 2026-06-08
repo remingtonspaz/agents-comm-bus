@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
 
 const CLIENT_VERSION = 'codex-hook-phase3';
 
@@ -115,7 +116,7 @@ function formatInboundMessages(items) {
 async function main() {
   const hookInput = await readStdinJson();
   const session = stableSessionId(hookInput);
-  const project = process.cwd();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: 'hosts/codex/hooks/user-prompt-submit.js',
     agent: 'codex',

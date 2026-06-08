@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
+import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import type { PendingInboundEntry } from "../../core-daemon/runtime/pending-inbound.js";
 import type {
@@ -143,10 +144,12 @@ async function waitForLeaseRelease(
   }
 }
 
+const PROJECT_A = normalizeProjectPath("project-a");
+
 function registrationRecord(): AccountRegistration {
   return {
     schema_version: SCHEMA_VERSION_ACCOUNT,
-    project: "project-a",
+    project: PROJECT_A,
     agent: "codex" as AgentId,
     comm: "telegram" as CommId,
     account_label: "main",
@@ -160,7 +163,7 @@ function registrationRecord(): AccountRegistration {
 function conversationRecord(): Conversation {
   return {
     schema_version: SCHEMA_VERSION_CONVERSATION,
-    project: "project-a",
+    project: PROJECT_A,
     agent: "codex" as AgentId,
     comm: "telegram" as CommId,
     account_label: "main",

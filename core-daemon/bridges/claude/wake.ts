@@ -9,6 +9,8 @@ import type {
   Storage,
 } from "agents-comm-bus-core";
 
+import { normalizeProjectPath } from "../../project-path.js";
+
 export interface ClaudeWakeRegistration {
   session: SessionId;
   project: string;
@@ -29,14 +31,14 @@ export function claudeWakeDirForProject(
   projectPath: string,
   homeDir = os.homedir(),
 ): string {
-  const resolved = path.resolve(projectPath);
-  const basename = path.basename(resolved) || "project";
+  const canonical = normalizeProjectPath(projectPath);
+  const basename = path.basename(canonical) || "project";
   return path.join(
     homeDir,
     ".agents-comm-bus",
     "claude-wake",
     "sessions",
-    `${basename}-${hashProjectKey(resolved)}`,
+    `${basename}-${hashProjectKey(canonical)}`,
   );
 }
 
@@ -91,10 +93,11 @@ export class ClaudeWakeRegistry {
     project: string;
     wakeDir?: string;
   }): ClaudeWakeRegistration {
+    const project = normalizeProjectPath(input.project);
     const registration: ClaudeWakeRegistration = {
       session: input.session,
-      project: path.resolve(input.project),
-      wakeDir: input.wakeDir ?? claudeWakeDirForProject(input.project),
+      project,
+      wakeDir: input.wakeDir ?? claudeWakeDirForProject(project),
       registeredAt: this.now(),
     };
     this.registrations.set(input.session, registration);
@@ -102,7 +105,7 @@ export class ClaudeWakeRegistry {
   }
 
   latestForProject(project: string): ClaudeWakeRegistration | undefined {
-    const resolved = path.resolve(project);
+    const resolved = normalizeProjectPath(project);
     let latest: ClaudeWakeRegistration | undefined;
     for (const registration of this.registrations.values()) {
       if (registration.project !== resolved) continue;
@@ -150,7 +153,7 @@ export class ClaudeWakeRegistry {
     project: string,
   ): Promise<ClaudeWakeRegistration | undefined> {
     if (!this.storage) return undefined;
-    const resolved = path.resolve(project);
+    const resolved = normalizeProjectPath(project);
     const sessions = await this.storage.listSessions({
       project: resolved,
       agent: "claude" as AgentId,

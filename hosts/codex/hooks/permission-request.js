@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
 
 const CLIENT_VERSION = 'codex-hook-phase3';
 const DEFAULT_TTL_SECONDS = 9 * 60;
@@ -109,7 +110,7 @@ async function main() {
   const toolName = hookInput.tool_name || hookInput.toolName || 'PermissionRequest';
   const toolInput = hookInput.tool_input || hookInput.toolInput || {};
   const session = stableSessionId(hookInput);
-  const project = process.cwd();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: 'hosts/codex/hooks/permission-request.js',
     agent: 'codex',

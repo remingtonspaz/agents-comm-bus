@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
 
 const CLIENT_VERSION = 'codex-session-start-bootstrap';
 const RESTART_GUARD_MS = 60_000;
@@ -225,7 +226,7 @@ async function main() {
   const hookInput = await readStdinJson();
   const threadId = codexThreadId(hookInput);
   const session = stableSessionId(hookInput);
-  const project = process.cwd();
+  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: 'hosts/codex/hooks/session-start.js',
     agent: 'codex',

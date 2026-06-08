@@ -5,12 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { claudeWakeDirForProject } from '../../../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js';
+import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export function resolveProjectPath() {
-  return path.resolve(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
+  return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
 
 export function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {

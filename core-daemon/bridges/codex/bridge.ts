@@ -18,6 +18,7 @@ import {
   type Storage,
 } from "agents-comm-bus-core";
 
+import { normalizeProjectPath } from "../../project-path.js";
 import type { MessageBus } from "../../bus.js";
 import type {
   AgentBridge,
@@ -151,7 +152,7 @@ export class CodexBridge implements AgentBridge {
 
   async onInboundConversation(conversation: Conversation): Promise<void> {
     if (conversation.agent !== this.agentId) return;
-    const sessions = this.sessionsByProject.get(conversation.project);
+    const sessions = this.sessionsByProject.get(normalizeProjectPath(conversation.project));
     const session = sessions?.values().next().value as SessionId | undefined;
     if (!session) {
       await this.auditWake("agent_wake_skipped", conversation, undefined, {
@@ -222,7 +223,7 @@ export class CodexBridge implements AgentBridge {
   }
 
   async bootstrapStatus(params: Record<string, unknown>): Promise<CodexBootstrapStatusResult> {
-    const project = requiredString(params.project, "project");
+    const project = normalizeProjectPath(requiredString(params.project, "project"));
     const registrations = await this.options.storage.listAccountRegistrations({
       project,
       agent: this.agentId,
@@ -259,7 +260,7 @@ export class CodexBridge implements AgentBridge {
     socket?: { once(event: "close", handler: () => void): void },
   ): Promise<RegisterCodexSessionResult> {
     const session = requiredString(params.session, "session") as SessionId;
-    const project = requiredString(params.project, "project");
+    const project = normalizeProjectPath(requiredString(params.project, "project"));
     const connectionId = typeof params.connection_id === "string"
       ? params.connection_id
       : `codex:${session}:${crypto.randomUUID()}`;

@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+import { normalizeProjectPath } from "./project-path.js";
+
 import type {
   AccountId,
   AccountRegistration,
@@ -331,7 +333,7 @@ export class MessageBus {
       try {
         const registration = await this.registrationFor(query.origin_chat);
         const conversation = await this.options.storage.findConversation({
-          project: registration.project,
+          project: normalizeProjectPath(registration.project),
           agent: registration.agent,
           comm: query.origin_chat.comm,
           bot_user_id: registration.bot_user_id,
@@ -597,7 +599,7 @@ export class MessageBus {
   ): Promise<Conversation> {
     const conversation: Conversation = {
       schema_version: SCHEMA_VERSION_CONVERSATION,
-      project: registration.project,
+      project: normalizeProjectPath(registration.project),
       comm: registration.comm,
       account_label: registration.account_label,
       bot_user_id: registration.bot_user_id,
@@ -644,7 +646,7 @@ export class MessageBus {
   private async findConversationForTarget(target: ChatRef): Promise<Conversation> {
     const registration = await this.registrationFor(target);
     const conversation = await this.options.storage.findConversation({
-      project: registration.project,
+      project: normalizeProjectPath(registration.project),
       agent: registration.agent,
       comm: target.comm,
       bot_user_id: registration.bot_user_id,
@@ -655,7 +657,7 @@ export class MessageBus {
     if (!conversation) {
       const created: Conversation = {
         schema_version: SCHEMA_VERSION_CONVERSATION,
-        project: registration.project,
+        project: normalizeProjectPath(registration.project),
         comm: registration.comm,
         account_label: registration.account_label,
         bot_user_id: registration.bot_user_id,

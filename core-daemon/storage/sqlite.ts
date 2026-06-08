@@ -25,6 +25,7 @@ import type {
   QueryId,
   SessionId,
 } from "agents-comm-bus-core";
+import { normalizeProjectPath } from "../project-path.js";
 import { runStorageMigrations, type SqliteLike } from "./schema/runner.js";
 
 const require = createRequire(import.meta.url);
@@ -322,6 +323,7 @@ export class SqliteStorage implements Storage {
   }
 
   async upsertConversation(rec: Conversation): Promise<ConversationId> {
+    rec = { ...rec, project: normalizeProjectPath(rec.project) };
     // AGE-20 Phase 2: resolve the existing conversation by its STABLE identity
     // (registration_id, chat, thread) and update it in place, PRESERVING its
     // conversation_id. This stops the drift: a registration field change (e.g.
@@ -468,7 +470,7 @@ export class SqliteStorage implements Storage {
             AND c.chat_native_id = ? AND c.thread_native_id = ?
         `)
         .get(
-          pk.project,
+          normalizeProjectPath(pk.project),
           pk.agent,
           pk.comm,
           pk.bot_user_id,
@@ -679,6 +681,7 @@ export class SqliteStorage implements Storage {
   }
 
   async upsertSession(rec: Session): Promise<void> {
+    const project = normalizeProjectPath(rec.project);
     this.db
       .prepare(`
         INSERT INTO sessions (
@@ -697,7 +700,7 @@ export class SqliteStorage implements Storage {
         rec.schema_version,
         rec.session_id,
         rec.agent,
-        rec.project,
+        project,
         rec.created_at,
         rec.lease_holder_connection_id,
         rec.lease_acquired_at,

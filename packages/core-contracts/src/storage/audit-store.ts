@@ -33,6 +33,9 @@ export type AuditEventKind =
   | "comm_lease_released"
   | "registration_added"
   | "registration_removed"
+  // AGE-52: session registered for a project with no exact registration row,
+  // but stored rows exist whose canonical form matches (path casing/separator drift).
+  | "registration_project_near_miss"
   | "loop_prevention_drop"
   // AGE-10: an inbound update dropped by an ADAPTER-level filter (allowlist /
   // missing sender id) before it reached the bus — previously silent.

@@ -38,6 +38,7 @@ import {
   reloadAdapters,
 } from "../../core-daemon/daemon.js";
 import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
+import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 
 const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;
@@ -110,7 +111,7 @@ class FakeAdapter implements CommAdapter {
 function registration(project: string, botId: string): AccountRegistration {
   return {
     schema_version: SCHEMA_VERSION_ACCOUNT,
-    project,
+    project: normalizeProjectPath(project),
     comm: TELEGRAM,
     agent: CLAUDE,
     account_label: "main",
@@ -380,7 +381,7 @@ describe("AGE-38 lazy, session-triggered comm-adapter instantiation", () => {
         blobs,
         stateRoot: dir,
         leaseArbiter: makeArbiter(dir),
-        activeScopes: new Set([`${CLAUDE}:projA`]),
+        activeScopes: new Set([`${CLAUDE}:${normalizeProjectPath("projA")}`]),
       });
 
       assert.ok(
