@@ -260,6 +260,8 @@ class RecordingStorage implements Partial<Storage> {
     });
   }
 
+  async acknowledgePendingInboundDeliveries(): Promise<void> {}
+
   async getSession(session: SessionId): Promise<Session | null> {
     return this.sessions.get(session) ?? null;
   }
