@@ -13,13 +13,38 @@ import {
   type IpcResponse,
 } from "./protocol.js";
 
+/** Conservative default for in-flight IPC requests (Codex permission hooks may wait up to ~9m). */
+export const DEFAULT_IPC_REQUEST_TIMEOUT_MS = 10 * 60 * 1_000;
+
+export class IpcRequestTimeoutError extends Error {
+  readonly requestId: string;
+  readonly method: string;
+  readonly timeoutMs: number;
+
+  constructor(requestId: string, method: string, timeoutMs: number) {
+    super(
+      `agents-comm-bus IPC request timed out after ${timeoutMs}ms ` +
+        `(method=${method}, id=${requestId}). ` +
+        "The daemon may be hung; restart it (kill the PID in ~/.agents-comm-bus/daemon.pid, " +
+        "remove port + daemon.pid) and retry.",
+    );
+    this.name = "IpcRequestTimeoutError";
+    this.requestId = requestId;
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 export interface IpcClientOptions {
   host?: string;
   port: number;
   protocolVersion?: string;
   clientVersion: string;
   metadata?: DiagnosticMetadata;
+  /** Connect + handshake timeout. Default 1s. */
   timeoutMs?: number;
+  /** Per-request timeout after handshake. Default {@link DEFAULT_IPC_REQUEST_TIMEOUT_MS}. */
+  requestTimeoutMs?: number;
 }
 
 export interface IpcClientConnection {
@@ -32,6 +57,7 @@ export interface IpcClientConnection {
 export async function connectIpc(options: IpcClientOptions): Promise<IpcClientConnection> {
   const host = options.host ?? IPC_HOST;
   const timeoutMs = options.timeoutMs ?? 1_000;
+  const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_IPC_REQUEST_TIMEOUT_MS;
   const socket = new WebSocket(`ws://${host}:${options.port}`);
 
   const hello = await new Promise<DaemonHello>((resolve, reject) => {
@@ -75,32 +101,77 @@ export async function connectIpc(options: IpcClientOptions): Promise<IpcClientCo
   return {
     socket,
     hello,
-    request: (method, params) => sendRequest(socket, createRequest(method, params)),
+    request: (method, params) =>
+      sendRequest(socket, createRequest(method, params), requestTimeoutMs),
     close: () => socket.close(),
   };
 }
 
-async function sendRequest<T>(socket: WebSocket, request: IpcRequest): Promise<T> {
+async function sendRequest<T>(
+  socket: WebSocket,
+  request: IpcRequest,
+  requestTimeoutMs: number,
+): Promise<T> {
   socket.send(JSON.stringify(request));
   return new Promise<T>((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      socket.off("message", onMessage);
+    };
+
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+
+    const timeout = setTimeout(() => {
+      settle(() => {
+        reject(new IpcRequestTimeoutError(request.id, request.method, requestTimeoutMs));
+      });
+    }, requestTimeoutMs);
+    timeout.unref?.();
+
     const onMessage = (data: RawData) => {
       try {
         const message = parseIpcMessage(data);
         if (message.type !== IPC_MESSAGE_TYPES.response || message.id !== request.id) {
           return;
         }
-        socket.off("message", onMessage);
         const response = message as IpcResponse;
         if (!response.ok) {
-          reject(new Error(response.error ?? "agents-comm-bus request failed"));
+          settle(() => {
+            reject(new Error(response.error ?? "agents-comm-bus request failed"));
+          });
           return;
         }
-        resolve(response.result as T);
+        settle(() => {
+          resolve(response.result as T);
+        });
       } catch (error) {
-        socket.off("message", onMessage);
-        reject(error);
+        settle(() => {
+          reject(error);
+        });
       }
     };
+
+    const onError = (error: Error) => {
+      settle(() => {
+        reject(error);
+      });
+    };
+
+    const onClose = () => {
+      settle(() => {
+        reject(new Error("agents-comm-bus IPC socket closed before the request completed."));
+      });
+    };
+
     socket.on("message", onMessage);
+    socket.once("error", onError);
+    socket.once("close", onClose);
   });
 }

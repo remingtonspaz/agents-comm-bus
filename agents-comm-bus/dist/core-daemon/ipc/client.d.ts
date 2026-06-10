@@ -1,12 +1,23 @@
 import WebSocket from "ws";
 import { type DaemonHello, type DiagnosticMetadata } from "./protocol.js";
+/** Conservative default for in-flight IPC requests (Codex permission hooks may wait up to ~9m). */
+export declare const DEFAULT_IPC_REQUEST_TIMEOUT_MS: number;
+export declare class IpcRequestTimeoutError extends Error {
+    readonly requestId: string;
+    readonly method: string;
+    readonly timeoutMs: number;
+    constructor(requestId: string, method: string, timeoutMs: number);
+}
 export interface IpcClientOptions {
     host?: string;
     port: number;
     protocolVersion?: string;
     clientVersion: string;
     metadata?: DiagnosticMetadata;
+    /** Connect + handshake timeout. Default 1s. */
     timeoutMs?: number;
+    /** Per-request timeout after handshake. Default {@link DEFAULT_IPC_REQUEST_TIMEOUT_MS}. */
+    requestTimeoutMs?: number;
 }
 export interface IpcClientConnection {
     socket: WebSocket;
