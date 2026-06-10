@@ -12,6 +12,8 @@ node_modules/
 # (canonical config lives in .claude-plugin/plugin.json under mcpServers)
 .mcp.json
 !plugins/codex/telegram/.mcp.json
+!plugins/codex/discord/.mcp.json
+!plugins/codex/matrix/.mcp.json
 
 # Local source-mode switch for central-install development
 .agents-comm-bus-dev.json
