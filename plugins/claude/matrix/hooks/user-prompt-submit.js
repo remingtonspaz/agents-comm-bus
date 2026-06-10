@@ -5030,6 +5030,21 @@ function findCmdAncestor(log = () => {
     return null;
   }
 }
+function enterWatcherScriptCandidates(fromDir = __dirname) {
+  return [
+    // Staged plugin MCP shim: plugins/claude/<comm>/scripts/
+    path12.resolve(fromDir, "scripts", "enter-watcher.ps1"),
+    // Staged hook bundle: <plugin>/hooks/ → ../scripts/
+    path12.resolve(fromDir, "..", "scripts", "enter-watcher.ps1"),
+    // MCP shim dev bundle (mcp-server/dist) or hosts/claude source → <repo>/scripts/
+    path12.resolve(fromDir, "..", "..", "scripts", "enter-watcher.ps1"),
+    // Source hook tree: hosts/claude/hooks/ → ../../../scripts/
+    path12.resolve(fromDir, "..", "..", "..", "scripts", "enter-watcher.ps1")
+  ];
+}
+function resolveEnterWatcherScript(fromDir = __dirname) {
+  return enterWatcherScriptCandidates(fromDir).find((candidate) => fs.existsSync(candidate)) ?? null;
+}
 function escapeForPwshSingleQuoted(value) {
   return String(value).replace(/'/g, "''");
 }
@@ -5082,10 +5097,7 @@ function ensureClaudeWakeWatcher(options = {}) {
   if (existingPid && isPidAlive(existingPid)) {
     return { started: false, pid: existingPid, wakeDir, reason: "already_running" };
   }
-  const watcherScript = [
-    path12.resolve(__dirname, "..", "scripts", "enter-watcher.ps1"),
-    path12.resolve(__dirname, "..", "..", "..", "scripts", "enter-watcher.ps1")
-  ].find((candidate) => fs.existsSync(candidate));
+  const watcherScript = resolveEnterWatcherScript(__dirname);
   if (!watcherScript) {
     log("ERROR: Watcher script not found (enter-watcher.ps1) in any known layout");
     return { started: false, wakeDir, reason: "missing_script" };

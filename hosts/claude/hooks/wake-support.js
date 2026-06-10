@@ -107,6 +107,23 @@ export function findClaudeWindowPid(log = () => {}) {
   return findCmdAncestor(log)?.pid ?? null;
 }
 
+export function enterWatcherScriptCandidates(fromDir = __dirname) {
+  return [
+    // Staged plugin MCP shim: plugins/claude/<comm>/scripts/
+    path.resolve(fromDir, 'scripts', 'enter-watcher.ps1'),
+    // Staged hook bundle: <plugin>/hooks/ → ../scripts/
+    path.resolve(fromDir, '..', 'scripts', 'enter-watcher.ps1'),
+    // MCP shim dev bundle (mcp-server/dist) or hosts/claude source → <repo>/scripts/
+    path.resolve(fromDir, '..', '..', 'scripts', 'enter-watcher.ps1'),
+    // Source hook tree: hosts/claude/hooks/ → ../../../scripts/
+    path.resolve(fromDir, '..', '..', '..', 'scripts', 'enter-watcher.ps1'),
+  ];
+}
+
+export function resolveEnterWatcherScript(fromDir = __dirname) {
+  return enterWatcherScriptCandidates(fromDir).find((candidate) => fs.existsSync(candidate)) ?? null;
+}
+
 function escapeForPwshSingleQuoted(value) {
   return String(value).replace(/'/g, "''");
 }
@@ -165,15 +182,7 @@ export function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, pid: existingPid, wakeDir, reason: 'already_running' };
   }
 
-  // Resolve enter-watcher.ps1 across both layouts this file runs in:
-  //   - source tree:    hosts/claude/hooks/      → ../../../scripts/
-  //   - staged plugin:   <plugin>/hooks/ (bundled) → ../scripts/
-  // Try each candidate and take the first that exists, so the same code works
-  // whether run from the checkout or from an esbuilt, staged hook bundle.
-  const watcherScript = [
-    path.resolve(__dirname, '..', 'scripts', 'enter-watcher.ps1'),
-    path.resolve(__dirname, '..', '..', '..', 'scripts', 'enter-watcher.ps1'),
-  ].find((candidate) => fs.existsSync(candidate));
+  const watcherScript = resolveEnterWatcherScript(__dirname);
   if (!watcherScript) {
     log('ERROR: Watcher script not found (enter-watcher.ps1) in any known layout');
     return { started: false, wakeDir, reason: 'missing_script' };
