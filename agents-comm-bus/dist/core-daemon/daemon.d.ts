@@ -4,7 +4,7 @@ import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
-import type { AgentBridge, AgentBridgeFactory } from "./runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeFactory, EnsureCommsForSession } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 export type { AgentBridge, AgentBridgeFactory, AgentBridgeContext, } from "./runtime/agent-bridge.js";
@@ -193,4 +193,9 @@ export declare function reloadAdapters(input: {
  * Returned entries preserve queue order (oldest first).
  */
 export declare function drainPendingInbound(queue: PendingInboundEntry[], params?: Record<string, unknown> | undefined): PendingInboundEntry[];
+export declare function handleEnsureCommsForScope(params: Record<string, unknown>, ensureCommsForSession: EnsureCommsForSession): Promise<{
+    ok: true;
+    project: string;
+    agent: AgentId;
+}>;
 //# sourceMappingURL=daemon.d.ts.map

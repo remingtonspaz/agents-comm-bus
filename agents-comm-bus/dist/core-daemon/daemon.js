@@ -270,6 +270,7 @@ export async function runDaemon(options) {
                 env,
                 socket,
                 reloadRegistrations,
+                ensureCommsForSession: ensureCommsForSessionFn,
             });
         },
     });
@@ -803,8 +804,23 @@ async function reportRegistrationProjectNearMiss(input) {
             .catch(() => { });
     }
 }
+export async function handleEnsureCommsForScope(params, ensureCommsForSession) {
+    const rawProject = params.project;
+    if (typeof rawProject !== "string" || rawProject.trim() === "") {
+        throw new Error("ensure_comms_for_scope requires params.project");
+    }
+    const agent = (typeof params.agent === "string" && params.agent.trim() !== ""
+        ? params.agent
+        : "claude");
+    const canonicalProject = normalizeProjectPath(rawProject);
+    await ensureCommsForSession(canonicalProject, agent);
+    return { ok: true, project: canonicalProject, agent };
+}
 async function dispatchIpc(request, context) {
     const params = (request.params ?? {});
+    if (request.method === "ensure_comms_for_scope") {
+        return handleEnsureCommsForScope(params, context.ensureCommsForSession);
+    }
     if (request.method === "list_conversations") {
         return context.bus.listConversations({
             comm: params.comm,

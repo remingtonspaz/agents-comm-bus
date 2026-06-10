@@ -54,11 +54,17 @@ test("IPC protocol fingerprint fails a wire-shape change without a protocol bump
 
 test("IPC protocol fingerprint accepts a wire-shape change with a protocol bump", () => {
   const base = baseFiles();
+  const versionMatch = base[IPC_FILES.config].match(
+    /export const IPC_PROTOCOL_VERSION = "([^"]+)";/,
+  );
+  assert.ok(versionMatch, "config must declare IPC_PROTOCOL_VERSION");
+  const baseVersion = versionMatch[1]!;
+  const bumpedVersion = bumpMinorProtocolVersion(baseVersion);
   const changed = {
     ...base,
     [IPC_FILES.config]: base[IPC_FILES.config].replace(
-      'export const IPC_PROTOCOL_VERSION = "1.0.0";',
-      'export const IPC_PROTOCOL_VERSION = "1.1.0";',
+      `export const IPC_PROTOCOL_VERSION = "${baseVersion}";`,
+      `export const IPC_PROTOCOL_VERSION = "${bumpedVersion}";`,
     ),
     [IPC_FILES.protocol]: addDaemonHelloCapability(base[IPC_FILES.protocol]),
   };
@@ -66,8 +72,8 @@ test("IPC protocol fingerprint accepts a wire-shape change with a protocol bump"
   const result = evaluateProtocolChange(contract(base), contract(changed));
   assert.equal(result.ok, true);
   assert.equal(result.reason, "protocol-bumped");
-  assert.equal(result.baseProtocol, "1.0.0");
-  assert.equal(result.headProtocol, "1.1.0");
+  assert.equal(result.baseProtocol, baseVersion);
+  assert.equal(result.headProtocol, bumpedVersion);
 });
 
 test("IPC protocol fingerprint accepts a deliberate compat note", () => {
@@ -81,6 +87,11 @@ test("IPC protocol fingerprint accepts a deliberate compat note", () => {
   assert.equal(result.ok, true);
   assert.equal(result.reason, "compat-note");
 });
+
+function bumpMinorProtocolVersion(version: string): string {
+  const [major, minor = "0"] = version.split(".");
+  return `${major}.${Number(minor) + 1}.0`;
+}
 
 function addDaemonHelloCapability(source: string): string {
   return source.replace(
