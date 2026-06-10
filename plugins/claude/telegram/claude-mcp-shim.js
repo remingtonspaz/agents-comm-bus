@@ -3232,8 +3232,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path10) {
-      let input = path10;
+    function removeDotSegments(path13) {
+      let input = path13;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3485,8 +3485,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path10, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path10 && path10 !== "/" ? path10 : void 0;
+        const [path13, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path13 && path13 !== "/" ? path13 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -12574,12 +12574,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs, exportName) {
+    function addFormats(ajv, list, fs2, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs[f]);
+        ajv.addFormat(f, fs2[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -16448,10 +16448,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path10) {
-  if (!path10)
+function getElementAtPath(obj, path13) {
+  if (!path13)
     return obj;
-  return path10.reduce((acc, key) => acc?.[key], obj);
+  return path13.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -16860,11 +16860,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path10, issues) {
+function prefixIssues(path13, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path10);
+    iss.path.unshift(path13);
     return iss;
   });
 }
@@ -17011,16 +17011,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path10 = []) => {
+  const processError = (error3, path13 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path10, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path10, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
       } else {
-        const fullpath = [...path10, ...issue2.path];
+        const fullpath = [...path13, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -24789,8 +24789,8 @@ import { dirname, join } from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
-async function appendJsonLine(path10, value) {
-  const handle = await open(path10, "a");
+async function appendJsonLine(path13, value) {
+  const handle = await open(path13, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -24810,9 +24810,9 @@ var JsonlAuditStore = class {
     this.root = root;
   }
   async append(event) {
-    const path10 = this.pathFor(event.timestamp);
-    await mkdir(dirname(path10), { recursive: true });
-    await appendJsonLine(path10, event);
+    const path13 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path13), { recursive: true });
+    await appendJsonLine(path13, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
@@ -25229,9 +25229,9 @@ async function ensureDaemon(options = {}) {
     isPidAlive: options.isPidAlive ?? defaultIsPidAlive2
   });
   let spawned = false;
-  const isPidAlive = options.isPidAlive ?? defaultIsPidAlive2;
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
   const spawnLockOptions = {
-    isPidAlive,
+    isPidAlive: isPidAlive2,
     staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(timeoutMs)
   };
   while (Date.now() <= deadline) {
@@ -25264,7 +25264,7 @@ async function ensureDaemon(options = {}) {
       stateRoot: paths.root,
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
-      isPidAlive
+      isPidAlive: isPidAlive2
     });
     await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
   }
@@ -25525,7 +25525,7 @@ function parseVersion(v) {
     return Number.isInteger(num) ? num : s;
   });
 }
-async function executeInstallPlan(plan, actor, paths, fs) {
+async function executeInstallPlan(plan, actor, paths, fs2) {
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
   if (plan.daemon.writeBundle && !daemonSrc) {
@@ -25542,37 +25542,37 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
     const binDir = dirname2(paths.daemonBundle);
-    await fs.mkdirp(binDir);
-    await fs.copyFile(
+    await fs2.mkdirp(binDir);
+    await fs2.copyFile(
       /** @type {string} */
       daemonSrc,
       paths.daemonBundle
     );
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
+      await fs2.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
     }
-    await fs.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs2.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.daemonVersionFile));
-    await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
+    await fs2.mkdirp(dirname2(paths.daemonVersionFile));
+    await fs2.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
     const adapterDir = dirname2(paths.adapterBundle);
-    await fs.mkdirp(adapterDir);
-    await fs.copyFile(
+    await fs2.mkdirp(adapterDir);
+    await fs2.copyFile(
       /** @type {string} */
       adapterSrc,
       paths.adapterBundle
     );
-    await fs.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs2.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.adapterVersionFile));
-    await fs.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
+    await fs2.mkdirp(dirname2(paths.adapterVersionFile));
+    await fs2.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
   return { wroteBundles, wroteVersionFiles };
@@ -25582,19 +25582,19 @@ function serialize(record2) {
 `;
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
-async function installCliLaunchers(paths, cliSrc, fs) {
+async function installCliLaunchers(paths, cliSrc, fs2) {
   const binDir = dirname2(paths.cliBundle);
-  await fs.mkdirp(binDir);
-  await fs.copyFile(cliSrc, paths.cliBundle);
+  await fs2.mkdirp(binDir);
+  await fs2.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
+    await fs2.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
     const posix = join2(binDir, name);
-    await fs.writeFile(posix, `#!/bin/sh
+    await fs2.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
-    await fs.chmod?.(posix, 493);
+    await fs2.chmod?.(posix, 493);
   }
 }
 function dirname2(p) {
@@ -25744,7 +25744,7 @@ function isAlreadyExistsError2(error2) {
 // common/install/run-central-install.js
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
-  const fs = deps.fs ?? createAtomicNodeFsSeam();
+  const fs2 = deps.fs ?? createAtomicNodeFsSeam();
   const lockPath = path6.join(stateRoot2, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
@@ -25752,11 +25752,11 @@ async function runCentralInstall(stateRoot2, actor, deps = {}) {
     state.daemonRunning = deps.daemonRunning ?? false;
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot2, actor.comm);
-    const result = await executeInstallPlan(plan, actor, paths, fs);
+    const result = await executeInstallPlan(plan, actor, paths, fs2);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
       const cliSrc = path6.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
-        await installCliLaunchers(paths, cliSrc, fs);
+        await installCliLaunchers(paths, cliSrc, fs2);
         result.wroteBundles.push(paths.cliBundle);
       }
     }
@@ -26094,10 +26094,12 @@ function startEnsureCommsHeartbeat(options) {
   const scheduleTimer = options.deps?.scheduleTimer ?? ((fn, delayMs) => setTimeout(fn, delayMs));
   const pathExistsFn = options.deps?.pathExists ?? existsSync5;
   const ensureAtStartup = options.deps?.ensureCommsForScopeAtStartup ?? ensureCommsForScopeAtStartup;
+  const ensureWatcher = options.deps?.ensureWatcher;
   const logFn = options.deps?.log ?? log;
   let stopped = false;
   let timer = null;
   let loggedFailure = false;
+  let loggedWatcherFailure = false;
   const resolveStateRoot = () => options.resolveStateRoot?.() ?? resolveMcpShimStateRoot(options);
   async function isPaused() {
     try {
@@ -26141,6 +26143,32 @@ function startEnsureCommsHeartbeat(options) {
           `ensure_comms_for_scope heartbeat failed: ${error2 instanceof Error ? error2.message : String(error2)} (suppressing until success)`
         );
         loggedFailure = true;
+      }
+    }
+    if (ensureWatcher) {
+      try {
+        const watcherResult = await ensureWatcher();
+        if (watcherResult?.started === true) {
+          loggedWatcherFailure = false;
+          logFn(
+            `enter-watcher was dead \u2014 respawned (pid ${watcherResult.pid ?? "unknown"})`
+          );
+        } else if (watcherResult?.reason === "already_running" || watcherResult?.reason === "raced_already_running" || watcherResult?.reason === "unsupported_platform" || watcherResult?.reason === "lock_held") {
+          loggedWatcherFailure = false;
+        } else if (!loggedWatcherFailure) {
+          const detail = watcherResult?.reason ?? watcherResult?.error ?? "unknown watcher ensure failure";
+          logFn(
+            `enter-watcher heartbeat failed: ${detail} (suppressing until success)`
+          );
+          loggedWatcherFailure = true;
+        }
+      } catch (error2) {
+        if (!loggedWatcherFailure) {
+          logFn(
+            `enter-watcher heartbeat failed: ${error2 instanceof Error ? error2.message : String(error2)} (suppressing until success)`
+          );
+          loggedWatcherFailure = true;
+        }
       }
     }
     scheduleNext();
@@ -26397,6 +26425,253 @@ function installShutdownHandlers(close) {
   });
 }
 
+// claude/hooks/wake-support.js
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import os3 from "node:os";
+import path12 from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js
+import os2 from "node:os";
+import path11 from "node:path";
+
+// ../agents-comm-bus/dist/core-daemon/project-path.js
+import path10 from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path10.resolve(project);
+  if (path10.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path10.sep || path10.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path10.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
+// ../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js
+function hashProjectKey(projectPath) {
+  let hash = 2166136261;
+  for (let i = 0; i < projectPath.length; i += 1) {
+    hash ^= projectPath.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+function claudeWakeDirForProject(projectPath, homeDir = os2.homedir()) {
+  const canonical = normalizeProjectPath(projectPath);
+  const basename = path11.basename(canonical) || "project";
+  return path11.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
+}
+
+// claude/hooks/wake-support.js
+var __filename = fileURLToPath(import.meta.url);
+var __dirname = path12.dirname(__filename);
+function resolveProjectPath() {
+  return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
+}
+function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
+  return claudeWakeDirForProject(projectPath);
+}
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function readWatcherPid(wakeDir) {
+  try {
+    const raw = fs.readFileSync(path12.join(wakeDir, "watcher.pid"), "utf8").trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isInteger(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+function wmicProcess(pid) {
+  try {
+    const result = execSync(
+      `wmic process where ProcessId=${pid} get Name,ParentProcessId /format:value`,
+      { encoding: "utf-8", windowsHide: true, timeout: 5e3 }
+    );
+    const nameMatch = result.match(/Name=([^\r\n]+)/);
+    const parentMatch = result.match(/ParentProcessId=(\d+)/);
+    return {
+      name: nameMatch ? nameMatch[1].trim() : null,
+      parentPid: parentMatch ? Number.parseInt(parentMatch[1], 10) : null
+    };
+  } catch {
+    return { name: null, parentPid: null };
+  }
+}
+function resolveMainWindowHandle(pid) {
+  try {
+    const result = execSync(
+      `powershell -NoProfile -Command "(Get-Process -Id ${pid}).MainWindowHandle.ToInt64()"`,
+      { encoding: "utf-8", windowsHide: true, timeout: 5e3 }
+    );
+    const hwnd = Number.parseInt(result.trim(), 10);
+    return Number.isFinite(hwnd) && hwnd > 0 ? hwnd : null;
+  } catch {
+    return null;
+  }
+}
+function findCmdAncestor(log2 = () => {
+}) {
+  if (os3.platform() !== "win32") return null;
+  try {
+    const chain = [];
+    let currentPid = process.pid;
+    for (let i = 0; i < 15; i += 1) {
+      const info = wmicProcess(currentPid);
+      chain.push({ pid: currentPid, name: info.name?.toLowerCase() || null });
+      if (!info.parentPid || info.parentPid <= 0) break;
+      currentPid = info.parentPid;
+    }
+    log2(`process chain: ${chain.map((c) => `${c.name || "?"}#${c.pid}`).join(" <- ")}`);
+    for (let i = 1; i < chain.length; i += 1) {
+      if (chain[i].name === "cmd.exe" && chain[i - 1].name === "claude.exe") {
+        const cmdPid = chain[i].pid;
+        const claudePid = chain[i - 1].pid;
+        return {
+          pid: cmdPid,
+          hwnd: resolveMainWindowHandle(cmdPid),
+          claudePid
+        };
+      }
+    }
+    log2("no persistent cmd.exe ancestor found (parent of claude.exe)");
+    return null;
+  } catch (error2) {
+    log2(`findCmdAncestor error: ${error2.message}`);
+    return null;
+  }
+}
+function escapeForPwshSingleQuoted(value) {
+  return String(value).replace(/'/g, "''");
+}
+function buildStartProcessCommand(watcherScript, watcherArgs) {
+  const argList = [
+    "'-ExecutionPolicy'",
+    "'Bypass'",
+    "'-WindowStyle'",
+    "'Hidden'",
+    "'-File'",
+    `'${escapeForPwshSingleQuoted(watcherScript)}'`,
+    ...watcherArgs.map((arg) => `'${escapeForPwshSingleQuoted(arg)}'`)
+  ].join(", ");
+  return `Start-Process -FilePath 'powershell' -ArgumentList ${argList} -WindowStyle Hidden -PassThru | Select-Object -ExpandProperty Id`;
+}
+function tryAcquireWatcherLock(wakeDir, log2) {
+  const lockFile = path12.join(wakeDir, "watcher.lock");
+  try {
+    fs.writeFileSync(lockFile, `${process.pid}
+`, { flag: "wx" });
+    return lockFile;
+  } catch {
+    try {
+      const ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+      if (ageMs < 3e4) {
+        log2("watcher spawn already in progress (lock <30s old); skipping");
+        return null;
+      }
+      fs.unlinkSync(lockFile);
+      fs.writeFileSync(lockFile, `${process.pid}
+`, { flag: "wx" });
+      return lockFile;
+    } catch {
+      log2("could not acquire watcher spawn lock");
+      return null;
+    }
+  }
+}
+function ensureClaudeWakeWatcher(options = {}) {
+  const log2 = options.log || (() => {
+  });
+  if (os3.platform() !== "win32") {
+    log2("Auto-watcher only supported on Windows");
+    return { started: false, reason: "unsupported_platform" };
+  }
+  const projectPath = options.projectPath || resolveProjectPath();
+  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
+  fs.mkdirSync(wakeDir, { recursive: true });
+  const existingPid = readWatcherPid(wakeDir);
+  if (existingPid && isPidAlive(existingPid)) {
+    return { started: false, pid: existingPid, wakeDir, reason: "already_running" };
+  }
+  const watcherScript = [
+    path12.resolve(__dirname, "..", "scripts", "enter-watcher.ps1"),
+    path12.resolve(__dirname, "..", "..", "..", "scripts", "enter-watcher.ps1")
+  ].find((candidate) => fs.existsSync(candidate));
+  if (!watcherScript) {
+    log2("ERROR: Watcher script not found (enter-watcher.ps1) in any known layout");
+    return { started: false, wakeDir, reason: "missing_script" };
+  }
+  const lockFile = tryAcquireWatcherLock(wakeDir, log2);
+  if (!lockFile) {
+    return { started: false, wakeDir, reason: "lock_held" };
+  }
+  try {
+    const racedPid = readWatcherPid(wakeDir);
+    if (racedPid && racedPid !== existingPid && isPidAlive(racedPid)) {
+      return { started: false, pid: racedPid, wakeDir, reason: "raced_already_running" };
+    }
+    const cmdInfo = options.cmdInfo ?? findCmdAncestor(log2);
+    const watcherArgs = ["-SessionDir", wakeDir];
+    if (cmdInfo?.hwnd) {
+      watcherArgs.push("-WindowHandle", String(cmdInfo.hwnd));
+    } else if (cmdInfo?.pid) {
+      watcherArgs.push("-TargetPid", String(cmdInfo.pid));
+    }
+    if (cmdInfo?.claudePid) {
+      watcherArgs.push("-ClaudePid", String(cmdInfo.claudePid));
+    }
+    const command = buildStartProcessCommand(watcherScript, watcherArgs);
+    log2(`Spawning watcher via Start-Process: ${command}`);
+    const stdout = execSync(`powershell -NoProfile -Command "${command}"`, {
+      encoding: "utf-8",
+      windowsHide: true,
+      timeout: 1e4
+    });
+    const watcherPid = Number.parseInt(stdout.trim(), 10);
+    if (!Number.isInteger(watcherPid) || watcherPid <= 0) {
+      log2(`Watcher spawn returned invalid pid: ${stdout.trim()}`);
+      return { started: false, wakeDir, reason: "invalid_pid" };
+    }
+    fs.writeFileSync(path12.join(wakeDir, "watcher.pid"), `${watcherPid}
+`, "utf8");
+    log2(
+      `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, target=${cmdInfo?.hwnd ? `hwnd:${cmdInfo.hwnd}` : cmdInfo?.pid ? `pid:${cmdInfo.pid}` : "search"})`
+    );
+    return { started: true, pid: watcherPid, wakeDir, cmdInfo };
+  } catch (error2) {
+    log2(`Watcher spawn error: ${error2.message}`);
+    try {
+      fs.appendFileSync(
+        path12.join(wakeDir, "debug.log"),
+        `[${(/* @__PURE__ */ new Date()).toISOString()}] wake-support spawn error: ${error2.message}
+`
+      );
+    } catch {
+    }
+    return { started: false, wakeDir, reason: "spawn_error", error: error2.message };
+  } finally {
+    try {
+      fs.unlinkSync(lockFile);
+    } catch {
+    }
+  }
+}
+
 // claude/claude-mcp-shim.js
 function agentInUse() {
   return process.env.AGENTS_COMM_BUS_AGENT ?? "claude";
@@ -26415,7 +26690,12 @@ runMcpShim({
   sessionInUse,
   beforeConnect: () => ensureCommsForScopeAtStartup(shimCommonOptions),
   afterConnect: () => {
-    const heartbeat = startEnsureCommsHeartbeat(shimCommonOptions);
+    const heartbeat = startEnsureCommsHeartbeat({
+      ...shimCommonOptions,
+      deps: {
+        ensureWatcher: () => ensureClaudeWakeWatcher({ log })
+      }
+    });
     installShutdownHandlers(() => heartbeat.stop());
   }
 }).catch((error2) => {

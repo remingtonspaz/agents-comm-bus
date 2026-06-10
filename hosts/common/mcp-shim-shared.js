@@ -105,11 +105,13 @@ export function startEnsureCommsHeartbeat(options) {
   const scheduleTimer = options.deps?.scheduleTimer ?? ((fn, delayMs) => setTimeout(fn, delayMs));
   const pathExistsFn = options.deps?.pathExists ?? existsSync;
   const ensureAtStartup = options.deps?.ensureCommsForScopeAtStartup ?? ensureCommsForScopeAtStartup;
+  const ensureWatcher = options.deps?.ensureWatcher;
   const logFn = options.deps?.log ?? log;
 
   let stopped = false;
   let timer = null;
   let loggedFailure = false;
+  let loggedWatcherFailure = false;
 
   const resolveStateRoot = () =>
     options.resolveStateRoot?.() ?? resolveMcpShimStateRoot(options);
@@ -162,6 +164,44 @@ export function startEnsureCommsHeartbeat(options) {
         loggedFailure = true;
       }
     }
+
+    if (ensureWatcher) {
+      try {
+        const watcherResult = await ensureWatcher();
+        if (watcherResult?.started === true) {
+          loggedWatcherFailure = false;
+          logFn(
+            `enter-watcher was dead — respawned (pid ${watcherResult.pid ?? "unknown"})`,
+          );
+        } else if (
+          watcherResult?.reason === "already_running" ||
+          watcherResult?.reason === "raced_already_running" ||
+          watcherResult?.reason === "unsupported_platform" ||
+          watcherResult?.reason === "lock_held"
+        ) {
+          loggedWatcherFailure = false;
+        } else if (!loggedWatcherFailure) {
+          const detail =
+            watcherResult?.reason ??
+            watcherResult?.error ??
+            "unknown watcher ensure failure";
+          logFn(
+            `enter-watcher heartbeat failed: ${detail} (suppressing until success)`,
+          );
+          loggedWatcherFailure = true;
+        }
+      } catch (error) {
+        if (!loggedWatcherFailure) {
+          logFn(
+            `enter-watcher heartbeat failed: ${
+              error instanceof Error ? error.message : String(error)
+            } (suppressing until success)`,
+          );
+          loggedWatcherFailure = true;
+        }
+      }
+    }
+
     scheduleNext();
   }
 

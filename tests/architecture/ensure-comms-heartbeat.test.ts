@@ -218,4 +218,210 @@ describe("AGE-53 Phase 2 ensure_comms heartbeat", () => {
     assert.equal(DEFAULT_HEARTBEAT_MIN_MS, 5 * 60 * 1_000);
     assert.equal(DEFAULT_HEARTBEAT_MAX_MS, 10 * 60 * 1_000);
   });
+
+  it("calls ensureWatcher on each tick when injected", async () => {
+    const watcherCalls: number[] = [];
+    const ensureCalls: number[] = [];
+    const { scheduleTimer, fire, flush } = makeScheduler();
+
+    startEnsureCommsHeartbeat({
+      agentInUse: () => "claude",
+      minMs: 10,
+      maxMs: 10,
+      resolveStateRoot: () => "/state",
+      deps: {
+        random: () => 0,
+        scheduleTimer,
+        pathExists: () => false,
+        ensureCommsForScopeAtStartup: async () => {
+          ensureCalls.push(Date.now());
+          return { ok: true };
+        },
+        ensureWatcher: async () => {
+          watcherCalls.push(Date.now());
+          return { started: false, reason: "already_running" };
+        },
+      },
+    });
+
+    fire(0);
+    await flush();
+    assert.equal(ensureCalls.length, 1);
+    assert.equal(watcherCalls.length, 1);
+
+    fire(0);
+    await flush();
+    assert.equal(ensureCalls.length, 2);
+    assert.equal(watcherCalls.length, 2);
+  });
+
+  it("logs each respawn when ensureWatcher returns started:true", async () => {
+    const messages: string[] = [];
+    const { scheduleTimer, fire, flush } = makeScheduler();
+
+    startEnsureCommsHeartbeat({
+      agentInUse: () => "claude",
+      minMs: 10,
+      maxMs: 10,
+      resolveStateRoot: () => "/state",
+      deps: {
+        random: () => 0,
+        scheduleTimer,
+        pathExists: () => false,
+        log: (message: string) => {
+          messages.push(message);
+        },
+        ensureCommsForScopeAtStartup: async () => ({ ok: true }),
+        ensureWatcher: async () => ({ started: true, pid: 4242 }),
+      },
+    });
+
+    fire(0);
+    await flush();
+    fire(0);
+    await flush();
+    assert.equal(
+      messages.filter((message) => message.includes("enter-watcher was dead")).length,
+      2,
+    );
+    assert.match(messages[0], /respawned \(pid 4242\)/);
+  });
+
+  it("skips ensureWatcher when the paused marker exists", async () => {
+    const watcherCalls: string[] = [];
+    const { scheduleTimer, fire, flush } = makeScheduler();
+    const stateRoot = "/state";
+
+    startEnsureCommsHeartbeat({
+      agentInUse: () => "claude",
+      minMs: 10,
+      maxMs: 10,
+      resolveStateRoot: () => stateRoot,
+      deps: {
+        random: () => 0,
+        scheduleTimer,
+        pathExists: (path) => path === join(stateRoot, "paused"),
+        ensureCommsForScopeAtStartup: async () => ({ ok: true }),
+        ensureWatcher: async () => {
+          watcherCalls.push("watcher");
+          return { started: false, reason: "already_running" };
+        },
+      },
+    });
+
+    fire(0);
+    await flush();
+    assert.equal(watcherCalls.length, 0);
+  });
+
+  it("ensureWatcher throwing does not break ensure-comms or reschedule", async () => {
+    const ensureCalls: string[] = [];
+    const messages: string[] = [];
+    const { scheduleTimer, fire, pending, flush } = makeScheduler();
+
+    startEnsureCommsHeartbeat({
+      agentInUse: () => "claude",
+      minMs: 10,
+      maxMs: 10,
+      resolveStateRoot: () => "/state",
+      deps: {
+        random: () => 0,
+        scheduleTimer,
+        pathExists: () => false,
+        log: (message: string) => {
+          messages.push(message);
+        },
+        ensureCommsForScopeAtStartup: async () => {
+          ensureCalls.push("ensure");
+          return { ok: true };
+        },
+        ensureWatcher: async () => {
+          throw new Error("watcher boom");
+        },
+      },
+    });
+
+    fire(0);
+    await flush();
+    assert.equal(ensureCalls.length, 1);
+    assert.equal(pending().length, 1);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /enter-watcher heartbeat failed: watcher boom/);
+  });
+
+  it("logs watcher failure once and re-logs after success", async () => {
+    const messages: string[] = [];
+    let failWatcher = true;
+    const { scheduleTimer, fire, flush } = makeScheduler();
+
+    startEnsureCommsHeartbeat({
+      agentInUse: () => "claude",
+      minMs: 10,
+      maxMs: 10,
+      resolveStateRoot: () => "/state",
+      deps: {
+        random: () => 0,
+        scheduleTimer,
+        pathExists: () => false,
+        log: (message: string) => {
+          messages.push(message);
+        },
+        ensureCommsForScopeAtStartup: async () => ({ ok: true }),
+        ensureWatcher: async () =>
+          failWatcher
+            ? { started: false, reason: "spawn_error", error: "spawn failed" }
+            : { started: false, reason: "already_running" },
+      },
+    });
+
+    fire(0);
+    await flush();
+    fire(0);
+    await flush();
+    assert.equal(
+      messages.filter((message) => message.includes("enter-watcher heartbeat failed")).length,
+      1,
+    );
+
+    failWatcher = false;
+    fire(0);
+    await flush();
+    failWatcher = true;
+    fire(0);
+    await flush();
+    assert.equal(
+      messages.filter((message) => message.includes("enter-watcher heartbeat failed")).length,
+      2,
+    );
+  });
+
+  it("behaves unchanged when ensureWatcher is not injected", async () => {
+    const ensureCalls: string[] = [];
+    const messages: string[] = [];
+    const { scheduleTimer, fire, flush } = makeScheduler();
+
+    startEnsureCommsHeartbeat({
+      agentInUse: () => "claude",
+      minMs: 10,
+      maxMs: 10,
+      resolveStateRoot: () => "/state",
+      deps: {
+        random: () => 0,
+        scheduleTimer,
+        pathExists: () => false,
+        log: (message: string) => {
+          messages.push(message);
+        },
+        ensureCommsForScopeAtStartup: async () => {
+          ensureCalls.push("ensure");
+          return { ok: true };
+        },
+      },
+    });
+
+    fire(0);
+    await flush();
+    assert.equal(ensureCalls.length, 1);
+    assert.equal(messages.length, 0);
+  });
 });
