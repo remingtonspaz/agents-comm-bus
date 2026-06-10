@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import { runMcpShim } from "../common/mcp-shim-shared.js";
+import {
+  ensureCommsForScopeAtStartup,
+  resolveMcpShimProject,
+  runMcpShim,
+} from "../common/mcp-shim-shared.js";
 
 function agentInUse() {
   return process.env.AGENTS_COMM_BUS_AGENT ?? "claude";
@@ -12,6 +16,13 @@ function sessionInUse() {
 runMcpShim({
   agentInUse,
   sessionInUse,
+  shimName: "agents-comm-claude-mcp-shim",
+  beforeConnect: () =>
+    ensureCommsForScopeAtStartup({
+      agentInUse,
+      shimName: "agents-comm-claude-mcp-shim",
+      resolveProject: () => resolveMcpShimProject(),
+    }),
 }).catch((error) => {
   console.error("Fatal error:", error);
   process.exit(1);

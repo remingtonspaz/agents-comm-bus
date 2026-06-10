@@ -351,6 +351,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         env,
         socket,
         reloadRegistrations,
+        ensureCommsForSession: ensureCommsForSessionFn,
       });
     },
   });
@@ -1020,6 +1021,24 @@ async function reportRegistrationProjectNearMiss(input: {
   }
 }
 
+export async function handleEnsureCommsForScope(
+  params: Record<string, unknown>,
+  ensureCommsForSession: EnsureCommsForSession,
+): Promise<{ ok: true; project: string; agent: AgentId }> {
+  const rawProject = params.project;
+  if (typeof rawProject !== "string" || rawProject.trim() === "") {
+    throw new Error("ensure_comms_for_scope requires params.project");
+  }
+  const agent = (
+    typeof params.agent === "string" && params.agent.trim() !== ""
+      ? params.agent
+      : "claude"
+  ) as AgentId;
+  const canonicalProject = normalizeProjectPath(rawProject);
+  await ensureCommsForSession(canonicalProject, agent);
+  return { ok: true, project: canonicalProject, agent };
+}
+
 async function dispatchIpc(
   request: IpcRequest,
   context: {
@@ -1030,9 +1049,14 @@ async function dispatchIpc(
     env: NodeJS.ProcessEnv;
     socket?: { once(event: "close", handler: () => void): void };
     reloadRegistrations: (options?: ReloadOptions) => Promise<ReloadSummary>;
+    ensureCommsForSession: EnsureCommsForSession;
   },
 ): Promise<unknown> {
   const params = (request.params ?? {}) as Record<string, unknown>;
+
+  if (request.method === "ensure_comms_for_scope") {
+    return handleEnsureCommsForScope(params, context.ensureCommsForSession);
+  }
 
   if (request.method === "list_conversations") {
     return context.bus.listConversations({

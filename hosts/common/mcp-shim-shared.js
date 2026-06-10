@@ -47,6 +47,73 @@ export async function ensureMcpRuntime(options) {
   };
 }
 
+export const DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS = 5_000;
+
+export function resolveMcpShimProject(env = process.env) {
+  return env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
+}
+
+export async function runWithStartupEnsureTimeout(work, timeoutMs = DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      work(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`ensure_comms_for_scope timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function ensureCommsForScopeAtStartup(options) {
+  const project = options.resolveProject?.() ?? resolveMcpShimProject(options.env);
+  const agent = options.agentInUse();
+  const requestEnsure = options.deps?.requestEnsure ?? defaultEnsureCommsForScopeRequest;
+  const timeoutMs = options.startupEnsureTimeoutMs ?? DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS;
+  const connectionRef = { current: null };
+  try {
+    await runWithStartupEnsureTimeout(
+      () => requestEnsure({ ...options, connectionRef }, { project, agent }),
+      timeoutMs,
+    );
+  } catch (error) {
+    log(
+      `ensure_comms_for_scope at startup failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    connectionRef.current?.close();
+  }
+}
+
+async function defaultEnsureCommsForScopeRequest(options, { project, agent }) {
+  const { metadata, ensured } = await ensureMcpRuntime(options);
+  const connection = await connectIpc({
+    port: ensured.port,
+    clientVersion: DAEMON_VERSION,
+    metadata: {
+      ...metadata,
+      operation: "ensure_comms_for_scope",
+      project,
+      agent,
+    },
+  });
+  options.connectionRef.current = connection;
+  try {
+    await connection.request("ensure_comms_for_scope", { project, agent });
+  } finally {
+    if (options.connectionRef.current === connection) {
+      connection.close();
+      options.connectionRef.current = null;
+    }
+  }
+}
+
 export function createDaemonRequester(options) {
   return async function daemonRequest(method, params = {}) {
     await options.beforeDaemonRequest?.();
