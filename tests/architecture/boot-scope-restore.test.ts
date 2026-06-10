@@ -1,15 +1,21 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
 
 import type { AgentId, AuditEvent, Session, SessionId } from "agents-comm-bus-core";
 import { SCHEMA_VERSION_SESSION } from "agents-comm-bus-core";
 
+import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
 import {
   DEFAULT_BOOT_RESTORE_RECENCY_MS,
   runBootScopeRestore,
 } from "../../core-daemon/bootstrap/boot-scope-restore.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import type { EnsureCommsForSession } from "../../core-daemon/runtime/agent-bridge.js";
+import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
+import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
+
+registerTempDirCleanup();
 
 const NOW = 1_700_000_000_000;
 const RECENT = NOW - 60_000;
@@ -55,6 +61,18 @@ function recordingEnsure(): {
       calls.push({ project, agent });
     },
   };
+}
+
+class FakeSocket {
+  private closeHandler: (() => void) | null = null;
+
+  once(event: "close", handler: () => void): void {
+    if (event === "close") this.closeHandler = handler;
+  }
+
+  close(): void {
+    this.closeHandler?.();
+  }
 }
 
 function auditRecorder(): { events: AuditEvent[]; audit: { append: (e: AuditEvent) => Promise<void> } } {
@@ -197,5 +215,64 @@ describe("AGE-55 boot scope restore", () => {
 
     assert.equal(summary.restored, 1);
     assert.deepEqual(calls, [{ project: canonical, agent: "codex" }]);
+  });
+
+  it("restores Claude scope after socket close preserves owner pid (regression)", async () => {
+    const dir = await makeTempDir("acb-age55-claude-owner-");
+    const storage = await openSqliteStorage(join(dir, "storage.db"));
+    const { fn, calls } = recordingEnsure();
+    const project = normalizeProjectPath("D:\\work\\claude-parked");
+    const sessionId = "claude-s1" as SessionId;
+    const connectionId = "claude:conn-1";
+    const ownerPid = process.pid;
+
+    const bridge = new ClaudeBridge({
+      storage,
+      bus: {} as never,
+      pendingInbound: [],
+    });
+
+    try {
+      const socket = new FakeSocket();
+      const result = await bridge.registerSession({
+        session: sessionId,
+        project,
+        connection_id: connectionId,
+        owner_process_pid: ownerPid,
+        owner_process_label: "claude",
+      }, socket);
+
+      assert.equal(result.ok, true);
+
+      const during = await storage.getSession(sessionId);
+      assert.equal(during?.lease_holder_connection_id, connectionId);
+      assert.equal(during?.lease_owner_process_pid, ownerPid);
+      assert.equal(during?.lease_owner_process_label, "claude");
+      assert.notEqual(during?.lease_owner_process_registered_at, null);
+
+      socket.close();
+
+      const afterClose = await storage.getSession(sessionId);
+      assert.equal(afterClose?.lease_holder_connection_id, null);
+      assert.notEqual(afterClose?.lease_released_at, null);
+      assert.equal(afterClose?.lease_owner_process_pid, ownerPid);
+      assert.equal(afterClose?.lease_owner_process_label, "claude");
+      assert.notEqual(afterClose?.lease_owner_process_registered_at, null);
+
+      const summary = await runBootScopeRestore({
+        stateRoot: dir,
+        storage,
+        ensureCommsForSession: fn,
+        now: () => Date.now(),
+        isPidAlive: (pid) => pid === ownerPid,
+        pathExists: async () => false,
+      });
+
+      assert.equal(summary.restored, 1);
+      assert.equal(summary.skipped_no_owner, 0);
+      assert.deepEqual(calls, [{ project, agent: "claude" }]);
+    } finally {
+      await storage.close();
+    }
   });
 });

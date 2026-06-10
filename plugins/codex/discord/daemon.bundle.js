@@ -6184,6 +6184,14 @@ var SqliteStorage = class _SqliteStorage {
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `).run(at, session, connection_id);
   }
+  async releaseSessionConnectionLeasePreservingOwner(session, connection_id, at) {
+    this.db.prepare(`
+        UPDATE sessions
+        SET lease_holder_connection_id = NULL,
+            lease_released_at = ?
+        WHERE session_id = ? AND lease_holder_connection_id = ?
+      `).run(at, session, connection_id);
+  }
   async getSession(session) {
     const row = this.db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(session);
     return row ? this.sessionFromRow(row) : null;
@@ -7498,7 +7506,11 @@ var ClaudeBridge = class {
     }
     const registration = this.wake.register({ session, project, wakeDir });
     socket?.once("close", () => {
-      void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
+      void this.options.storage.releaseSessionConnectionLeasePreservingOwner(
+        session,
+        connectionId,
+        Date.now()
+      );
     });
     await this.ensureCommsBestEffort(project);
     return { ok: true, wake_dir: registration.wakeDir };

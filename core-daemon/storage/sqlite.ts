@@ -775,6 +775,21 @@ export class SqliteStorage implements Storage {
       .run(at, session, connection_id);
   }
 
+  async releaseSessionConnectionLeasePreservingOwner(
+    session: SessionId,
+    connection_id: string,
+    at: number,
+  ): Promise<void> {
+    this.db
+      .prepare(`
+        UPDATE sessions
+        SET lease_holder_connection_id = NULL,
+            lease_released_at = ?
+        WHERE session_id = ? AND lease_holder_connection_id = ?
+      `)
+      .run(at, session, connection_id);
+  }
+
   async getSession(session: SessionId): Promise<Session | null> {
     const row = this.db
       .prepare("SELECT * FROM sessions WHERE session_id = ?")

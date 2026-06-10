@@ -266,6 +266,35 @@ describe("SQLite storage schema", () => {
       await storage.close();
     });
   });
+
+  it("releaseSessionConnectionLeasePreservingOwner clears connection lease but keeps owner", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertSession(session());
+
+      assert.equal(
+        await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10, {
+          process_pid: 12345,
+          process_label: "claude",
+        }),
+        true,
+      );
+
+      await storage.releaseSessionConnectionLeasePreservingOwner(
+        "session-1" as SessionId,
+        "conn-1",
+        20,
+      );
+      const released = await storage.getSession("session-1" as SessionId);
+      assert.equal(released?.lease_holder_connection_id, null);
+      assert.equal(released?.lease_released_at, 20);
+      assert.equal(released?.lease_owner_process_pid, 12345);
+      assert.equal(released?.lease_owner_process_label, "claude");
+      assert.equal(released?.lease_owner_process_registered_at, 10);
+
+      await storage.close();
+    });
+  });
 });
 
 describe("allowlist storage (migration v3)", () => {

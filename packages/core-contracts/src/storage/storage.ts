@@ -189,6 +189,17 @@ export interface Storage {
     connection_id: string,
     at: number,
   ): Promise<void>;
+  /**
+   * Release the connection lease while preserving host-owner process metadata.
+   * Used when a hook IPC socket closes but the host process may still be alive
+   * (e.g. Claude register-session), so boot-time scope restore can re-ensure
+   * comm adapters without waiting for a new register call.
+   */
+  releaseSessionConnectionLeasePreservingOwner(
+    session: SessionId,
+    connection_id: string,
+    at: number,
+  ): Promise<void>;
   setSessionMostRecentInbound(
     session: SessionId,
     conversation_id: ConversationId,

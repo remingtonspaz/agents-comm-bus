@@ -194,7 +194,7 @@ export class ClaudeBridge {
         }
         const registration = this.wake.register({ session, project, wakeDir });
         socket?.once("close", () => {
-            void this.options.storage.releaseSessionLease(session, connectionId, Date.now());
+            void this.options.storage.releaseSessionConnectionLeasePreservingOwner(session, connectionId, Date.now());
         });
         // AGE-38/AGE-45: after wake registration + close handler so inbound cannot race ahead.
         await this.ensureCommsBestEffort(project);

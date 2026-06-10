@@ -62,6 +62,7 @@ export declare class SqliteStorage implements Storage {
     upsertSession(rec: Session): Promise<void>;
     acquireSessionLease(session: SessionId, connection_id: string, at: number, owner?: SessionLeaseOwner): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;
+    releaseSessionConnectionLeasePreservingOwner(session: SessionId, connection_id: string, at: number): Promise<void>;
     getSession(session: SessionId): Promise<Session | null>;
     listSessions(filter?: {
         project?: string;
