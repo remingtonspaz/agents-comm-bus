@@ -16205,6 +16205,7 @@ var require_websocket_server = __commonJS({
 
 // common/mcp-shim-shared.js
 import { existsSync as existsSync5 } from "node:fs";
+import { join as join3 } from "node:path";
 
 // ../node_modules/zod/v4/core/core.js
 var _a;
@@ -24820,7 +24821,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.20";
+var DAEMON_VERSION = "0.2.21";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -26001,6 +26002,8 @@ async function ensureMcpRuntime(options) {
   };
 }
 var DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS = 5e3;
+var DEFAULT_HEARTBEAT_MIN_MS = 5 * 60 * 1e3;
+var DEFAULT_HEARTBEAT_MAX_MS = 10 * 60 * 1e3;
 function resolveMcpShimProject(env = process.env) {
   return env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
 }
@@ -26019,6 +26022,94 @@ async function runWithStartupEnsureTimeout(work, timeoutMs = DEFAULT_ENSURE_COMM
     if (timer) clearTimeout(timer);
   }
 }
+function resolveMcpShimStateRoot(options) {
+  const env = options.env ?? process.env;
+  const fromDir = options.fromDir ?? import.meta.dirname;
+  const ctx = resolveEntryContext(fromDir, options.deps?.entryContextDeps);
+  const resolvedEnv = ctx.projectRoot ? applyDevConfig(env, ctx.projectRoot, options.deps?.devConfigDeps).env : env;
+  const resolveStatePathsFn = options.deps?.resolveStatePaths ?? resolveStatePaths;
+  return options.stateRoot ?? resolvedEnv.AGENTS_COMM_BUS_ROOT ?? resolveStatePathsFn({ stateRoot: resolvedEnv.AGENTS_COMM_BUS_STATE_ROOT }).root;
+}
+function randomHeartbeatDelayMs(minMs, maxMs, randomFn) {
+  return minMs + Math.floor(randomFn() * (maxMs - minMs + 1));
+}
+async function pathExistsAsync(pathExistsFn, targetPath) {
+  const result = pathExistsFn(targetPath);
+  return result instanceof Promise ? result : result;
+}
+function startEnsureCommsHeartbeat(options) {
+  const minMs = options.minMs ?? DEFAULT_HEARTBEAT_MIN_MS;
+  const maxMs = options.maxMs ?? DEFAULT_HEARTBEAT_MAX_MS;
+  const randomFn = options.deps?.random ?? Math.random;
+  const scheduleTimer = options.deps?.scheduleTimer ?? ((fn, delayMs) => setTimeout(fn, delayMs));
+  const pathExistsFn = options.deps?.pathExists ?? existsSync5;
+  const ensureAtStartup = options.deps?.ensureCommsForScopeAtStartup ?? ensureCommsForScopeAtStartup;
+  const logFn = options.deps?.log ?? log;
+  let stopped = false;
+  let timer = null;
+  let loggedFailure = false;
+  const resolveStateRoot = () => options.resolveStateRoot?.() ?? resolveMcpShimStateRoot(options);
+  async function isPaused() {
+    try {
+      const stateRoot2 = resolveStateRoot();
+      return await pathExistsAsync(pathExistsFn, join3(stateRoot2, "paused"));
+    } catch {
+      return false;
+    }
+  }
+  function scheduleNext() {
+    if (stopped) return;
+    const delayMs = randomHeartbeatDelayMs(minMs, maxMs, randomFn);
+    timer = scheduleTimer(() => {
+      void tick();
+    }, delayMs);
+    timer?.unref?.();
+  }
+  async function tick() {
+    if (stopped) return;
+    timer = null;
+    try {
+      if (await isPaused()) {
+        scheduleNext();
+        return;
+      }
+      const result = await ensureAtStartup({
+        ...options,
+        logFailures: false
+      });
+      if (result.ok) {
+        loggedFailure = false;
+      } else if (!loggedFailure) {
+        logFn(
+          `ensure_comms_for_scope heartbeat failed: ${result.message} (suppressing until success)`
+        );
+        loggedFailure = true;
+      }
+    } catch (error2) {
+      if (!loggedFailure) {
+        logFn(
+          `ensure_comms_for_scope heartbeat failed: ${error2 instanceof Error ? error2.message : String(error2)} (suppressing until success)`
+        );
+        loggedFailure = true;
+      }
+    }
+    scheduleNext();
+  }
+  scheduleNext();
+  return {
+    stop() {
+      stopped = true;
+      if (timer != null) {
+        if (typeof timer.cancel === "function") {
+          timer.cancel();
+        } else {
+          clearTimeout(timer);
+        }
+        timer = null;
+      }
+    }
+  };
+}
 async function ensureCommsForScopeAtStartup(options) {
   const project = options.resolveProject?.() ?? resolveMcpShimProject(options.env);
   const agent = options.agentInUse();
@@ -26030,10 +26121,13 @@ async function ensureCommsForScopeAtStartup(options) {
       () => requestEnsure({ ...options, connectionRef }, { project, agent }),
       timeoutMs
     );
+    return { ok: true };
   } catch (error2) {
-    log(
-      `ensure_comms_for_scope at startup failed: ${error2 instanceof Error ? error2.message : String(error2)}`
-    );
+    const message = error2 instanceof Error ? error2.message : String(error2);
+    if (options.logFailures !== false) {
+      log(`ensure_comms_for_scope at startup failed: ${message}`);
+    }
+    return { ok: false, message };
   } finally {
     connectionRef.current?.close();
   }
@@ -26239,6 +26333,18 @@ async function runMcpShim(options) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log("MCP shim connected via stdio");
+  options.afterConnect?.();
+}
+function installShutdownHandlers(close) {
+  process.once("exit", close);
+  process.once("SIGINT", () => {
+    close();
+    process.exit(130);
+  });
+  process.once("SIGTERM", () => {
+    close();
+    process.exit(143);
+  });
 }
 
 // claude/claude-mcp-shim.js
@@ -26248,15 +26354,20 @@ function agentInUse() {
 function sessionInUse() {
   return process.env.AGENTS_COMM_BUS_SESSION_ID ?? process.env.CLAUDE_SESSION_ID ?? "mcp";
 }
-runMcpShim({
+var shimCommonOptions = {
   agentInUse,
-  sessionInUse,
   shimName: "agents-comm-claude-mcp-shim",
-  beforeConnect: () => ensureCommsForScopeAtStartup({
-    agentInUse,
-    shimName: "agents-comm-claude-mcp-shim",
-    resolveProject: () => resolveMcpShimProject()
-  })
+  fromDir: import.meta.dirname,
+  resolveProject: () => resolveMcpShimProject()
+};
+runMcpShim({
+  ...shimCommonOptions,
+  sessionInUse,
+  beforeConnect: () => ensureCommsForScopeAtStartup(shimCommonOptions),
+  afterConnect: () => {
+    const heartbeat = startEnsureCommsHeartbeat(shimCommonOptions);
+    installShutdownHandlers(() => heartbeat.stop());
+  }
 }).catch((error2) => {
   console.error("Fatal error:", error2);
   process.exit(1);

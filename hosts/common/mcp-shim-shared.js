@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -6,8 +7,10 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { entryEnsures } from "./install/entry-ensures.js";
+import { entryEnsures, resolveEntryContext } from "./install/entry-ensures.js";
+import { applyDevConfig } from "./install/dev-config-resolver.js";
 import { connectIpc } from "../../agents-comm-bus/dist/core-daemon/ipc/client.js";
+import { resolveStatePaths } from "../../agents-comm-bus/dist/core-daemon/paths.js";
 import { PersistentIpcClient } from "../../agents-comm-bus/dist/core-daemon/ipc/persistent-client.js";
 import { DAEMON_VERSION } from "../../agents-comm-bus/dist/core-daemon/config.js";
 
@@ -48,6 +51,8 @@ export async function ensureMcpRuntime(options) {
 }
 
 export const DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS = 5_000;
+export const DEFAULT_HEARTBEAT_MIN_MS = 5 * 60 * 1_000;
+export const DEFAULT_HEARTBEAT_MAX_MS = 10 * 60 * 1_000;
 
 export function resolveMcpShimProject(env = process.env) {
   return env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
@@ -69,6 +74,114 @@ export async function runWithStartupEnsureTimeout(work, timeoutMs = DEFAULT_ENSU
   }
 }
 
+export function resolveMcpShimStateRoot(options) {
+  const env = options.env ?? process.env;
+  const fromDir = options.fromDir ?? import.meta.dirname;
+  const ctx = resolveEntryContext(fromDir, options.deps?.entryContextDeps);
+  const resolvedEnv = ctx.projectRoot
+    ? applyDevConfig(env, ctx.projectRoot, options.deps?.devConfigDeps).env
+    : env;
+  const resolveStatePathsFn = options.deps?.resolveStatePaths ?? resolveStatePaths;
+  return (
+    options.stateRoot ??
+    resolvedEnv.AGENTS_COMM_BUS_ROOT ??
+    resolveStatePathsFn({ stateRoot: resolvedEnv.AGENTS_COMM_BUS_STATE_ROOT }).root
+  );
+}
+
+function randomHeartbeatDelayMs(minMs, maxMs, randomFn) {
+  return minMs + Math.floor(randomFn() * (maxMs - minMs + 1));
+}
+
+async function pathExistsAsync(pathExistsFn, targetPath) {
+  const result = pathExistsFn(targetPath);
+  return result instanceof Promise ? result : result;
+}
+
+export function startEnsureCommsHeartbeat(options) {
+  const minMs = options.minMs ?? DEFAULT_HEARTBEAT_MIN_MS;
+  const maxMs = options.maxMs ?? DEFAULT_HEARTBEAT_MAX_MS;
+  const randomFn = options.deps?.random ?? Math.random;
+  const scheduleTimer = options.deps?.scheduleTimer ?? ((fn, delayMs) => setTimeout(fn, delayMs));
+  const pathExistsFn = options.deps?.pathExists ?? existsSync;
+  const ensureAtStartup = options.deps?.ensureCommsForScopeAtStartup ?? ensureCommsForScopeAtStartup;
+  const logFn = options.deps?.log ?? log;
+
+  let stopped = false;
+  let timer = null;
+  let loggedFailure = false;
+
+  const resolveStateRoot = () =>
+    options.resolveStateRoot?.() ?? resolveMcpShimStateRoot(options);
+
+  async function isPaused() {
+    try {
+      const stateRoot = resolveStateRoot();
+      return await pathExistsAsync(pathExistsFn, join(stateRoot, "paused"));
+    } catch {
+      return false;
+    }
+  }
+
+  function scheduleNext() {
+    if (stopped) return;
+    const delayMs = randomHeartbeatDelayMs(minMs, maxMs, randomFn);
+    timer = scheduleTimer(() => {
+      void tick();
+    }, delayMs);
+    timer?.unref?.();
+  }
+
+  async function tick() {
+    if (stopped) return;
+    timer = null;
+    try {
+      if (await isPaused()) {
+        scheduleNext();
+        return;
+      }
+      const result = await ensureAtStartup({
+        ...options,
+        logFailures: false,
+      });
+      if (result.ok) {
+        loggedFailure = false;
+      } else if (!loggedFailure) {
+        logFn(
+          `ensure_comms_for_scope heartbeat failed: ${result.message} (suppressing until success)`,
+        );
+        loggedFailure = true;
+      }
+    } catch (error) {
+      if (!loggedFailure) {
+        logFn(
+          `ensure_comms_for_scope heartbeat failed: ${
+            error instanceof Error ? error.message : String(error)
+          } (suppressing until success)`,
+        );
+        loggedFailure = true;
+      }
+    }
+    scheduleNext();
+  }
+
+  scheduleNext();
+
+  return {
+    stop() {
+      stopped = true;
+      if (timer != null) {
+        if (typeof timer.cancel === "function") {
+          timer.cancel();
+        } else {
+          clearTimeout(timer);
+        }
+        timer = null;
+      }
+    },
+  };
+}
+
 export async function ensureCommsForScopeAtStartup(options) {
   const project = options.resolveProject?.() ?? resolveMcpShimProject(options.env);
   const agent = options.agentInUse();
@@ -80,12 +193,13 @@ export async function ensureCommsForScopeAtStartup(options) {
       () => requestEnsure({ ...options, connectionRef }, { project, agent }),
       timeoutMs,
     );
+    return { ok: true };
   } catch (error) {
-    log(
-      `ensure_comms_for_scope at startup failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
+    const message = error instanceof Error ? error.message : String(error);
+    if (options.logFailures !== false) {
+      log(`ensure_comms_for_scope at startup failed: ${message}`);
+    }
+    return { ok: false, message };
   } finally {
     connectionRef.current?.close();
   }
@@ -315,6 +429,7 @@ export async function runMcpShim(options) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log("MCP shim connected via stdio");
+  options.afterConnect?.();
 }
 
 export function installShutdownHandlers(close) {

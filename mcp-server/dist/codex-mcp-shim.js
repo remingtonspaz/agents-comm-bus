@@ -24832,7 +24832,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.20";
+var DAEMON_VERSION = "0.2.21";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -26249,6 +26249,8 @@ async function ensureMcpRuntime(options) {
     env: ensured.env
   };
 }
+var DEFAULT_HEARTBEAT_MIN_MS = 5 * 60 * 1e3;
+var DEFAULT_HEARTBEAT_MAX_MS = 10 * 60 * 1e3;
 function createDaemonRequester(options) {
   return async function daemonRequest(method, params = {}) {
     await options.beforeDaemonRequest?.();
@@ -26428,6 +26430,7 @@ async function runMcpShim(options) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log("MCP shim connected via stdio");
+  options.afterConnect?.();
 }
 function installShutdownHandlers(close) {
   process.once("exit", close);
