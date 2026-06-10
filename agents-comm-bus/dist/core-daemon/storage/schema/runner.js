@@ -97,6 +97,14 @@ export const multiOpenQueriesMigration = {
         await ctx.exec(sql);
     },
 };
+export const durablePendingInboundMigration = {
+    version: 10,
+    description: "AGE-56: durable pending inbound delivery rows",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "010_durable_pending_inbound.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -108,6 +116,7 @@ export async function runStorageMigrations(db) {
         registrationPkMigration,
         conversationRegistrationKeyMigration,
         multiOpenQueriesMigration,
+        durablePendingInboundMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

@@ -411,5 +411,30 @@ class MemoryStorage implements Storage {
     });
   }
 
+  async addAllowlistGlobal(): Promise<void> {}
+  async removeAllowlistGlobal(): Promise<void> {}
+  async listAllowlistGlobal() { return []; }
+  async addAllowlistPerBot(): Promise<void> {}
+  async removeAllowlistPerBot(): Promise<void> {}
+  async listAllowlistPerBot() { return []; }
+
+  async recordPendingInboundDelivery(): Promise<void> {}
+  async listPendingInboundDeliveries() { return []; }
+  async acknowledgePendingInboundDeliveries(): Promise<void> {}
+
+  async updateQueryKind(): Promise<boolean> { return false; }
+  async supersedeOpenQueriesForSession(): Promise<number> { return 0; }
+  async cancelOpenQuery(): Promise<boolean> { return false; }
+  async getOpenQueryById() { return null; }
+  async listOpenQueriesForSession() { return []; }
+  async listOpenQueriesByConversation() { return []; }
+  async setQuerySourceMessage(): Promise<boolean> { return false; }
+  async updateAccountRegistrationToken(): Promise<never> {
+    throw new Error("not implemented");
+  }
+  async updateAccountRegistrationLabel(): Promise<never> {
+    throw new Error("not implemented");
+  }
+
   async close(): Promise<void> {}
 }

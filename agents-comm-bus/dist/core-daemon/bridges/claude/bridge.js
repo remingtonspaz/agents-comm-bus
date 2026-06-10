@@ -11,6 +11,7 @@
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../../project-path.js";
+import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const CLAUDE_IPC_METHODS = new Set([
@@ -160,13 +161,9 @@ export class ClaudeBridge {
      */
     async drainPendingInbound(session) {
         const owned = await this.ownedAccountKeys(session);
-        const drained = [];
-        for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-            const entry = this.options.pendingInbound[i];
-            if (owned.has(accountKey(entry))) {
-                drained.unshift(entry);
-                this.options.pendingInbound.splice(i, 1);
-            }
+        const drained = this.options.pendingInbound.filter((entry) => owned.has(accountKey(entry)));
+        if (drained.length > 0) {
+            await removePendingInboundEntries(this.options.storage, this.options.pendingInbound, drained);
         }
         return drained;
     }

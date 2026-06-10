@@ -14,6 +14,8 @@ import type {
   AccountRelabelResult,
   AccountTokenUpdateInput,
   AccountTokenUpdateResult,
+  PendingInboundDeliveryKey,
+  PendingInboundDeliveryRow,
   SessionLeaseOwner,
   Storage,
 } from "agents-comm-bus-core/storage/storage";
@@ -920,6 +922,54 @@ export class SqliteStorage implements Storage {
     return rows.map((row) => this.allowlistPerBotFromRow(row));
   }
 
+  async recordPendingInboundDelivery(row: PendingInboundDeliveryRow): Promise<void> {
+    const project = normalizeProjectPath(row.project);
+    this.db
+      .prepare(`
+        INSERT INTO pending_inbound_deliveries (
+          conversation_id, message_id, comm, account, project, agent, enqueued_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id, message_id, comm, account) DO NOTHING
+      `)
+      .run(
+        row.conversation_id,
+        row.message_id,
+        row.comm,
+        row.account,
+        project,
+        row.agent,
+        row.enqueued_at,
+      );
+  }
+
+  async listPendingInboundDeliveries(filter: {
+    project: string;
+    agent: AgentId;
+  }): Promise<PendingInboundDeliveryRow[]> {
+    const project = normalizeProjectPath(filter.project);
+    const rows = this.db
+      .prepare(`
+        SELECT * FROM pending_inbound_deliveries
+        WHERE project = ? AND agent = ?
+        ORDER BY enqueued_at, conversation_id, message_id
+      `)
+      .all(project, filter.agent) as unknown[];
+    return rows.map((row) => this.pendingInboundDeliveryFromRow(row));
+  }
+
+  async acknowledgePendingInboundDeliveries(
+    keys: PendingInboundDeliveryKey[],
+  ): Promise<void> {
+    if (keys.length === 0) return;
+    const stmt = this.db.prepare(`
+      DELETE FROM pending_inbound_deliveries
+      WHERE conversation_id = ? AND message_id = ? AND comm = ? AND account = ?
+    `);
+    for (const key of keys) {
+      stmt.run(key.conversation_id, key.message_id, key.comm, key.account);
+    }
+  }
+
   async close(): Promise<void> {
     this.db.close();
   }
@@ -1004,6 +1054,19 @@ export class SqliteStorage implements Storage {
       resolved_at: r.resolved_at as number | null,
       resolution: decodeJson<ResolvedDecision>(r.resolution_json),
       options_json: r.options_json as string | null,
+    };
+  }
+
+  private pendingInboundDeliveryFromRow(row: unknown): PendingInboundDeliveryRow {
+    const r = row as Record<string, unknown>;
+    return {
+      conversation_id: r.conversation_id as ConversationId,
+      message_id: r.message_id as MessageId,
+      comm: r.comm as CommId,
+      account: r.account as string,
+      project: r.project as string,
+      agent: r.agent as AgentId,
+      enqueued_at: r.enqueued_at as number,
     };
   }
 

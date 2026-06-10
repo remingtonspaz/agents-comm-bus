@@ -37,6 +37,13 @@ import type {
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
+import {
+  acknowledgePendingInboundEntries,
+  deliveryRowFromEntry,
+  durableInboundKey,
+  queueHasDurableKey,
+  rehydratePendingInboundForScope,
+} from "./runtime/durable-inbound.js";
 
 export type {
   AgentBridge,
@@ -191,10 +198,10 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // until then a stale scope only causes a bounded re-add on `account-add` for a
   // project whose bots are usually already live anyway.
   const activeScopes = new Set<string>();
-  const ensureCommsForSessionFn: EnsureCommsForSession = (project, agent) => {
+  const ensureCommsForSessionFn: EnsureCommsForSession = async (project, agent) => {
     const canonicalProject = normalizeProjectPath(project);
     activeScopes.add(scopeKey(agent, canonicalProject));
-    return ensureCommsForSession({
+    await ensureCommsForSession({
       project: canonicalProject,
       requestedProject: project,
       agent,
@@ -209,6 +216,14 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       inFlight: inFlightAdapters,
       audit,
     });
+    await rehydratePendingInboundForScope({
+      storage,
+      transcripts,
+      audit,
+      queue: pendingInbound,
+      project: canonicalProject,
+      agent,
+    });
   };
   bridges.push(
     ...options.agentBridgeFactories.map((factory) =>
@@ -222,11 +237,32 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     ),
   );
 
+  const pendingInboundMax = 100;
   bus.setDispatchSink({
     enqueueInbound: async (message, conversation) => {
-      pendingInbound.push({ message, conversation });
-      if (pendingInbound.length > 100) {
-        pendingInbound.splice(0, pendingInbound.length - 100);
+      const entry: PendingInboundEntry = { message, conversation };
+      const enqueuedAt = Date.now();
+      await storage.recordPendingInboundDelivery(
+        deliveryRowFromEntry(entry, enqueuedAt),
+      );
+      if (!queueHasDurableKey(pendingInbound, durableInboundKey(entry))) {
+        pendingInbound.push(entry);
+        if (pendingInbound.length > pendingInboundMax) {
+          const spillCount = pendingInbound.length - pendingInboundMax;
+          const spilled = pendingInbound.splice(0, spillCount);
+          await audit.append({
+            timestamp: Date.now(),
+            kind: "pending_inbound_overflow_spill",
+            agent: conversation.agent,
+            conversation_id: conversation.conversation_id,
+            detail: {
+              spilled_count: spillCount,
+              queue_length_before: pendingInbound.length + spillCount,
+              queue_length_after: pendingInbound.length,
+              spilled_keys: spilled.map((spilledEntry) => durableInboundKey(spilledEntry)),
+            },
+          });
+        }
       }
       await audit.append({
         timestamp: Date.now(),
@@ -314,7 +350,9 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     // agent's `comm_check_messages` cannot cannibalize another agent's pending
     // inbound (Claude + Codex share comm="telegram" with different bots).
     const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
-    return drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+    const drained = drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+    await acknowledgePendingInboundEntries(storage, drained);
+    return drained;
   });
   const bridgesByMethod = new Map<string, AgentBridge>();
   for (const bridge of bridges) {

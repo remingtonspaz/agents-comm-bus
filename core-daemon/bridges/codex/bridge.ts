@@ -19,6 +19,7 @@ import {
 } from "agents-comm-bus-core";
 
 import { normalizeProjectPath } from "../../project-path.js";
+import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import type { MessageBus } from "../../bus.js";
 import type {
   AgentBridge,
@@ -186,7 +187,7 @@ export class CodexBridge implements AgentBridge {
           pending_count: pendingForSession.length,
           removed_pending_count: pendingForSession.length,
         });
-        this.removePendingInbound(pendingForSession);
+        await this.removePendingInbound(pendingForSession);
       }
     } catch (error) {
       await this.auditWake("agent_wake_failed", conversation, session, {
@@ -362,13 +363,15 @@ export class CodexBridge implements AgentBridge {
     // `message.chat.account` (the bot_user_id, the source-of-truth field)
     // rather than the derived `conversation.agent`.
     const owned = await this.ownedAccountKeys(session);
-    const drained: PendingInboundEntry[] = [];
-    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-      const entry = this.options.pendingInbound[i];
-      if (owned.has(accountKey(entry))) {
-        drained.unshift(entry);
-        this.options.pendingInbound.splice(i, 1);
-      }
+    const drained = this.options.pendingInbound.filter((entry) =>
+      owned.has(accountKey(entry)),
+    );
+    if (drained.length > 0) {
+      await removePendingInboundEntries(
+        this.options.storage,
+        this.options.pendingInbound,
+        drained,
+      );
     }
     if (session && drained.length > 0) {
       await this.options.storage.setSessionMostRecentInbound(
@@ -739,33 +742,24 @@ export class CodexBridge implements AgentBridge {
     return this.ownedAccountsCache;
   }
 
-  private removePendingInbound(entries: PendingInboundEntry[]): void {
+  private async removePendingInbound(entries: PendingInboundEntry[]): Promise<void> {
     if (entries.length === 0) return;
-    // Scope the removal by (message_id, chat.comm, chat.account) so we
-    // only remove Codex-owned entries. The same Telegram message can
-    // appear in pendingInbound twice when multiple bots in the same
-    // chat each receive the update — entries share message_id but
-    // differ by chat.account. Filtering on message_id alone wipes the
-    // sibling entry that belongs to another agent (e.g. Claude), so
-    // its drain hook then sees an empty queue and never injects the
-    // inbound into the prompt.
-    const targetKeys = new Set(
-      entries.map((entry) => entryKey(entry)),
+    // Scope removal by durable delivery key (message_id + comm + account) so
+    // we only remove Codex-owned entries. The same Telegram message can
+    // appear in pendingInbound twice when multiple bots in the same chat each
+    // receive the update.
+    const owned = await this.ownedAccountKeys();
+    const scoped = entries.filter((entry) => owned.has(accountKey(entry)));
+    await removePendingInboundEntries(
+      this.options.storage,
+      this.options.pendingInbound,
+      scoped,
     );
-    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-      if (targetKeys.has(entryKey(this.options.pendingInbound[i]))) {
-        this.options.pendingInbound.splice(i, 1);
-      }
-    }
   }
 }
 
 function accountKey(entry: PendingInboundEntry): string {
   return `${entry.message.chat.comm}:${entry.message.chat.account}`;
-}
-
-function entryKey(entry: PendingInboundEntry): string {
-  return `${entry.message.message_id}::${accountKey(entry)}`;
 }
 
 function formatInboundMessagesForTurn(entries: PendingInboundEntry[]): string {

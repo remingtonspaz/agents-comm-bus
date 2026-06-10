@@ -74,6 +74,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/010_durable_pending_inbound.sql",
+      "artifact": "plugins/codex/matrix/010_durable_pending_inbound.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/matrix/package.json",
       "type": "package-json"

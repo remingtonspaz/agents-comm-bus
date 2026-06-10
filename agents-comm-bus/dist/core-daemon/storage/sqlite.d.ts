@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "agents-comm-bus-core";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
-import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -81,12 +81,19 @@ export declare class SqliteStorage implements Storage {
         comm?: CommId;
         bot_user_id?: string;
     }): Promise<AllowlistPerBotEntry[]>;
+    recordPendingInboundDelivery(row: PendingInboundDeliveryRow): Promise<void>;
+    listPendingInboundDeliveries(filter: {
+        project: string;
+        agent: AgentId;
+    }): Promise<PendingInboundDeliveryRow[]>;
+    acknowledgePendingInboundDeliveries(keys: PendingInboundDeliveryKey[]): Promise<void>;
     close(): Promise<void>;
     private allowlistGlobalFromRow;
     private allowlistPerBotFromRow;
     private accountFromRow;
     private conversationFromRow;
     private queryFromRow;
+    private pendingInboundDeliveryFromRow;
     private sessionFromRow;
 }
 export declare function openSqliteStorage(path: string): Promise<SqliteStorage>;

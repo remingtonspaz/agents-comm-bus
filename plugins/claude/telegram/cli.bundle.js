@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.19";
+var DAEMON_VERSION = "0.2.20";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 
@@ -3835,6 +3835,14 @@ var multiOpenQueriesMigration = {
     await ctx.exec(sql);
   }
 };
+var durablePendingInboundMigration = {
+  version: 10,
+  description: "AGE-56: durable pending inbound delivery rows",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "010_durable_pending_inbound.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3845,7 +3853,8 @@ async function runStorageMigrations(db) {
     registrationIdentityMigration,
     registrationPkMigration,
     conversationRegistrationKeyMigration,
-    multiOpenQueriesMigration
+    multiOpenQueriesMigration,
+    durablePendingInboundMigration
   ]);
 }
 
@@ -4479,6 +4488,42 @@ var SqliteStorage = class _SqliteStorage {
     ).all(...params);
     return rows.map((row) => this.allowlistPerBotFromRow(row));
   }
+  async recordPendingInboundDelivery(row) {
+    const project = normalizeProjectPath(row.project);
+    this.db.prepare(`
+        INSERT INTO pending_inbound_deliveries (
+          conversation_id, message_id, comm, account, project, agent, enqueued_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id, message_id, comm, account) DO NOTHING
+      `).run(
+      row.conversation_id,
+      row.message_id,
+      row.comm,
+      row.account,
+      project,
+      row.agent,
+      row.enqueued_at
+    );
+  }
+  async listPendingInboundDeliveries(filter) {
+    const project = normalizeProjectPath(filter.project);
+    const rows = this.db.prepare(`
+        SELECT * FROM pending_inbound_deliveries
+        WHERE project = ? AND agent = ?
+        ORDER BY enqueued_at, conversation_id, message_id
+      `).all(project, filter.agent);
+    return rows.map((row) => this.pendingInboundDeliveryFromRow(row));
+  }
+  async acknowledgePendingInboundDeliveries(keys) {
+    if (keys.length === 0) return;
+    const stmt = this.db.prepare(`
+      DELETE FROM pending_inbound_deliveries
+      WHERE conversation_id = ? AND message_id = ? AND comm = ? AND account = ?
+    `);
+    for (const key of keys) {
+      stmt.run(key.conversation_id, key.message_id, key.comm, key.account);
+    }
+  }
   async close() {
     this.db.close();
   }
@@ -4558,6 +4603,18 @@ var SqliteStorage = class _SqliteStorage {
       resolved_at: r.resolved_at,
       resolution: decodeJson(r.resolution_json),
       options_json: r.options_json
+    };
+  }
+  pendingInboundDeliveryFromRow(row) {
+    const r = row;
+    return {
+      conversation_id: r.conversation_id,
+      message_id: r.message_id,
+      comm: r.comm,
+      account: r.account,
+      project: r.project,
+      agent: r.agent,
+      enqueued_at: r.enqueued_at
     };
   }
   sessionFromRow(row) {
@@ -4761,7 +4818,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.19";
+var DAEMON_VERSION2 = "0.2.20";
 var IPC_PROTOCOL_VERSION2 = "1.2.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;

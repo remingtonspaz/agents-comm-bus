@@ -3,7 +3,7 @@
   "agent": "claude",
   "comm": "discord",
   "plugin_version": "0.1.1",
-  "daemon_bundle_version": "0.2.19",
+  "daemon_bundle_version": "0.2.20",
   "adapter_bundle_version": "0.1.0",
   "adapter_bundle_versions": {
     "discord": "0.1.0"
@@ -17,6 +17,7 @@
     "006_registration_identity.sql",
     "007_registration_pk.sql",
     "008_conversation_registration_key.sql",
-    "009_multi_open_queries.sql"
+    "009_multi_open_queries.sql",
+    "010_durable_pending_inbound.sql"
   ]
 }

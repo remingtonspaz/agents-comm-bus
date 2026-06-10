@@ -79,6 +79,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/010_durable_pending_inbound.sql",
+      "artifact": "plugins/claude/telegram/010_durable_pending_inbound.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/claude/telegram/package.json",
       "type": "package-json"

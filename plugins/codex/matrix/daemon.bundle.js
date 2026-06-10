@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.19";
+var DAEMON_VERSION = "0.2.20";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -5672,6 +5672,14 @@ var multiOpenQueriesMigration = {
     await ctx.exec(sql);
   }
 };
+var durablePendingInboundMigration = {
+  version: 10,
+  description: "AGE-56: durable pending inbound delivery rows",
+  async up(ctx) {
+    const sql = await readFile4(join3(schemaDir, "010_durable_pending_inbound.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -5682,7 +5690,8 @@ async function runStorageMigrations(db) {
     registrationIdentityMigration,
     registrationPkMigration,
     conversationRegistrationKeyMigration,
-    multiOpenQueriesMigration
+    multiOpenQueriesMigration,
+    durablePendingInboundMigration
   ]);
 }
 
@@ -6316,6 +6325,42 @@ var SqliteStorage = class _SqliteStorage {
     ).all(...params);
     return rows.map((row) => this.allowlistPerBotFromRow(row));
   }
+  async recordPendingInboundDelivery(row) {
+    const project = normalizeProjectPath(row.project);
+    this.db.prepare(`
+        INSERT INTO pending_inbound_deliveries (
+          conversation_id, message_id, comm, account, project, agent, enqueued_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id, message_id, comm, account) DO NOTHING
+      `).run(
+      row.conversation_id,
+      row.message_id,
+      row.comm,
+      row.account,
+      project,
+      row.agent,
+      row.enqueued_at
+    );
+  }
+  async listPendingInboundDeliveries(filter) {
+    const project = normalizeProjectPath(filter.project);
+    const rows = this.db.prepare(`
+        SELECT * FROM pending_inbound_deliveries
+        WHERE project = ? AND agent = ?
+        ORDER BY enqueued_at, conversation_id, message_id
+      `).all(project, filter.agent);
+    return rows.map((row) => this.pendingInboundDeliveryFromRow(row));
+  }
+  async acknowledgePendingInboundDeliveries(keys) {
+    if (keys.length === 0) return;
+    const stmt = this.db.prepare(`
+      DELETE FROM pending_inbound_deliveries
+      WHERE conversation_id = ? AND message_id = ? AND comm = ? AND account = ?
+    `);
+    for (const key of keys) {
+      stmt.run(key.conversation_id, key.message_id, key.comm, key.account);
+    }
+  }
   async close() {
     this.db.close();
   }
@@ -6395,6 +6440,18 @@ var SqliteStorage = class _SqliteStorage {
       resolved_at: r.resolved_at,
       resolution: decodeJson(r.resolution_json),
       options_json: r.options_json
+    };
+  }
+  pendingInboundDeliveryFromRow(row) {
+    const r = row;
+    return {
+      conversation_id: r.conversation_id,
+      message_id: r.message_id,
+      comm: r.comm,
+      account: r.account,
+      project: r.project,
+      agent: r.agent,
+      enqueued_at: r.enqueued_at
     };
   }
   sessionFromRow(row) {
@@ -6511,6 +6568,112 @@ var ContentAddressedBlobStore = class {
   }
 };
 
+// ../core-daemon/runtime/durable-inbound.ts
+function durableInboundKey(entry) {
+  return deliveryKey(
+    entry.conversation.conversation_id,
+    entry.message.message_id,
+    entry.message.chat.comm,
+    entry.message.chat.account
+  );
+}
+function deliveryKeyFromRow(row) {
+  return deliveryKey(row.conversation_id, row.message_id, row.comm, row.account);
+}
+function deliveryKey(conversationId, messageId, comm, account) {
+  return `${conversationId}::${messageId}::${comm}::${account}`;
+}
+function queueHasDurableKey(queue, key) {
+  return queue.some((entry) => durableInboundKey(entry) === key);
+}
+function deliveryRowFromEntry(entry, enqueuedAt) {
+  return {
+    conversation_id: entry.conversation.conversation_id,
+    message_id: entry.message.message_id,
+    comm: entry.message.chat.comm,
+    account: entry.message.chat.account,
+    project: normalizeProjectPath(entry.conversation.project),
+    agent: entry.conversation.agent,
+    enqueued_at: enqueuedAt
+  };
+}
+async function acknowledgePendingInboundEntries(storage, entries) {
+  if (entries.length === 0) return;
+  const keys = entries.map((entry) => ({
+    conversation_id: entry.conversation.conversation_id,
+    message_id: entry.message.message_id,
+    comm: entry.message.chat.comm,
+    account: entry.message.chat.account
+  }));
+  await storage.acknowledgePendingInboundDeliveries(keys);
+}
+async function removePendingInboundEntries(storage, queue, entries) {
+  if (entries.length === 0) return;
+  await acknowledgePendingInboundEntries(storage, entries);
+  const keys = new Set(entries.map((entry) => durableInboundKey(entry)));
+  for (let i = queue.length - 1; i >= 0; i -= 1) {
+    if (keys.has(durableInboundKey(queue[i]))) {
+      queue.splice(i, 1);
+    }
+  }
+}
+async function rehydratePendingInboundForScope(input) {
+  const project = normalizeProjectPath(input.project);
+  const rows = await input.storage.listPendingInboundDeliveries({
+    project,
+    agent: input.agent
+  });
+  let rehydrated = 0;
+  for (const row of rows) {
+    const key = deliveryKeyFromRow(row);
+    if (queueHasDurableKey(input.queue, key)) continue;
+    const conversation = await input.storage.getConversation(row.conversation_id);
+    if (!conversation) {
+      await auditReplayMiss(input.audit, row, "conversation_not_found");
+      continue;
+    }
+    const message = await findInboundTranscriptMessage(
+      input.transcripts,
+      row.conversation_id,
+      row.message_id
+    );
+    if (!message) {
+      await auditReplayMiss(input.audit, row, "transcript_payload_missing");
+      continue;
+    }
+    if (message.chat.comm !== row.comm || message.chat.account !== row.account) {
+      await auditReplayMiss(input.audit, row, "transcript_key_mismatch");
+      continue;
+    }
+    input.queue.push({ message, conversation });
+    rehydrated += 1;
+  }
+  return rehydrated;
+}
+async function findInboundTranscriptMessage(transcripts, conversationId, messageId) {
+  for await (const entry of transcripts.read(conversationId)) {
+    if (entry.direction !== "inbound" || entry.message_id !== messageId) continue;
+    return entry.payload;
+  }
+  return null;
+}
+async function auditReplayMiss(audit, row, reason) {
+  await audit.append({
+    timestamp: Date.now(),
+    kind: "durable_inbound_replay_miss",
+    agent: row.agent,
+    conversation_id: row.conversation_id,
+    detail: {
+      message_id: row.message_id,
+      comm: row.comm,
+      account: row.account,
+      project: row.project,
+      reason
+    }
+  }).catch(() => {
+  });
+}
+
 // ../core-daemon/daemon.ts
 async function runDaemon(options) {
   const argv = options.argv ?? process.argv.slice(2);
@@ -6572,10 +6735,10 @@ async function runDaemon(options) {
   const bridges = [];
   const inFlightAdapters = /* @__PURE__ */ new Set();
   const activeScopes = /* @__PURE__ */ new Set();
-  const ensureCommsForSessionFn = (project, agent) => {
+  const ensureCommsForSessionFn = async (project, agent) => {
     const canonicalProject = normalizeProjectPath(project);
     activeScopes.add(scopeKey(agent, canonicalProject));
-    return ensureCommsForSession({
+    await ensureCommsForSession({
       project: canonicalProject,
       requestedProject: project,
       agent,
@@ -6590,6 +6753,14 @@ async function runDaemon(options) {
       inFlight: inFlightAdapters,
       audit
     });
+    await rehydratePendingInboundForScope({
+      storage,
+      transcripts,
+      audit,
+      queue: pendingInbound,
+      project: canonicalProject,
+      agent
+    });
   };
   bridges.push(
     ...options.agentBridgeFactories.map(
@@ -6602,11 +6773,32 @@ async function runDaemon(options) {
       })
     )
   );
+  const pendingInboundMax = 100;
   bus.setDispatchSink({
     enqueueInbound: async (message, conversation) => {
-      pendingInbound.push({ message, conversation });
-      if (pendingInbound.length > 100) {
-        pendingInbound.splice(0, pendingInbound.length - 100);
+      const entry = { message, conversation };
+      const enqueuedAt = Date.now();
+      await storage.recordPendingInboundDelivery(
+        deliveryRowFromEntry(entry, enqueuedAt)
+      );
+      if (!queueHasDurableKey(pendingInbound, durableInboundKey(entry))) {
+        pendingInbound.push(entry);
+        if (pendingInbound.length > pendingInboundMax) {
+          const spillCount = pendingInbound.length - pendingInboundMax;
+          const spilled = pendingInbound.splice(0, spillCount);
+          await audit.append({
+            timestamp: Date.now(),
+            kind: "pending_inbound_overflow_spill",
+            agent: conversation.agent,
+            conversation_id: conversation.conversation_id,
+            detail: {
+              spilled_count: spillCount,
+              queue_length_before: pendingInbound.length + spillCount,
+              queue_length_after: pendingInbound.length,
+              spilled_keys: spilled.map((spilledEntry) => durableInboundKey(spilledEntry))
+            }
+          });
+        }
       }
       await audit.append({
         timestamp: Date.now(),
@@ -6685,7 +6877,9 @@ async function runDaemon(options) {
   ipcMethods.set("drain_pending_inbound", async (params) => {
     const base = params ?? {};
     const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
-    return drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+    const drained = drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+    await acknowledgePendingInboundEntries(storage, drained);
+    return drained;
   });
   const bridgesByMethod = /* @__PURE__ */ new Map();
   for (const bridge of bridges) {
@@ -7550,13 +7744,15 @@ var ClaudeBridge = class {
    */
   async drainPendingInbound(session) {
     const owned = await this.ownedAccountKeys(session);
-    const drained = [];
-    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-      const entry = this.options.pendingInbound[i];
-      if (owned.has(accountKey(entry))) {
-        drained.unshift(entry);
-        this.options.pendingInbound.splice(i, 1);
-      }
+    const drained = this.options.pendingInbound.filter(
+      (entry) => owned.has(accountKey(entry))
+    );
+    if (drained.length > 0) {
+      await removePendingInboundEntries(
+        this.options.storage,
+        this.options.pendingInbound,
+        drained
+      );
     }
     return drained;
   }
@@ -8825,7 +9021,7 @@ var CodexBridge = class {
           pending_count: pendingForSession.length,
           removed_pending_count: pendingForSession.length
         });
-        this.removePendingInbound(pendingForSession);
+        await this.removePendingInbound(pendingForSession);
       }
     } catch (error) {
       await this.auditWake("agent_wake_failed", conversation, session, {
@@ -8961,13 +9157,15 @@ var CodexBridge = class {
   async drainInbound(params) {
     const session = typeof params.session === "string" ? params.session : void 0;
     const owned = await this.ownedAccountKeys(session);
-    const drained = [];
-    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-      const entry = this.options.pendingInbound[i];
-      if (owned.has(accountKey2(entry))) {
-        drained.unshift(entry);
-        this.options.pendingInbound.splice(i, 1);
-      }
+    const drained = this.options.pendingInbound.filter(
+      (entry) => owned.has(accountKey2(entry))
+    );
+    if (drained.length > 0) {
+      await removePendingInboundEntries(
+        this.options.storage,
+        this.options.pendingInbound,
+        drained
+      );
     }
     if (session && drained.length > 0) {
       await this.options.storage.setSessionMostRecentInbound(
@@ -9283,23 +9481,19 @@ var CodexBridge = class {
     );
     return this.ownedAccountsCache;
   }
-  removePendingInbound(entries) {
+  async removePendingInbound(entries) {
     if (entries.length === 0) return;
-    const targetKeys = new Set(
-      entries.map((entry) => entryKey(entry))
+    const owned = await this.ownedAccountKeys();
+    const scoped = entries.filter((entry) => owned.has(accountKey2(entry)));
+    await removePendingInboundEntries(
+      this.options.storage,
+      this.options.pendingInbound,
+      scoped
     );
-    for (let i = this.options.pendingInbound.length - 1; i >= 0; i -= 1) {
-      if (targetKeys.has(entryKey(this.options.pendingInbound[i]))) {
-        this.options.pendingInbound.splice(i, 1);
-      }
-    }
   }
 };
 function accountKey2(entry) {
   return `${entry.message.chat.comm}:${entry.message.chat.account}`;
-}
-function entryKey(entry) {
-  return `${entry.message.message_id}::${accountKey2(entry)}`;
 }
 function formatInboundMessagesForTurn(entries) {
   if (entries.length === 0) {

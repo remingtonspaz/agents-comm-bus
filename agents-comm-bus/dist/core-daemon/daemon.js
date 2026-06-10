@@ -13,6 +13,7 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
+import { acknowledgePendingInboundEntries, deliveryRowFromEntry, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, } from "./runtime/durable-inbound.js";
 /**
  * Generic daemon entry point. Knows nothing about specific agents or
  * comms — adapter wiring is supplied by the composition root.
@@ -121,10 +122,10 @@ export async function runDaemon(options) {
     // until then a stale scope only causes a bounded re-add on `account-add` for a
     // project whose bots are usually already live anyway.
     const activeScopes = new Set();
-    const ensureCommsForSessionFn = (project, agent) => {
+    const ensureCommsForSessionFn = async (project, agent) => {
         const canonicalProject = normalizeProjectPath(project);
         activeScopes.add(scopeKey(agent, canonicalProject));
-        return ensureCommsForSession({
+        await ensureCommsForSession({
             project: canonicalProject,
             requestedProject: project,
             agent,
@@ -139,6 +140,14 @@ export async function runDaemon(options) {
             inFlight: inFlightAdapters,
             audit,
         });
+        await rehydratePendingInboundForScope({
+            storage,
+            transcripts,
+            audit,
+            queue: pendingInbound,
+            project: canonicalProject,
+            agent,
+        });
     };
     bridges.push(...options.agentBridgeFactories.map((factory) => factory.create({
         storage,
@@ -147,11 +156,30 @@ export async function runDaemon(options) {
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
     })));
+    const pendingInboundMax = 100;
     bus.setDispatchSink({
         enqueueInbound: async (message, conversation) => {
-            pendingInbound.push({ message, conversation });
-            if (pendingInbound.length > 100) {
-                pendingInbound.splice(0, pendingInbound.length - 100);
+            const entry = { message, conversation };
+            const enqueuedAt = Date.now();
+            await storage.recordPendingInboundDelivery(deliveryRowFromEntry(entry, enqueuedAt));
+            if (!queueHasDurableKey(pendingInbound, durableInboundKey(entry))) {
+                pendingInbound.push(entry);
+                if (pendingInbound.length > pendingInboundMax) {
+                    const spillCount = pendingInbound.length - pendingInboundMax;
+                    const spilled = pendingInbound.splice(0, spillCount);
+                    await audit.append({
+                        timestamp: Date.now(),
+                        kind: "pending_inbound_overflow_spill",
+                        agent: conversation.agent,
+                        conversation_id: conversation.conversation_id,
+                        detail: {
+                            spilled_count: spillCount,
+                            queue_length_before: pendingInbound.length + spillCount,
+                            queue_length_after: pendingInbound.length,
+                            spilled_keys: spilled.map((spilledEntry) => durableInboundKey(spilledEntry)),
+                        },
+                    });
+                }
             }
             await audit.append({
                 timestamp: Date.now(),
@@ -236,7 +264,9 @@ export async function runDaemon(options) {
         // agent's `comm_check_messages` cannot cannibalize another agent's pending
         // inbound (Claude + Codex share comm="telegram" with different bots).
         const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
-        return drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+        const drained = drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
+        await acknowledgePendingInboundEntries(storage, drained);
+        return drained;
     });
     const bridgesByMethod = new Map();
     for (const bridge of bridges) {

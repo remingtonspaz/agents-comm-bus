@@ -50,7 +50,11 @@ export type AuditEventKind =
   // AGE-57: stale pid/port discovery files removed during ensureDaemon bootstrap.
   | "discovery_stale_cleanup"
   // AGE-57: adapter/credential skip not already covered by actionable console logs.
-  | "comm_adapter_skip";
+  | "comm_adapter_skip"
+  // AGE-56: in-memory pending queue overflow spilled oldest entries; durable rows remain.
+  | "pending_inbound_overflow_spill"
+  // AGE-56: durable pending row could not be replayed from transcript storage.
+  | "durable_inbound_replay_miss";
 
 export interface AuditEvent {
   timestamp: number;

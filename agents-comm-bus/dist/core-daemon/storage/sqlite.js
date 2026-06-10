@@ -651,6 +651,39 @@ export class SqliteStorage {
             .all(...params);
         return rows.map((row) => this.allowlistPerBotFromRow(row));
     }
+    async recordPendingInboundDelivery(row) {
+        const project = normalizeProjectPath(row.project);
+        this.db
+            .prepare(`
+        INSERT INTO pending_inbound_deliveries (
+          conversation_id, message_id, comm, account, project, agent, enqueued_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id, message_id, comm, account) DO NOTHING
+      `)
+            .run(row.conversation_id, row.message_id, row.comm, row.account, project, row.agent, row.enqueued_at);
+    }
+    async listPendingInboundDeliveries(filter) {
+        const project = normalizeProjectPath(filter.project);
+        const rows = this.db
+            .prepare(`
+        SELECT * FROM pending_inbound_deliveries
+        WHERE project = ? AND agent = ?
+        ORDER BY enqueued_at, conversation_id, message_id
+      `)
+            .all(project, filter.agent);
+        return rows.map((row) => this.pendingInboundDeliveryFromRow(row));
+    }
+    async acknowledgePendingInboundDeliveries(keys) {
+        if (keys.length === 0)
+            return;
+        const stmt = this.db.prepare(`
+      DELETE FROM pending_inbound_deliveries
+      WHERE conversation_id = ? AND message_id = ? AND comm = ? AND account = ?
+    `);
+        for (const key of keys) {
+            stmt.run(key.conversation_id, key.message_id, key.comm, key.account);
+        }
+    }
     async close() {
         this.db.close();
     }
@@ -730,6 +763,18 @@ export class SqliteStorage {
             resolved_at: r.resolved_at,
             resolution: decodeJson(r.resolution_json),
             options_json: r.options_json,
+        };
+    }
+    pendingInboundDeliveryFromRow(row) {
+        const r = row;
+        return {
+            conversation_id: r.conversation_id,
+            message_id: r.message_id,
+            comm: r.comm,
+            account: r.account,
+            project: r.project,
+            agent: r.agent,
+            enqueued_at: r.enqueued_at,
         };
     }
     sessionFromRow(row) {

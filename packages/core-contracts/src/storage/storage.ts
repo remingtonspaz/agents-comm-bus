@@ -11,6 +11,19 @@ import type {
   QueryId,
   SessionId,
 } from "../types.js";
+
+export interface PendingInboundDeliveryKey {
+  conversation_id: ConversationId;
+  message_id: MessageId;
+  comm: CommId;
+  account: string;
+}
+
+export interface PendingInboundDeliveryRow extends PendingInboundDeliveryKey {
+  project: string;
+  agent: AgentId;
+  enqueued_at: number;
+}
 import type { ResolvedDecision } from "../queries.js";
 import type {
   AccountRegistration,
@@ -243,6 +256,16 @@ export interface Storage {
     comm?: CommId;
     bot_user_id?: string;
   }): Promise<AllowlistPerBotEntry[]>;
+
+  // AGE-56: durable pending inbound deliveries
+  recordPendingInboundDelivery(row: PendingInboundDeliveryRow): Promise<void>;
+  listPendingInboundDeliveries(filter: {
+    project: string;
+    agent: AgentId;
+  }): Promise<PendingInboundDeliveryRow[]>;
+  acknowledgePendingInboundDeliveries(
+    keys: PendingInboundDeliveryKey[],
+  ): Promise<void>;
 
   // lifecycle
   close(): Promise<void>;
