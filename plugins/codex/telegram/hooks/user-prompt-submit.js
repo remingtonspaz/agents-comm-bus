@@ -3660,7 +3660,7 @@ import path9 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
-import { mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { mkdir as mkdir3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 import path3 from "node:path";
 
@@ -4157,7 +4157,7 @@ async function cleanupStalePidAndPort(input) {
     await rm2(input.pidFile, { force: true });
     await rm2(input.portFile, { force: true });
     const audit = new JsonlAuditStore(input.stateRoot);
-    audit.append({
+    await audit.append({
       timestamp: Date.now(),
       kind: "discovery_stale_cleanup",
       detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile }
@@ -4200,15 +4200,20 @@ function defaultTerminateDaemon(pid) {
 function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const binOverride = env.AGENTS_COMM_BUS_BIN;
   const daemonEntry = binOverride ? path3.resolve(binOverride) : path3.join(paths.root, "bin", "daemon.js");
+  const stdio = daemonSpawnStdio(paths.root);
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
-    stdio: daemonSpawnStdio(paths.root),
+    stdio,
     env: {
       ...env,
       AGENTS_COMM_BUS_STATE_ROOT: paths.root,
       AGENTS_COMM_BUS_DISCOVERY_ROOT: discoveryPaths.root
     }
   });
+  try {
+    closeSync(stdio[1]);
+  } catch {
+  }
   child.unref();
 }
 function warnIfSourceModeSharesDiscoveryRoot(input) {

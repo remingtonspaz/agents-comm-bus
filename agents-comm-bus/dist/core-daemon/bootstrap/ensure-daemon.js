@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { JsonlAuditStore } from "../storage/audit.js";
@@ -189,7 +189,7 @@ async function cleanupStalePidAndPort(input) {
         await rm(input.pidFile, { force: true });
         await rm(input.portFile, { force: true });
         const audit = new JsonlAuditStore(input.stateRoot);
-        audit
+        await audit
             .append({
             timestamp: Date.now(),
             kind: "discovery_stale_cleanup",
@@ -246,15 +246,22 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
     const daemonEntry = binOverride
         ? path.resolve(binOverride)
         : path.join(paths.root, "bin", "daemon.js");
+    const stdio = daemonSpawnStdio(paths.root);
     const child = spawn(process.execPath, [daemonEntry, "serve"], {
         detached: true,
-        stdio: daemonSpawnStdio(paths.root),
+        stdio,
         env: {
             ...env,
             AGENTS_COMM_BUS_STATE_ROOT: paths.root,
             AGENTS_COMM_BUS_DISCOVERY_ROOT: discoveryPaths.root,
         },
     });
+    try {
+        closeSync(stdio[1]);
+    }
+    catch {
+        // best-effort: child already inherited a dup of the log fd
+    }
     child.unref();
 }
 function warnIfSourceModeSharesDiscoveryRoot(input) {
