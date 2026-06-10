@@ -1,6 +1,10 @@
 import WebSocket from "ws";
 import { type DaemonHello, type DiagnosticMetadata } from "./protocol.js";
-/** Conservative default for in-flight IPC requests (Codex permission hooks may wait up to ~9m). */
+/**
+ * Conservative default for in-flight IPC requests.
+ * Keep above CodexBridge's blocking permission-query poll cap (~9m); Claude
+ * permission opens return immediately and resolve later through wake typing.
+ */
 export declare const DEFAULT_IPC_REQUEST_TIMEOUT_MS: number;
 export declare class IpcRequestTimeoutError extends Error {
     readonly requestId: string;

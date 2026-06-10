@@ -1,7 +1,11 @@
 import WebSocket from "ws";
 import { IPC_HOST, IPC_PROTOCOL_VERSION } from "../config.js";
 import { IPC_MESSAGE_TYPES, createRequest, createClientHello, parseIpcMessage, parseHandshakeMessage, } from "./protocol.js";
-/** Conservative default for in-flight IPC requests (Codex permission hooks may wait up to ~9m). */
+/**
+ * Conservative default for in-flight IPC requests.
+ * Keep above CodexBridge's blocking permission-query poll cap (~9m); Claude
+ * permission opens return immediately and resolve later through wake typing.
+ */
 export const DEFAULT_IPC_REQUEST_TIMEOUT_MS = 10 * 60 * 1_000;
 export class IpcRequestTimeoutError extends Error {
     requestId;

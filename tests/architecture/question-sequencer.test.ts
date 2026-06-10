@@ -190,9 +190,47 @@ function sequenceMapSize(bridge: ClaudeBridge): number {
   return (bridge as unknown as { questionSequences: Map<unknown, unknown> }).questionSequences.size;
 }
 
+async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 100): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 registerTempDirCleanup();
 
 describe("AGE-37 AskUserQuestion sequencer", () => {
+  it("returns unresolved Claude permission queries immediately for out-of-band wake resolution", async () => {
+    const dir = await makeTempDir("acb-q37-open-return-");
+    const h = await makeHarness(dir);
+    try {
+      const result = await withTimeout(
+        h.bridge.openQuery({
+          session: SESSION,
+          tool_name: "Bash",
+          prompt_text: "Allow Bash(npm test)?",
+          kind: "approval",
+        }),
+        "ClaudeBridge.openQuery",
+      );
+
+      assert.deepEqual(result.nativeHookJson, { decision: { behavior: "ask" } });
+      assert.equal(h.adapter.sent.length, 1);
+      const stored = await h.storage.getOpenQueryById(result.query_id);
+      assert.ok(stored, "the query remains open for later button/text resolution");
+      assert.equal(stored.resolved_at, null);
+    } finally {
+      await h.storage.close();
+    }
+  });
+
   it("shows one question at a time through a three-question flow", async () => {
     const dir = await makeTempDir("acb-q37-three-");
     const h = await makeHarness(dir);
