@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.16";
+var DAEMON_VERSION = "0.2.17";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4552,6 +4552,113 @@ async function writeDaemonDiscoveryFiles(input) {
 `, "utf8");
 }
 
+// ../core-daemon/bootstrap/boot-scope-restore.ts
+import { access } from "node:fs/promises";
+import { join } from "node:path";
+var DEFAULT_BOOT_RESTORE_RECENCY_MS = 24 * 60 * 60 * 1e3;
+function defaultIsPidAlive2(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function defaultPathExists(path8) {
+  try {
+    await access(path8);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function scopeDedupeKey(agent, project) {
+  return `${agent}:${normalizeProjectPath(project)}`;
+}
+async function auditBootRestore(audit, timestamp, summary, error) {
+  if (!audit) return;
+  const detail = { ...summary };
+  if (error !== void 0) {
+    detail.error = error instanceof Error ? error.message : String(error);
+  }
+  await audit.append({
+    timestamp,
+    kind: "daemon_boot_restore",
+    detail
+  }).catch(() => {
+  });
+}
+async function runBootScopeRestore(input) {
+  const now = input.now ?? (() => Date.now());
+  const isPidAlive2 = input.isPidAlive ?? defaultIsPidAlive2;
+  const recencyMs = input.recencyMs ?? DEFAULT_BOOT_RESTORE_RECENCY_MS;
+  const pathExists = input.pathExists ?? defaultPathExists;
+  const summary = {
+    status: "completed",
+    candidates: 0,
+    restored: 0,
+    skipped_dead: 0,
+    skipped_stale: 0,
+    skipped_no_owner: 0
+  };
+  try {
+    const pausedPath = join(input.stateRoot, "paused");
+    if (await pathExists(pausedPath)) {
+      summary.status = "skipped_paused";
+      console.error(
+        "agents-comm-bus: boot scope restore skipped (paused marker present)"
+      );
+      await auditBootRestore(input.audit, now(), summary);
+      return summary;
+    }
+    const sessions = await input.storage.listSessions({ status: "active" });
+    summary.candidates = sessions.length;
+    const scopesToRestore = /* @__PURE__ */ new Map();
+    for (const session of sessions) {
+      const pid = session.lease_owner_process_pid;
+      const registeredAt = session.lease_owner_process_registered_at;
+      if (pid == null || registeredAt == null) {
+        summary.skipped_no_owner += 1;
+        continue;
+      }
+      if (now() - registeredAt > recencyMs) {
+        summary.skipped_stale += 1;
+        continue;
+      }
+      if (!isPidAlive2(pid)) {
+        summary.skipped_dead += 1;
+        continue;
+      }
+      const canonicalProject = normalizeProjectPath(session.project);
+      const key = scopeDedupeKey(session.agent, canonicalProject);
+      if (!scopesToRestore.has(key)) {
+        scopesToRestore.set(key, { project: canonicalProject, agent: session.agent });
+      }
+    }
+    for (const scope of scopesToRestore.values()) {
+      try {
+        await input.ensureCommsForSession(scope.project, scope.agent);
+        summary.restored += 1;
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: boot scope restore ensure failed for ${scope.project}/${scope.agent}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+    console.error(
+      `agents-comm-bus: boot scope restore complete: candidates=${summary.candidates} restored=${summary.restored} skipped_dead=${summary.skipped_dead} skipped_stale=${summary.skipped_stale} skipped_no_owner=${summary.skipped_no_owner}`
+    );
+    await auditBootRestore(input.audit, now(), summary);
+    return summary;
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: boot scope restore failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+    await auditBootRestore(input.audit, now(), summary, error);
+    return summary;
+  }
+}
+
 // ../core-daemon/bootstrap/pid-watchdog.ts
 import { readFile as readFile3 } from "node:fs/promises";
 function startDaemonPidWatchdog(options) {
@@ -4622,7 +4729,7 @@ async function runDaemonPidWatchdogTick(options) {
 async function checkDaemonPidOwnership(options) {
   const selfPid = options.selfPid ?? process.pid;
   const read = options.readPidFile ?? readPidFile;
-  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive3;
   const writeDiscovery = options.writeDiscoveryFiles ?? writeDaemonDiscoveryFiles;
   const pidFile = await read(options.pidFile);
   if (pidFile.status === "missing") {
@@ -4711,7 +4818,7 @@ async function readPidFile(pidFile) {
     return { status: "error", error };
   }
 }
-function defaultIsPidAlive2(pid) {
+function defaultIsPidAlive3(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -5433,7 +5540,7 @@ import { createRequire } from "node:module";
 
 // ../core-daemon/storage/schema/runner.ts
 import { readFile as readFile4 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 var SqliteMigrationRunner = class {
   constructor(db) {
@@ -5461,7 +5568,7 @@ var initialMigration = {
   version: 1,
   description: "initial storage schema",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "001_initial.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "001_initial.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5469,7 +5576,7 @@ var conversationAgentIdentityMigration = {
   version: 2,
   description: "include agent in conversation identity",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5477,7 +5584,7 @@ var allowlistMigration = {
   version: 3,
   description: "add allowlist_global and allowlist_per_bot tables",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "003_allowlist.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "003_allowlist.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5485,7 +5592,7 @@ var sessionOwnerProcessMigration = {
   version: 4,
   description: "track owning agent process for session leases",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "004_session_owner_process.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "004_session_owner_process.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5493,7 +5600,7 @@ var conversationBotIdentityMigration = {
   version: 5,
   description: "store receiving bot identity on conversations",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5501,7 +5608,7 @@ var registrationIdentityMigration = {
   version: 6,
   description: "add immutable registration_id surrogate to registrations + conversations",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "006_registration_identity.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "006_registration_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5509,7 +5616,7 @@ var registrationPkMigration = {
   version: 7,
   description: "make registration_id the canonical primary key of account_registrations",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "007_registration_pk.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "007_registration_pk.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5517,7 +5624,7 @@ var conversationRegistrationKeyMigration = {
   version: 8,
   description: "re-key conversations on (registration_id, chat, thread) + drop account_label",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "008_conversation_registration_key.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "008_conversation_registration_key.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5525,7 +5632,7 @@ var multiOpenQueriesMigration = {
   version: 9,
   description: "AGE-9: drop the one-open-query-per-session unique index (policy moves to callers)",
   async up(ctx) {
-    const sql = await readFile4(join(schemaDir, "009_multi_open_queries.sql"), "utf8");
+    const sql = await readFile4(join2(schemaDir, "009_multi_open_queries.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -6276,7 +6383,7 @@ function isConstraintError(error) {
 // ../core-daemon/storage/transcripts.ts
 import { createReadStream } from "node:fs";
 import { mkdir as mkdir3, stat as stat2 } from "node:fs/promises";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 // ../core-daemon/storage/jsonl.ts
@@ -6328,13 +6435,13 @@ var JsonlTranscriptStore = class {
     }
   }
   pathFor(conversation_id) {
-    return join2(this.root, "chats", safeSegment2(conversation_id), "transcript.jsonl");
+    return join3(this.root, "chats", safeSegment2(conversation_id), "transcript.jsonl");
   }
 };
 
 // ../core-daemon/storage/audit.ts
 import { mkdir as mkdir4 } from "node:fs/promises";
-import { dirname as dirname3, join as join3 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 function utcDay(timestamp) {
   return new Date(timestamp).toISOString().slice(0, 10);
 }
@@ -6349,7 +6456,7 @@ var JsonlAuditStore = class {
     await appendJsonLine(path8, event);
   }
   pathFor(timestamp) {
-    return join3(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+    return join4(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
 };
 
@@ -6357,7 +6464,7 @@ var JsonlAuditStore = class {
 import { createHash } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
 import { mkdir as mkdir5, open as open3, stat as stat3 } from "node:fs/promises";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 import { Readable } from "node:stream";
 var ContentAddressedBlobStore = class {
   constructor(root) {
@@ -6368,7 +6475,7 @@ var ContentAddressedBlobStore = class {
     const hash = createHash("sha256").update(content).digest("hex");
     const ref = { hash, size: content.byteLength, mime };
     const path8 = this.pathFor(ref);
-    await mkdir5(join4(this.root, "blobs", hash.slice(0, 2)), { recursive: true });
+    await mkdir5(join5(this.root, "blobs", hash.slice(0, 2)), { recursive: true });
     let handle;
     try {
       handle = await open3(path8, "wx");
@@ -6384,7 +6491,7 @@ var ContentAddressedBlobStore = class {
     return Readable.toWeb(createReadStream2(this.pathFor(ref)));
   }
   pathFor(ref) {
-    return join4(this.root, "blobs", ref.hash.slice(0, 2), ref.hash);
+    return join5(this.root, "blobs", ref.hash.slice(0, 2), ref.hash);
   }
   async exists(ref) {
     try {
@@ -6634,6 +6741,12 @@ async function runDaemon(options) {
         "close IPC server during daemon retirement"
       );
     }
+  });
+  void runBootScopeRestore({
+    stateRoot: paths.root,
+    storage,
+    ensureCommsForSession: ensureCommsForSessionFn,
+    audit
   });
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }
