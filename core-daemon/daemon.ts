@@ -38,11 +38,12 @@ import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import {
-  acknowledgePendingInboundEntries,
   deliveryRowFromEntry,
+  drainAndAcknowledgePendingInbound,
   durableInboundKey,
   queueHasDurableKey,
   rehydratePendingInboundForScope,
+  selectPendingInboundForDrain,
 } from "./runtime/durable-inbound.js";
 
 export type {
@@ -350,9 +351,10 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     // agent's `comm_check_messages` cannot cannibalize another agent's pending
     // inbound (Claude + Codex share comm="telegram" with different bots).
     const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
-    const drained = drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
-    await acknowledgePendingInboundEntries(storage, drained);
-    return drained;
+    return drainAndAcknowledgePendingInbound(storage, pendingInbound, {
+      ...base,
+      ownedAccountKeys,
+    });
   });
   const bridgesByMethod = new Map<string, AgentBridge>();
   for (const bridge of bridges) {
@@ -992,27 +994,15 @@ export function drainPendingInbound(
   queue: PendingInboundEntry[],
   params: Record<string, unknown> | undefined = {},
 ): PendingInboundEntry[] {
-  const raw = params?.comm;
-  const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
-  const owned = params?.ownedAccountKeys instanceof Set
-    ? (params.ownedAccountKeys as Set<string>)
-    : null;
-  if (!commFilter && owned === null) {
-    return queue.splice(0);
-  }
-  const drained: PendingInboundEntry[] = [];
+  const selected = selectPendingInboundForDrain(queue, params);
+  if (selected.length === 0) return selected;
+  const keys = new Set(selected.map((entry) => durableInboundKey(entry)));
   for (let i = queue.length - 1; i >= 0; i -= 1) {
-    const entry = queue[i];
-    if (commFilter && entry.message.chat.comm !== commFilter) continue;
-    if (owned !== null && !owned.has(pendingAccountKey(entry))) continue;
-    drained.unshift(entry);
-    queue.splice(i, 1);
+    if (keys.has(durableInboundKey(queue[i]))) {
+      queue.splice(i, 1);
+    }
   }
-  return drained;
-}
-
-function pendingAccountKey(entry: PendingInboundEntry): string {
-  return `${entry.message.chat.comm}:${entry.message.chat.account}`;
+  return selected;
 }
 
 /**

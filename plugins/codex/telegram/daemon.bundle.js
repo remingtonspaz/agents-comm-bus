@@ -6610,12 +6610,38 @@ async function acknowledgePendingInboundEntries(storage, entries) {
 async function removePendingInboundEntries(storage, queue, entries) {
   if (entries.length === 0) return;
   await acknowledgePendingInboundEntries(storage, entries);
+  removePendingInboundFromMemory(queue, entries);
+}
+function removePendingInboundFromMemory(queue, entries) {
   const keys = new Set(entries.map((entry) => durableInboundKey(entry)));
   for (let i = queue.length - 1; i >= 0; i -= 1) {
     if (keys.has(durableInboundKey(queue[i]))) {
       queue.splice(i, 1);
     }
   }
+}
+function selectPendingInboundForDrain(queue, params = {}) {
+  const raw = params?.comm;
+  const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
+  const owned = params?.ownedAccountKeys instanceof Set ? params.ownedAccountKeys : null;
+  if (!commFilter && owned === null) {
+    return [...queue];
+  }
+  const selected = [];
+  for (const entry of queue) {
+    if (commFilter && entry.message.chat.comm !== commFilter) continue;
+    if (owned !== null && !owned.has(pendingAccountKey(entry))) continue;
+    selected.push(entry);
+  }
+  return selected;
+}
+async function drainAndAcknowledgePendingInbound(storage, queue, params = {}) {
+  const selected = selectPendingInboundForDrain(queue, params);
+  await removePendingInboundEntries(storage, queue, selected);
+  return selected;
+}
+function pendingAccountKey(entry) {
+  return `${entry.message.chat.comm}:${entry.message.chat.account}`;
 }
 async function rehydratePendingInboundForScope(input) {
   const project = normalizeProjectPath(input.project);
@@ -6877,9 +6903,10 @@ async function runDaemon(options) {
   ipcMethods.set("drain_pending_inbound", async (params) => {
     const base = params ?? {};
     const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
-    const drained = drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
-    await acknowledgePendingInboundEntries(storage, drained);
-    return drained;
+    return drainAndAcknowledgePendingInbound(storage, pendingInbound, {
+      ...base,
+      ownedAccountKeys
+    });
   });
   const bridgesByMethod = /* @__PURE__ */ new Map();
   for (const bridge of bridges) {
@@ -7312,26 +7339,6 @@ async function reloadAdapters(input) {
     }
   }
   return { ok: true, added, removed, updated, skipped };
-}
-function drainPendingInbound(queue, params = {}) {
-  const raw = params?.comm;
-  const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
-  const owned = params?.ownedAccountKeys instanceof Set ? params.ownedAccountKeys : null;
-  if (!commFilter && owned === null) {
-    return queue.splice(0);
-  }
-  const drained = [];
-  for (let i = queue.length - 1; i >= 0; i -= 1) {
-    const entry = queue[i];
-    if (commFilter && entry.message.chat.comm !== commFilter) continue;
-    if (owned !== null && !owned.has(pendingAccountKey(entry))) continue;
-    drained.unshift(entry);
-    queue.splice(i, 1);
-  }
-  return drained;
-}
-function pendingAccountKey(entry) {
-  return `${entry.message.chat.comm}:${entry.message.chat.account}`;
 }
 async function resolveOwnedAccountKeys(storage, session) {
   if (typeof session !== "string" || session.length === 0) return void 0;

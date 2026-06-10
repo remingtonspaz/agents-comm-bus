@@ -6,14 +6,13 @@ import { MessageBus } from "../../core-daemon/bus.js";
 import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
 import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
 import {
-  acknowledgePendingInboundEntries,
   deliveryRowFromEntry,
+  drainAndAcknowledgePendingInbound,
   durableInboundKey,
   queueHasDurableKey,
   rehydratePendingInboundForScope,
 } from "../../core-daemon/runtime/durable-inbound.js";
 import type { PendingInboundEntry } from "../../core-daemon/runtime/pending-inbound.js";
-import { drainPendingInbound } from "../../core-daemon/daemon.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import { JsonlAuditStore } from "../../core-daemon/storage/audit.js";
 import { JsonlTranscriptStore } from "../../core-daemon/storage/transcripts.js";
@@ -425,15 +424,34 @@ describe("AGE-56 durable inbound delivery", () => {
       await ctx.storage.recordPendingInboundDelivery(deliveryRowFromEntry(entry, 1000));
       const queue = [entry];
 
-      const drained = drainPendingInbound(queue, {
+      const drained = await drainAndAcknowledgePendingInbound(ctx.storage, queue, {
         ownedAccountKeys: new Set([`telegram:${BOT}`]),
       });
-      await acknowledgePendingInboundEntries(ctx.storage, drained);
 
       assert.equal(drained.length, 1);
       assert.equal(queue.length, 0);
       assert.equal((await listPendingRows(ctx.storage, CLAUDE)).length, 0);
     });
+  });
+
+  it("keeps pendingInbound intact when durable ack fails during generic drain", async () => {
+    const conversationId = "conv-claude" as ConversationId;
+    const entry = pendingEntry(CLAUDE, String(BOT), conversationId);
+    const queue: PendingInboundEntry[] = [entry];
+    const storage = {
+      async acknowledgePendingInboundDeliveries(): Promise<void> {
+        throw new Error("simulated ack failure");
+      },
+    };
+
+    await assert.rejects(
+      () => drainAndAcknowledgePendingInbound(storage as never, queue, {
+        ownedAccountKeys: new Set([`telegram:${BOT}`]),
+      }),
+      /simulated ack failure/,
+    );
+    assert.equal(queue.length, 1);
+    assert.equal(queue[0].message.message_id, entry.message.message_id);
   });
 
   it("overflow spill audits memory loss while durable rows remain replayable", async () => {

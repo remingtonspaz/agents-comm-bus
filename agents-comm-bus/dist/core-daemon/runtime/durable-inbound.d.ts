@@ -17,6 +17,15 @@ export declare function queueHasDurableKey(queue: readonly PendingInboundEntry[]
 export declare function deliveryRowFromEntry(entry: PendingInboundEntry, enqueuedAt: number): PendingInboundDeliveryRow;
 export declare function acknowledgePendingInboundEntries(storage: Storage, entries: readonly PendingInboundEntry[]): Promise<void>;
 export declare function removePendingInboundEntries(storage: Storage, queue: PendingInboundEntry[], entries: readonly PendingInboundEntry[]): Promise<void>;
+/**
+ * Select pending-inbound entries matching the same comm/account filters as
+ * `drainPendingInbound`, without mutating the queue.
+ */
+export declare function selectPendingInboundForDrain(queue: readonly PendingInboundEntry[], params?: Record<string, unknown> | undefined): PendingInboundEntry[];
+/**
+ * Daemon IPC drain path: select, acknowledge durable rows, then remove from memory.
+ */
+export declare function drainAndAcknowledgePendingInbound(storage: Storage, queue: PendingInboundEntry[], params?: Record<string, unknown> | undefined): Promise<PendingInboundEntry[]>;
 export declare function rehydratePendingInboundForScope(input: {
     storage: Storage;
     transcripts: TranscriptStore;

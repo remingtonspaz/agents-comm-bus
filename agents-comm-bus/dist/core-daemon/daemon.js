@@ -13,7 +13,7 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
-import { acknowledgePendingInboundEntries, deliveryRowFromEntry, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, } from "./runtime/durable-inbound.js";
+import { deliveryRowFromEntry, drainAndAcknowledgePendingInbound, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, selectPendingInboundForDrain, } from "./runtime/durable-inbound.js";
 /**
  * Generic daemon entry point. Knows nothing about specific agents or
  * comms — adapter wiring is supplied by the composition root.
@@ -264,9 +264,10 @@ export async function runDaemon(options) {
         // agent's `comm_check_messages` cannot cannibalize another agent's pending
         // inbound (Claude + Codex share comm="telegram" with different bots).
         const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
-        const drained = drainPendingInbound(pendingInbound, { ...base, ownedAccountKeys });
-        await acknowledgePendingInboundEntries(storage, drained);
-        return drained;
+        return drainAndAcknowledgePendingInbound(storage, pendingInbound, {
+            ...base,
+            ownedAccountKeys,
+        });
     });
     const bridgesByMethod = new Map();
     for (const bridge of bridges) {
@@ -780,28 +781,16 @@ export async function reloadAdapters(input) {
  * Returned entries preserve queue order (oldest first).
  */
 export function drainPendingInbound(queue, params = {}) {
-    const raw = params?.comm;
-    const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
-    const owned = params?.ownedAccountKeys instanceof Set
-        ? params.ownedAccountKeys
-        : null;
-    if (!commFilter && owned === null) {
-        return queue.splice(0);
-    }
-    const drained = [];
+    const selected = selectPendingInboundForDrain(queue, params);
+    if (selected.length === 0)
+        return selected;
+    const keys = new Set(selected.map((entry) => durableInboundKey(entry)));
     for (let i = queue.length - 1; i >= 0; i -= 1) {
-        const entry = queue[i];
-        if (commFilter && entry.message.chat.comm !== commFilter)
-            continue;
-        if (owned !== null && !owned.has(pendingAccountKey(entry)))
-            continue;
-        drained.unshift(entry);
-        queue.splice(i, 1);
+        if (keys.has(durableInboundKey(queue[i]))) {
+            queue.splice(i, 1);
+        }
     }
-    return drained;
-}
-function pendingAccountKey(entry) {
-    return `${entry.message.chat.comm}:${entry.message.chat.account}`;
+    return selected;
 }
 /**
  * Resolve the bot accounts a calling session owns, as `${comm}:${account}`

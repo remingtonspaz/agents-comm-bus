@@ -91,12 +91,61 @@ export async function removePendingInboundEntries(
 ): Promise<void> {
   if (entries.length === 0) return;
   await acknowledgePendingInboundEntries(storage, entries);
+  removePendingInboundFromMemory(queue, entries);
+}
+
+function removePendingInboundFromMemory(
+  queue: PendingInboundEntry[],
+  entries: readonly PendingInboundEntry[],
+): void {
   const keys = new Set(entries.map((entry) => durableInboundKey(entry)));
   for (let i = queue.length - 1; i >= 0; i -= 1) {
     if (keys.has(durableInboundKey(queue[i]))) {
       queue.splice(i, 1);
     }
   }
+}
+
+/**
+ * Select pending-inbound entries matching the same comm/account filters as
+ * `drainPendingInbound`, without mutating the queue.
+ */
+export function selectPendingInboundForDrain(
+  queue: readonly PendingInboundEntry[],
+  params: Record<string, unknown> | undefined = {},
+): PendingInboundEntry[] {
+  const raw = params?.comm;
+  const commFilter = typeof raw === "string" && raw.length > 0 ? raw : null;
+  const owned = params?.ownedAccountKeys instanceof Set
+    ? (params.ownedAccountKeys as Set<string>)
+    : null;
+  if (!commFilter && owned === null) {
+    return [...queue];
+  }
+  const selected: PendingInboundEntry[] = [];
+  for (const entry of queue) {
+    if (commFilter && entry.message.chat.comm !== commFilter) continue;
+    if (owned !== null && !owned.has(pendingAccountKey(entry))) continue;
+    selected.push(entry);
+  }
+  return selected;
+}
+
+/**
+ * Daemon IPC drain path: select, acknowledge durable rows, then remove from memory.
+ */
+export async function drainAndAcknowledgePendingInbound(
+  storage: Storage,
+  queue: PendingInboundEntry[],
+  params: Record<string, unknown> | undefined = {},
+): Promise<PendingInboundEntry[]> {
+  const selected = selectPendingInboundForDrain(queue, params);
+  await removePendingInboundEntries(storage, queue, selected);
+  return selected;
+}
+
+function pendingAccountKey(entry: PendingInboundEntry): string {
+  return `${entry.message.chat.comm}:${entry.message.chat.account}`;
 }
 
 export async function rehydratePendingInboundForScope(input: {
