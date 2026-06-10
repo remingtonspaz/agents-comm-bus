@@ -3658,8 +3658,8 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.18";
-var IPC_PROTOCOL_VERSION = "1.1.0";
+var DAEMON_VERSION = "0.2.19";
+var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
   return version.split(".", 1)[0] ?? version;
@@ -4428,7 +4428,43 @@ async function handleRequest(socket, data, onRequest) {
 }
 
 // ../core-daemon/bootstrap/ensure-daemon.ts
-import { mkdir as mkdir2, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
+import { mkdir as mkdir3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
+
+// ../core-daemon/storage/audit.ts
+import { mkdir as mkdir2 } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+// ../core-daemon/storage/jsonl.ts
+import { open as open2 } from "node:fs/promises";
+async function appendJsonLine(path8, value) {
+  const handle = await open2(path8, "a");
+  try {
+    await handle.writeFile(`${JSON.stringify(value)}
+`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+// ../core-daemon/storage/audit.ts
+function utcDay(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+var JsonlAuditStore = class {
+  constructor(root) {
+    this.root = root;
+  }
+  root;
+  async append(event) {
+    const path8 = this.pathFor(event.timestamp);
+    await mkdir2(dirname(path8), { recursive: true });
+    await appendJsonLine(path8, event);
+  }
+  pathFor(timestamp) {
+    return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+  }
+};
 
 // ../core-daemon/ipc/client.ts
 async function connectIpc(options) {
@@ -4529,7 +4565,7 @@ async function writeDaemonDiscoveryFiles(input) {
     stateRoot: input.stateRoot,
     discoveryRoot: input.discoveryRoot
   });
-  await mkdir2(paths.root, { recursive: true });
+  await mkdir3(paths.root, { recursive: true });
   const existingPort = await readPortFile(paths.portFile);
   if (existingPort !== void 0 && existingPort !== input.port) {
     const probe = input.probeDaemon ?? ((port) => probeDaemon({ port }));
@@ -4554,7 +4590,7 @@ async function writeDaemonDiscoveryFiles(input) {
 
 // ../core-daemon/bootstrap/boot-scope-restore.ts
 import { access } from "node:fs/promises";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 var DEFAULT_BOOT_RESTORE_RECENCY_MS = 24 * 60 * 60 * 1e3;
 function defaultIsPidAlive2(pid) {
   try {
@@ -4602,7 +4638,7 @@ async function runBootScopeRestore(input) {
     skipped_no_owner: 0
   };
   try {
-    const pausedPath = join(input.stateRoot, "paused");
+    const pausedPath = join2(input.stateRoot, "paused");
     if (await pathExists(pausedPath)) {
       summary.status = "skipped_paused";
       console.error(
@@ -5540,7 +5576,7 @@ import { createRequire } from "node:module";
 
 // ../core-daemon/storage/schema/runner.ts
 import { readFile as readFile4 } from "node:fs/promises";
-import { dirname, join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 var SqliteMigrationRunner = class {
   constructor(db) {
@@ -5563,12 +5599,12 @@ var SqliteMigrationRunner = class {
     }
   }
 };
-var schemaDir = dirname(fileURLToPath(import.meta.url));
+var schemaDir = dirname2(fileURLToPath(import.meta.url));
 var initialMigration = {
   version: 1,
   description: "initial storage schema",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "001_initial.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "001_initial.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5576,7 +5612,7 @@ var conversationAgentIdentityMigration = {
   version: 2,
   description: "include agent in conversation identity",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5584,7 +5620,7 @@ var allowlistMigration = {
   version: 3,
   description: "add allowlist_global and allowlist_per_bot tables",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "003_allowlist.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "003_allowlist.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5592,7 +5628,7 @@ var sessionOwnerProcessMigration = {
   version: 4,
   description: "track owning agent process for session leases",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "004_session_owner_process.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "004_session_owner_process.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5600,7 +5636,7 @@ var conversationBotIdentityMigration = {
   version: 5,
   description: "store receiving bot identity on conversations",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5608,7 +5644,7 @@ var registrationIdentityMigration = {
   version: 6,
   description: "add immutable registration_id surrogate to registrations + conversations",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "006_registration_identity.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "006_registration_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5616,7 +5652,7 @@ var registrationPkMigration = {
   version: 7,
   description: "make registration_id the canonical primary key of account_registrations",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "007_registration_pk.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "007_registration_pk.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5624,7 +5660,7 @@ var conversationRegistrationKeyMigration = {
   version: 8,
   description: "re-key conversations on (registration_id, chat, thread) + drop account_label",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "008_conversation_registration_key.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "008_conversation_registration_key.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5632,7 +5668,7 @@ var multiOpenQueriesMigration = {
   version: 9,
   description: "AGE-9: drop the one-open-query-per-session unique index (policy moves to callers)",
   async up(ctx) {
-    const sql = await readFile4(join2(schemaDir, "009_multi_open_queries.sql"), "utf8");
+    const sql = await readFile4(join3(schemaDir, "009_multi_open_queries.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -6390,24 +6426,9 @@ function isConstraintError(error) {
 
 // ../core-daemon/storage/transcripts.ts
 import { createReadStream } from "node:fs";
-import { mkdir as mkdir3, stat as stat2 } from "node:fs/promises";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { mkdir as mkdir4, stat as stat2 } from "node:fs/promises";
+import { dirname as dirname3, join as join4 } from "node:path";
 import { createInterface } from "node:readline/promises";
-
-// ../core-daemon/storage/jsonl.ts
-import { open as open2 } from "node:fs/promises";
-async function appendJsonLine(path8, value) {
-  const handle = await open2(path8, "a");
-  try {
-    await handle.writeFile(`${JSON.stringify(value)}
-`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-// ../core-daemon/storage/transcripts.ts
 function safeSegment2(value) {
   return encodeURIComponent(value);
 }
@@ -6418,7 +6439,7 @@ var JsonlTranscriptStore = class {
   root;
   async append(entry) {
     const path8 = this.pathFor(entry.conversation_id);
-    await mkdir3(dirname2(path8), { recursive: true });
+    await mkdir4(dirname3(path8), { recursive: true });
     await appendJsonLine(path8, entry);
   }
   async *read(conversation_id, opts = {}) {
@@ -6443,28 +6464,7 @@ var JsonlTranscriptStore = class {
     }
   }
   pathFor(conversation_id) {
-    return join3(this.root, "chats", safeSegment2(conversation_id), "transcript.jsonl");
-  }
-};
-
-// ../core-daemon/storage/audit.ts
-import { mkdir as mkdir4 } from "node:fs/promises";
-import { dirname as dirname3, join as join4 } from "node:path";
-function utcDay(timestamp) {
-  return new Date(timestamp).toISOString().slice(0, 10);
-}
-var JsonlAuditStore = class {
-  constructor(root) {
-    this.root = root;
-  }
-  root;
-  async append(event) {
-    const path8 = this.pathFor(event.timestamp);
-    await mkdir4(dirname3(path8), { recursive: true });
-    await appendJsonLine(path8, event);
-  }
-  pathFor(timestamp) {
-    return join4(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+    return join4(this.root, "chats", safeSegment2(conversation_id), "transcript.jsonl");
   }
 };
 
@@ -6703,6 +6703,7 @@ async function runDaemon(options) {
     stateRoot: paths.root,
     leaseArbiter,
     activeScopes,
+    audit,
     options: reloadOptions
   });
   const server = await startIpcServer({
@@ -6717,7 +6718,9 @@ async function runDaemon(options) {
         env,
         socket,
         reloadRegistrations,
-        ensureCommsForSession: ensureCommsForSessionFn
+        ensureCommsForSession: ensureCommsForSessionFn,
+        pendingInbound,
+        activeScopes
       });
     }
   });
@@ -6835,7 +6838,22 @@ async function ensureCommsForSession(input) {
   }
   for (const registration of registrations) {
     const factory = input.factories.find((f) => f.commId === registration.comm);
-    if (!factory) continue;
+    if (!factory) {
+      await input.audit?.append({
+        timestamp: Date.now(),
+        kind: "comm_adapter_skip",
+        agent: input.agent,
+        detail: {
+          comm: registration.comm,
+          account_id: registration.bot_user_id,
+          account_label: registration.account_label,
+          project,
+          reason: "no_comm_factory"
+        }
+      }).catch(() => {
+      });
+      continue;
+    }
     const accountId = registration.bot_user_id;
     const key = adapterMapKey(registration.comm, accountId);
     if (input.bus.getComm(registration.comm, accountId) || input.inFlight.has(key)) continue;
@@ -6856,6 +6874,19 @@ async function ensureCommsForSession(input) {
         console.error(
           `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
         );
+        await input.audit?.append({
+          timestamp: Date.now(),
+          kind: "comm_adapter_skip",
+          agent: input.agent,
+          detail: {
+            comm: registration.comm,
+            account_id: registration.bot_user_id,
+            account_label: registration.account_label,
+            project,
+            reason: result.reason
+          }
+        }).catch(() => {
+        });
       }
     } finally {
       input.inFlight.delete(key);
@@ -6929,6 +6960,20 @@ async function reloadAdapters(input) {
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id,
         reason: result.reason
+      });
+      await input.audit?.append({
+        timestamp: Date.now(),
+        kind: "comm_adapter_skip",
+        agent: entry.registration.agent,
+        detail: {
+          comm: entry.registration.comm,
+          account_id: entry.registration.bot_user_id,
+          account_label: entry.registration.account_label,
+          project: entry.registration.project,
+          reason: result.reason,
+          via: "reload_registrations"
+        }
+      }).catch(() => {
       });
     }
   }
@@ -7150,6 +7195,14 @@ async function reportRegistrationProjectNearMiss(input) {
     });
   }
 }
+function handleDaemonStatus(input) {
+  return {
+    daemon_version: DAEMON_VERSION,
+    live_adapters: input.bus.listComms().map((entry) => `${entry.commId}:${entry.accountId}`),
+    pending_inbound_depth: input.pendingInbound.length,
+    active_scope_count: input.activeScopes.size
+  };
+}
 async function handleEnsureCommsForScope(params, ensureCommsForSession2) {
   const rawProject = params.project;
   if (typeof rawProject !== "string" || rawProject.trim() === "") {
@@ -7162,6 +7215,13 @@ async function handleEnsureCommsForScope(params, ensureCommsForSession2) {
 }
 async function dispatchIpc(request, context) {
   const params = request.params ?? {};
+  if (request.method === "daemon_status") {
+    return handleDaemonStatus({
+      bus: context.bus,
+      pendingInbound: context.pendingInbound,
+      activeScopes: context.activeScopes
+    });
+  }
   if (request.method === "ensure_comms_for_scope") {
     return handleEnsureCommsForScope(params, context.ensureCommsForSession);
   }
@@ -7384,7 +7444,26 @@ var ClaudeBridge = class {
         if (query.agent !== this.agentId) return;
         const payload = wakePayloadFromDecision(decision);
         if (!payload) return;
-        await this.wake.writeResponseForSession(query.session, payload);
+        try {
+          const delivered = await this.wake.writeResponseForSession(query.session, payload);
+          if (!delivered) {
+            await this.auditWakeFailure({
+              reason: "hydration_miss",
+              session: query.session,
+              detail: { path: "resolve_sink", prompt_type: payload.prompt_type }
+            });
+          }
+        } catch (error) {
+          await this.auditWakeFailure({
+            reason: "write_failed",
+            session: query.session,
+            detail: {
+              path: "resolve_sink",
+              prompt_type: payload.prompt_type,
+              error: error instanceof Error ? error.message : String(error)
+            }
+          });
+        }
         const seq = this.questionSequences.get(query.query_id);
         if (seq) {
           this.questionSequences.delete(query.query_id);
@@ -7411,11 +7490,40 @@ var ClaudeBridge = class {
   async onInboundConversation(conversation) {
     if (conversation.agent !== this.agentId) return;
     try {
-      await this.wake.wakeConversation(conversation);
+      const delivered = await this.wake.wakeConversation(conversation);
+      if (!delivered) {
+        await this.auditWakeFailure({
+          reason: "hydration_miss",
+          conversation_id: conversation.conversation_id,
+          detail: { path: "inbound_wake", project: conversation.project }
+        });
+      }
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to write Claude wake trigger for ${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`
       );
+      await this.auditWakeFailure({
+        reason: "write_failed",
+        conversation_id: conversation.conversation_id,
+        detail: {
+          path: "inbound_wake",
+          project: conversation.project,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
+  }
+  async auditWakeFailure(input) {
+    try {
+      await this.options.audit?.append({
+        timestamp: Date.now(),
+        kind: "wake_delivery_failure",
+        agent: this.agentId,
+        session: input.session,
+        conversation_id: input.conversation_id,
+        detail: { reason: input.reason, ...input.detail }
+      });
+    } catch {
     }
   }
   async handleIpcMethod(method, params, ctx) {
@@ -8003,6 +8111,7 @@ var ClaudeBridgeFactory = class {
     return new ClaudeBridge({
       storage: context.storage,
       bus: context.bus,
+      audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession
     });

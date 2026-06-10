@@ -15729,7 +15729,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open3() {
+          ws.once("open", function open4() {
             duplex._final(callback);
           });
           return;
@@ -15750,7 +15750,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open3() {
+          ws.once("open", function open4() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -24778,13 +24778,50 @@ import path9 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
-import { mkdir as mkdir2, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
+import { mkdirSync, openSync } from "node:fs";
+import { mkdir as mkdir3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 import path3 from "node:path";
+
+// ../agents-comm-bus/dist/core-daemon/storage/audit.js
+import { mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+// ../agents-comm-bus/dist/core-daemon/storage/jsonl.js
+import { open } from "node:fs/promises";
+async function appendJsonLine(path10, value) {
+  const handle = await open(path10, "a");
+  try {
+    await handle.writeFile(`${JSON.stringify(value)}
+`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+// ../agents-comm-bus/dist/core-daemon/storage/audit.js
+function utcDay(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+var JsonlAuditStore = class {
+  root;
+  constructor(root) {
+    this.root = root;
+  }
+  async append(event) {
+    const path10 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path10), { recursive: true });
+    await appendJsonLine(path10, event);
+  }
+  pathFor(timestamp) {
+    return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+  }
+};
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.18";
-var IPC_PROTOCOL_VERSION = "1.1.0";
+var DAEMON_VERSION = "0.2.19";
+var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
@@ -24972,7 +25009,7 @@ async function probeDaemon(options) {
 
 // ../agents-comm-bus/dist/core-daemon/bootstrap/spawn-lock.js
 import { constants } from "node:fs";
-import { open, mkdir, readFile, rm } from "node:fs/promises";
+import { open as open2, mkdir as mkdir2, readFile, rm } from "node:fs/promises";
 import path2 from "node:path";
 function parseSpawnLockToken(raw) {
   const trimmed = raw.trim();
@@ -25030,7 +25067,7 @@ async function removeStaleSpawnLock(lockPath, options = {}) {
   return removeSpawnLockIfTokenMatches(lockPath, observedToken);
 }
 async function tryAcquireSpawnLock(lockPath, options = {}) {
-  await mkdir(path2.dirname(lockPath), { recursive: true });
+  await mkdir2(path2.dirname(lockPath), { recursive: true });
   const acquired = await createSpawnLock(lockPath);
   if (acquired) {
     return acquired;
@@ -25042,7 +25079,7 @@ async function tryAcquireSpawnLock(lockPath, options = {}) {
 }
 async function createSpawnLock(lockPath) {
   try {
-    const handle = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+    const handle = await open2(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
     const token = `${process.pid}:${Date.now()}`;
     await handle.writeFile(`${token}
 `, "utf8");
@@ -25092,8 +25129,8 @@ async function ensureDaemon(options = {}) {
     stateRoot: paths.root,
     discoveryRoot: options.discoveryRoot ?? env.AGENTS_COMM_BUS_DISCOVERY_ROOT
   });
-  await mkdir2(paths.root, { recursive: true });
-  await mkdir2(discoveryPaths.root, { recursive: true });
+  await mkdir3(paths.root, { recursive: true });
+  await mkdir3(discoveryPaths.root, { recursive: true });
   warnIfSourceModeSharesDiscoveryRoot({
     stateRoot: paths.root,
     discoveryRoot: discoveryPaths.root,
@@ -25135,6 +25172,7 @@ async function ensureDaemon(options = {}) {
     return { ...afterTerminate, spawned: false };
   }
   await cleanupStalePidAndPort({
+    stateRoot: paths.root,
     pidFile: discoveryPaths.pidFile,
     portFile: discoveryPaths.portFile,
     isPidAlive: options.isPidAlive ?? defaultIsPidAlive2
@@ -25172,6 +25210,7 @@ async function ensureDaemon(options = {}) {
       return { ...found, spawned };
     }
     await cleanupStalePidAndPort({
+      stateRoot: paths.root,
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
       isPidAlive
@@ -25222,11 +25261,26 @@ async function waitForDaemon(portFile, probe, deadline, retryMs) {
   }
   return void 0;
 }
+function daemonStderrLogPath(stateRoot2) {
+  return path3.join(stateRoot2, "daemon.stderr.log");
+}
+function daemonSpawnStdio(stateRoot2) {
+  mkdirSync(stateRoot2, { recursive: true });
+  const logFd = openSync(daemonStderrLogPath(stateRoot2), "a");
+  return ["ignore", logFd, logFd];
+}
 async function cleanupStalePidAndPort(input) {
   const pid = await readPidFile(input.pidFile);
   if (pid !== void 0 && !input.isPidAlive(pid)) {
     await rm2(input.pidFile, { force: true });
     await rm2(input.portFile, { force: true });
+    const audit = new JsonlAuditStore(input.stateRoot);
+    audit.append({
+      timestamp: Date.now(),
+      kind: "discovery_stale_cleanup",
+      detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile }
+    }).catch(() => {
+    });
   }
 }
 async function readPortFile(portFile) {
@@ -25266,7 +25320,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const daemonEntry = binOverride ? path3.resolve(binOverride) : path3.join(paths.root, "bin", "daemon.js");
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
-    stdio: "ignore",
+    stdio: daemonSpawnStdio(paths.root),
     env: {
       ...env,
       AGENTS_COMM_BUS_STATE_ROOT: paths.root,
@@ -25431,7 +25485,7 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteBundles = [];
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
-    const binDir = dirname(paths.daemonBundle);
+    const binDir = dirname2(paths.daemonBundle);
     await fs.mkdirp(binDir);
     await fs.copyFile(
       /** @type {string} */
@@ -25440,28 +25494,28 @@ async function executeInstallPlan(plan, actor, paths, fs) {
     );
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join(binDir, name));
+      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
     }
-    await fs.writeFile(join(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs.mkdirp(dirname(paths.daemonVersionFile));
+    await fs.mkdirp(dirname2(paths.daemonVersionFile));
     await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
-    const adapterDir = dirname(paths.adapterBundle);
+    const adapterDir = dirname2(paths.adapterBundle);
     await fs.mkdirp(adapterDir);
     await fs.copyFile(
       /** @type {string} */
       adapterSrc,
       paths.adapterBundle
     );
-    await fs.writeFile(join(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs.mkdirp(dirname(paths.adapterVersionFile));
+    await fs.mkdirp(dirname2(paths.adapterVersionFile));
     await fs.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
@@ -25473,30 +25527,30 @@ function serialize(record2) {
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
 async function installCliLaunchers(paths, cliSrc, fs) {
-  const binDir = dirname(paths.cliBundle);
+  const binDir = dirname2(paths.cliBundle);
   await fs.mkdirp(binDir);
   await fs.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs.writeFile(join(binDir, `${name}.cmd`), `@echo off\r
+    await fs.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
-    const posix = join(binDir, name);
+    const posix = join2(binDir, name);
     await fs.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
     await fs.chmod?.(posix, 493);
   }
 }
-function dirname(p) {
+function dirname2(p) {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return i === -1 ? "." : p.slice(0, i);
 }
-function join(dir, name) {
+function join2(dir, name) {
   return `${dir}/${name}`;
 }
 
 // common/install/node-fs-seam.js
-import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3, chmod } from "node:fs/promises";
+import { mkdir as mkdir4, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3, chmod } from "node:fs/promises";
 import path4 from "node:path";
 
 // common/install/strip-bom.js
@@ -25508,7 +25562,7 @@ function stripBom(text) {
 function createAtomicNodeFsSeam() {
   return {
     mkdirp: async (dir) => {
-      await mkdir3(dir, { recursive: true });
+      await mkdir4(dir, { recursive: true });
     },
     copyFile: async (from, to) => {
       const tmp = `${to}.tmp`;
@@ -25566,7 +25620,7 @@ function resolveCentralPaths(stateRoot2, comm) {
 
 // common/install/install-lock.js
 import { constants as constants2 } from "node:fs";
-import { open as open2, readFile as readFile4, rm as rm3, mkdir as mkdir4, stat } from "node:fs/promises";
+import { open as open3, readFile as readFile4, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
 import path5 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
 async function acquireInstallLock(lockPath, options = {}) {
@@ -25575,13 +25629,13 @@ async function acquireInstallLock(lockPath, options = {}) {
   const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? Date.now;
   const sleep2 = options.sleep ?? defaultSleep;
-  await mkdir4(path5.dirname(lockPath), { recursive: true });
+  await mkdir5(path5.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
   for (; ; ) {
     try {
-      const handle = await open2(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
+      const handle = await open3(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
       await handle.writeFile(`${token}
 `, "utf8");
       await handle.close();

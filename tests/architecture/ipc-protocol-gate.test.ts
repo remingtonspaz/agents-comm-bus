@@ -52,6 +52,12 @@ test("IPC protocol fingerprint fails a wire-shape change without a protocol bump
   );
 });
 
+test("AGE-57 IPC protocol version is 1.2.0 after daemon_status additive surface", () => {
+  const base = baseFiles();
+  assert.match(base[IPC_FILES.config], /export const IPC_PROTOCOL_VERSION = "1\.2\.0";/);
+  assert.match(base[IPC_FILES.protocol], /DaemonStatusResponse/);
+});
+
 test("IPC protocol fingerprint accepts a wire-shape change with a protocol bump", () => {
   const base = baseFiles();
   const versionMatch = base[IPC_FILES.config].match(

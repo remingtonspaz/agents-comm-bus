@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
 import {
   ensureClaudeWakeWatcher,
   findCmdAncestor,
@@ -188,6 +189,13 @@ async function main() {
     }
   } catch (error) {
     process.stderr.write(`Claude UserPromptSubmit daemon hook skipped: ${error.message}\n`);
+    console.log(JSON.stringify({
+      systemMessage: AGENTS_COMM_BUS_DEGRADED_MESSAGE,
+      hookSpecificOutput: {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext: AGENTS_COMM_BUS_DEGRADED_MESSAGE,
+      },
+    }));
   } finally {
     ipc?.close();
   }

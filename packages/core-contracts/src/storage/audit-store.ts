@@ -44,7 +44,13 @@ export type AuditEventKind =
   // attempt was consumed and a disambiguation helper was sent instead.
   | "query_ambiguous_reply"
   // AGE-55: boot-time liveness-gated comm-scope restore summary.
-  | "daemon_boot_restore";
+  | "daemon_boot_restore"
+  // AGE-57: wake trigger/response write or hydration miss (previously stderr-only).
+  | "wake_delivery_failure"
+  // AGE-57: stale pid/port discovery files removed during ensureDaemon bootstrap.
+  | "discovery_stale_cleanup"
+  // AGE-57: adapter/credential skip not already covered by actionable console logs.
+  | "comm_adapter_skip";
 
 export interface AuditEvent {
   timestamp: number;

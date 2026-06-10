@@ -334,6 +334,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       stateRoot: paths.root,
       leaseArbiter,
       activeScopes,
+      audit,
       options: reloadOptions,
     });
 
@@ -352,6 +353,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         socket,
         reloadRegistrations,
         ensureCommsForSession: ensureCommsForSessionFn,
+        pendingInbound,
+        activeScopes,
       });
     },
   });
@@ -527,7 +530,23 @@ export async function ensureCommsForSession(input: {
   }
   for (const registration of registrations) {
     const factory = input.factories.find((f) => f.commId === registration.comm);
-    if (!factory) continue;
+    if (!factory) {
+      await input.audit
+        ?.append({
+          timestamp: Date.now(),
+          kind: "comm_adapter_skip",
+          agent: input.agent,
+          detail: {
+            comm: registration.comm,
+            account_id: registration.bot_user_id,
+            account_label: registration.account_label,
+            project,
+            reason: "no_comm_factory",
+          },
+        })
+        .catch(() => {});
+      continue;
+    }
     const accountId = registration.bot_user_id as AccountId;
     const key = adapterMapKey(registration.comm, accountId);
     if (input.bus.getComm(registration.comm, accountId) || input.inFlight.has(key)) continue;
@@ -548,6 +567,20 @@ export async function ensureCommsForSession(input: {
         console.error(
           `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`,
         );
+        await input.audit
+          ?.append({
+            timestamp: Date.now(),
+            kind: "comm_adapter_skip",
+            agent: input.agent,
+            detail: {
+              comm: registration.comm,
+              account_id: registration.bot_user_id,
+              account_label: registration.account_label,
+              project,
+              reason: result.reason,
+            },
+          })
+          .catch(() => {});
       }
     } finally {
       input.inFlight.delete(key);
@@ -643,6 +676,7 @@ export async function reloadAdapters(input: {
    * immediately, while rows for inactive projects stay lazy.
    */
   activeScopes?: ReadonlySet<string>;
+  audit?: JsonlAuditStore;
   options?: ReloadOptions;
 }): Promise<ReloadSummary> {
   const added: ReloadSummary["added"] = [];
@@ -702,6 +736,21 @@ export async function reloadAdapters(input: {
         account_id: entry.registration.bot_user_id,
         reason: result.reason,
       });
+      await input.audit
+        ?.append({
+          timestamp: Date.now(),
+          kind: "comm_adapter_skip",
+          agent: entry.registration.agent,
+          detail: {
+            comm: entry.registration.comm,
+            account_id: entry.registration.bot_user_id,
+            account_label: entry.registration.account_label,
+            project: entry.registration.project,
+            reason: result.reason,
+            via: "reload_registrations",
+          },
+        })
+        .catch(() => {});
     }
   }
 
@@ -1021,6 +1070,26 @@ async function reportRegistrationProjectNearMiss(input: {
   }
 }
 
+export interface DaemonStatusSummary {
+  daemon_version: string;
+  live_adapters: string[];
+  pending_inbound_depth: number;
+  active_scope_count: number;
+}
+
+export function handleDaemonStatus(input: {
+  bus: MessageBus;
+  pendingInbound: PendingInboundEntry[];
+  activeScopes: ReadonlySet<string>;
+}): DaemonStatusSummary {
+  return {
+    daemon_version: DAEMON_VERSION,
+    live_adapters: input.bus.listComms().map((entry) => `${entry.commId}:${entry.accountId}`),
+    pending_inbound_depth: input.pendingInbound.length,
+    active_scope_count: input.activeScopes.size,
+  };
+}
+
 export async function handleEnsureCommsForScope(
   params: Record<string, unknown>,
   ensureCommsForSession: EnsureCommsForSession,
@@ -1050,9 +1119,19 @@ async function dispatchIpc(
     socket?: { once(event: "close", handler: () => void): void };
     reloadRegistrations: (options?: ReloadOptions) => Promise<ReloadSummary>;
     ensureCommsForSession: EnsureCommsForSession;
+    pendingInbound: PendingInboundEntry[];
+    activeScopes: ReadonlySet<string>;
   },
 ): Promise<unknown> {
   const params = (request.params ?? {}) as Record<string, unknown>;
+
+  if (request.method === "daemon_status") {
+    return handleDaemonStatus({
+      bus: context.bus,
+      pendingInbound: context.pendingInbound,
+      activeScopes: context.activeScopes,
+    });
+  }
 
   if (request.method === "ensure_comms_for_scope") {
     return handleEnsureCommsForScope(params, context.ensureCommsForSession);

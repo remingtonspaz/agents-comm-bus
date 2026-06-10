@@ -64,6 +64,14 @@ export interface IpcResponse {
   error?: string;
 }
 
+/** Runtime summary returned by the intrinsic `daemon_status` IPC method (AGE-57). */
+export interface DaemonStatusResponse {
+  daemon_version: string;
+  live_adapters: readonly string[];
+  pending_inbound_depth: number;
+  active_scope_count: number;
+}
+
 export type HandshakeMessage = ClientHello | DaemonHello | DaemonError;
 export type IpcMessage = HandshakeMessage | IpcRequest | IpcResponse;
 

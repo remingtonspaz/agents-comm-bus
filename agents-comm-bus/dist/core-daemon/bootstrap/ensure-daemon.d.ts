@@ -19,6 +19,9 @@ export interface EnsureDaemonResult {
     spawned: boolean;
 }
 export declare function ensureDaemon(options?: EnsureDaemonOptions): Promise<EnsureDaemonResult>;
+export declare function daemonStderrLogPath(stateRoot: string): string;
+/** Spawn stdio for a detached daemon child: stdout+stderr share an append log fd. */
+export declare function daemonSpawnStdio(stateRoot: string): ["ignore", number, number];
 export declare function writeDaemonDiscoveryFiles(input: {
     stateRoot?: string;
     discoveryRoot?: string;

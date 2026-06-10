@@ -3174,7 +3174,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open3() {
+          ws.once("open", function open4() {
             duplex._final(callback);
           });
           return;
@@ -3195,7 +3195,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open3() {
+          ws.once("open", function open4() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -3650,7 +3650,7 @@ var require_websocket_server = __commonJS({
 
 // ../core-daemon/cli/account-add.ts
 import { randomBytes } from "node:crypto";
-import { mkdir as mkdir6 } from "node:fs/promises";
+import { mkdir as mkdir7 } from "node:fs/promises";
 
 // ../packages/core-contracts/dist/types.js
 var SCHEMA_VERSION_ACCOUNT = 1;
@@ -3681,8 +3681,8 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.18";
-var IPC_PROTOCOL_VERSION = "1.1.0";
+var DAEMON_VERSION = "0.2.19";
+var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 
 // ../core-daemon/paths.ts
@@ -3869,8 +3869,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db = db;
   }
   db;
-  static async open(path13) {
-    const db = new DatabaseSync(path13);
+  static async open(path14) {
+    const db = new DatabaseSync(path14);
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
     await runStorageMigrations(db);
@@ -4579,8 +4579,8 @@ var SqliteStorage = class _SqliteStorage {
     };
   }
 };
-async function openSqliteStorage(path13) {
-  return SqliteStorage.open(path13);
+async function openSqliteStorage(path14) {
+  return SqliteStorage.open(path14);
 }
 function isConstraintError(error) {
   const sqliteError = error;
@@ -4719,13 +4719,50 @@ import path11 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
-import { mkdir as mkdir2, readFile as readFile3, rm as rm2, writeFile } from "node:fs/promises";
+import { mkdirSync, openSync } from "node:fs";
+import { mkdir as mkdir3, readFile as readFile3, rm as rm2, writeFile } from "node:fs/promises";
 import path5 from "node:path";
+
+// dist/core-daemon/storage/audit.js
+import { mkdir } from "node:fs/promises";
+import { dirname as dirname2, join as join2 } from "node:path";
+
+// dist/core-daemon/storage/jsonl.js
+import { open } from "node:fs/promises";
+async function appendJsonLine(path14, value) {
+  const handle = await open(path14, "a");
+  try {
+    await handle.writeFile(`${JSON.stringify(value)}
+`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+// dist/core-daemon/storage/audit.js
+function utcDay(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+var JsonlAuditStore = class {
+  root;
+  constructor(root) {
+    this.root = root;
+  }
+  async append(event) {
+    const path14 = this.pathFor(event.timestamp);
+    await mkdir(dirname2(path14), { recursive: true });
+    await appendJsonLine(path14, event);
+  }
+  pathFor(timestamp) {
+    return join2(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+  }
+};
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.18";
-var IPC_PROTOCOL_VERSION2 = "1.1.0";
+var DAEMON_VERSION2 = "0.2.19";
+var IPC_PROTOCOL_VERSION2 = "1.2.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
@@ -4905,7 +4942,7 @@ async function probeDaemon(options) {
 
 // dist/core-daemon/bootstrap/spawn-lock.js
 import { constants } from "node:fs";
-import { open, mkdir, readFile as readFile2, rm } from "node:fs/promises";
+import { open as open2, mkdir as mkdir2, readFile as readFile2, rm } from "node:fs/promises";
 import path4 from "node:path";
 function parseSpawnLockToken(raw) {
   const trimmed = raw.trim();
@@ -4963,7 +5000,7 @@ async function removeStaleSpawnLock(lockPath, options = {}) {
   return removeSpawnLockIfTokenMatches(lockPath, observedToken);
 }
 async function tryAcquireSpawnLock(lockPath, options = {}) {
-  await mkdir(path4.dirname(lockPath), { recursive: true });
+  await mkdir2(path4.dirname(lockPath), { recursive: true });
   const acquired = await createSpawnLock(lockPath);
   if (acquired) {
     return acquired;
@@ -4975,7 +5012,7 @@ async function tryAcquireSpawnLock(lockPath, options = {}) {
 }
 async function createSpawnLock(lockPath) {
   try {
-    const handle = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+    const handle = await open2(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
     const token = `${process.pid}:${Date.now()}`;
     await handle.writeFile(`${token}
 `, "utf8");
@@ -5025,8 +5062,8 @@ async function ensureDaemon(options = {}) {
     stateRoot: paths.root,
     discoveryRoot: options.discoveryRoot ?? env.AGENTS_COMM_BUS_DISCOVERY_ROOT
   });
-  await mkdir2(paths.root, { recursive: true });
-  await mkdir2(discoveryPaths.root, { recursive: true });
+  await mkdir3(paths.root, { recursive: true });
+  await mkdir3(discoveryPaths.root, { recursive: true });
   warnIfSourceModeSharesDiscoveryRoot({
     stateRoot: paths.root,
     discoveryRoot: discoveryPaths.root,
@@ -5068,6 +5105,7 @@ async function ensureDaemon(options = {}) {
     return { ...afterTerminate, spawned: false };
   }
   await cleanupStalePidAndPort({
+    stateRoot: paths.root,
     pidFile: discoveryPaths.pidFile,
     portFile: discoveryPaths.portFile,
     isPidAlive: options.isPidAlive ?? defaultIsPidAlive2
@@ -5105,6 +5143,7 @@ async function ensureDaemon(options = {}) {
       return { ...found, spawned };
     }
     await cleanupStalePidAndPort({
+      stateRoot: paths.root,
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
       isPidAlive
@@ -5155,11 +5194,26 @@ async function waitForDaemon(portFile, probe, deadline, retryMs) {
   }
   return void 0;
 }
+function daemonStderrLogPath(stateRoot3) {
+  return path5.join(stateRoot3, "daemon.stderr.log");
+}
+function daemonSpawnStdio(stateRoot3) {
+  mkdirSync(stateRoot3, { recursive: true });
+  const logFd = openSync(daemonStderrLogPath(stateRoot3), "a");
+  return ["ignore", logFd, logFd];
+}
 async function cleanupStalePidAndPort(input) {
   const pid = await readPidFile(input.pidFile);
   if (pid !== void 0 && !input.isPidAlive(pid)) {
     await rm2(input.pidFile, { force: true });
     await rm2(input.portFile, { force: true });
+    const audit = new JsonlAuditStore(input.stateRoot);
+    audit.append({
+      timestamp: Date.now(),
+      kind: "discovery_stale_cleanup",
+      detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile }
+    }).catch(() => {
+    });
   }
 }
 async function readPortFile(portFile) {
@@ -5199,7 +5253,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const daemonEntry = binOverride ? path5.resolve(binOverride) : path5.join(paths.root, "bin", "daemon.js");
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
-    stdio: "ignore",
+    stdio: daemonSpawnStdio(paths.root),
     env: {
       ...env,
       AGENTS_COMM_BUS_STATE_ROOT: paths.root,
@@ -5364,7 +5418,7 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteBundles = [];
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
-    const binDir = dirname2(paths.daemonBundle);
+    const binDir = dirname3(paths.daemonBundle);
     await fs.mkdirp(binDir);
     await fs.copyFile(
       /** @type {string} */
@@ -5373,28 +5427,28 @@ async function executeInstallPlan(plan, actor, paths, fs) {
     );
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
+      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join3(binDir, name));
     }
-    await fs.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs.writeFile(join3(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.daemonVersionFile));
+    await fs.mkdirp(dirname3(paths.daemonVersionFile));
     await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
-    const adapterDir = dirname2(paths.adapterBundle);
+    const adapterDir = dirname3(paths.adapterBundle);
     await fs.mkdirp(adapterDir);
     await fs.copyFile(
       /** @type {string} */
       adapterSrc,
       paths.adapterBundle
     );
-    await fs.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs.writeFile(join3(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.adapterVersionFile));
+    await fs.mkdirp(dirname3(paths.adapterVersionFile));
     await fs.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
@@ -5406,30 +5460,30 @@ function serialize(record) {
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
 async function installCliLaunchers(paths, cliSrc, fs) {
-  const binDir = dirname2(paths.cliBundle);
+  const binDir = dirname3(paths.cliBundle);
   await fs.mkdirp(binDir);
   await fs.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
+    await fs.writeFile(join3(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
-    const posix = join2(binDir, name);
+    const posix = join3(binDir, name);
     await fs.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
     await fs.chmod?.(posix, 493);
   }
 }
-function dirname2(p) {
+function dirname3(p) {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return i === -1 ? "." : p.slice(0, i);
 }
-function join2(dir, name) {
+function join3(dir, name) {
   return `${dir}/${name}`;
 }
 
 // ../hosts/common/install/node-fs-seam.js
-import { mkdir as mkdir3, copyFile, writeFile as writeFile2, rename, access, readFile as readFile4, chmod } from "node:fs/promises";
+import { mkdir as mkdir4, copyFile, writeFile as writeFile2, rename, access, readFile as readFile4, chmod } from "node:fs/promises";
 import path6 from "node:path";
 
 // ../hosts/common/install/strip-bom.js
@@ -5441,7 +5495,7 @@ function stripBom(text) {
 function createAtomicNodeFsSeam() {
   return {
     mkdirp: async (dir) => {
-      await mkdir3(dir, { recursive: true });
+      await mkdir4(dir, { recursive: true });
     },
     copyFile: async (from, to) => {
       const tmp = `${to}.tmp`;
@@ -5499,7 +5553,7 @@ function resolveCentralPaths(stateRoot3, comm) {
 
 // ../hosts/common/install/install-lock.js
 import { constants as constants2 } from "node:fs";
-import { open as open2, readFile as readFile5, rm as rm3, mkdir as mkdir4, stat } from "node:fs/promises";
+import { open as open3, readFile as readFile5, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
 import path7 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
 async function acquireInstallLock(lockPath, options = {}) {
@@ -5508,13 +5562,13 @@ async function acquireInstallLock(lockPath, options = {}) {
   const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? Date.now;
   const sleep2 = options.sleep ?? defaultSleep;
-  await mkdir4(path7.dirname(lockPath), { recursive: true });
+  await mkdir5(path7.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
   for (; ; ) {
     try {
-      const handle = await open2(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
+      const handle = await open3(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
       await handle.writeFile(`${token}
 `, "utf8");
       await handle.close();
@@ -5710,14 +5764,14 @@ import path10 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 function resolveDevConfig(projectRoot, deps = {}) {
   const exists = deps.exists ?? existsSync3;
-  const readFile9 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
+  const readFile10 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
   const markerPath = path10.join(projectRoot, DEV_MARKER_NAME);
   if (!exists(markerPath)) {
     return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
   }
   let parsed;
   try {
-    parsed = JSON.parse(stripBom(readFile9(markerPath)));
+    parsed = JSON.parse(stripBom(readFile10(markerPath)));
   } catch (error) {
     return {
       env: {},
@@ -5885,7 +5939,7 @@ function parseProbeResult(result) {
 }
 
 // ../core-daemon/cli/token-file.ts
-import { chmod as chmod2, mkdir as mkdir5, writeFile as writeFile3 } from "node:fs/promises";
+import { chmod as chmod2, mkdir as mkdir6, writeFile as writeFile3 } from "node:fs/promises";
 import path12 from "node:path";
 async function writeTokenFile(options) {
   const tokenFile = resolveTokenFilePath({
@@ -5895,7 +5949,7 @@ async function writeTokenFile(options) {
     agent: options.agent,
     accountId: options.accountId
   });
-  await mkdir5(path12.dirname(tokenFile), { recursive: true });
+  await mkdir6(path12.dirname(tokenFile), { recursive: true });
   const body = {
     botToken: options.botToken,
     ...options.userId && options.userId.length > 0 ? { userId: options.userId } : {}
@@ -5928,7 +5982,7 @@ async function accountAdd(options) {
     stateRoot: options.stateRoot
   })))(botToken);
   const paths = resolveStatePaths({ stateRoot: options.stateRoot });
-  await mkdir6(paths.root, { recursive: true });
+  await mkdir7(paths.root, { recursive: true });
   const storage = await openSqliteStorage(paths.database);
   try {
     const labelMatches = await storage.listAccountRegistrations({
@@ -6453,7 +6507,7 @@ import { pathToFileURL } from "node:url";
 // ../core-daemon/migrations/legacy-readers.ts
 import { createHash as createHash2 } from "node:crypto";
 import { existsSync as existsSync5, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
-import { basename, join as join3, resolve } from "node:path";
+import { basename, join as join4, resolve } from "node:path";
 import { homedir } from "node:os";
 var TRANSITION_ONLY_MARKER = "transition-only";
 var TRANSITION_CLEANUP_RELEASE = "v4.1-cleanup";
@@ -6461,7 +6515,7 @@ function legacySessionDirForProject(projectRoot, agent, homeDir = homedir()) {
   const normalizedProject = resolve(projectRoot);
   const safeBase = basename(normalizedProject).replace(/[^a-zA-Z0-9-_]/g, "_");
   const hash = createHash2("md5").update(normalizedProject).digest("hex").slice(0, 6);
-  return join3(homeDir, agent === "claude" ? ".claude-telegram" : ".codex-telegram", `${safeBase}-${hash}`);
+  return join4(homeDir, agent === "claude" ? ".claude-telegram" : ".codex-telegram", `${safeBase}-${hash}`);
 }
 function discoverLegacyInputs(options) {
   const projectRoot = resolve(options.projectRoot);
@@ -6475,24 +6529,24 @@ function discoverLegacyInputs(options) {
   const pendingPermissions = [];
   const queues = [];
   for (const root of sessionRoots) {
-    const lastChat = readLastChat(join3(root.path, "last-chat.json"), root.agent, root.path);
+    const lastChat = readLastChat(join4(root.path, "last-chat.json"), root.agent, root.path);
     if (lastChat.ok) lastChats.push(lastChat.file);
-    else if (lastChat.exists) skipped3.push(skip("last-chat", root.agent, join3(root.path, "last-chat.json"), lastChat.reason));
-    const pending = readPendingPermission(join3(root.path, "pending-permission.json"), root.agent, root.path, now, pendingTtlMs);
+    else if (lastChat.exists) skipped3.push(skip("last-chat", root.agent, join4(root.path, "last-chat.json"), lastChat.reason));
+    const pending = readPendingPermission(join4(root.path, "pending-permission.json"), root.agent, root.path, now, pendingTtlMs);
     if (pending.ok) pendingPermissions.push(pending.file);
-    else if (pending.exists) skipped3.push(skip("pending-permission", root.agent, join3(root.path, "pending-permission.json"), pending.reason));
-    const queue = readQueue(join3(root.path, "queue.json"), root.agent, root.path);
+    else if (pending.exists) skipped3.push(skip("pending-permission", root.agent, join4(root.path, "pending-permission.json"), pending.reason));
+    const queue = readQueue(join4(root.path, "queue.json"), root.agent, root.path);
     if (queue.ok) queues.push(queue.file);
-    else if (queue.exists) skipped3.push(skip("queue", root.agent, join3(root.path, "queue.json"), queue.reason));
+    else if (queue.exists) skipped3.push(skip("queue", root.agent, join4(root.path, "queue.json"), queue.reason));
   }
   return { projectRoot, homeDir, credentials, sessionRoots, lastChats, pendingPermissions, queues, skipped: skipped3 };
 }
 function discoverCredentialCandidates(projectRoot, homeDir, skipped3) {
   const paths = [
-    { agent: "claude", scope: "project", path: join3(projectRoot, ".claude", "telegram.json"), priority: 10 },
-    { agent: "codex", scope: "project", path: join3(projectRoot, ".codex", "telegram.json"), priority: 10 },
-    { agent: "claude", scope: "home", path: join3(homeDir, ".claude", "telegram.json"), priority: 1 },
-    { agent: "codex", scope: "home", path: join3(homeDir, ".codex", "telegram.json"), priority: 1 }
+    { agent: "claude", scope: "project", path: join4(projectRoot, ".claude", "telegram.json"), priority: 10 },
+    { agent: "codex", scope: "project", path: join4(projectRoot, ".codex", "telegram.json"), priority: 10 },
+    { agent: "claude", scope: "home", path: join4(homeDir, ".claude", "telegram.json"), priority: 1 },
+    { agent: "codex", scope: "home", path: join4(homeDir, ".codex", "telegram.json"), priority: 1 }
   ];
   const result = [];
   for (const candidate of paths) {
@@ -6526,7 +6580,7 @@ function discoverCredentialCandidates(projectRoot, homeDir, skipped3) {
 function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
   const roots = [];
   for (const agent of ["claude", "codex"]) {
-    const parent = join3(homeDir, agent === "claude" ? ".claude-telegram" : ".codex-telegram");
+    const parent = join4(homeDir, agent === "claude" ? ".claude-telegram" : ".codex-telegram");
     if (!existsSync5(parent)) continue;
     let entries;
     try {
@@ -6537,10 +6591,10 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
     }
     const expected = legacySessionDirForProject(projectRoot, agent, homeDir);
     for (const entry of entries) {
-      const path13 = join3(parent, entry);
+      const path14 = join4(parent, entry);
       let isDirectory = false;
       try {
-        isDirectory = statSync(path13).isDirectory();
+        isDirectory = statSync(path14).isDirectory();
       } catch {
         continue;
       }
@@ -6548,9 +6602,9 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
       roots.push({
         kind: "session-root",
         agent,
-        path: path13,
+        path: path14,
         projectHint: entry.replace(/-[0-9a-f]{6}$/i, ""),
-        expectedForProject: resolve(path13) === resolve(expected),
+        expectedForProject: resolve(path14) === resolve(expected),
         transition: TRANSITION_ONLY_MARKER,
         cleanupRelease: TRANSITION_CLEANUP_RELEASE
       });
@@ -6558,14 +6612,14 @@ function discoverLegacySessionRoots(projectRoot, homeDir, skipped3) {
   }
   return roots;
 }
-function readLastChat(path13, agent, sessionRoot) {
-  const parsed = readOptionalObject(path13);
+function readLastChat(path14, agent, sessionRoot) {
+  const parsed = readOptionalObject(path14);
   if (!parsed.ok) return parsed;
   const chatId = stringValue(parsed.value.chat_id);
   if (!chatId) return { ok: false, exists: true, reason: "last-chat.json is missing chat_id" };
   return {
     ok: true,
-    file: stateFile("last-chat", agent, path13, sessionRoot, {
+    file: stateFile("last-chat", agent, path14, sessionRoot, {
       chat_id: chatId,
       message_thread_id: nullableString(parsed.value.message_thread_id),
       from_user_id: nullableString(parsed.value.from_user_id),
@@ -6573,8 +6627,8 @@ function readLastChat(path13, agent, sessionRoot) {
     })
   };
 }
-function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
-  const parsed = readOptionalObject(path13);
+function readPendingPermission(path14, agent, sessionRoot, now, ttlMs) {
+  const parsed = readOptionalObject(path14);
   if (!parsed.ok) return parsed;
   const timestamp = stringValue(parsed.value.timestamp);
   if (!timestamp) return { ok: false, exists: true, reason: "pending-permission.json is missing timestamp" };
@@ -6583,7 +6637,7 @@ function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
   if (now - timestampMs >= ttlMs) return { ok: false, exists: true, reason: "pending permission is expired" };
   return {
     ok: true,
-    file: stateFile("pending-permission", agent, path13, sessionRoot, {
+    file: stateFile("pending-permission", agent, path14, sessionRoot, {
       timestamp,
       tool_name: nullableString(parsed.value.tool_name),
       tool_input: isObject(parsed.value.tool_input) ? parsed.value.tool_input : null,
@@ -6593,8 +6647,8 @@ function readPendingPermission(path13, agent, sessionRoot, now, ttlMs) {
     })
   };
 }
-function readQueue(path13, agent, sessionRoot) {
-  const parsed = readOptionalObject(path13);
+function readQueue(path14, agent, sessionRoot) {
+  const parsed = readOptionalObject(path14);
   if (!parsed.ok) return parsed;
   const rawMessages = Array.isArray(parsed.value.messages) ? parsed.value.messages : [];
   const messages = [];
@@ -6609,18 +6663,18 @@ function readQueue(path13, agent, sessionRoot) {
       imagePath: nullableString(raw.imagePath) ?? void 0
     });
   }
-  return { ok: true, file: stateFile("queue", agent, path13, sessionRoot, messages) };
+  return { ok: true, file: stateFile("queue", agent, path14, sessionRoot, messages) };
 }
-function readOptionalObject(path13) {
-  if (!existsSync5(path13)) return { ok: false, exists: false, reason: "file does not exist" };
-  const parsed = readJson(path13);
+function readOptionalObject(path14) {
+  if (!existsSync5(path14)) return { ok: false, exists: false, reason: "file does not exist" };
+  const parsed = readJson(path14);
   if (!parsed.ok) return { ok: false, exists: true, reason: parsed.reason };
   if (!isObject(parsed.value)) return { ok: false, exists: true, reason: "file is not a JSON object" };
   return { ok: true, value: parsed.value };
 }
-function readJson(path13) {
+function readJson(path14) {
   try {
-    return { ok: true, value: JSON.parse(readFileSync2(path13, "utf8")) };
+    return { ok: true, value: JSON.parse(readFileSync2(path14, "utf8")) };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "invalid JSON" };
   }
@@ -6629,22 +6683,22 @@ function normalizeUserIds(raw) {
   const values = Array.isArray(raw) ? raw : raw == null ? [] : [raw];
   return values.map((value) => stringValue(value).trim()).filter(Boolean);
 }
-function stateFile(kind, agent, path13, sessionRoot, value) {
+function stateFile(kind, agent, path14, sessionRoot, value) {
   return {
     kind,
     agent,
-    path: path13,
+    path: path14,
     sessionRoot,
     value,
     transition: TRANSITION_ONLY_MARKER,
     cleanupRelease: TRANSITION_CLEANUP_RELEASE
   };
 }
-function skip(kind, agent, path13, reason) {
+function skip(kind, agent, path14, reason) {
   return {
     kind,
     agent,
-    path: path13,
+    path: path14,
     reason,
     transition: TRANSITION_ONLY_MARKER,
     cleanupRelease: TRANSITION_CLEANUP_RELEASE
@@ -6702,15 +6756,15 @@ function importLastChat(file, options) {
     }
   };
 }
-function skipped(path13, reason) {
+function skipped(path14, reason) {
   return {
     status: "skipped",
     reason,
-    source_file: path13,
+    source_file: path14,
     audit: {
       kind: "legacy_state_skipped",
       source: "last-chat",
-      path: path13,
+      path: path14,
       reason,
       detail: {},
       transition: TRANSITION_ONLY_MARKER,
@@ -6761,15 +6815,15 @@ function importPendingPermission(file, options) {
     }
   };
 }
-function skipped2(path13, reason) {
+function skipped2(path14, reason) {
   return {
     status: "skipped",
     reason,
-    source_file: path13,
+    source_file: path14,
     audit: {
       kind: "legacy_state_skipped",
       source: "pending-permission",
-      path: path13,
+      path: path14,
       reason,
       detail: {},
       transition: TRANSITION_ONLY_MARKER,
@@ -6985,6 +7039,224 @@ async function readPortFile2(portFile) {
   }
 }
 
+// ../core-daemon/cli/status.ts
+import { readdir, readFile as readFile9 } from "node:fs/promises";
+import os3 from "node:os";
+import path13 from "node:path";
+async function daemonStatus(options = {}) {
+  const statePaths = resolveStatePaths({
+    stateRoot: options.stateRoot ?? process.env.AGENTS_COMM_BUS_STATE_ROOT
+  });
+  const discoveryPaths = resolveDiscoveryPaths({
+    stateRoot: statePaths.root,
+    discoveryRoot: options.discoveryRoot ?? process.env.AGENTS_COMM_BUS_DISCOVERY_ROOT
+  });
+  const pid = await readPidFile2(discoveryPaths.pidFile);
+  const port = await readPortFile3(discoveryPaths.portFile);
+  const commLeases = await listCommLeasesForPid(pid);
+  const conversations = await listRecentConversations(statePaths.database);
+  const watchers = await listWatcherPids(statePaths.root);
+  if (port === void 0) {
+    return {
+      daemon: {
+        reachable: false,
+        pid,
+        reason: pid === void 0 ? "daemon not running (no pid/port files)" : "daemon not running (stale port file)"
+      },
+      comm_leases: commLeases,
+      conversations,
+      watchers
+    };
+  }
+  const timeoutMs = options.timeoutMs ?? 2e3;
+  let connection = null;
+  try {
+    connection = await connectIpc({
+      port,
+      clientVersion: DAEMON_VERSION,
+      timeoutMs,
+      metadata: { shimName: "agents-comm-bus/cli", operation: "daemon_status" }
+    });
+    const runtime = await connection.request("daemon_status", {});
+    return {
+      daemon: {
+        reachable: true,
+        pid,
+        port,
+        version: connection.hello.daemonVersion,
+        protocol_version: connection.hello.protocolVersion
+      },
+      runtime,
+      comm_leases: commLeases,
+      conversations,
+      watchers
+    };
+  } catch (error) {
+    return {
+      daemon: {
+        reachable: false,
+        pid,
+        port,
+        reason: error instanceof Error ? error.message : String(error)
+      },
+      comm_leases: commLeases,
+      conversations,
+      watchers
+    };
+  } finally {
+    connection?.close();
+  }
+}
+function formatDaemonStatus(snapshot) {
+  const lines = ["agents-comm-bus status", ""];
+  if (snapshot.daemon.reachable) {
+    lines.push(
+      `daemon: up (pid ${snapshot.daemon.pid ?? "?"}, port ${snapshot.daemon.port ?? "?"}, version ${snapshot.daemon.version ?? "?"}, protocol ${snapshot.daemon.protocol_version ?? "?"})`
+    );
+    if (snapshot.runtime) {
+      lines.push(
+        `runtime: pendingInbound=${snapshot.runtime.pending_inbound_depth}, active_scopes=${snapshot.runtime.active_scope_count}, live_adapters=${snapshot.runtime.live_adapters.length}`
+      );
+      if (snapshot.runtime.live_adapters.length > 0) {
+        lines.push(`  adapters: ${snapshot.runtime.live_adapters.join(", ")}`);
+      }
+    }
+  } else {
+    lines.push(`daemon: down (${snapshot.daemon.reason ?? "unreachable"})`);
+    if (snapshot.daemon.pid !== void 0) {
+      lines.push(`  pid file: ${snapshot.daemon.pid} (process may be stale)`);
+    }
+    if (snapshot.daemon.port !== void 0) {
+      lines.push(`  port file: ${snapshot.daemon.port}`);
+    }
+  }
+  lines.push("");
+  lines.push(`comm leases (this pid): ${snapshot.comm_leases.length}`);
+  for (const lease of snapshot.comm_leases.slice(0, 10)) {
+    lines.push(`  ${lease.comm}/${lease.resource_id} rank=${lease.authority_rank} pid=${lease.pid}`);
+  }
+  if (snapshot.comm_leases.length > 10) {
+    lines.push(`  ... +${snapshot.comm_leases.length - 10} more`);
+  }
+  lines.push("");
+  lines.push(`recent conversations: ${snapshot.conversations.length}`);
+  for (const row of snapshot.conversations.slice(0, 10)) {
+    lines.push(
+      `  ${row.agent}/${row.comm} chat=${row.chat_native_id} in=${formatTs(row.last_inbound_at)} out=${formatTs(row.last_outbound_at)}`
+    );
+  }
+  if (snapshot.conversations.length > 10) {
+    lines.push(`  ... +${snapshot.conversations.length - 10} more`);
+  }
+  lines.push("");
+  lines.push(`claude watchers: ${snapshot.watchers.length}`);
+  for (const watcher of snapshot.watchers.slice(0, 10)) {
+    lines.push(`  ${watcher.session_key}: pid=${watcher.pid ?? "missing"}`);
+  }
+  if (snapshot.watchers.length > 10) {
+    lines.push(`  ... +${snapshot.watchers.length - 10} more`);
+  }
+  return lines.join("\n");
+}
+async function readPidFile2(pidFile) {
+  try {
+    const raw = (await readFile9(pidFile, "utf8")).trim();
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? pid : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function readPortFile3(portFile) {
+  try {
+    const raw = (await readFile9(portFile, "utf8")).trim();
+    const port = Number(raw);
+    return Number.isInteger(port) && port > 0 && port < 65536 ? port : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function listCommLeasesForPid(pid) {
+  if (pid === void 0) return [];
+  const locksRoot = path13.join(os3.homedir(), ".agents-comm-bus", "comm-locks");
+  const out = [];
+  let commDirs;
+  try {
+    commDirs = await readdir(locksRoot);
+  } catch {
+    return out;
+  }
+  for (const comm of commDirs) {
+    const commDir = path13.join(locksRoot, comm);
+    let files;
+    try {
+      files = await readdir(commDir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const filePath = path13.join(commDir, file);
+      try {
+        const record = JSON.parse(await readFile9(filePath, "utf8"));
+        if (record.pid !== pid) continue;
+        out.push({
+          comm: record.comm_id,
+          resource_id: record.resource_id,
+          pid: record.pid,
+          authority_rank: record.authorityRank
+        });
+      } catch {
+      }
+    }
+  }
+  return out;
+}
+async function listRecentConversations(databasePath) {
+  try {
+    const storage = await openSqliteStorage(databasePath);
+    const rows = await storage.listConversations({ limit: 25 });
+    return rows.map((row) => ({
+      conversation_id: row.conversation_id,
+      agent: row.agent,
+      comm: row.comm,
+      chat_native_id: row.chat_native_id,
+      last_inbound_at: row.last_inbound_at,
+      last_outbound_at: row.last_outbound_at
+    }));
+  } catch {
+    return [];
+  }
+}
+async function listWatcherPids(stateRoot3) {
+  const sessionsDir = path13.join(stateRoot3, "claude-wake", "sessions");
+  const out = [];
+  let sessionDirs;
+  try {
+    sessionDirs = await readdir(sessionsDir);
+  } catch {
+    return out;
+  }
+  for (const sessionKey of sessionDirs) {
+    const pidFile = path13.join(sessionsDir, sessionKey, "watcher.pid");
+    try {
+      const raw = (await readFile9(pidFile, "utf8")).trim();
+      const pid = Number(raw);
+      out.push({
+        session_key: sessionKey,
+        pid: Number.isInteger(pid) && pid > 0 ? pid : null
+      });
+    } catch {
+      out.push({ session_key: sessionKey, pid: null });
+    }
+  }
+  return out;
+}
+function formatTs(value) {
+  if (value == null) return "-";
+  return new Date(value).toISOString();
+}
+
 // ../core-daemon/cli/index.ts
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
@@ -7062,6 +7334,18 @@ async function main() {
     case "migrate": {
       const result = runMigration(parseMigrateArgs(rest));
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case "status": {
+      const snapshot = await daemonStatus({
+        stateRoot: args.stateRoot ?? args["state-root"],
+        discoveryRoot: args.discoveryRoot ?? args["discovery-root"]
+      });
+      if (args.json !== void 0 || args["json"] !== void 0) {
+        console.log(JSON.stringify(snapshot, null, 2));
+      } else {
+        console.log(formatDaemonStatus(snapshot));
+      }
       return;
     }
     default:
@@ -7180,6 +7464,9 @@ Allowlist commands:
   agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id> | --account-label <label> [--agent <a>] [--project <p>]]
   agents-comm-bus allowlist import-from-env   [--comm telegram]
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
+
+Diagnostics:
+  agents-comm-bus status [--json] [--state-root <path>] [--discovery-root <path>]
 
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
 account-add stores --bot-token in a daemon-owned file ref; credentials_ref is not user-supplied.

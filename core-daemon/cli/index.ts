@@ -19,6 +19,7 @@ import { allowlistList, type AllowlistScopeFilter } from "./allowlist-list.js";
 import { allowlistRemove } from "./allowlist-remove.js";
 import { parseMigrateArgs, runMigration } from "./migrate.js";
 import { reloadDaemonRegistrations } from "./reload-helper.js";
+import { daemonStatus, formatDaemonStatus } from "./status.js";
 
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
@@ -98,6 +99,18 @@ async function main(): Promise<void> {
     case "migrate": {
       const result = runMigration(parseMigrateArgs(rest));
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case "status": {
+      const snapshot = await daemonStatus({
+        stateRoot: args.stateRoot ?? args["state-root"],
+        discoveryRoot: args.discoveryRoot ?? args["discovery-root"],
+      });
+      if (args.json !== undefined || args["json"] !== undefined) {
+        console.log(JSON.stringify(snapshot, null, 2));
+      } else {
+        console.log(formatDaemonStatus(snapshot));
+      }
       return;
     }
     default:
@@ -222,6 +235,9 @@ Allowlist commands:
   agents-comm-bus allowlist list   [--comm <c>] [--scope global|per-bot|all] [--bot-id <id> | --account-label <label> [--agent <a>] [--project <p>]]
   agents-comm-bus allowlist import-from-env   [--comm telegram]
   agents-comm-bus allowlist import-from-files [--comm telegram] [--dry-run]
+
+Diagnostics:
+  agents-comm-bus status [--json] [--state-root <path>] [--discovery-root <path>]
 
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
 account-add stores --bot-token in a daemon-owned file ref; credentials_ref is not user-supplied.

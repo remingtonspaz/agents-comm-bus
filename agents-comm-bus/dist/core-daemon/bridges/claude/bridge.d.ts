@@ -8,7 +8,7 @@
  * `attach` to the bus + the running comm adapters; everything Claude-specific
  * stays inside this module.
  */
-import { type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
+import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -16,6 +16,7 @@ export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
     storage: Storage;
     bus: MessageBus;
+    audit?: AuditStore;
     /**
      * Shared inbound queue that Claude's `claude_drain_inbound` IPC method
      * pulls from. The daemon owns the array reference so other consumers
@@ -69,6 +70,7 @@ export declare class ClaudeBridge implements AgentBridge {
     detachComm(_commId: CommId, _accountId: AccountId): void;
     invalidateRegistrationCaches(): void;
     onInboundConversation(conversation: Conversation): Promise<void>;
+    private auditWakeFailure;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {
             once(event: "close", handler: () => void): void;

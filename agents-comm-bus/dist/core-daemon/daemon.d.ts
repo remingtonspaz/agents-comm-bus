@@ -165,6 +165,7 @@ export declare function reloadAdapters(input: {
      * immediately, while rows for inactive projects stay lazy.
      */
     activeScopes?: ReadonlySet<string>;
+    audit?: JsonlAuditStore;
     options?: ReloadOptions;
 }): Promise<ReloadSummary>;
 /**
@@ -193,6 +194,17 @@ export declare function reloadAdapters(input: {
  * Returned entries preserve queue order (oldest first).
  */
 export declare function drainPendingInbound(queue: PendingInboundEntry[], params?: Record<string, unknown> | undefined): PendingInboundEntry[];
+export interface DaemonStatusSummary {
+    daemon_version: string;
+    live_adapters: string[];
+    pending_inbound_depth: number;
+    active_scope_count: number;
+}
+export declare function handleDaemonStatus(input: {
+    bus: MessageBus;
+    pendingInbound: PendingInboundEntry[];
+    activeScopes: ReadonlySet<string>;
+}): DaemonStatusSummary;
 export declare function handleEnsureCommsForScope(params: Record<string, unknown>, ensureCommsForSession: EnsureCommsForSession): Promise<{
     ok: true;
     project: string;

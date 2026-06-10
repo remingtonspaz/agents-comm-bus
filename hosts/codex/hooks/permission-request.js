@@ -9,6 +9,7 @@
  */
 
 import crypto from 'node:crypto';
+import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
@@ -154,7 +155,10 @@ async function main() {
     console.log(JSON.stringify(extractHookJson(result)));
   } catch (error) {
     process.stderr.write(`Codex PermissionRequest daemon hook failed closed: ${error.message}\n`);
-    console.log(JSON.stringify(failClosed(error.message)));
+    console.log(JSON.stringify({
+      systemMessage: AGENTS_COMM_BUS_DEGRADED_MESSAGE,
+      ...failClosed(error.message),
+    }));
   } finally {
     ipc?.close();
   }

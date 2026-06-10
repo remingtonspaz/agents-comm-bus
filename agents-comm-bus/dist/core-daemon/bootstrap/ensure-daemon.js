@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import { mkdirSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { JsonlAuditStore } from "../storage/audit.js";
 import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, isProtocolCompatible, protocolMajor, } from "../config.js";
 import { resolveDiscoveryPaths, resolveStatePaths, } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
@@ -66,6 +68,7 @@ export async function ensureDaemon(options = {}) {
         return { ...afterTerminate, spawned: false };
     }
     await cleanupStalePidAndPort({
+        stateRoot: paths.root,
         pidFile: discoveryPaths.pidFile,
         portFile: discoveryPaths.portFile,
         isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
@@ -105,6 +108,7 @@ export async function ensureDaemon(options = {}) {
             return { ...found, spawned };
         }
         await cleanupStalePidAndPort({
+            stateRoot: paths.root,
             pidFile: discoveryPaths.pidFile,
             portFile: discoveryPaths.portFile,
             isPidAlive,
@@ -170,11 +174,28 @@ async function waitForDaemon(portFile, probe, deadline, retryMs) {
     }
     return undefined;
 }
+export function daemonStderrLogPath(stateRoot) {
+    return path.join(stateRoot, "daemon.stderr.log");
+}
+/** Spawn stdio for a detached daemon child: stdout+stderr share an append log fd. */
+export function daemonSpawnStdio(stateRoot) {
+    mkdirSync(stateRoot, { recursive: true });
+    const logFd = openSync(daemonStderrLogPath(stateRoot), "a");
+    return ["ignore", logFd, logFd];
+}
 async function cleanupStalePidAndPort(input) {
     const pid = await readPidFile(input.pidFile);
     if (pid !== undefined && !input.isPidAlive(pid)) {
         await rm(input.pidFile, { force: true });
         await rm(input.portFile, { force: true });
+        const audit = new JsonlAuditStore(input.stateRoot);
+        audit
+            .append({
+            timestamp: Date.now(),
+            kind: "discovery_stale_cleanup",
+            detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile },
+        })
+            .catch(() => { });
     }
 }
 async function readPortFile(portFile) {
@@ -227,7 +248,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
         : path.join(paths.root, "bin", "daemon.js");
     const child = spawn(process.execPath, [daemonEntry, "serve"], {
         detached: true,
-        stdio: "ignore",
+        stdio: daemonSpawnStdio(paths.root),
         env: {
             ...env,
             AGENTS_COMM_BUS_STATE_ROOT: paths.root,

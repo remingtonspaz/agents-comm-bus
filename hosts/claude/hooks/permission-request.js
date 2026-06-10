@@ -11,6 +11,7 @@
 import crypto from 'node:crypto';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
+import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
 import {
   ensureClaudeWakeWatcher,
   findCmdAncestor,
@@ -282,7 +283,10 @@ async function main() {
     console.log(JSON.stringify(translateDecision(result, toolName)));
   } catch (error) {
     process.stderr.write(`Claude PermissionRequest daemon hook fell back: ${error.message}\n`);
-    console.log(JSON.stringify(failClosed(toolName)));
+    console.log(JSON.stringify({
+      systemMessage: AGENTS_COMM_BUS_DEGRADED_MESSAGE,
+      ...failClosed(toolName),
+    }));
   } finally {
     ipc?.close();
   }

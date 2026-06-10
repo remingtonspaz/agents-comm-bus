@@ -13,6 +13,7 @@ import crypto from "node:crypto";
 
 import {
   SCHEMA_VERSION_SESSION,
+  type AuditStore,
   type AccountId,
   type AgentId,
   type CallbackEvent,
@@ -20,6 +21,7 @@ import {
   type CommAdapter,
   type CommId,
   type Conversation,
+  type ConversationId,
   type InlineKeyboardButton,
   type Query,
   type QueryId,
@@ -45,6 +47,7 @@ export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
   storage: Storage;
   bus: MessageBus;
+  audit?: AuditStore;
   /**
    * Shared inbound queue that Claude's `claude_drain_inbound` IPC method
    * pulls from. The daemon owns the array reference so other consumers
@@ -144,7 +147,26 @@ export class ClaudeBridge implements AgentBridge {
         if (query.agent !== this.agentId) return;
         const payload = wakePayloadFromDecision(decision);
         if (!payload) return;
-        await this.wake.writeResponseForSession(query.session, payload);
+        try {
+          const delivered = await this.wake.writeResponseForSession(query.session, payload);
+          if (!delivered) {
+            await this.auditWakeFailure({
+              reason: "hydration_miss",
+              session: query.session,
+              detail: { path: "resolve_sink", prompt_type: payload.prompt_type },
+            });
+          }
+        } catch (error) {
+          await this.auditWakeFailure({
+            reason: "write_failed",
+            session: query.session,
+            detail: {
+              path: "resolve_sink",
+              prompt_type: payload.prompt_type,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        }
 
         // AGE-37: advance the AskUserQuestion sequencer when this query resolves.
         const seq = this.questionSequences.get(query.query_id as QueryId);
@@ -180,12 +202,48 @@ export class ClaudeBridge implements AgentBridge {
   async onInboundConversation(conversation: Conversation): Promise<void> {
     if (conversation.agent !== this.agentId) return;
     try {
-      await this.wake.wakeConversation(conversation);
+      const delivered = await this.wake.wakeConversation(conversation);
+      if (!delivered) {
+        await this.auditWakeFailure({
+          reason: "hydration_miss",
+          conversation_id: conversation.conversation_id,
+          detail: { path: "inbound_wake", project: conversation.project },
+        });
+      }
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to write Claude wake trigger for ` +
           `${conversation.conversation_id}: ${error instanceof Error ? error.message : String(error)}`,
       );
+      await this.auditWakeFailure({
+        reason: "write_failed",
+        conversation_id: conversation.conversation_id,
+        detail: {
+          path: "inbound_wake",
+          project: conversation.project,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  private async auditWakeFailure(input: {
+    reason: string;
+    session?: SessionId;
+    conversation_id?: ConversationId;
+    detail?: Record<string, unknown>;
+  }): Promise<void> {
+    try {
+      await this.options.audit?.append({
+        timestamp: Date.now(),
+        kind: "wake_delivery_failure",
+        agent: this.agentId,
+        session: input.session,
+        conversation_id: input.conversation_id,
+        detail: { reason: input.reason, ...input.detail },
+      });
+    } catch {
+      // best-effort observability
     }
   }
 
@@ -904,6 +962,7 @@ export class ClaudeBridgeFactory implements AgentBridgeFactory {
     return new ClaudeBridge({
       storage: context.storage,
       bus: context.bus,
+      audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
     });

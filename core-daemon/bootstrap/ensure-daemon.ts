@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
+import { mkdirSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import { JsonlAuditStore } from "../storage/audit.js";
 
 import {
   DAEMON_VERSION,
@@ -114,6 +117,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
   }
 
   await cleanupStalePidAndPort({
+    stateRoot: paths.root,
     pidFile: discoveryPaths.pidFile,
     portFile: discoveryPaths.portFile,
     isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
@@ -158,6 +162,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
     }
 
     await cleanupStalePidAndPort({
+      stateRoot: paths.root,
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
       isPidAlive,
@@ -253,7 +258,19 @@ async function waitForDaemon(
   return undefined;
 }
 
+export function daemonStderrLogPath(stateRoot: string): string {
+  return path.join(stateRoot, "daemon.stderr.log");
+}
+
+/** Spawn stdio for a detached daemon child: stdout+stderr share an append log fd. */
+export function daemonSpawnStdio(stateRoot: string): ["ignore", number, number] {
+  mkdirSync(stateRoot, { recursive: true });
+  const logFd = openSync(daemonStderrLogPath(stateRoot), "a");
+  return ["ignore", logFd, logFd];
+}
+
 async function cleanupStalePidAndPort(input: {
+  stateRoot: string;
   pidFile: string;
   portFile: string;
   isPidAlive: (pid: number) => boolean;
@@ -262,6 +279,14 @@ async function cleanupStalePidAndPort(input: {
   if (pid !== undefined && !input.isPidAlive(pid)) {
     await rm(input.pidFile, { force: true });
     await rm(input.portFile, { force: true });
+    const audit = new JsonlAuditStore(input.stateRoot);
+    audit
+      .append({
+        timestamp: Date.now(),
+        kind: "discovery_stale_cleanup",
+        detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile },
+      })
+      .catch(() => {});
   }
 }
 
@@ -320,7 +345,7 @@ function defaultSpawnDaemon(
     : path.join(paths.root, "bin", "daemon.js");
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
-    stdio: "ignore",
+    stdio: daemonSpawnStdio(paths.root),
     env: {
       ...env,
       AGENTS_COMM_BUS_STATE_ROOT: paths.root,
