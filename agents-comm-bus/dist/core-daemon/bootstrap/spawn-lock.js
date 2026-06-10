@@ -44,6 +44,10 @@ export async function removeSpawnLockIfTokenMatches(lockPath, expectedToken) {
         if (current.trim() !== expectedToken) {
             return false;
         }
+        // Narrow residual: read-then-rm is not atomic with another process creating
+        // a fresh lock between the two syscalls. Fully closing that would require a
+        // rename-based protocol; this compare step prevents the practical stale
+        // cleanup race without that complexity.
         await rm(lockPath, { force: true });
         return true;
     }
