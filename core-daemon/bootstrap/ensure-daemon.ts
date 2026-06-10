@@ -19,7 +19,11 @@ import {
 } from "../paths.js";
 import type { DaemonHello, DiagnosticMetadata } from "../ipc/protocol.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
-import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
+import {
+  defaultSpawnLockStaleTimeoutMs,
+  removeStaleSpawnLock,
+  tryAcquireSpawnLock,
+} from "./spawn-lock.js";
 
 export interface EnsureDaemonOptions extends DiscoveryPathOptions {
   env?: NodeJS.ProcessEnv;
@@ -116,9 +120,14 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
   });
 
   let spawned = false;
+  const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+  const spawnLockOptions = {
+    isPidAlive,
+    staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(timeoutMs),
+  };
 
   while (Date.now() <= deadline) {
-    const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock);
+    const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
 
     if (lock) {
       try {
@@ -133,6 +142,11 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           defaultSpawnDaemon(paths, discoveryPaths, env);
         }
         spawned = true;
+
+        const found = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+        if (found) {
+          return { ...found, spawned: true };
+        }
       } finally {
         await lock.release();
       }
@@ -146,9 +160,9 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
     await cleanupStalePidAndPort({
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
-      isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+      isPidAlive,
     });
-    await removeSpawnLock(discoveryPaths.spawnLock);
+    await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
   }
 
   throw new Error(`Timed out starting agents-comm-bus daemon under ${discoveryPaths.root}.`);

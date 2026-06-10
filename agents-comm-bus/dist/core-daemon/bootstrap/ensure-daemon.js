@@ -4,7 +4,7 @@ import path from "node:path";
 import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, isProtocolCompatible, protocolMajor, } from "../config.js";
 import { resolveDiscoveryPaths, resolveStatePaths, } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
-import { removeSpawnLock, tryAcquireSpawnLock } from "./spawn-lock.js";
+import { defaultSpawnLockStaleTimeoutMs, removeStaleSpawnLock, tryAcquireSpawnLock, } from "./spawn-lock.js";
 export async function ensureDaemon(options = {}) {
     const env = options.env ?? process.env;
     const stateRoot = options.stateRoot ?? env.AGENTS_COMM_BUS_ROOT ?? env.AGENTS_COMM_BUS_STATE_ROOT;
@@ -71,8 +71,13 @@ export async function ensureDaemon(options = {}) {
         isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
     });
     let spawned = false;
+    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    const spawnLockOptions = {
+        isPidAlive,
+        staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(timeoutMs),
+    };
     while (Date.now() <= deadline) {
-        const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock);
+        const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
         if (lock) {
             try {
                 const recheck = await probeFromPortFile(discoveryPaths.portFile, probe);
@@ -86,6 +91,10 @@ export async function ensureDaemon(options = {}) {
                     defaultSpawnDaemon(paths, discoveryPaths, env);
                 }
                 spawned = true;
+                const found = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+                if (found) {
+                    return { ...found, spawned: true };
+                }
             }
             finally {
                 await lock.release();
@@ -98,9 +107,9 @@ export async function ensureDaemon(options = {}) {
         await cleanupStalePidAndPort({
             pidFile: discoveryPaths.pidFile,
             portFile: discoveryPaths.portFile,
-            isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+            isPidAlive,
         });
-        await removeSpawnLock(discoveryPaths.spawnLock);
+        await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
     }
     throw new Error(`Timed out starting agents-comm-bus daemon under ${discoveryPaths.root}.`);
 }

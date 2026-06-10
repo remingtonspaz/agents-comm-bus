@@ -5,6 +5,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { ensureDaemon, writeDaemonDiscoveryFiles } from "../../core-daemon/bootstrap/ensure-daemon.js";
+import {
+  defaultSpawnLockStaleTimeoutMs,
+  isSpawnLockStale,
+  isTokenContentStale,
+  parseSpawnLockToken,
+  removeSpawnLockIfTokenMatches,
+  removeStaleSpawnLock,
+  tryAcquireSpawnLock,
+} from "../../core-daemon/bootstrap/spawn-lock.js";
+import { DEFAULT_SPAWN_LOCK_STALE_GRACE_MS } from "../../core-daemon/config.js";
 import { DAEMON_VERSION, IPC_PROTOCOL_VERSION } from "../../core-daemon/config.js";
 import {
   resolveConversationPaths,
@@ -103,6 +113,36 @@ describe("ensureDaemon", () => {
     assert.equal(b.port, port);
     assert.equal(a.hello.protocolVersion, IPC_PROTOCOL_VERSION);
     assert.equal(b.hello.protocolVersion, IPC_PROTOCOL_VERSION);
+  });
+
+  it("converges concurrent callers when spawn writes discovery asynchronously", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    let spawnCount = 0;
+    const port = 41_138;
+
+    const spawnDaemon = async (): Promise<void> => {
+      spawnCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      await writeDaemonDiscoveryFiles({ stateRoot, pid: process.pid, port });
+    };
+
+    const probeDaemon = async (candidatePort: number): Promise<DaemonHello> => {
+      assert.equal(candidatePort, port);
+      return daemonHello();
+    };
+
+    const [a, b, c] = await Promise.all([
+      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
+      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
+      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
+    ]);
+
+    assert.equal(spawnCount, 1);
+    assert.equal(a.port, port);
+    assert.equal(b.port, port);
+    assert.equal(c.port, port);
+    await assert.rejects(readFile(paths.spawnLock, "utf8"), /ENOENT/);
   });
 
   it("removes stale pid and port files before spawning", async () => {
@@ -477,5 +517,146 @@ describe("ensureDaemon", () => {
     });
 
     assert.equal((await readFile(paths.portFile, "utf8")).trim(), "41116");
+  });
+});
+
+describe("spawn lock", () => {
+  it("does not remove a live lock during non-owner retry cleanup", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    const liveToken = `${process.pid}:${Date.now()}`;
+    await writeFile(paths.spawnLock, `${liveToken}\n`, "utf8");
+
+    const removed = await removeStaleSpawnLock(paths.spawnLock, {
+      isPidAlive: () => true,
+      staleTimeoutMs: 5_000,
+    });
+
+    assert.equal(removed, false);
+    assert.equal((await readFile(paths.spawnLock, "utf8")).trim(), liveToken);
+  });
+
+  it("reclaims a stale lock whose owner pid is dead", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.spawnLock, "99999999:1234567890\n", "utf8");
+
+    const removed = await removeStaleSpawnLock(paths.spawnLock, {
+      isPidAlive: () => false,
+      staleTimeoutMs: 5_000,
+    });
+
+    assert.equal(removed, true);
+    await assert.rejects(readFile(paths.spawnLock, "utf8"), /ENOENT/);
+  });
+
+  it("does not delete a lock replaced between stale inspection and removal", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    const staleToken = "99999999:1234567890";
+    const newToken = `${process.pid}:${Date.now() + 60_000}`;
+    await writeFile(paths.spawnLock, `${staleToken}\n`, "utf8");
+
+    const removed = await removeStaleSpawnLock(paths.spawnLock, {
+      isPidAlive: () => false,
+      staleTimeoutMs: 5_000,
+      testHookAfterStaleCheck: async () => {
+        await writeFile(paths.spawnLock, `${newToken}\n`, "utf8");
+      },
+    });
+
+    assert.equal(removed, false);
+    assert.equal((await readFile(paths.spawnLock, "utf8")).trim(), newToken);
+  });
+
+  it("removeSpawnLockIfTokenMatches no-ops when the on-disk token changed", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    const staleToken = "99999999:1234567890";
+    const newToken = `${process.pid}:${Date.now() + 60_000}`;
+    await writeFile(paths.spawnLock, `${newToken}\n`, "utf8");
+
+    const removed = await removeSpawnLockIfTokenMatches(paths.spawnLock, staleToken);
+
+    assert.equal(removed, false);
+    assert.equal((await readFile(paths.spawnLock, "utf8")).trim(), newToken);
+  });
+
+  it("uses bootstrap timeout plus grace for default stale classification", () => {
+    assert.equal(defaultSpawnLockStaleTimeoutMs(5_000), 5_000 + DEFAULT_SPAWN_LOCK_STALE_GRACE_MS);
+    assert.equal(
+      isTokenContentStale(`${process.pid}:${Date.now() - 4_500}`, {
+        isPidAlive: () => true,
+        staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(5_000),
+      }),
+      false,
+    );
+  });
+
+  it("reclaims a stale lock whose age exceeds the configured timeout", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    const staleTimestamp = Date.now() - 10_000;
+    await writeFile(paths.spawnLock, `${process.pid}:${staleTimestamp}\n`, "utf8");
+
+    const removed = await removeStaleSpawnLock(paths.spawnLock, {
+      isPidAlive: () => true,
+      staleTimeoutMs: 1_000,
+    });
+
+    assert.equal(removed, true);
+    await assert.rejects(readFile(paths.spawnLock, "utf8"), /ENOENT/);
+  });
+
+  it("treats malformed lock tokens as stale", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(paths.spawnLock, "not-a-valid-token\n", "utf8");
+
+    assert.deepEqual(parseSpawnLockToken("not-a-valid-token"), {});
+    assert.equal(
+      await isSpawnLockStale(paths.spawnLock, {
+        isPidAlive: () => true,
+        staleTimeoutMs: 5_000,
+      }),
+      true,
+    );
+
+    const lock = await tryAcquireSpawnLock(paths.spawnLock, {
+      isPidAlive: () => true,
+      staleTimeoutMs: 5_000,
+    });
+    assert.ok(lock);
+    await lock!.release();
+  });
+
+  it("does not let a non-owner ensureDaemon retry delete a live spawn lock", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    const liveToken = `${process.pid}:${Date.now()}`;
+    await writeFile(paths.spawnLock, `${liveToken}\n`, "utf8");
+
+    await assert.rejects(
+      ensureDaemon({
+        stateRoot,
+        isPidAlive: () => true,
+        probeDaemon: async () => daemonHello(),
+        spawnDaemon: async () => {
+          throw new Error("must not spawn while another caller holds a live lock");
+        },
+        timeoutMs: 100,
+        retryMs: 5,
+      }),
+      /Timed out starting agents-comm-bus daemon/,
+    );
+
+    assert.equal((await readFile(paths.spawnLock, "utf8")).trim(), liveToken);
   });
 });

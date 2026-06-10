@@ -3668,11 +3668,12 @@ import path3 from "node:path";
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.15";
+var DAEMON_VERSION = "0.2.16";
 var IPC_PROTOCOL_VERSION = "1.0.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
+var DEFAULT_SPAWN_LOCK_STALE_GRACE_MS = 2e3;
 function protocolMajor(version) {
   return version.split(".", 1)[0] ?? version;
 }
@@ -3858,8 +3859,73 @@ async function probeDaemon(options) {
 import { constants } from "node:fs";
 import { open, mkdir, readFile, rm } from "node:fs/promises";
 import path2 from "node:path";
-async function tryAcquireSpawnLock(lockPath) {
+function parseSpawnLockToken(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const parts = trimmed.split(":");
+  if (parts.length !== 2) {
+    return {};
+  }
+  const pid = Number(parts[0]);
+  const timestamp = Number(parts[1]);
+  return {
+    pid: Number.isInteger(pid) && pid > 0 ? pid : void 0,
+    timestamp: Number.isFinite(timestamp) && timestamp > 0 ? timestamp : void 0
+  };
+}
+function isTokenContentStale(token, options) {
+  const { pid, timestamp } = parseSpawnLockToken(token);
+  if (pid === void 0 || timestamp === void 0) {
+    return true;
+  }
+  if (!options.isPidAlive(pid)) {
+    return true;
+  }
+  return Date.now() - timestamp > options.staleTimeoutMs;
+}
+async function removeSpawnLockIfTokenMatches(lockPath, expectedToken) {
+  try {
+    const current = await readFile(lockPath, "utf8");
+    if (current.trim() !== expectedToken) {
+      return false;
+    }
+    await rm(lockPath, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function removeStaleSpawnLock(lockPath, options = {}) {
+  const resolved = resolveSpawnLockOptions(options);
+  let observedRaw;
+  try {
+    observedRaw = await readFile(lockPath, "utf8");
+  } catch {
+    return false;
+  }
+  const observedToken = observedRaw.trim();
+  if (!isTokenContentStale(observedToken, resolved)) {
+    return false;
+  }
+  if (options.testHookAfterStaleCheck) {
+    await options.testHookAfterStaleCheck();
+  }
+  return removeSpawnLockIfTokenMatches(lockPath, observedToken);
+}
+async function tryAcquireSpawnLock(lockPath, options = {}) {
   await mkdir(path2.dirname(lockPath), { recursive: true });
+  const acquired = await createSpawnLock(lockPath);
+  if (acquired) {
+    return acquired;
+  }
+  if (!await removeStaleSpawnLock(lockPath, options)) {
+    return void 0;
+  }
+  return createSpawnLock(lockPath);
+}
+async function createSpawnLock(lockPath) {
   try {
     const handle = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
     const token = `${process.pid}:${Date.now()}`;
@@ -3869,14 +3935,9 @@ async function tryAcquireSpawnLock(lockPath) {
     return {
       path: lockPath,
       acquired: true,
+      token,
       release: async () => {
-        try {
-          const current = await readFile(lockPath, "utf8");
-          if (current.trim() === token) {
-            await rm(lockPath, { force: true });
-          }
-        } catch {
-        }
+        await removeSpawnLockIfTokenMatches(lockPath, token);
       }
     };
   } catch (error) {
@@ -3886,8 +3947,22 @@ async function tryAcquireSpawnLock(lockPath) {
     throw error;
   }
 }
-async function removeSpawnLock(lockPath) {
-  await rm(lockPath, { force: true });
+function resolveSpawnLockOptions(options) {
+  return {
+    isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+    staleTimeoutMs: options.staleTimeoutMs ?? defaultSpawnLockStaleTimeoutMs()
+  };
+}
+function defaultSpawnLockStaleTimeoutMs(bootstrapTimeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS) {
+  return bootstrapTimeoutMs + DEFAULT_SPAWN_LOCK_STALE_GRACE_MS;
+}
+function defaultIsPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 function isAlreadyExistsError(error) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
@@ -3936,7 +4011,7 @@ async function ensureDaemon(options = {}) {
       liveProtocol: existing.hello.protocolVersion,
       clientProtocol: clientProtocolVersion,
       terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
-      isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
+      isPidAlive: options.isPidAlive ?? defaultIsPidAlive2,
       retryMs
     });
   }
@@ -3947,11 +4022,16 @@ async function ensureDaemon(options = {}) {
   await cleanupStalePidAndPort({
     pidFile: discoveryPaths.pidFile,
     portFile: discoveryPaths.portFile,
-    isPidAlive: options.isPidAlive ?? defaultIsPidAlive
+    isPidAlive: options.isPidAlive ?? defaultIsPidAlive2
   });
   let spawned = false;
+  const isPidAlive = options.isPidAlive ?? defaultIsPidAlive2;
+  const spawnLockOptions = {
+    isPidAlive,
+    staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(timeoutMs)
+  };
   while (Date.now() <= deadline) {
-    const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock);
+    const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
     if (lock) {
       try {
         const recheck = await probeFromPortFile(discoveryPaths.portFile, probe);
@@ -3964,6 +4044,10 @@ async function ensureDaemon(options = {}) {
           defaultSpawnDaemon(paths, discoveryPaths, env);
         }
         spawned = true;
+        const found2 = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+        if (found2) {
+          return { ...found2, spawned: true };
+        }
       } finally {
         await lock.release();
       }
@@ -3975,9 +4059,9 @@ async function ensureDaemon(options = {}) {
     await cleanupStalePidAndPort({
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
-      isPidAlive: options.isPidAlive ?? defaultIsPidAlive
+      isPidAlive
     });
-    await removeSpawnLock(discoveryPaths.spawnLock);
+    await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
   }
   throw new Error(`Timed out starting agents-comm-bus daemon under ${discoveryPaths.root}.`);
 }
@@ -4048,7 +4132,7 @@ async function readPidFile(pidFile) {
     return void 0;
   }
 }
-function defaultIsPidAlive(pid) {
+function defaultIsPidAlive2(pid) {
   try {
     process.kill(pid, 0);
     return true;
