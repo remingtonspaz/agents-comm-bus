@@ -22,6 +22,7 @@ import {
 import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
 import { startDaemonPidWatchdog } from "./bootstrap/pid-watchdog.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
@@ -382,6 +383,14 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         "close IPC server during daemon retirement",
       );
     },
+  });
+
+  // AGE-55: async boot restore — never block daemon readiness on comm bring-up.
+  void runBootScopeRestore({
+    stateRoot: paths.root,
+    storage,
+    ensureCommsForSession: ensureCommsForSessionFn,
+    audit,
   });
 
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);

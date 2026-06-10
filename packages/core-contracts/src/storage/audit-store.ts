@@ -42,7 +42,9 @@ export type AuditEventKind =
   | "inbound_filter_drop"
   // AGE-9: a bare text reply matched more than one open query; the answer
   // attempt was consumed and a disambiguation helper was sent instead.
-  | "query_ambiguous_reply";
+  | "query_ambiguous_reply"
+  // AGE-55: boot-time liveness-gated comm-scope restore summary.
+  | "daemon_boot_restore";
 
 export interface AuditEvent {
   timestamp: number;
