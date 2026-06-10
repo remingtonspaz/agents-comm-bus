@@ -24988,23 +24988,6 @@ async function sendRequest(socket, request, requestTimeoutMs) {
   socket.send(JSON.stringify(request));
   return new Promise((resolve, reject) => {
     let settled = false;
-    const cleanup = () => {
-      clearTimeout(timeout);
-      socket.off("message", onMessage);
-    };
-    const settle = (fn) => {
-      if (settled)
-        return;
-      settled = true;
-      cleanup();
-      fn();
-    };
-    const timeout = setTimeout(() => {
-      settle(() => {
-        reject(new IpcRequestTimeoutError(request.id, request.method, requestTimeoutMs));
-      });
-    }, requestTimeoutMs);
-    timeout.unref?.();
     const onMessage = (data) => {
       try {
         const message = parseIpcMessage(data);
@@ -25037,6 +25020,25 @@ async function sendRequest(socket, request, requestTimeoutMs) {
         reject(new Error("agents-comm-bus IPC socket closed before the request completed."));
       });
     };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const settle = (fn) => {
+      if (settled)
+        return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const timeout = setTimeout(() => {
+      settle(() => {
+        reject(new IpcRequestTimeoutError(request.id, request.method, requestTimeoutMs));
+      });
+    }, requestTimeoutMs);
+    timeout.unref?.();
     socket.on("message", onMessage);
     socket.once("error", onError);
     socket.once("close", onClose);

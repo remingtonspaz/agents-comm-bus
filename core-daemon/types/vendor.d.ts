@@ -19,6 +19,8 @@ declare module "ws" {
     on(event: "error", handler: (error: Error) => void): void;
     on(event: string, handler: (...args: unknown[]) => void): void;
     off(event: "message", handler: (data: RawData) => void): void;
+    off(event: "error", handler: (error: Error) => void): void;
+    off(event: "close", handler: () => void): void;
     removeAllListeners(event?: string): void;
   }
 

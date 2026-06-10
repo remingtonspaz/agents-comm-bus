@@ -89,6 +89,73 @@ describe("agents-comm-bus IPC request timeout", () => {
     }
   });
 
+  it("removes per-request socket listeners after a successful response", async () => {
+    const server = await startIpcServer({
+      onRequest: async (request) => ({ echo: request.method }),
+    });
+
+    try {
+      const client = await connectIpc({
+        port: server.port,
+        clientVersion: "ipc-timeout-test",
+        requestTimeoutMs: 50,
+      });
+
+      const baseline = {
+        message: client.socket.listenerCount("message"),
+        error: client.socket.listenerCount("error"),
+        close: client.socket.listenerCount("close"),
+      };
+
+      for (let i = 0; i < 5; i++) {
+        const result = await client.request(`ping-${i}`);
+        assert.deepEqual(result, { echo: `ping-${i}` });
+        assert.equal(client.socket.listenerCount("message"), baseline.message);
+        assert.equal(client.socket.listenerCount("error"), baseline.error);
+        assert.equal(client.socket.listenerCount("close"), baseline.close);
+      }
+
+      client.close();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("removes per-request socket listeners after a request timeout", async () => {
+    const server = await startIpcServer({
+      onRequest: async (request) => {
+        if (request.method === "hang") {
+          await new Promise(() => {});
+        }
+        return { ok: true };
+      },
+    });
+
+    try {
+      const client = await connectIpc({
+        port: server.port,
+        clientVersion: "ipc-timeout-test",
+        requestTimeoutMs: 40,
+      });
+
+      const baseline = {
+        message: client.socket.listenerCount("message"),
+        error: client.socket.listenerCount("error"),
+        close: client.socket.listenerCount("close"),
+      };
+
+      await assert.rejects(client.request("hang"), IpcRequestTimeoutError);
+
+      assert.equal(client.socket.listenerCount("message"), baseline.message);
+      assert.equal(client.socket.listenerCount("error"), baseline.error);
+      assert.equal(client.socket.listenerCount("close"), baseline.close);
+
+      client.close();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("clears the request timer and rejects on socket close before timeout", async () => {
     const server = await startIpcServer({
       onRequest: async (request) => {
