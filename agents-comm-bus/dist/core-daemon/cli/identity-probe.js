@@ -26,7 +26,10 @@ export async function probeIdentityViaDaemon(options) {
     try {
         const result = await connection.request("probe_comm_identity", {
             comm: options.comm,
-            credentials: { botToken: options.botToken },
+            credentials: {
+                botToken: options.botToken,
+                ...(options.accountId ? { accountId: options.accountId } : {}),
+            },
         });
         return parseProbeResult(result);
     }

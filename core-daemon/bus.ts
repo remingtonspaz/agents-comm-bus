@@ -105,7 +105,10 @@ export class MessageBus {
     }
     this.comms.set(key, comm);
     comm.onInbound(async (message) => {
-      await this.receiveInbound(message);
+      const conversation = await this.receiveInbound(message);
+      // Acceptance echo for request/response ingress adapters (AGE-50); the
+      // polling/streaming adapters ignore the return value.
+      return { conversation_id: conversation.conversation_id };
     });
     comm.onConnectionState((state) => {
       void this.options.audit.append({

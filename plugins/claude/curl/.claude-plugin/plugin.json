@@ -1,0 +1,17 @@
+{
+  "name": "curl",
+  "version": "0.1.0",
+  "description": "Local HTTP ingress for Claude Code through the agents-comm-bus daemon: POST context from cron, CI, or scripts straight into the session",
+  "author": {
+    "name": "Satrio"
+  },
+  "mcpServers": {
+    "curl": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"
+      ]
+    }
+  },
+  "skills": "./skills/"
+}

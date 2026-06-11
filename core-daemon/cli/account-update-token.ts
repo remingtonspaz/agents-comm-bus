@@ -19,6 +19,13 @@ export interface AccountUpdateTokenOptions {
   agent?: string;
   project?: string;
   botToken?: string;
+  /**
+   * Explicit synthetic account id for comms without a remote identity to
+   * probe (e.g. curl, AGE-50). Without it a rotation on such a comm probes
+   * the default synthetic id, which can look like a bot change for accounts
+   * registered with an explicit id.
+   */
+  accountId?: string;
   allowBotChange?: boolean;
   stateRoot?: string;
   probeIdentity?: ProbeIdentity;
@@ -34,13 +41,14 @@ export async function accountUpdateToken(
     throw new Error("--bot-token is required for account-update-token");
   }
 
-  const identity = await (options.probeIdentity ?? ((token) =>
+  const identity = await (options.probeIdentity ?? ((token, accountId) =>
     probeIdentityViaDaemon({
       comm,
       botToken: token,
+      accountId,
       agent: options.agent,
       stateRoot: options.stateRoot,
-    })))(options.botToken);
+    })))(options.botToken, options.accountId);
   const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
   let wroteTokenRef: string | null = null;
   let wroteReplacementToken = false;

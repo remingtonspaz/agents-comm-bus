@@ -20,6 +20,7 @@ describe("comm-adapters discovery", () => {
     assert.ok(comms.includes("telegram"), `expected telegram in ${JSON.stringify(comms)}`);
     assert.ok(comms.includes("matrix"), `expected matrix in ${JSON.stringify(comms)}`);
     assert.ok(comms.includes("discord"), `expected discord in ${JSON.stringify(comms)}`);
+    assert.ok(comms.includes("curl"), `expected curl in ${JSON.stringify(comms)}`);
   });
 
   it("exposes stable path helpers for release tooling", () => {

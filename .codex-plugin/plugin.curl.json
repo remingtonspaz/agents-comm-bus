@@ -1,0 +1,33 @@
+{
+  "name": "curl",
+  "version": "0.1.0",
+  "description": "Local HTTP ingress for Codex through the shared agents-comm-bus daemon: POST context from cron, CI, or scripts straight into the session.",
+  "author": {
+    "name": "Satrio"
+  },
+  "homepage": "https://github.com/remingtonspaz/claude-code-telegram",
+  "repository": "https://github.com/remingtonspaz/claude-code-telegram",
+  "license": "MIT",
+  "keywords": [
+    "curl",
+    "ingress",
+    "automation",
+    "local"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Curl Ingress",
+    "shortDescription": "POST local context into Codex",
+    "longDescription": "Local-only HTTP ingress for Codex through the shared agents-comm-bus daemon. Cron jobs, CI pipelines, and local scripts POST JSON payloads to a loopback endpoint; the daemon wakes the target session and injects the payload into its prompt context. Inbound only — no outbound protocol.",
+    "developerName": "Satrio",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Check pending curl-injected messages"
+    ]
+  }
+}

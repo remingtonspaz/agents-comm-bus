@@ -9,12 +9,13 @@ export async function accountUpdateToken(options) {
     if (!options.botToken) {
         throw new Error("--bot-token is required for account-update-token");
     }
-    const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
+    const identity = await (options.probeIdentity ?? ((token, accountId) => probeIdentityViaDaemon({
         comm,
         botToken: token,
+        accountId,
         agent: options.agent,
         stateRoot: options.stateRoot,
-    })))(options.botToken);
+    })))(options.botToken, options.accountId);
     const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
     let wroteTokenRef = null;
     let wroteReplacementToken = false;

@@ -106,6 +106,9 @@ Three perpendicular layers meeting at the bus:
 │       ├── storage/           # Storage interface, MigrationRunner
 │       └── ...
 ├── adapters/
+│   ├── curl/                  # Local HTTP POST ingress, inbound-only (AGE-50)
+│   ├── discord/
+│   ├── matrix/
 │   └── telegram/
 │       ├── adapter.ts         # TelegramCommAdapter
 │       └── factory.ts         # TelegramCommAdapterFactory + MCP IPC surface
@@ -376,6 +379,24 @@ handshake before deciding whether to reuse or spawn.
 - **Credentials are daemon-owned file references, not inline secrets.** The
   DB stores `credentials_ref` as `file:/abs/path.json`. Adapter factories
   resolve them at startup; secrets never sit in the records table.
+- **Curl comm adapter is local inbound-only (AGE-50).** `adapters/curl/`
+  binds a loopback-only (`127.0.0.1`) HTTP server per registration; local
+  systems (cron, CI, Hermes, scripts) inject context with `POST /messages`
+  authenticated by the bearer token from the daemon-owned token file ref.
+  The body's required `project`/`agent` must match the registration scope
+  (404 otherwise); `sender_id` flows through the normal
+  allowlist/filter/audit path (unauthorized → 401 + `inbound_filter_drop`),
+  and an omitted `chat_native_id` bins into the deterministic synthetic
+  conversation `curl:<sender_id>`. Accepted messages ride the standard bus
+  path (transcript, `pendingInbound`, bridge wake, `[Daemon Inbound
+  Messages]`), and the response echoes `{ message_id, conversation_id }`.
+  The bound port is ephemeral by default and published at
+  `~/.agents-comm-bus/curl/<account>/endpoint.json` (pin it by adding a
+  `"port"` field to the token file). Identity is synthetic — `account-add
+  --comm curl --bot-token <secret>` defaults to account id `curl:local`;
+  pass `--account-id <id>` to register additional scopes. There is no
+  outbound: `send()` and the `curl_send` IPC method fail loudly by design,
+  so agents reply over a bidirectional comm instead.
 - **Callback resolutions bypass TTL.** When a user actively taps a button or
   sends a text reply, the query resolves even if its TTL passed. TTL is for
   abandoned queries, not slow ones.
@@ -551,6 +572,7 @@ gitignored `discoveryRoot`.
 | `chats/<conversation_id>/transcript.jsonl` | Per-conversation inbound + outbound transcript |
 | `blobs/<hash>` | Content-addressed attachment blobs |
 | `tokens/<comm>/<project-key>/<agent>/<bot-id>.json` | Daemon-owned token files used by `file:` credential refs created by `account-add --bot-token` |
+| `curl/<account>/endpoint.json` | Curl adapter's loopback endpoint discovery file (bound port + URL), written on adapter start (AGE-50) |
 | `claude-wake/sessions/<key>/trigger-enter` | Wake trigger file (watcher polls this) |
 | `claude-wake/sessions/<key>/permission-response.json` | Wake response payload (watcher reads, types chars) |
 | `claude-wake/sessions/<key>/watcher.pid` | Watcher process id |

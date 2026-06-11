@@ -6,6 +6,12 @@ export interface AccountAddOptions {
     accountLabel: string;
     comm?: string;
     botToken?: string;
+    /**
+     * Explicit synthetic account id for comms without a remote identity to
+     * probe (e.g. curl, AGE-50). Ignored by comms that probe a real platform
+     * identity (telegram getMe, matrix whoami, ...).
+     */
+    accountId?: string;
     stateRoot?: string;
     probeIdentity?: ProbeIdentity;
 }

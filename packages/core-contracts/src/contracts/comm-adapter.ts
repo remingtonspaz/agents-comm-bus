@@ -55,6 +55,17 @@ export interface SendResult {
 }
 
 /**
+ * Optional acceptance info the bus's inbound handler returns after it has
+ * persisted + dispatched an inbound message. Most adapters fire-and-forget
+ * (the platform offers nowhere to surface it), but request/response ingress
+ * adapters (e.g. the local curl adapter, AGE-50) echo `conversation_id` back
+ * to the caller as the acceptance result.
+ */
+export interface InboundAcceptance {
+  conversation_id?: string;
+}
+
+/**
  * AGE-10: an inbound update the adapter dropped BEFORE it reached the bus —
  * e.g. the sender failed the adapter's allowlist. Historically these drops
  * were silent (nothing in the audit log, nothing on stderr), which made
@@ -138,8 +149,13 @@ export interface CommAdapter {
   /** Stop and release platform connections. */
   stop(): Promise<void>;
 
-  /** Register the inbound-message handler. */
-  onInbound(handler: (msg: Message) => Promise<void>): void;
+  /**
+   * Register the inbound-message handler. The handler may return an
+   * {@link InboundAcceptance}; adapters with a synchronous ingress channel
+   * (HTTP request/response) may surface it to the caller, all others ignore
+   * the return value.
+   */
+  onInbound(handler: (msg: Message) => Promise<void | InboundAcceptance>): void;
 
   /**
    * Optional: register a callback-event handler for adapters that support

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "agent": "claude",
+  "comm": "curl",
+  "plugin_version": "0.1.0",
+  "daemon_bundle_version": "0.2.27",
+  "adapter_bundle_version": "0.1.0",
+  "adapter_bundle_versions": {
+    "curl": "0.1.0"
+  },
+  "daemon_sidecars": [
+    "001_initial.sql",
+    "002_conversation_agent_identity.sql",
+    "003_allowlist.sql",
+    "004_session_owner_process.sql",
+    "005_conversation_bot_identity.sql",
+    "006_registration_identity.sql",
+    "007_registration_pk.sql",
+    "008_conversation_registration_key.sql",
+    "009_multi_open_queries.sql",
+    "010_durable_pending_inbound.sql"
+  ]
+}

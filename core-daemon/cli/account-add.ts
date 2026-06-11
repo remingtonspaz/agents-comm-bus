@@ -19,6 +19,12 @@ export interface AccountAddOptions {
   accountLabel: string;
   comm?: string;
   botToken?: string;
+  /**
+   * Explicit synthetic account id for comms without a remote identity to
+   * probe (e.g. curl, AGE-50). Ignored by comms that probe a real platform
+   * identity (telegram getMe, matrix whoami, ...).
+   */
+  accountId?: string;
   stateRoot?: string;
   probeIdentity?: ProbeIdentity;
 }
@@ -30,13 +36,14 @@ export async function accountAdd(options: AccountAddOptions): Promise<AccountReg
   if (!botToken) {
     throw new Error("--bot-token is required for account-add");
   }
-  const identity = await (options.probeIdentity ?? ((token) =>
+  const identity = await (options.probeIdentity ?? ((token, accountId) =>
     probeIdentityViaDaemon({
       comm,
       botToken: token,
+      accountId,
       agent: options.agent,
       stateRoot: options.stateRoot,
-    })))(botToken);
+    })))(botToken, options.accountId);
   const paths = resolveStatePaths({ stateRoot: options.stateRoot });
   await mkdir(paths.root, { recursive: true });
   const storage = await openSqliteStorage(paths.database);

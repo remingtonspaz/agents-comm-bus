@@ -13,12 +13,13 @@ export async function accountAdd(options) {
     if (!botToken) {
         throw new Error("--bot-token is required for account-add");
     }
-    const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
+    const identity = await (options.probeIdentity ?? ((token, accountId) => probeIdentityViaDaemon({
         comm,
         botToken: token,
+        accountId,
         agent: options.agent,
         stateRoot: options.stateRoot,
-    })))(botToken);
+    })))(botToken, options.accountId);
     const paths = resolveStatePaths({ stateRoot: options.stateRoot });
     await mkdir(paths.root, { recursive: true });
     const storage = await openSqliteStorage(paths.database);

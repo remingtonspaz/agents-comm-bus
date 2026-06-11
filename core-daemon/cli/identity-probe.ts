@@ -12,11 +12,17 @@ export interface BotIdentity {
   bot_username?: string | null;
 }
 
-export type ProbeIdentity = (botToken: string) => Promise<BotIdentity>;
+export type ProbeIdentity = (botToken: string, accountId?: string) => Promise<BotIdentity>;
 
 export async function probeIdentityViaDaemon(options: {
   comm: string;
   botToken: string;
+  /**
+   * Explicit synthetic account id for comms without a remote identity to
+   * probe (e.g. curl, AGE-50). Comms that probe a real platform identity
+   * ignore it.
+   */
+  accountId?: string;
   agent?: string;
   stateRoot?: string;
   timeoutMs?: number;
@@ -41,7 +47,10 @@ export async function probeIdentityViaDaemon(options: {
   try {
     const result = await connection.request("probe_comm_identity", {
       comm: options.comm,
-      credentials: { botToken: options.botToken },
+      credentials: {
+        botToken: options.botToken,
+        ...(options.accountId ? { accountId: options.accountId } : {}),
+      },
     });
     return parseProbeResult(result);
   } finally {

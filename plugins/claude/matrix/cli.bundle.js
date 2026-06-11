@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.26";
+var DAEMON_VERSION = "0.2.27";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 
@@ -4869,7 +4869,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME2 = "agents-comm-bus";
-var DAEMON_VERSION2 = "0.2.26";
+var DAEMON_VERSION2 = "0.2.27";
 var IPC_PROTOCOL_VERSION2 = "1.2.0";
 var IPC_HOST2 = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -6080,7 +6080,10 @@ async function probeIdentityViaDaemon(options) {
   try {
     const result = await connection.request("probe_comm_identity", {
       comm: options.comm,
-      credentials: { botToken: options.botToken }
+      credentials: {
+        botToken: options.botToken,
+        ...options.accountId ? { accountId: options.accountId } : {}
+      }
     });
     return parseProbeResult(result);
   } finally {
@@ -6138,12 +6141,13 @@ async function accountAdd(options) {
   if (!botToken) {
     throw new Error("--bot-token is required for account-add");
   }
-  const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
+  const identity = await (options.probeIdentity ?? ((token, accountId) => probeIdentityViaDaemon({
     comm,
     botToken: token,
+    accountId,
     agent: options.agent,
     stateRoot: options.stateRoot
-  })))(botToken);
+  })))(botToken, options.accountId);
   const paths = resolveStatePaths({ stateRoot: options.stateRoot });
   await mkdir7(paths.root, { recursive: true });
   const storage = await openSqliteStorage(paths.database);
@@ -6315,12 +6319,13 @@ async function accountUpdateToken(options) {
   if (!options.botToken) {
     throw new Error("--bot-token is required for account-update-token");
   }
-  const identity = await (options.probeIdentity ?? ((token) => probeIdentityViaDaemon({
+  const identity = await (options.probeIdentity ?? ((token, accountId) => probeIdentityViaDaemon({
     comm,
     botToken: token,
+    accountId,
     agent: options.agent,
     stateRoot: options.stateRoot
-  })))(options.botToken);
+  })))(options.botToken, options.accountId);
   const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
   let wroteTokenRef = null;
   let wroteReplacementToken = false;
@@ -7431,7 +7436,8 @@ async function main() {
         agent: required(args.agent, "--agent"),
         accountLabel: required(args.accountLabel ?? args["account-label"], "--account-label"),
         comm: args.comm,
-        botToken: args.botToken ?? args["bot-token"]
+        botToken: args.botToken ?? args["bot-token"],
+        accountId: args.accountId ?? args["account-id"]
       });
       const reload = await reloadDaemonRegistrations();
       console.log(JSON.stringify({ ...redact(rec), reload }, null, 2));
@@ -7482,6 +7488,7 @@ async function main() {
         agent: args.agent,
         project: args.project,
         botToken: required(args.botToken ?? args["bot-token"], "--bot-token"),
+        accountId: args.accountId ?? args["account-id"],
         allowBotChange: args.allowBotChange !== void 0 || args["allow-bot-change"] !== void 0
       });
       const reload = await reloadDaemonRegistrations({
@@ -7614,11 +7621,11 @@ function printHelp2() {
   console.error(`agents-comm-bus CLI
 
 Account commands:
-  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> --bot-token <token>
+  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> --bot-token <token> [--comm <comm>] [--account-id <id>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
-  agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --bot-token <token> [--allow-bot-change]
+  agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --bot-token <token> [--account-id <id>] [--allow-bot-change]
 
 Allowlist commands:
   agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                                                      # global
@@ -7633,6 +7640,7 @@ Diagnostics:
 
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
 account-add stores --bot-token in a daemon-owned file ref; credentials_ref is not user-supplied.
+--account-id sets an explicit synthetic account id for comms without a probeable platform identity (e.g. curl, default curl:local); comms that probe a real identity ignore it.
 `);
 }
 function resultSummary(result) {

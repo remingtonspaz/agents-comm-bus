@@ -22,6 +22,7 @@ async function main() {
                 accountLabel: required(args.accountLabel ?? args["account-label"], "--account-label"),
                 comm: args.comm,
                 botToken: args.botToken ?? args["bot-token"],
+                accountId: args.accountId ?? args["account-id"],
             });
             const reload = await reloadDaemonRegistrations();
             console.log(JSON.stringify({ ...redact(rec), reload }, null, 2));
@@ -69,6 +70,7 @@ async function main() {
                 agent: args.agent,
                 project: args.project,
                 botToken: required(args.botToken ?? args["bot-token"], "--bot-token"),
+                accountId: args.accountId ?? args["account-id"],
                 allowBotChange: args.allowBotChange !== undefined || args["allow-bot-change"] !== undefined,
             });
             const reload = await reloadDaemonRegistrations({
@@ -204,11 +206,11 @@ function printHelp() {
     console.error(`agents-comm-bus CLI
 
 Account commands:
-  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> --bot-token <token>
+  agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> --bot-token <token> [--comm <comm>] [--account-id <id>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
-  agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --bot-token <token> [--allow-bot-change]
+  agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --bot-token <token> [--account-id <id>] [--allow-bot-change]
 
 Allowlist commands:
   agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                                                      # global
@@ -223,6 +225,7 @@ Diagnostics:
 
 --bot-id is canonical for per-bot commands. Label selectors are accepted only when they resolve to exactly one account.
 account-add stores --bot-token in a daemon-owned file ref; credentials_ref is not user-supplied.
+--account-id sets an explicit synthetic account id for comms without a probeable platform identity (e.g. curl, default curl:local); comms that probe a real identity ignore it.
 `);
 }
 function resultSummary(result) {
