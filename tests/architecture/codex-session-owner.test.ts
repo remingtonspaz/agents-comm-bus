@@ -81,6 +81,48 @@ describe("Codex session owner liveness", () => {
     });
   });
 
+  it("reclaims a dead same-project lease before registering a new session", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      const staleSession = "stale-codex-session" as SessionId;
+      const nextSession = "next-codex-session" as SessionId;
+      const project = normalizeProjectPath("project-a");
+      try {
+        await storage.upsertSession(sessionRecord(staleSession, project));
+        assert.equal(
+          await storage.acquireSessionLease(staleSession, "stale-conn", 10, {
+            process_pid: 99999,
+            process_label: "codex",
+          }),
+          true,
+        );
+        await storage.upsertSession(sessionRecord(nextSession, project));
+
+        const bridge = new CodexBridge({
+          storage,
+          bus: {} as never,
+          pendingInbound: [],
+          isProcessAlive: () => false,
+        });
+
+        const result = await bridge.registerSession({
+          session: nextSession,
+          project,
+        });
+        assert.equal(result.ok, true);
+
+        const stale = await storage.getSession(staleSession);
+        assert.equal(stale?.lease_holder_connection_id, null);
+        assert.equal(stale?.lease_owner_process_pid, null);
+
+        const next = await storage.getSession(nextSession);
+        assert.match(next?.lease_holder_connection_id ?? "", /^codex:next-codex-session:/);
+      } finally {
+        await storage.close();
+      }
+    });
+  });
+
   it("audits Codex wake attempts and app-server results", async () => {
     {
       const storage = new RecordingStorage([registrationRecord()]);
@@ -145,6 +187,24 @@ async function waitForLeaseRelease(
 }
 
 const PROJECT_A = normalizeProjectPath("project-a");
+
+function sessionRecord(id: SessionId, project = PROJECT_A): Session {
+  return {
+    schema_version: 1,
+    session_id: id,
+    agent: "codex" as AgentId,
+    project,
+    created_at: 1,
+    lease_holder_connection_id: null,
+    lease_acquired_at: null,
+    lease_released_at: null,
+    lease_owner_process_pid: null,
+    lease_owner_process_label: null,
+    lease_owner_process_registered_at: null,
+    most_recent_inbound_conversation_id: null,
+    status: "active",
+  };
+}
 
 function registrationRecord(): AccountRegistration {
   return {
