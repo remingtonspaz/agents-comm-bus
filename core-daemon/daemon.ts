@@ -416,6 +416,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         ipcMethods,
         bridgesByMethod,
         commAdapterFactories,
+        rescanFactories: rescanFactoriesForComm,
         env,
         socket,
         reloadRegistrations,
@@ -1186,6 +1187,7 @@ async function dispatchIpc(
     ipcMethods: Map<string, IpcMethodHandler>;
     bridgesByMethod: Map<string, AgentBridge>;
     commAdapterFactories: CommAdapterFactory[];
+    rescanFactories?: (comm: string) => Promise<CommAdapterFactory | undefined>;
     env: NodeJS.ProcessEnv;
     socket?: { once(event: "close", handler: () => void): void };
     reloadRegistrations: (options?: ReloadOptions) => Promise<ReloadSummary>;
@@ -1220,7 +1222,12 @@ async function dispatchIpc(
   }
 
   if (request.method === "probe_comm_identity") {
-    return probeCommIdentity(params, context.commAdapterFactories, context.env);
+    return probeCommIdentity(
+      params,
+      context.commAdapterFactories,
+      context.env,
+      context.rescanFactories,
+    );
   }
 
   const bridge = context.bridgesByMethod.get(request.method);
@@ -1236,10 +1243,11 @@ async function dispatchIpc(
   throw new Error(`unknown IPC method: ${request.method}`);
 }
 
-async function probeCommIdentity(
+export async function probeCommIdentity(
   params: Record<string, unknown>,
   factories: CommAdapterFactory[],
   env: NodeJS.ProcessEnv,
+  rescanFactories?: (comm: string) => Promise<CommAdapterFactory | undefined>,
 ): Promise<{ comm: CommId; account_id: string; account_username?: string | null }> {
   const comm = typeof params.comm === "string" ? params.comm as CommId : null;
   if (!comm) {
@@ -1252,7 +1260,10 @@ async function probeCommIdentity(
   if (!credentials) {
     throw new Error("probe_comm_identity requires params.credentials");
   }
-  const factory = factories.find((candidate) => candidate.commId === comm);
+  let factory = factories.find((candidate) => candidate.commId === comm);
+  if (!factory && rescanFactories) {
+    factory = await rescanFactories(comm);
+  }
   if (!factory) {
     throw new Error(`no comm adapter factory is loaded for ${comm}`);
   }

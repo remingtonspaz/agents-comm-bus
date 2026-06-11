@@ -6,6 +6,7 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   ensureCommsForSession,
+  probeCommIdentity,
 } from "../../core-daemon/daemon.js";
 import { MessageBus } from "../../core-daemon/bus.js";
 import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
@@ -51,6 +52,24 @@ async function tempAdaptersDir(): Promise<string> {
   createdAdapterDirs.push(dir);
   await writeFile(path.join(dir, "package.json"), '{ "type": "module" }\n', "utf8");
   return dir;
+}
+
+function probeFactorySource(commId: string): string {
+  return `export function createCommAdapterFactory() {
+  return {
+    commId: ${JSON.stringify(commId)},
+    async resolveCredentials() { return undefined; },
+    create() { throw new Error("not used"); },
+    async probeIdentity(credentials) {
+      return {
+        accountId: "bot-" + String(credentials.token),
+        accountUsername: "probe-" + String(credentials.token),
+      };
+    },
+    ipcMethods() { return new Map(); },
+  };
+}
+`;
 }
 
 function factorySource(commId: string, ipcMethod: string): string {
@@ -237,6 +256,72 @@ describe("AGE-49 hot comm factory reload", () => {
       (error: unknown) => error instanceof DuplicateCommIpcMethodError,
       "duplicate IPC method names must throw, not shadow",
     );
+  });
+
+  it("does not leave partial IPC handlers when registration hits a duplicate", () => {
+    const ipcMethods = new Map<string, IpcMethodHandler>();
+    const deps = { bus: null as never, storage: null as never, pendingInbound: [] };
+    const commIdByMethod = new Map<string, string>();
+    registerCommIpcMethods(
+      ipcMethods,
+      stubFactory(TELEGRAM, "duplicate_method"),
+      deps,
+      { commIdByMethod },
+    );
+    const sizeBefore = ipcMethods.size;
+
+    const partialFactory: CommAdapterFactory = {
+      commId: DISCORD,
+      async resolveCredentials() {
+        return { credentials: {} };
+      },
+      create() {
+        throw new Error("not used");
+      },
+      ipcMethods() {
+        return new Map<string, IpcMethodHandler>([
+          ["unique_method", async () => ({ ok: true })],
+          ["duplicate_method", async () => ({ ok: true })],
+        ]);
+      },
+    };
+
+    assert.throws(
+      () => registerCommIpcMethods(ipcMethods, partialFactory, deps, { commIdByMethod }),
+      (error: unknown) => error instanceof DuplicateCommIpcMethodError,
+    );
+    assert.equal(ipcMethods.size, sizeBefore, "map size unchanged after failed registration");
+    assert.equal(ipcMethods.has("unique_method"), false, "unique handler not orphaned on map");
+  });
+
+  it("probe_comm_identity discovers a factory written after startup via on-demand rescan", async () => {
+    const adaptersDir = await tempAdaptersDir();
+    await writeFile(path.join(adaptersDir, "telegram.js"), factorySource("telegram", "telegram_ping"), "utf8");
+
+    const startupFactories = await loadCommAdapterFactories({ adaptersDir });
+    await writeFile(path.join(adaptersDir, "discord.js"), probeFactorySource("discord"), "utf8");
+
+    const ipcMethods = new Map<string, IpcMethodHandler>();
+    const registry = createCommFactoryRegistry({
+      initial: startupFactories,
+      loadFactories: () => loadCommAdapterFactories({ adaptersDir }),
+      ipcMethods,
+      ipcDeps: { bus: null as never, storage: null as never, pendingInbound: [] },
+    });
+
+    const result = await probeCommIdentity(
+      { comm: "discord", credentials: { token: "abc123" } },
+      registry.factories,
+      {},
+      (comm) => registry.rescanFactoriesForComm(comm),
+    );
+
+    assert.deepEqual(result, {
+      comm: "discord",
+      account_id: "bot-abc123",
+      account_username: "probe-abc123",
+    });
+    assert.equal(registry.factories.some((factory) => factory.commId === "discord"), true);
   });
 
   it("audits and logs loudly when re-scan still finds no factory", async () => {

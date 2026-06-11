@@ -6637,11 +6637,14 @@ var DuplicateCommIpcMethodError = class extends Error {
 function registerCommIpcMethods(ipcMethods, factory, deps, options) {
   if (!factory.ipcMethods) return;
   const ownerByMethod = options?.commIdByMethod;
-  for (const [method, handler] of factory.ipcMethods(deps)) {
-    if (ipcMethods.has(method)) {
+  const pending = [...factory.ipcMethods(deps)];
+  for (const [method] of pending) {
+    if (ipcMethods.has(method) || ownerByMethod?.has(method)) {
       const existingCommId = ownerByMethod?.get(method) ?? "unknown";
       throw new DuplicateCommIpcMethodError(method, existingCommId, factory.commId);
     }
+  }
+  for (const [method, handler] of pending) {
     ipcMethods.set(method, handler);
     ownerByMethod?.set(method, factory.commId);
   }
@@ -7071,6 +7074,7 @@ async function runDaemon(options) {
         ipcMethods,
         bridgesByMethod,
         commAdapterFactories,
+        rescanFactories: rescanFactoriesForComm,
         env,
         socket,
         reloadRegistrations,
@@ -7581,7 +7585,12 @@ async function dispatchIpc(request, context) {
     return context.reloadRegistrations(parseReloadOptions(params));
   }
   if (request.method === "probe_comm_identity") {
-    return probeCommIdentity(params, context.commAdapterFactories, context.env);
+    return probeCommIdentity(
+      params,
+      context.commAdapterFactories,
+      context.env,
+      context.rescanFactories
+    );
   }
   const bridge = context.bridgesByMethod.get(request.method);
   if (bridge) {
@@ -7593,7 +7602,7 @@ async function dispatchIpc(request, context) {
   }
   throw new Error(`unknown IPC method: ${request.method}`);
 }
-async function probeCommIdentity(params, factories, env) {
+async function probeCommIdentity(params, factories, env, rescanFactories) {
   const comm = typeof params.comm === "string" ? params.comm : null;
   if (!comm) {
     throw new Error("probe_comm_identity requires params.comm");
@@ -7602,7 +7611,10 @@ async function probeCommIdentity(params, factories, env) {
   if (!credentials) {
     throw new Error("probe_comm_identity requires params.credentials");
   }
-  const factory = factories.find((candidate) => candidate.commId === comm);
+  let factory = factories.find((candidate) => candidate.commId === comm);
+  if (!factory && rescanFactories) {
+    factory = await rescanFactories(comm);
+  }
   if (!factory) {
     throw new Error(`no comm adapter factory is loaded for ${comm}`);
   }

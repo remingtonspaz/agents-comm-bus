@@ -28,11 +28,14 @@ export function registerCommIpcMethods(
 ): void {
   if (!factory.ipcMethods) return;
   const ownerByMethod = options?.commIdByMethod;
-  for (const [method, handler] of factory.ipcMethods(deps)) {
-    if (ipcMethods.has(method)) {
+  const pending = [...factory.ipcMethods(deps)];
+  for (const [method] of pending) {
+    if (ipcMethods.has(method) || ownerByMethod?.has(method)) {
       const existingCommId = ownerByMethod?.get(method) ?? "unknown";
       throw new DuplicateCommIpcMethodError(method, existingCommId, factory.commId);
     }
+  }
+  for (const [method, handler] of pending) {
     ipcMethods.set(method, handler);
     ownerByMethod?.set(method, factory.commId);
   }

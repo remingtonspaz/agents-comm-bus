@@ -225,4 +225,9 @@ export declare function handleEnsureCommsForScope(params: Record<string, unknown
     project: string;
     agent: AgentId;
 }>;
+export declare function probeCommIdentity(params: Record<string, unknown>, factories: CommAdapterFactory[], env: NodeJS.ProcessEnv, rescanFactories?: (comm: string) => Promise<CommAdapterFactory | undefined>): Promise<{
+    comm: CommId;
+    account_id: string;
+    account_username?: string | null;
+}>;
 //# sourceMappingURL=daemon.d.ts.map
