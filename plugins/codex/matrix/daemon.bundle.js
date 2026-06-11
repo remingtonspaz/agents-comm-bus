@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.24";
+var DAEMON_VERSION = "0.2.25";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3824,6 +3824,18 @@ var CommLeaseArbiter = class {
   stalenessMs;
   ipcRecencyMarginMs;
   onAudit;
+  /**
+   * Per-resource signature of the last `comm_lease_denied` we actually audited,
+   * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
+   * re-acquire poll ({@link wrapWithLease.startReacquireTimer}, every
+   * DEFAULT_REACQUIRE_INTERVAL_MS) re-attempts a lease it cannot win forever
+   * (`held-by-higher-rank` is a STABLE condition), so without dedup it writes an
+   * identical denial row every poll — thousands/day per held bot. Audit is for
+   * state TRANSITIONS: emit a denial only when it first occurs or when the
+   * holder/reason changes, and reset on a successful take so the next genuine
+   * denial logs again.
+   */
+  lastDenyAudit = /* @__PURE__ */ new Map();
   constructor(options) {
     this.self = options.self;
     this.lastIpcServedAt = options.lastIpcServedAt;
@@ -3861,21 +3873,27 @@ var CommLeaseArbiter = class {
         ipcRecencyMarginMs: this.ipcRecencyMarginMs
       });
       if (!decision.take) {
-        this.audit({
-          kind: "comm_lease_denied",
-          comm_id: commId,
-          resource_id: resourceId,
-          detail: {
-            reason: decision.reason,
-            self_pid: this.self.pid,
-            self_rank: this.self.authorityRank,
-            holder_pid: decision.holder.pid,
-            holder_rank: decision.holder.authorityRank,
-            holder_checkout: decision.holder.checkoutRoot
-          }
-        });
+        const denyKey = `${commId}:${resourceId}`;
+        const denySig = `${decision.reason}:${decision.holder.pid}`;
+        if (this.lastDenyAudit.get(denyKey) !== denySig) {
+          this.lastDenyAudit.set(denyKey, denySig);
+          this.audit({
+            kind: "comm_lease_denied",
+            comm_id: commId,
+            resource_id: resourceId,
+            detail: {
+              reason: decision.reason,
+              self_pid: this.self.pid,
+              self_rank: this.self.authorityRank,
+              holder_pid: decision.holder.pid,
+              holder_rank: decision.holder.authorityRank,
+              holder_checkout: decision.holder.checkoutRoot
+            }
+          });
+        }
         return { ok: false, reason: decision.reason, holder: decision.holder };
       }
+      this.lastDenyAudit.delete(`${commId}:${resourceId}`);
       const record = this.buildRecord(commId, resourceId, existing);
       await this.writeRecord(leasePath, record);
       const reclaimed = decision.reason === "higher-rank" || decision.reason === "same-rank-staler-holder";
@@ -9256,12 +9274,23 @@ var CodexBridge = class {
     });
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
     const leaseOwner = sessionLeaseOwnerFromParams2(params, "codex");
-    const acquired = await this.options.storage.acquireSessionLease(
+    let acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
       now,
       leaseOwner
     );
+    if (!acquired) {
+      const releasedDeadLease = await this.releaseDeadSameProjectLease(project, now);
+      if (releasedDeadLease) {
+        acquired = await this.options.storage.acquireSessionLease(
+          session,
+          connectionId,
+          now,
+          leaseOwner
+        );
+      }
+    }
     if (!acquired) {
       const existing = await this.options.storage.getSession(session);
       if (existing?.lease_holder_connection_id && replaceExistingLease) {
@@ -9549,6 +9578,23 @@ var CodexBridge = class {
       if (isAlive(ownerPid)) continue;
       await this.releaseSessionLease(lease);
     }
+  }
+  async releaseDeadSameProjectLease(project, at) {
+    const isAlive = this.options.isProcessAlive ?? isPidAlive;
+    const sessions = await this.options.storage.listSessions({
+      project,
+      agent: this.agentId,
+      status: "active"
+    });
+    let released = false;
+    for (const session of sessions) {
+      const connectionId = session.lease_holder_connection_id;
+      const ownerPid = session.lease_owner_process_pid;
+      if (!connectionId || !ownerPid || isAlive(ownerPid)) continue;
+      await this.options.storage.releaseSessionLease(session.session_id, connectionId, at);
+      released = true;
+    }
+    return released;
   }
   scheduleManagedAppServerCleanup(session) {
     const delay = this.options.appServerCleanupDelayMs ?? DEFAULT_APP_SERVER_CLEANUP_DELAY_MS;

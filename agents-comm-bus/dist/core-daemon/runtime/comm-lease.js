@@ -182,6 +182,18 @@ export class CommLeaseArbiter {
     stalenessMs;
     ipcRecencyMarginMs;
     onAudit;
+    /**
+     * Per-resource signature of the last `comm_lease_denied` we actually audited,
+     * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
+     * re-acquire poll ({@link wrapWithLease.startReacquireTimer}, every
+     * DEFAULT_REACQUIRE_INTERVAL_MS) re-attempts a lease it cannot win forever
+     * (`held-by-higher-rank` is a STABLE condition), so without dedup it writes an
+     * identical denial row every poll — thousands/day per held bot. Audit is for
+     * state TRANSITIONS: emit a denial only when it first occurs or when the
+     * holder/reason changes, and reset on a successful take so the next genuine
+     * denial logs again.
+     */
+    lastDenyAudit = new Map();
     constructor(options) {
         this.self = options.self;
         this.lastIpcServedAt = options.lastIpcServedAt;
@@ -220,21 +232,32 @@ export class CommLeaseArbiter {
                 ipcRecencyMarginMs: this.ipcRecencyMarginMs,
             });
             if (!decision.take) {
-                this.audit({
-                    kind: "comm_lease_denied",
-                    comm_id: commId,
-                    resource_id: resourceId,
-                    detail: {
-                        reason: decision.reason,
-                        self_pid: this.self.pid,
-                        self_rank: this.self.authorityRank,
-                        holder_pid: decision.holder.pid,
-                        holder_rank: decision.holder.authorityRank,
-                        holder_checkout: decision.holder.checkoutRoot,
-                    },
-                });
+                // Dedup: only audit a denial on a state change (first denial of a streak,
+                // or a changed holder/reason). A steady-state poll that keeps getting the
+                // same answer is a non-event and must not flood the audit log.
+                const denyKey = `${commId}:${resourceId}`;
+                const denySig = `${decision.reason}:${decision.holder.pid}`;
+                if (this.lastDenyAudit.get(denyKey) !== denySig) {
+                    this.lastDenyAudit.set(denyKey, denySig);
+                    this.audit({
+                        kind: "comm_lease_denied",
+                        comm_id: commId,
+                        resource_id: resourceId,
+                        detail: {
+                            reason: decision.reason,
+                            self_pid: this.self.pid,
+                            self_rank: this.self.authorityRank,
+                            holder_pid: decision.holder.pid,
+                            holder_rank: decision.holder.authorityRank,
+                            holder_checkout: decision.holder.checkoutRoot,
+                        },
+                    });
+                }
                 return { ok: false, reason: decision.reason, holder: decision.holder };
             }
+            // Took the lease — clear any denial-streak signature so that if we later
+            // lose it and get denied again, that fresh denial audits.
+            this.lastDenyAudit.delete(`${commId}:${resourceId}`);
             const record = this.buildRecord(commId, resourceId, existing);
             await this.writeRecord(leasePath, record);
             const reclaimed = decision.reason === "higher-rank" || decision.reason === "same-rank-staler-holder";

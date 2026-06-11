@@ -77,6 +77,7 @@ export declare class CodexBridge implements AgentBridge {
     private ensureOwnerCheckTimer;
     private stopOwnerCheckTimerIfIdle;
     private releaseLeasesWithDeadOwners;
+    private releaseDeadSameProjectLease;
     private scheduleManagedAppServerCleanup;
     private cleanupManagedAppServerIfLeaseIsIdle;
     private chatRefForConversation;

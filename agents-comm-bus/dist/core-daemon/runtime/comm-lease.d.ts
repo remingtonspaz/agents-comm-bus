@@ -180,6 +180,18 @@ export declare class CommLeaseArbiter {
     private readonly stalenessMs;
     private readonly ipcRecencyMarginMs;
     private readonly onAudit?;
+    /**
+     * Per-resource signature of the last `comm_lease_denied` we actually audited,
+     * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
+     * re-acquire poll ({@link wrapWithLease.startReacquireTimer}, every
+     * DEFAULT_REACQUIRE_INTERVAL_MS) re-attempts a lease it cannot win forever
+     * (`held-by-higher-rank` is a STABLE condition), so without dedup it writes an
+     * identical denial row every poll — thousands/day per held bot. Audit is for
+     * state TRANSITIONS: emit a denial only when it first occurs or when the
+     * holder/reason changes, and reset on a successful take so the next genuine
+     * denial logs again.
+     */
+    private readonly lastDenyAudit;
     constructor(options: CommLeaseArbiterOptions);
     get authorityRank(): AuthorityRank;
     /**

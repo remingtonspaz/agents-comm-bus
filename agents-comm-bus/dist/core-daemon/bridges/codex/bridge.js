@@ -172,7 +172,13 @@ export class CodexBridge {
         const replaceExistingLease = params.replace_existing_lease === true ||
             params.persist_after_disconnect === true;
         const leaseOwner = sessionLeaseOwnerFromParams(params, "codex");
-        const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, leaseOwner);
+        let acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, leaseOwner);
+        if (!acquired) {
+            const releasedDeadLease = await this.releaseDeadSameProjectLease(project, now);
+            if (releasedDeadLease) {
+                acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, leaseOwner);
+            }
+        }
         if (!acquired) {
             const existing = await this.options.storage.getSession(session);
             if (existing?.lease_holder_connection_id && replaceExistingLease) {
@@ -456,6 +462,24 @@ export class CodexBridge {
                 continue;
             await this.releaseSessionLease(lease);
         }
+    }
+    async releaseDeadSameProjectLease(project, at) {
+        const isAlive = this.options.isProcessAlive ?? isPidAlive;
+        const sessions = await this.options.storage.listSessions({
+            project,
+            agent: this.agentId,
+            status: "active",
+        });
+        let released = false;
+        for (const session of sessions) {
+            const connectionId = session.lease_holder_connection_id;
+            const ownerPid = session.lease_owner_process_pid;
+            if (!connectionId || !ownerPid || isAlive(ownerPid))
+                continue;
+            await this.options.storage.releaseSessionLease(session.session_id, connectionId, at);
+            released = true;
+        }
+        return released;
     }
     scheduleManagedAppServerCleanup(session) {
         const delay = this.options.appServerCleanupDelayMs ?? DEFAULT_APP_SERVER_CLEANUP_DELAY_MS;

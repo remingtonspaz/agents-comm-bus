@@ -483,6 +483,82 @@ describe("AGE-35 CommLeaseArbiter (filesystem)", () => {
     await owner.release("fakecomm", "res");
     assert.ok(!existsSync(leasePath), "owner release must delete the lease");
   });
+
+  it("dedups steady-state denials: audits once per episode, re-audits on holder change or after a take", async () => {
+    // The slow re-acquire poll re-attempts a lease it cannot win every
+    // DEFAULT_REACQUIRE_INTERVAL_MS forever; without dedup that floods the audit
+    // log with thousands of identical `comm_lease_denied` rows. Audit is for
+    // TRANSITIONS — emit on the first denial of a streak, on a holder/reason
+    // change, and again after we held-and-lost; stay silent on steady-state polls.
+    const home = await tempHome();
+    const now = () => 5_000;
+    const aliveSet = new Set<number>([400, 401, 402, 410]);
+    const isPidAlive = (pid: number): boolean => aliveSet.has(pid);
+
+    const holder1 = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 400, authorityRank: "main-dev" }),
+      lastIpcServedAt: now,
+      homeDir: home,
+      isPidAlive,
+      now,
+    });
+    assert.equal((await holder1.tryAcquire("fakecomm", "res-dd")).ok, true);
+
+    const denied: Array<{ holderPid: unknown; reason: unknown }> = [];
+    const contender = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 410, authorityRank: "worktree" }),
+      lastIpcServedAt: now,
+      homeDir: home,
+      isPidAlive,
+      now,
+      onAudit: (e) => {
+        if (e.kind === "comm_lease_denied") {
+          denied.push({ holderPid: e.detail.holder_pid, reason: e.detail.reason });
+        }
+      },
+    });
+
+    // 5 identical steady-state polls → ONE audit.
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await contender.tryAcquire("fakecomm", "res-dd")).ok, false);
+    }
+    assert.equal(denied.length, 1, "repeated identical denials must audit once");
+    assert.equal(denied[0].holderPid, 400);
+
+    // Holder CHANGES (400 dies, 401 takes over) → the next denial re-audits.
+    aliveSet.delete(400);
+    const holder2 = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 401, authorityRank: "main-dev" }),
+      lastIpcServedAt: now,
+      homeDir: home,
+      isPidAlive,
+      now,
+    });
+    assert.equal((await holder2.tryAcquire("fakecomm", "res-dd")).ok, true);
+    assert.equal((await contender.tryAcquire("fakecomm", "res-dd")).ok, false);
+    assert.equal(denied.length, 2, "a changed holder must re-audit");
+    assert.equal(denied[1].holderPid, 401);
+
+    // Same holder again → still deduped.
+    assert.equal((await contender.tryAcquire("fakecomm", "res-dd")).ok, false);
+    assert.equal(denied.length, 2, "same holder again must not re-audit");
+
+    // TAKE-RESET: contender takes when the holder dies, a higher-rank reclaims,
+    // and the contender's next denial re-audits (signature cleared on the take).
+    aliveSet.delete(401);
+    assert.equal((await contender.tryAcquire("fakecomm", "res-dd")).ok, true);
+    const holder3 = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 402, authorityRank: "main-dev" }),
+      lastIpcServedAt: now,
+      homeDir: home,
+      isPidAlive,
+      now,
+    });
+    assert.equal((await holder3.tryAcquire("fakecomm", "res-dd")).ok, true);
+    assert.equal((await contender.tryAcquire("fakecomm", "res-dd")).ok, false);
+    assert.equal(denied.length, 3, "a denial after held-and-lost must re-audit");
+    assert.equal(denied[2].holderPid, 402);
+  });
 });
 
 describe("AGE-35 wrapWithLease", () => {
