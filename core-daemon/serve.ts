@@ -30,6 +30,8 @@ export async function startConfiguredDaemon(): Promise<void> {
 
   await runDaemon({
     commAdapterFactories,
+    adaptersDir,
+    loadCommAdapterFactories: () => loadCommAdapterFactories({ adaptersDir }),
     agentBridgeFactories: [new ClaudeBridgeFactory(), new CodexBridgeFactory()],
   });
 }

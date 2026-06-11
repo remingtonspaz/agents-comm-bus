@@ -35,7 +35,9 @@ import type {
   EnsureCommsForSession,
 } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
+import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import type { IpcMethodHandler } from "./runtime/ipc-method.js";
+import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import {
   deliveryRowFromEntry,
@@ -66,6 +68,16 @@ export interface RunDaemonOptions {
    * the row with a warning.
    */
   commAdapterFactories: CommAdapterFactory[];
+  /**
+   * Directory scanned on-demand when a session needs a comm factory that was
+   * not present at daemon startup (AGE-49 hot factory reload).
+   */
+  adaptersDir?: string;
+  /**
+   * Re-runs the comm adapter loader against `adaptersDir`. When omitted, no
+   * on-demand factory discovery is available (direct/test callers).
+   */
+  loadCommAdapterFactories?: () => Promise<CommAdapterFactory[]>;
   /**
    * Agent-side bridge factories. Each bridge is constructed with shared
    * runtime deps (storage, bus, pendingInbound) and asked to `attach` to
@@ -199,6 +211,28 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // until then a stale scope only causes a bounded re-add on `account-add` for a
   // project whose bots are usually already live anyway.
   const activeScopes = new Set<string>();
+  const ipcMethods = new Map<string, IpcMethodHandler>();
+  const ipcDeps = { bus, storage, pendingInbound };
+  let commAdapterFactories: CommAdapterFactory[];
+  let rescanFactoriesForComm:
+    | ((comm: string) => Promise<CommAdapterFactory | undefined>)
+    | undefined;
+  if (options.loadCommAdapterFactories) {
+    const registry = createCommFactoryRegistry({
+      initial: options.commAdapterFactories,
+      loadFactories: options.loadCommAdapterFactories,
+      ipcMethods,
+      ipcDeps,
+    });
+    commAdapterFactories = registry.factories;
+    rescanFactoriesForComm = (comm) => registry.rescanFactoriesForComm(comm);
+  } else {
+    commAdapterFactories = [...options.commAdapterFactories];
+    const commIdByMethod = new Map<string, string>();
+    for (const factory of commAdapterFactories) {
+      registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
+    }
+  }
   const ensureCommsForSessionFn: EnsureCommsForSession = async (project, agent) => {
     const canonicalProject = normalizeProjectPath(project);
     activeScopes.add(scopeKey(agent, canonicalProject));
@@ -206,7 +240,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       project: canonicalProject,
       requestedProject: project,
       agent,
-      factories: options.commAdapterFactories,
+      factories: commAdapterFactories,
+      rescanFactories: rescanFactoriesForComm,
       bus,
       bridges,
       storage,
@@ -334,14 +369,6 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     bridge.attach(comms);
   }
 
-  const ipcMethods = new Map<string, IpcMethodHandler>();
-  for (const factory of options.commAdapterFactories) {
-    if (factory.ipcMethods) {
-      for (const [method, handler] of factory.ipcMethods({ bus, storage, pendingInbound })) {
-        ipcMethods.set(method, handler);
-      }
-    }
-  }
   // Generic drain of the shared pendingInbound queue. Used by the MCP shim's
   // `comm_check_messages` tool so the shim doesn't have to know any per-comm
   // IPC method names.
@@ -365,7 +392,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
 
   const reloadRegistrations = (reloadOptions?: ReloadOptions): Promise<ReloadSummary> =>
     reloadAdapters({
-      factories: options.commAdapterFactories,
+      factories: commAdapterFactories,
       bridges,
       bus,
       storage,
@@ -388,7 +415,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         bus,
         ipcMethods,
         bridgesByMethod,
-        commAdapterFactories: options.commAdapterFactories,
+        commAdapterFactories,
         env,
         socket,
         reloadRegistrations,
@@ -543,6 +570,11 @@ export async function ensureCommsForSession(input: {
   requestedProject?: string;
   agent: AgentId;
   factories: CommAdapterFactory[];
+  /**
+   * AGE-49: on-demand factory discovery when `factories` has no entry for a
+   * registration's comm. Fires only on a no-factory miss, never eagerly.
+   */
+  rescanFactories?: (comm: string) => Promise<CommAdapterFactory | undefined>;
   bus: MessageBus;
   bridges: AgentBridge[];
   storage: Storage;
@@ -569,8 +601,18 @@ export async function ensureCommsForSession(input: {
     return;
   }
   for (const registration of registrations) {
-    const factory = input.factories.find((f) => f.commId === registration.comm);
+    let factory = input.factories.find((f) => f.commId === registration.comm);
+    const attemptedRescan = !factory && Boolean(input.rescanFactories);
+    if (!factory && input.rescanFactories) {
+      factory = await input.rescanFactories(registration.comm);
+    }
     if (!factory) {
+      if (attemptedRescan) {
+        console.error(
+          `agents-comm-bus: no comm adapter factory for "${registration.comm}" after on-demand re-scan ` +
+            `(project=${project}, agent=${input.agent}, bot=${registration.bot_user_id}) — skipping adapter`,
+        );
+      }
       await input.audit
         ?.append({
           timestamp: Date.now(),
@@ -582,6 +624,7 @@ export async function ensureCommsForSession(input: {
             account_label: registration.account_label,
             project,
             reason: "no_comm_factory",
+            rescanned: Boolean(input.rescanFactories),
           },
         })
         .catch(() => {});

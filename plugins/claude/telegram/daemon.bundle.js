@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.23";
+var DAEMON_VERSION = "0.2.24";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -6619,6 +6619,77 @@ var ContentAddressedBlobStore = class {
   }
 };
 
+// ../core-daemon/runtime/register-comm-ipc-methods.ts
+var DuplicateCommIpcMethodError = class extends Error {
+  constructor(method, existingCommId, newCommId) {
+    super(
+      `IPC method "${method}" is already registered for comm "${existingCommId}" (refusing duplicate registration from comm "${newCommId}")`
+    );
+    this.method = method;
+    this.existingCommId = existingCommId;
+    this.newCommId = newCommId;
+    this.name = "DuplicateCommIpcMethodError";
+  }
+  method;
+  existingCommId;
+  newCommId;
+};
+function registerCommIpcMethods(ipcMethods, factory, deps, options) {
+  if (!factory.ipcMethods) return;
+  const ownerByMethod = options?.commIdByMethod;
+  for (const [method, handler] of factory.ipcMethods(deps)) {
+    if (ipcMethods.has(method)) {
+      const existingCommId = ownerByMethod?.get(method) ?? "unknown";
+      throw new DuplicateCommIpcMethodError(method, existingCommId, factory.commId);
+    }
+    ipcMethods.set(method, handler);
+    ownerByMethod?.set(method, factory.commId);
+  }
+}
+
+// ../core-daemon/runtime/comm-factory-registry.ts
+function createCommFactoryRegistry(input) {
+  const factories = [...input.initial];
+  const loadedCommIds = new Set(factories.map((factory) => factory.commId));
+  const commIdByMethod = /* @__PURE__ */ new Map();
+  let rescanInFlight = null;
+  for (const factory of factories) {
+    registerCommIpcMethods(input.ipcMethods, factory, input.ipcDeps, { commIdByMethod });
+  }
+  async function runRescan() {
+    if (rescanInFlight) {
+      await rescanInFlight;
+      return;
+    }
+    rescanInFlight = (async () => {
+      try {
+        const discovered = await input.loadFactories();
+        for (const factory of discovered) {
+          if (loadedCommIds.has(factory.commId)) continue;
+          registerCommIpcMethods(input.ipcMethods, factory, input.ipcDeps, { commIdByMethod });
+          factories.push(factory);
+          loadedCommIds.add(factory.commId);
+        }
+      } finally {
+        rescanInFlight = null;
+      }
+    })();
+    await rescanInFlight;
+  }
+  async function rescanFactoriesForComm(comm) {
+    const existing = factories.find((factory) => factory.commId === comm);
+    if (existing) return existing;
+    await runRescan();
+    return factories.find((factory) => factory.commId === comm);
+  }
+  return {
+    get factories() {
+      return factories;
+    },
+    rescanFactoriesForComm
+  };
+}
+
 // ../core-daemon/runtime/durable-inbound.ts
 function durableInboundKey(entry) {
   return deliveryKey(
@@ -6812,6 +6883,26 @@ async function runDaemon(options) {
   const bridges = [];
   const inFlightAdapters = /* @__PURE__ */ new Set();
   const activeScopes = /* @__PURE__ */ new Set();
+  const ipcMethods = /* @__PURE__ */ new Map();
+  const ipcDeps = { bus, storage, pendingInbound };
+  let commAdapterFactories;
+  let rescanFactoriesForComm;
+  if (options.loadCommAdapterFactories) {
+    const registry = createCommFactoryRegistry({
+      initial: options.commAdapterFactories,
+      loadFactories: options.loadCommAdapterFactories,
+      ipcMethods,
+      ipcDeps
+    });
+    commAdapterFactories = registry.factories;
+    rescanFactoriesForComm = (comm) => registry.rescanFactoriesForComm(comm);
+  } else {
+    commAdapterFactories = [...options.commAdapterFactories];
+    const commIdByMethod = /* @__PURE__ */ new Map();
+    for (const factory of commAdapterFactories) {
+      registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
+    }
+  }
   const ensureCommsForSessionFn = async (project, agent) => {
     const canonicalProject = normalizeProjectPath(project);
     activeScopes.add(scopeKey(agent, canonicalProject));
@@ -6819,7 +6910,8 @@ async function runDaemon(options) {
       project: canonicalProject,
       requestedProject: project,
       agent,
-      factories: options.commAdapterFactories,
+      factories: commAdapterFactories,
+      rescanFactories: rescanFactoriesForComm,
       bus,
       bridges,
       storage,
@@ -6943,14 +7035,6 @@ async function runDaemon(options) {
   for (const bridge of bridges) {
     bridge.attach(comms);
   }
-  const ipcMethods = /* @__PURE__ */ new Map();
-  for (const factory of options.commAdapterFactories) {
-    if (factory.ipcMethods) {
-      for (const [method, handler] of factory.ipcMethods({ bus, storage, pendingInbound })) {
-        ipcMethods.set(method, handler);
-      }
-    }
-  }
   ipcMethods.set("drain_pending_inbound", async (params) => {
     const base = params ?? {};
     const ownedAccountKeys = await resolveOwnedAccountKeys(storage, base.session);
@@ -6966,7 +7050,7 @@ async function runDaemon(options) {
     }
   }
   const reloadRegistrations = (reloadOptions) => reloadAdapters({
-    factories: options.commAdapterFactories,
+    factories: commAdapterFactories,
     bridges,
     bus,
     storage,
@@ -6986,7 +7070,7 @@ async function runDaemon(options) {
         bus,
         ipcMethods,
         bridgesByMethod,
-        commAdapterFactories: options.commAdapterFactories,
+        commAdapterFactories,
         env,
         socket,
         reloadRegistrations,
@@ -7109,8 +7193,17 @@ async function ensureCommsForSession(input) {
     return;
   }
   for (const registration of registrations) {
-    const factory = input.factories.find((f) => f.commId === registration.comm);
+    let factory = input.factories.find((f) => f.commId === registration.comm);
+    const attemptedRescan = !factory && Boolean(input.rescanFactories);
+    if (!factory && input.rescanFactories) {
+      factory = await input.rescanFactories(registration.comm);
+    }
     if (!factory) {
+      if (attemptedRescan) {
+        console.error(
+          `agents-comm-bus: no comm adapter factory for "${registration.comm}" after on-demand re-scan (project=${project}, agent=${input.agent}, bot=${registration.bot_user_id}) \u2014 skipping adapter`
+        );
+      }
       await input.audit?.append({
         timestamp: Date.now(),
         kind: "comm_adapter_skip",
@@ -7120,7 +7213,8 @@ async function ensureCommsForSession(input) {
           account_id: registration.bot_user_id,
           account_label: registration.account_label,
           project,
-          reason: "no_comm_factory"
+          reason: "no_comm_factory",
+          rescanned: Boolean(input.rescanFactories)
         }
       }).catch(() => {
       });
@@ -9776,6 +9870,8 @@ async function startConfiguredDaemon() {
   const commAdapterFactories = await loadCommAdapterFactories({ adaptersDir });
   await runDaemon({
     commAdapterFactories,
+    adaptersDir,
+    loadCommAdapterFactories: () => loadCommAdapterFactories({ adaptersDir }),
     agentBridgeFactories: [new ClaudeBridgeFactory(), new CodexBridgeFactory()]
   });
 }

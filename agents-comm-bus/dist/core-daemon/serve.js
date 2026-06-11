@@ -27,6 +27,8 @@ export async function startConfiguredDaemon() {
     const commAdapterFactories = await loadCommAdapterFactories({ adaptersDir });
     await runDaemon({
         commAdapterFactories,
+        adaptersDir,
+        loadCommAdapterFactories: () => loadCommAdapterFactories({ adaptersDir }),
         agentBridgeFactories: [new ClaudeBridgeFactory(), new CodexBridgeFactory()],
     });
 }

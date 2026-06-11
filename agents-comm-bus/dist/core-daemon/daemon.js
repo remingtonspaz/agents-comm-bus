@@ -13,6 +13,8 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
+import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
+import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import { deliveryRowFromEntry, drainAndAcknowledgePendingInbound, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, selectPendingInboundForDrain, } from "./runtime/durable-inbound.js";
 /**
  * Generic daemon entry point. Knows nothing about specific agents or
@@ -122,6 +124,27 @@ export async function runDaemon(options) {
     // until then a stale scope only causes a bounded re-add on `account-add` for a
     // project whose bots are usually already live anyway.
     const activeScopes = new Set();
+    const ipcMethods = new Map();
+    const ipcDeps = { bus, storage, pendingInbound };
+    let commAdapterFactories;
+    let rescanFactoriesForComm;
+    if (options.loadCommAdapterFactories) {
+        const registry = createCommFactoryRegistry({
+            initial: options.commAdapterFactories,
+            loadFactories: options.loadCommAdapterFactories,
+            ipcMethods,
+            ipcDeps,
+        });
+        commAdapterFactories = registry.factories;
+        rescanFactoriesForComm = (comm) => registry.rescanFactoriesForComm(comm);
+    }
+    else {
+        commAdapterFactories = [...options.commAdapterFactories];
+        const commIdByMethod = new Map();
+        for (const factory of commAdapterFactories) {
+            registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
+        }
+    }
     const ensureCommsForSessionFn = async (project, agent) => {
         const canonicalProject = normalizeProjectPath(project);
         activeScopes.add(scopeKey(agent, canonicalProject));
@@ -129,7 +152,8 @@ export async function runDaemon(options) {
             project: canonicalProject,
             requestedProject: project,
             agent,
-            factories: options.commAdapterFactories,
+            factories: commAdapterFactories,
+            rescanFactories: rescanFactoriesForComm,
             bus,
             bridges,
             storage,
@@ -247,14 +271,6 @@ export async function runDaemon(options) {
     for (const bridge of bridges) {
         bridge.attach(comms);
     }
-    const ipcMethods = new Map();
-    for (const factory of options.commAdapterFactories) {
-        if (factory.ipcMethods) {
-            for (const [method, handler] of factory.ipcMethods({ bus, storage, pendingInbound })) {
-                ipcMethods.set(method, handler);
-            }
-        }
-    }
     // Generic drain of the shared pendingInbound queue. Used by the MCP shim's
     // `comm_check_messages` tool so the shim doesn't have to know any per-comm
     // IPC method names.
@@ -276,7 +292,7 @@ export async function runDaemon(options) {
         }
     }
     const reloadRegistrations = (reloadOptions) => reloadAdapters({
-        factories: options.commAdapterFactories,
+        factories: commAdapterFactories,
         bridges,
         bus,
         storage,
@@ -298,7 +314,7 @@ export async function runDaemon(options) {
                 bus,
                 ipcMethods,
                 bridgesByMethod,
-                commAdapterFactories: options.commAdapterFactories,
+                commAdapterFactories,
                 env,
                 socket,
                 reloadRegistrations,
@@ -440,8 +456,16 @@ export async function ensureCommsForSession(input) {
         return;
     }
     for (const registration of registrations) {
-        const factory = input.factories.find((f) => f.commId === registration.comm);
+        let factory = input.factories.find((f) => f.commId === registration.comm);
+        const attemptedRescan = !factory && Boolean(input.rescanFactories);
+        if (!factory && input.rescanFactories) {
+            factory = await input.rescanFactories(registration.comm);
+        }
         if (!factory) {
+            if (attemptedRescan) {
+                console.error(`agents-comm-bus: no comm adapter factory for "${registration.comm}" after on-demand re-scan ` +
+                    `(project=${project}, agent=${input.agent}, bot=${registration.bot_user_id}) — skipping adapter`);
+            }
             await input.audit
                 ?.append({
                 timestamp: Date.now(),
@@ -453,6 +477,7 @@ export async function ensureCommsForSession(input) {
                     account_label: registration.account_label,
                     project,
                     reason: "no_comm_factory",
+                    rescanned: Boolean(input.rescanFactories),
                 },
             })
                 .catch(() => { });

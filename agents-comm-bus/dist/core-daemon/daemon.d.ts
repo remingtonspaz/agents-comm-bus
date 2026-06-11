@@ -19,6 +19,16 @@ export interface RunDaemonOptions {
      */
     commAdapterFactories: CommAdapterFactory[];
     /**
+     * Directory scanned on-demand when a session needs a comm factory that was
+     * not present at daemon startup (AGE-49 hot factory reload).
+     */
+    adaptersDir?: string;
+    /**
+     * Re-runs the comm adapter loader against `adaptersDir`. When omitted, no
+     * on-demand factory discovery is available (direct/test callers).
+     */
+    loadCommAdapterFactories?: () => Promise<CommAdapterFactory[]>;
+    /**
      * Agent-side bridge factories. Each bridge is constructed with shared
      * runtime deps (storage, bus, pendingInbound) and asked to `attach` to
      * the live comm adapters before the bus starts.
@@ -91,6 +101,11 @@ export declare function ensureCommsForSession(input: {
     requestedProject?: string;
     agent: AgentId;
     factories: CommAdapterFactory[];
+    /**
+     * AGE-49: on-demand factory discovery when `factories` has no entry for a
+     * registration's comm. Fires only on a no-factory miss, never eagerly.
+     */
+    rescanFactories?: (comm: string) => Promise<CommAdapterFactory | undefined>;
     bus: MessageBus;
     bridges: AgentBridge[];
     storage: Storage;
