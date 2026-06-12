@@ -173,6 +173,39 @@ describe("Codex session owner liveness", () => {
       await storage.close();
     }
   });
+
+  it("labels daemon-delivered inbound by comm in Codex wake prompts", async () => {
+    const storage = new RecordingStorage([registrationRecord("discord")]);
+    const pendingInbound: PendingInboundEntry[] = [];
+    const fakeClient = new FakeCodexClient();
+    const bridge = new CodexBridge({
+      storage,
+      bus: {} as never,
+      pendingInbound,
+      appServerClientFactory: () => fakeClient,
+    });
+
+    const session = "codex-session" as SessionId;
+    const socket = new FakeSocket();
+    await bridge.registerSession({
+      session,
+      project: "project-a",
+      app_server_url: "ws://127.0.0.1:4509",
+    }, socket);
+
+    const conversation = conversationRecord("discord");
+    pendingInbound.push({ message: messageRecord("discord"), conversation });
+
+    await bridge.onInboundConversation(conversation);
+
+    assert.match(fakeClient.steerTexts[0] ?? "", /daemon-delivered Discord messages/);
+    assert.match(fakeClient.steerTexts[0] ?? "", /Discord MCP tool/);
+    assert.doesNotMatch(fakeClient.steerTexts[0] ?? "", /Telegram MCP tool/);
+
+    socket.close();
+    await waitForLeaseRelease(storage, session);
+    await storage.close();
+  });
 });
 
 async function waitForLeaseRelease(
@@ -206,12 +239,12 @@ function sessionRecord(id: SessionId, project = PROJECT_A): Session {
   };
 }
 
-function registrationRecord(): AccountRegistration {
+function registrationRecord(comm: CommId = "telegram" as CommId): AccountRegistration {
   return {
     schema_version: SCHEMA_VERSION_ACCOUNT,
     project: PROJECT_A,
     agent: "codex" as AgentId,
-    comm: "telegram" as CommId,
+    comm,
     account_label: "main",
     bot_user_id: "bot-1",
     credentials_ref: "file:/dev/null",
@@ -220,12 +253,12 @@ function registrationRecord(): AccountRegistration {
   };
 }
 
-function conversationRecord(): Conversation {
+function conversationRecord(comm: CommId = "telegram" as CommId): Conversation {
   return {
     schema_version: SCHEMA_VERSION_CONVERSATION,
     project: PROJECT_A,
     agent: "codex" as AgentId,
-    comm: "telegram" as CommId,
+    comm,
     account_label: "main",
     bot_user_id: "bot-1",
     chat_native_id: "-100group",
@@ -233,17 +266,17 @@ function conversationRecord(): Conversation {
     conversation_id: "conv-test" as ConversationId,
     last_inbound_at: 10,
     last_outbound_at: null,
-    last_message_id: "telegram:1" as MessageId,
+    last_message_id: `${comm}:1` as MessageId,
     created_at: 10,
   };
 }
 
-function messageRecord(): Message {
+function messageRecord(comm: CommId = "telegram" as CommId): Message {
   return {
     schema_version: SCHEMA_VERSION_MESSAGE,
-    message_id: "telegram:1" as MessageId,
+    message_id: `${comm}:1` as MessageId,
     chat: {
-      comm: "telegram" as CommId,
+      comm,
       account: "bot-1" as AccountId,
       chat_native_id: "-100group",
     },
@@ -253,7 +286,7 @@ function messageRecord(): Message {
       isBot: false,
       isForeignBot: false,
     },
-    origin: { comm: "telegram" as CommId },
+    origin: { comm },
     text: "group wake probe",
     attachments: [],
     platform_message_id: "1",
@@ -331,6 +364,7 @@ class RecordingStorage implements Partial<Storage> {
 
 class FakeCodexClient {
   readonly calls: Array<[string, string]> = [];
+  readonly steerTexts: string[] = [];
 
   async call(): Promise<unknown> {
     return {};
@@ -349,18 +383,19 @@ class FakeCodexClient {
     return {};
   }
 
-  async steerTurn(threadId: string, _text: string, _expectedTurnId: string): Promise<unknown> {
+  async steerTurn(threadId: string, text: string, _expectedTurnId: string): Promise<unknown> {
     this.calls.push(["turn/steer", threadId]);
+    this.steerTexts.push(text);
     return {};
   }
 
-  async wakeMostRecentThread(): Promise<any> {
+  async wakeMostRecentThread(_text?: string): Promise<any> {
     await this.startTurn("thread-1");
     return { ok: true, threadId: "thread-1", method: "turn/start" };
   }
 
-  async steerMostRecentThread(): Promise<any> {
-    await this.steerTurn("thread-1");
+  async steerMostRecentThread(text = ""): Promise<any> {
+    await this.steerTurn("thread-1", text, "turn-1");
     return { ok: true, threadId: "thread-1", method: "turn/steer" };
   }
 }

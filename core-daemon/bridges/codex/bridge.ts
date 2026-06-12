@@ -409,7 +409,7 @@ export class CodexBridge implements AgentBridge {
     if (!originChat) {
       const hookResponse = codexHookDecision(
         "deny",
-        `No recent inbound Telegram conversation is associated with Codex session ${session}.`,
+        `No recent inbound comm conversation is associated with Codex session ${session}.`,
       );
       return {
         query_id: queryId,
@@ -793,7 +793,7 @@ function accountKey(entry: PendingInboundEntry): string {
 
 function formatInboundMessagesForTurn(entries: PendingInboundEntry[]): string {
   if (entries.length === 0) {
-    return "Check for pending daemon-delivered Telegram messages and handle them if present.";
+    return "Check for pending daemon-delivered messages and handle them if present.";
   }
   const lines = entries.map((entry) => {
     const message = entry.message;
@@ -822,11 +822,33 @@ function formatInboundMessagesForTurn(entries: PendingInboundEntry[]): string {
     return `[${new Date(message.received_at).toISOString()}] ${sender} (${envelope}): ${text}`;
   });
   return [
-    "Process these daemon-delivered Telegram messages as user input. If a reply is requested, use the Telegram MCP tool.",
+    inboundInstructionFor(entries),
     "[Daemon Inbound Messages]",
     ...lines,
     "[End Daemon Inbound Messages]",
   ].join("\n");
+}
+
+function inboundInstructionFor(entries: PendingInboundEntry[]): string {
+  const comms = [...new Set(entries.map((entry) => entry.conversation.comm))];
+  if (comms.length === 1) {
+    const commName = displayCommName(comms[0]);
+    return `Process these daemon-delivered ${commName} messages as user input. If a reply is requested, use the ${commName} MCP tool.`;
+  }
+  return "Process these daemon-delivered messages as user input. If a reply is requested, use the MCP tool matching each message's comm value.";
+}
+
+function displayCommName(comm: CommId): string {
+  switch (comm) {
+    case "discord":
+      return "Discord";
+    case "matrix":
+      return "Matrix";
+    case "telegram":
+      return "Telegram";
+    default:
+      return String(comm);
+  }
 }
 
 function formatAttachmentForCodex(attachment: {

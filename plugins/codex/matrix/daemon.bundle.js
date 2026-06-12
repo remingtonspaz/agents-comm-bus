@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.25";
+var DAEMON_VERSION = "0.2.26";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -9382,7 +9382,7 @@ var CodexBridge = class {
     if (!originChat) {
       const hookResponse2 = codexHookDecision(
         "deny",
-        `No recent inbound Telegram conversation is associated with Codex session ${session}.`
+        `No recent inbound comm conversation is associated with Codex session ${session}.`
       );
       return {
         query_id: queryId,
@@ -9707,7 +9707,7 @@ function accountKey2(entry) {
 }
 function formatInboundMessagesForTurn(entries) {
   if (entries.length === 0) {
-    return "Check for pending daemon-delivered Telegram messages and handle them if present.";
+    return "Check for pending daemon-delivered messages and handle them if present.";
   }
   const lines = entries.map((entry) => {
     const message = entry.message;
@@ -9736,11 +9736,31 @@ function formatInboundMessagesForTurn(entries) {
     return `[${new Date(message.received_at).toISOString()}] ${sender} (${envelope}): ${text}`;
   });
   return [
-    "Process these daemon-delivered Telegram messages as user input. If a reply is requested, use the Telegram MCP tool.",
+    inboundInstructionFor(entries),
     "[Daemon Inbound Messages]",
     ...lines,
     "[End Daemon Inbound Messages]"
   ].join("\n");
+}
+function inboundInstructionFor(entries) {
+  const comms = [...new Set(entries.map((entry) => entry.conversation.comm))];
+  if (comms.length === 1) {
+    const commName = displayCommName(comms[0]);
+    return `Process these daemon-delivered ${commName} messages as user input. If a reply is requested, use the ${commName} MCP tool.`;
+  }
+  return "Process these daemon-delivered messages as user input. If a reply is requested, use the MCP tool matching each message's comm value.";
+}
+function displayCommName(comm) {
+  switch (comm) {
+    case "discord":
+      return "Discord";
+    case "matrix":
+      return "Matrix";
+    case "telegram":
+      return "Telegram";
+    default:
+      return String(comm);
+  }
 }
 function formatAttachmentForCodex(attachment) {
   const fields = [

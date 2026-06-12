@@ -3,7 +3,7 @@
   "agent": "codex",
   "comm": "discord",
   "plugin_version": "0.1.2",
-  "daemon_bundle_version": "0.2.25",
+  "daemon_bundle_version": "0.2.26",
   "adapter_bundle_version": "0.1.0",
   "adapter_bundle_versions": {
     "discord": "0.1.0"
