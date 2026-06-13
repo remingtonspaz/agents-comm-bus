@@ -700,8 +700,11 @@ export class SqliteStorage implements Storage {
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
           lease_owner_process_pid, lease_owner_process_label,
           lease_owner_process_registered_at,
+          lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
+          lease_owner_daemon_state_root, lease_owner_daemon_bin,
+          lease_owner_daemon_authority_rank,
           most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -719,6 +722,11 @@ export class SqliteStorage implements Storage {
         rec.lease_owner_process_pid,
         rec.lease_owner_process_label,
         rec.lease_owner_process_registered_at,
+        rec.lease_owner_daemon_discovery_root,
+        rec.lease_owner_daemon_checkout_root,
+        rec.lease_owner_daemon_state_root,
+        rec.lease_owner_daemon_bin,
+        rec.lease_owner_daemon_authority_rank,
         rec.most_recent_inbound_conversation_id,
         rec.status,
       );
@@ -739,7 +747,12 @@ export class SqliteStorage implements Storage {
               lease_released_at = NULL,
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
-              lease_owner_process_registered_at = ?
+              lease_owner_process_registered_at = ?,
+              lease_owner_daemon_discovery_root = ?,
+              lease_owner_daemon_checkout_root = ?,
+              lease_owner_daemon_state_root = ?,
+              lease_owner_daemon_bin = ?,
+              lease_owner_daemon_authority_rank = ?
           WHERE session_id = ?
             AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
         `)
@@ -749,6 +762,11 @@ export class SqliteStorage implements Storage {
           owner?.process_pid ?? null,
           owner?.process_label ?? null,
           owner?.process_pid ? at : null,
+          owner?.daemon?.discovery_root ?? null,
+          owner?.daemon?.checkout_root ?? null,
+          owner?.daemon?.state_root ?? null,
+          owner?.daemon?.daemon_bin ?? null,
+          owner?.daemon?.authority_rank ?? null,
           session,
           connection_id,
         ) as { changes?: number };
@@ -771,7 +789,12 @@ export class SqliteStorage implements Storage {
             lease_released_at = ?,
             lease_owner_process_pid = NULL,
             lease_owner_process_label = NULL,
-            lease_owner_process_registered_at = NULL
+            lease_owner_process_registered_at = NULL,
+            lease_owner_daemon_discovery_root = NULL,
+            lease_owner_daemon_checkout_root = NULL,
+            lease_owner_daemon_state_root = NULL,
+            lease_owner_daemon_bin = NULL,
+            lease_owner_daemon_authority_rank = NULL
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `)
       .run(at, session, connection_id);
@@ -1085,6 +1108,15 @@ export class SqliteStorage implements Storage {
       lease_owner_process_label: r.lease_owner_process_label as string | null,
       lease_owner_process_registered_at:
         r.lease_owner_process_registered_at as number | null,
+      lease_owner_daemon_discovery_root:
+        r.lease_owner_daemon_discovery_root as string | null,
+      lease_owner_daemon_checkout_root:
+        r.lease_owner_daemon_checkout_root as string | null,
+      lease_owner_daemon_state_root:
+        r.lease_owner_daemon_state_root as string | null,
+      lease_owner_daemon_bin: r.lease_owner_daemon_bin as string | null,
+      lease_owner_daemon_authority_rank:
+        r.lease_owner_daemon_authority_rank as string | null,
       most_recent_inbound_conversation_id:
         r.most_recent_inbound_conversation_id as ConversationId | null,
       status: r.status as Session["status"],

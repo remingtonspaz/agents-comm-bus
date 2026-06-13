@@ -36,8 +36,10 @@ import type {
   AgentBridge,
   AgentBridgeContext,
   AgentBridgeFactory,
+  DaemonSelfIdentity,
   EnsureCommsForSession,
 } from "../../runtime/agent-bridge.js";
+import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { normalizeProjectPath } from "../../project-path.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
@@ -64,6 +66,8 @@ export interface ClaudeBridgeOptions {
    * composition root always supplies it.
    */
   ensureCommsForSession?: EnsureCommsForSession;
+  /** AGE-58: daemon-resolved identity for session ownership stamping. */
+  daemonOwner?: DaemonSelfIdentity;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
@@ -361,6 +365,11 @@ export class ClaudeBridge implements AgentBridge {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_daemon_discovery_root: null,
+      lease_owner_daemon_checkout_root: null,
+      lease_owner_daemon_state_root: null,
+      lease_owner_daemon_bin: null,
+      lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
       status: "active",
     });
@@ -368,7 +377,9 @@ export class ClaudeBridge implements AgentBridge {
       session,
       connectionId,
       now,
-      sessionLeaseOwnerFromParams(params),
+      this.options.daemonOwner
+        ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
+        : sessionLeaseOwnerFromParams(params),
     );
     if (!acquired) {
       await this.ensureCommsBestEffort(project);
@@ -968,6 +979,7 @@ export class ClaudeBridgeFactory implements AgentBridgeFactory {
       audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
+      daemonOwner: context.daemonOwner,
     });
   }
 }

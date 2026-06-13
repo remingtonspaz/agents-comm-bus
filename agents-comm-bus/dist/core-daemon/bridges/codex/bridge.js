@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../../project-path.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
+import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { CodexAgentAdapter, codexDecisionFromResolution, codexHookDecision, } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
 const DEFAULT_TTL_SECONDS = 3600;
@@ -166,12 +167,19 @@ export class CodexBridge {
             lease_owner_process_pid: null,
             lease_owner_process_label: null,
             lease_owner_process_registered_at: null,
+            lease_owner_daemon_discovery_root: null,
+            lease_owner_daemon_checkout_root: null,
+            lease_owner_daemon_state_root: null,
+            lease_owner_daemon_bin: null,
+            lease_owner_daemon_authority_rank: null,
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
         const replaceExistingLease = params.replace_existing_lease === true ||
             params.persist_after_disconnect === true;
-        const leaseOwner = sessionLeaseOwnerFromParams(params, "codex");
+        const leaseOwner = this.options.daemonOwner
+            ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params, "codex"), this.options.daemonOwner)
+            : sessionLeaseOwnerFromParams(params, "codex");
         let acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, leaseOwner);
         if (!acquired) {
             const releasedDeadLease = await this.releaseDeadSameProjectLease(project, now);
@@ -758,6 +766,7 @@ export class CodexBridgeFactory {
             audit: context.audit,
             pendingInbound: context.pendingInbound,
             ensureCommsForSession: context.ensureCommsForSession,
+            daemonOwner: context.daemonOwner,
         });
     }
 }

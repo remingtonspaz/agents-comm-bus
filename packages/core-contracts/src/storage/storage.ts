@@ -34,9 +34,19 @@ import type {
   Session,
 } from "../records/index.js";
 
+/** Daemon-instance identity stamped from the serving daemon, never from IPC params. */
+export interface SessionDaemonOwner {
+  discovery_root: string;
+  checkout_root: string | null;
+  state_root: string;
+  daemon_bin: string | null;
+  authority_rank: string;
+}
+
 export interface SessionLeaseOwner {
   process_pid: number | null;
   process_label?: string | null;
+  daemon?: SessionDaemonOwner;
 }
 
 export interface AccountTokenUpdateInput {

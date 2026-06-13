@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AgentId, AuditStore, Storage } from "agents-comm-bus-core";
 
 import { normalizeProjectPath } from "../project-path.js";
+import { normalizeDaemonRootPath } from "../paths.js";
 import type { EnsureCommsForSession } from "../runtime/agent-bridge.js";
 
 /** Default recency window for boot-time scope restore (24 hours). */
@@ -16,10 +17,13 @@ export interface BootScopeRestoreSummary {
   skipped_dead: number;
   skipped_stale: number;
   skipped_no_owner: number;
+  skipped_no_daemon_owner: number;
+  skipped_foreign_owner: number;
 }
 
 export interface BootScopeRestoreInput {
   stateRoot: string;
+  discoveryRoot: string;
   storage: Storage;
   ensureCommsForSession: EnsureCommsForSession;
   audit?: AuditStore;
@@ -49,6 +53,17 @@ async function defaultPathExists(path: string): Promise<boolean> {
 
 function scopeDedupeKey(agent: AgentId | string, project: string): string {
   return `${agent}:${normalizeProjectPath(project)}`;
+}
+
+function classifySessionDaemonOwner(
+  session: { lease_owner_daemon_discovery_root: string | null },
+  currentDiscoveryRoot: string,
+): "match" | "missing" | "foreign" {
+  const stamped = session.lease_owner_daemon_discovery_root;
+  if (stamped == null || stamped.length === 0) return "missing";
+  return normalizeDaemonRootPath(stamped) === normalizeDaemonRootPath(currentDiscoveryRoot)
+    ? "match"
+    : "foreign";
 }
 
 async function auditBootRestore(
@@ -90,6 +105,8 @@ export async function runBootScopeRestore(
     skipped_dead: 0,
     skipped_stale: 0,
     skipped_no_owner: 0,
+    skipped_no_daemon_owner: 0,
+    skipped_foreign_owner: 0,
   };
 
   try {
@@ -127,6 +144,16 @@ export async function runBootScopeRestore(
         continue;
       }
 
+      const ownerClass = classifySessionDaemonOwner(session, input.discoveryRoot);
+      if (ownerClass === "missing") {
+        summary.skipped_no_daemon_owner += 1;
+        continue;
+      }
+      if (ownerClass === "foreign") {
+        summary.skipped_foreign_owner += 1;
+        continue;
+      }
+
       // TODO(AGE-55): compare process start time against registeredAt to detect
       // pid reuse within the recency window. No clean cross-platform API from
       // Node built-ins — accepted-narrow v1 residual; worst case re-ensures an
@@ -156,7 +183,9 @@ export async function runBootScopeRestore(
       "agents-comm-bus: boot scope restore complete: " +
         `candidates=${summary.candidates} restored=${summary.restored} ` +
         `skipped_dead=${summary.skipped_dead} skipped_stale=${summary.skipped_stale} ` +
-        `skipped_no_owner=${summary.skipped_no_owner}`,
+        `skipped_no_owner=${summary.skipped_no_owner} ` +
+        `skipped_no_daemon_owner=${summary.skipped_no_daemon_owner} ` +
+        `skipped_foreign_owner=${summary.skipped_foreign_owner}`,
     );
     await auditBootRestore(input.audit, now(), summary);
     return summary;

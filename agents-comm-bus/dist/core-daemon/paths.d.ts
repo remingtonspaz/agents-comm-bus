@@ -40,6 +40,11 @@ export interface TokenFilePathOptions extends StatePathOptions {
 export declare function stateRoot(options?: StatePathOptions): string;
 export declare function resolveStatePaths(options?: StatePathOptions): AgentsCommBusPaths;
 export declare function discoveryRoot(options?: DiscoveryPathOptions): string;
+/**
+ * Canonical daemon discovery/state root for ownership comparisons (AGE-58).
+ * Reuses project-path normalization: drive-letter casing, separators, trailing slash.
+ */
+export declare function normalizeDaemonRootPath(root: string): string;
 export declare function resolveDiscoveryPaths(options?: DiscoveryPathOptions): AgentsCommBusDiscoveryPaths;
 export declare function resolveConversationPaths(options: ConversationPathOptions): ConversationPaths;
 export declare function resolveTokenFilePath(options: TokenFilePathOptions): string;

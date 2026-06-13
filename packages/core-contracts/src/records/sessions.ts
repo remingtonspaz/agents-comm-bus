@@ -27,6 +27,13 @@ export interface Session {
   lease_owner_process_label: string | null;
   lease_owner_process_registered_at: number | null;
 
+  // Daemon-instance identity stamped at lease acquire (AGE-58 boot-restore scoping).
+  lease_owner_daemon_discovery_root: string | null;
+  lease_owner_daemon_checkout_root: string | null;
+  lease_owner_daemon_state_root: string | null;
+  lease_owner_daemon_bin: string | null;
+  lease_owner_daemon_authority_rank: string | null;
+
   // Most recent inbound conversation linkage (used by routing / steering).
   most_recent_inbound_conversation_id: ConversationId | null;
 

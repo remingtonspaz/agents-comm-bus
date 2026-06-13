@@ -30,6 +30,7 @@ import {
   SCHEMA_VERSION_CONVERSATION,
 } from "../../packages/core-contracts/src/index.js";
 import { MessageBus } from "../../core-daemon/bus.js";
+import { sessionFixture } from "./_session-fixture.js";
 
 const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;
@@ -138,21 +139,12 @@ describe("AGE-15 outbound routes by bot id, not account label", () => {
       last_message_id: "telegram:0" as MessageId,
       created_at: 1,
     });
-    storage.sessions.set("s" as SessionId, {
+    storage.sessions.set("s" as SessionId, sessionFixture({
       session_id: "s" as SessionId,
       agent: CODEX,
       project: PROJECT,
-      schema_version: 1,
-      created_at: 1,
-      lease_holder_connection_id: null,
-      lease_acquired_at: null,
-      lease_released_at: null,
-      lease_owner_process_pid: null,
-      lease_owner_process_label: null,
-      lease_owner_process_registered_at: null,
       most_recent_inbound_conversation_id: conversationId,
-      status: "active",
-    } as Session);
+    }));
     const audit: AuditEvent[] = [];
     const comm = fakeComm(CODEX_BOT);
     const bus = makeBus(storage, audit, [comm]);

@@ -10,7 +10,7 @@
  */
 import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
@@ -32,6 +32,8 @@ export interface ClaudeBridgeOptions {
      * composition root always supplies it.
      */
     ensureCommsForSession?: EnsureCommsForSession;
+    /** AGE-58: daemon-resolved identity for session ownership stamping. */
+    daemonOwner?: DaemonSelfIdentity;
 }
 /**
  * Outcome shape returned by claude_register_session.

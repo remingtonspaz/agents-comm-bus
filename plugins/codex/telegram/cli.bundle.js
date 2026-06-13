@@ -3843,6 +3843,14 @@ var durablePendingInboundMigration = {
     await ctx.exec(sql);
   }
 };
+var sessionDaemonOwnerMigration = {
+  version: 11,
+  description: "AGE-58: stamp daemon-instance identity on session leases",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "011_session_daemon_owner.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3854,7 +3862,8 @@ async function runStorageMigrations(db) {
     registrationPkMigration,
     conversationRegistrationKeyMigration,
     multiOpenQueriesMigration,
-    durablePendingInboundMigration
+    durablePendingInboundMigration,
+    sessionDaemonOwnerMigration
   ]);
 }
 
@@ -4332,8 +4341,11 @@ var SqliteStorage = class _SqliteStorage {
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
           lease_owner_process_pid, lease_owner_process_label,
           lease_owner_process_registered_at,
+          lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
+          lease_owner_daemon_state_root, lease_owner_daemon_bin,
+          lease_owner_daemon_authority_rank,
           most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -4350,6 +4362,11 @@ var SqliteStorage = class _SqliteStorage {
       rec.lease_owner_process_pid,
       rec.lease_owner_process_label,
       rec.lease_owner_process_registered_at,
+      rec.lease_owner_daemon_discovery_root,
+      rec.lease_owner_daemon_checkout_root,
+      rec.lease_owner_daemon_state_root,
+      rec.lease_owner_daemon_bin,
+      rec.lease_owner_daemon_authority_rank,
       rec.most_recent_inbound_conversation_id,
       rec.status
     );
@@ -4363,7 +4380,12 @@ var SqliteStorage = class _SqliteStorage {
               lease_released_at = NULL,
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
-              lease_owner_process_registered_at = ?
+              lease_owner_process_registered_at = ?,
+              lease_owner_daemon_discovery_root = ?,
+              lease_owner_daemon_checkout_root = ?,
+              lease_owner_daemon_state_root = ?,
+              lease_owner_daemon_bin = ?,
+              lease_owner_daemon_authority_rank = ?
           WHERE session_id = ?
             AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
         `).run(
@@ -4372,6 +4394,11 @@ var SqliteStorage = class _SqliteStorage {
         owner?.process_pid ?? null,
         owner?.process_label ?? null,
         owner?.process_pid ? at : null,
+        owner?.daemon?.discovery_root ?? null,
+        owner?.daemon?.checkout_root ?? null,
+        owner?.daemon?.state_root ?? null,
+        owner?.daemon?.daemon_bin ?? null,
+        owner?.daemon?.authority_rank ?? null,
         session,
         connection_id
       );
@@ -4388,7 +4415,12 @@ var SqliteStorage = class _SqliteStorage {
             lease_released_at = ?,
             lease_owner_process_pid = NULL,
             lease_owner_process_label = NULL,
-            lease_owner_process_registered_at = NULL
+            lease_owner_process_registered_at = NULL,
+            lease_owner_daemon_discovery_root = NULL,
+            lease_owner_daemon_checkout_root = NULL,
+            lease_owner_daemon_state_root = NULL,
+            lease_owner_daemon_bin = NULL,
+            lease_owner_daemon_authority_rank = NULL
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `).run(at, session, connection_id);
   }
@@ -4631,6 +4663,11 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_process_pid: r.lease_owner_process_pid,
       lease_owner_process_label: r.lease_owner_process_label,
       lease_owner_process_registered_at: r.lease_owner_process_registered_at,
+      lease_owner_daemon_discovery_root: r.lease_owner_daemon_discovery_root,
+      lease_owner_daemon_checkout_root: r.lease_owner_daemon_checkout_root,
+      lease_owner_daemon_state_root: r.lease_owner_daemon_state_root,
+      lease_owner_daemon_bin: r.lease_owner_daemon_bin,
+      lease_owner_daemon_authority_rank: r.lease_owner_daemon_authority_rank,
       most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
       status: r.status
     };

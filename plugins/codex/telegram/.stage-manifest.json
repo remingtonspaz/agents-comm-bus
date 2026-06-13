@@ -84,6 +84,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/011_session_daemon_owner.sql",
+      "artifact": "plugins/codex/telegram/011_session_daemon_owner.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/telegram/package.json",
       "type": "package-json"

@@ -7,6 +7,7 @@ import type {
   Conversation,
   Storage,
 } from "agents-comm-bus-core";
+import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 
 import type { MessageBus } from "../bus.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
@@ -21,6 +22,15 @@ import type { PendingInboundEntry } from "./pending-inbound.js";
  */
 export type EnsureCommsForSession = (project: string, agent: AgentId) => Promise<void>;
 
+/** Resolved daemon self-identity; stamped onto sessions at lease acquire (AGE-58). */
+export interface DaemonSelfIdentity {
+  discoveryRoot: string;
+  checkoutRoot: string | null;
+  stateRoot: string;
+  daemonBin: string | null;
+  authorityRank: string;
+}
+
 export interface AgentBridgeContext {
   storage: Storage;
   bus: MessageBus;
@@ -28,6 +38,8 @@ export interface AgentBridgeContext {
   pendingInbound: PendingInboundEntry[];
   /** AGE-38: lazy, session-triggered comm-adapter instantiation. */
   ensureCommsForSession: EnsureCommsForSession;
+  /** AGE-58: daemon-resolved identity for session ownership stamping. */
+  daemonOwner: DaemonSelfIdentity;
 }
 
 export interface AgentBridge {
@@ -87,4 +99,22 @@ export interface AgentBridge {
 export interface AgentBridgeFactory {
   readonly agentId: AgentId;
   create(context: AgentBridgeContext): AgentBridge;
+}
+
+/** Merge hook-supplied process owner with daemon-resolved identity (AGE-58). */
+export function sessionLeaseOwnerWithDaemon(
+  ownerFromParams: { process_pid: number | null; process_label?: string | null } | undefined,
+  daemonOwner: DaemonSelfIdentity,
+): SessionLeaseOwner {
+  return {
+    process_pid: ownerFromParams?.process_pid ?? null,
+    process_label: ownerFromParams?.process_label,
+    daemon: {
+      discovery_root: daemonOwner.discoveryRoot,
+      checkout_root: daemonOwner.checkoutRoot,
+      state_root: daemonOwner.stateRoot,
+      daemon_bin: daemonOwner.daemonBin,
+      authority_rank: daemonOwner.authorityRank,
+    },
+  };
 }

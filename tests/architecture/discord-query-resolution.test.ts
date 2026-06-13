@@ -26,6 +26,7 @@ import type {
 import { MessageBus } from "../../core-daemon/bus.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
+import { sessionFixture } from "./_session-fixture.js";
 
 const DISCORD = "discord" as CommId;
 const CLAUDE = "claude" as AgentId;
@@ -50,21 +51,12 @@ function account(): AccountRegistration {
 }
 
 function session(): Session {
-  return {
-    schema_version: 1,
+  return sessionFixture({
     session_id: SESSION,
     agent: CLAUDE,
     project: "project-a",
-    created_at: 1,
-    lease_holder_connection_id: null,
-    lease_acquired_at: null,
-    lease_released_at: null,
-    lease_owner_process_pid: null,
-    lease_owner_process_label: null,
-    lease_owner_process_registered_at: null,
     most_recent_inbound_conversation_id: CONV,
-    status: "active",
-  };
+  });
 }
 
 function conversation(): Conversation {

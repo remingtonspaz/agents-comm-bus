@@ -9,9 +9,12 @@ export interface BootScopeRestoreSummary {
     skipped_dead: number;
     skipped_stale: number;
     skipped_no_owner: number;
+    skipped_no_daemon_owner: number;
+    skipped_foreign_owner: number;
 }
 export interface BootScopeRestoreInput {
     stateRoot: string;
+    discoveryRoot: string;
     storage: Storage;
     ensureCommsForSession: EnsureCommsForSession;
     audit?: AuditStore;

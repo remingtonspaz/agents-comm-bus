@@ -1,4 +1,5 @@
 import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Storage } from "agents-comm-bus-core";
+import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 /**
@@ -9,6 +10,14 @@ import type { PendingInboundEntry } from "./pending-inbound.js";
  * Idempotent — safe to call on every register (hooks register frequently).
  */
 export type EnsureCommsForSession = (project: string, agent: AgentId) => Promise<void>;
+/** Resolved daemon self-identity; stamped onto sessions at lease acquire (AGE-58). */
+export interface DaemonSelfIdentity {
+    discoveryRoot: string;
+    checkoutRoot: string | null;
+    stateRoot: string;
+    daemonBin: string | null;
+    authorityRank: string;
+}
 export interface AgentBridgeContext {
     storage: Storage;
     bus: MessageBus;
@@ -16,6 +25,8 @@ export interface AgentBridgeContext {
     pendingInbound: PendingInboundEntry[];
     /** AGE-38: lazy, session-triggered comm-adapter instantiation. */
     ensureCommsForSession: EnsureCommsForSession;
+    /** AGE-58: daemon-resolved identity for session ownership stamping. */
+    daemonOwner: DaemonSelfIdentity;
 }
 export interface AgentBridge {
     /** Agent id this bridge handles (e.g. `"claude"`). */
@@ -67,4 +78,9 @@ export interface AgentBridgeFactory {
     readonly agentId: AgentId;
     create(context: AgentBridgeContext): AgentBridge;
 }
+/** Merge hook-supplied process owner with daemon-resolved identity (AGE-58). */
+export declare function sessionLeaseOwnerWithDaemon(ownerFromParams: {
+    process_pid: number | null;
+    process_label?: string | null;
+} | undefined, daemonOwner: DaemonSelfIdentity): SessionLeaseOwner;
 //# sourceMappingURL=agent-bridge.d.ts.map

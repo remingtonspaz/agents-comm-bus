@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { DAEMON_NAME } from "./config.js";
+import { normalizeProjectPath } from "./project-path.js";
 export function stateRoot(options = {}) {
     return path.resolve(options.stateRoot ?? path.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
 }
@@ -23,6 +24,13 @@ export function resolveStatePaths(options = {}) {
 }
 export function discoveryRoot(options = {}) {
     return path.resolve(options.discoveryRoot ?? stateRoot(options));
+}
+/**
+ * Canonical daemon discovery/state root for ownership comparisons (AGE-58).
+ * Reuses project-path normalization: drive-letter casing, separators, trailing slash.
+ */
+export function normalizeDaemonRootPath(root) {
+    return normalizeProjectPath(root);
 }
 export function resolveDiscoveryPaths(options = {}) {
     const root = discoveryRoot(options);

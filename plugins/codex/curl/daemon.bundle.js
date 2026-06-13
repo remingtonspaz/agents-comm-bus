@@ -3712,6 +3712,9 @@ function resolveStatePaths(options = {}) {
 function discoveryRoot(options = {}) {
   return path2.resolve(options.discoveryRoot ?? stateRoot(options));
 }
+function normalizeDaemonRootPath(root) {
+  return normalizeProjectPath(root);
+}
 function resolveDiscoveryPaths(options = {}) {
   const root = discoveryRoot(options);
   return {
@@ -4680,6 +4683,11 @@ async function defaultPathExists(path8) {
 function scopeDedupeKey(agent, project) {
   return `${agent}:${normalizeProjectPath(project)}`;
 }
+function classifySessionDaemonOwner(session, currentDiscoveryRoot) {
+  const stamped = session.lease_owner_daemon_discovery_root;
+  if (stamped == null || stamped.length === 0) return "missing";
+  return normalizeDaemonRootPath(stamped) === normalizeDaemonRootPath(currentDiscoveryRoot) ? "match" : "foreign";
+}
 async function auditBootRestore(audit, timestamp, summary, error) {
   if (!audit) return;
   const detail = { ...summary };
@@ -4704,7 +4712,9 @@ async function runBootScopeRestore(input) {
     restored: 0,
     skipped_dead: 0,
     skipped_stale: 0,
-    skipped_no_owner: 0
+    skipped_no_owner: 0,
+    skipped_no_daemon_owner: 0,
+    skipped_foreign_owner: 0
   };
   try {
     const pausedPath = join2(input.stateRoot, "paused");
@@ -4734,6 +4744,15 @@ async function runBootScopeRestore(input) {
         summary.skipped_dead += 1;
         continue;
       }
+      const ownerClass = classifySessionDaemonOwner(session, input.discoveryRoot);
+      if (ownerClass === "missing") {
+        summary.skipped_no_daemon_owner += 1;
+        continue;
+      }
+      if (ownerClass === "foreign") {
+        summary.skipped_foreign_owner += 1;
+        continue;
+      }
       const canonicalProject = normalizeProjectPath(session.project);
       const key = scopeDedupeKey(session.agent, canonicalProject);
       if (!scopesToRestore.has(key)) {
@@ -4751,7 +4770,7 @@ async function runBootScopeRestore(input) {
       }
     }
     console.error(
-      `agents-comm-bus: boot scope restore complete: candidates=${summary.candidates} restored=${summary.restored} skipped_dead=${summary.skipped_dead} skipped_stale=${summary.skipped_stale} skipped_no_owner=${summary.skipped_no_owner}`
+      `agents-comm-bus: boot scope restore complete: candidates=${summary.candidates} restored=${summary.restored} skipped_dead=${summary.skipped_dead} skipped_stale=${summary.skipped_stale} skipped_no_owner=${summary.skipped_no_owner} skipped_no_daemon_owner=${summary.skipped_no_daemon_owner} skipped_foreign_owner=${summary.skipped_foreign_owner}`
     );
     await auditBootRestore(input.audit, now(), summary);
     return summary;
@@ -5750,6 +5769,14 @@ var durablePendingInboundMigration = {
     await ctx.exec(sql);
   }
 };
+var sessionDaemonOwnerMigration = {
+  version: 11,
+  description: "AGE-58: stamp daemon-instance identity on session leases",
+  async up(ctx) {
+    const sql = await readFile4(join3(schemaDir, "011_session_daemon_owner.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -5761,7 +5788,8 @@ async function runStorageMigrations(db) {
     registrationPkMigration,
     conversationRegistrationKeyMigration,
     multiOpenQueriesMigration,
-    durablePendingInboundMigration
+    durablePendingInboundMigration,
+    sessionDaemonOwnerMigration
   ]);
 }
 
@@ -6239,8 +6267,11 @@ var SqliteStorage = class _SqliteStorage {
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
           lease_owner_process_pid, lease_owner_process_label,
           lease_owner_process_registered_at,
+          lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
+          lease_owner_daemon_state_root, lease_owner_daemon_bin,
+          lease_owner_daemon_authority_rank,
           most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -6257,6 +6288,11 @@ var SqliteStorage = class _SqliteStorage {
       rec.lease_owner_process_pid,
       rec.lease_owner_process_label,
       rec.lease_owner_process_registered_at,
+      rec.lease_owner_daemon_discovery_root,
+      rec.lease_owner_daemon_checkout_root,
+      rec.lease_owner_daemon_state_root,
+      rec.lease_owner_daemon_bin,
+      rec.lease_owner_daemon_authority_rank,
       rec.most_recent_inbound_conversation_id,
       rec.status
     );
@@ -6270,7 +6306,12 @@ var SqliteStorage = class _SqliteStorage {
               lease_released_at = NULL,
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
-              lease_owner_process_registered_at = ?
+              lease_owner_process_registered_at = ?,
+              lease_owner_daemon_discovery_root = ?,
+              lease_owner_daemon_checkout_root = ?,
+              lease_owner_daemon_state_root = ?,
+              lease_owner_daemon_bin = ?,
+              lease_owner_daemon_authority_rank = ?
           WHERE session_id = ?
             AND (lease_holder_connection_id IS NULL OR lease_holder_connection_id = ?)
         `).run(
@@ -6279,6 +6320,11 @@ var SqliteStorage = class _SqliteStorage {
         owner?.process_pid ?? null,
         owner?.process_label ?? null,
         owner?.process_pid ? at : null,
+        owner?.daemon?.discovery_root ?? null,
+        owner?.daemon?.checkout_root ?? null,
+        owner?.daemon?.state_root ?? null,
+        owner?.daemon?.daemon_bin ?? null,
+        owner?.daemon?.authority_rank ?? null,
         session,
         connection_id
       );
@@ -6295,7 +6341,12 @@ var SqliteStorage = class _SqliteStorage {
             lease_released_at = ?,
             lease_owner_process_pid = NULL,
             lease_owner_process_label = NULL,
-            lease_owner_process_registered_at = NULL
+            lease_owner_process_registered_at = NULL,
+            lease_owner_daemon_discovery_root = NULL,
+            lease_owner_daemon_checkout_root = NULL,
+            lease_owner_daemon_state_root = NULL,
+            lease_owner_daemon_bin = NULL,
+            lease_owner_daemon_authority_rank = NULL
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `).run(at, session, connection_id);
   }
@@ -6538,6 +6589,11 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_process_pid: r.lease_owner_process_pid,
       lease_owner_process_label: r.lease_owner_process_label,
       lease_owner_process_registered_at: r.lease_owner_process_registered_at,
+      lease_owner_daemon_discovery_root: r.lease_owner_daemon_discovery_root,
+      lease_owner_daemon_checkout_root: r.lease_owner_daemon_checkout_root,
+      lease_owner_daemon_state_root: r.lease_owner_daemon_state_root,
+      lease_owner_daemon_bin: r.lease_owner_daemon_bin,
+      lease_owner_daemon_authority_rank: r.lease_owner_daemon_authority_rank,
       most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
       status: r.status
     };
@@ -6960,7 +7016,14 @@ async function runDaemon(options) {
         bus,
         audit,
         pendingInbound,
-        ensureCommsForSession: ensureCommsForSessionFn
+        ensureCommsForSession: ensureCommsForSessionFn,
+        daemonOwner: {
+          discoveryRoot: discoveryPaths.root,
+          checkoutRoot,
+          stateRoot: paths.root,
+          daemonBin,
+          authorityRank
+        }
       })
     )
   );
@@ -7135,6 +7198,7 @@ async function runDaemon(options) {
   });
   void runBootScopeRestore({
     stateRoot: paths.root,
+    discoveryRoot: discoveryPaths.root,
     storage,
     ensureCommsForSession: ensureCommsForSessionFn,
     audit
@@ -7665,6 +7729,21 @@ function parseReloadOptions(params) {
 // ../core-daemon/bridges/claude/bridge.ts
 import crypto2 from "node:crypto";
 
+// ../core-daemon/runtime/agent-bridge.ts
+function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
+  return {
+    process_pid: ownerFromParams?.process_pid ?? null,
+    process_label: ownerFromParams?.process_label,
+    daemon: {
+      discovery_root: daemonOwner.discoveryRoot,
+      checkout_root: daemonOwner.checkoutRoot,
+      state_root: daemonOwner.stateRoot,
+      daemon_bin: daemonOwner.daemonBin,
+      authority_rank: daemonOwner.authorityRank
+    }
+  };
+}
+
 // ../core-daemon/bridges/claude/wake.ts
 import { mkdir as mkdir7, writeFile as writeFile2 } from "node:fs/promises";
 import os4 from "node:os";
@@ -7992,6 +8071,11 @@ var ClaudeBridge = class {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_daemon_discovery_root: null,
+      lease_owner_daemon_checkout_root: null,
+      lease_owner_daemon_state_root: null,
+      lease_owner_daemon_bin: null,
+      lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
       status: "active"
     });
@@ -7999,7 +8083,7 @@ var ClaudeBridge = class {
       session,
       connectionId,
       now,
-      sessionLeaseOwnerFromParams(params)
+      this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams(params)
     );
     if (!acquired) {
       await this.ensureCommsBestEffort(project);
@@ -8492,7 +8576,8 @@ var ClaudeBridgeFactory = class {
       bus: context.bus,
       audit: context.audit,
       pendingInbound: context.pendingInbound,
-      ensureCommsForSession: context.ensureCommsForSession
+      ensureCommsForSession: context.ensureCommsForSession,
+      daemonOwner: context.daemonOwner
     });
   }
 };
@@ -9270,11 +9355,16 @@ var CodexBridge = class {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_daemon_discovery_root: null,
+      lease_owner_daemon_checkout_root: null,
+      lease_owner_daemon_state_root: null,
+      lease_owner_daemon_bin: null,
+      lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
       status: "active"
     });
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
-    const leaseOwner = sessionLeaseOwnerFromParams2(params, "codex");
+    const leaseOwner = this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams2(params, "codex"), this.options.daemonOwner) : sessionLeaseOwnerFromParams2(params, "codex");
     let acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
@@ -9854,7 +9944,8 @@ var CodexBridgeFactory = class {
       bus: context.bus,
       audit: context.audit,
       pendingInbound: context.pendingInbound,
-      ensureCommsForSession: context.ensureCommsForSession
+      ensureCommsForSession: context.ensureCommsForSession,
+      daemonOwner: context.daemonOwner
     });
   }
 };

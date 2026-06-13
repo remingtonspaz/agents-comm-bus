@@ -179,6 +179,13 @@ export async function runDaemon(options) {
         audit,
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
+        daemonOwner: {
+            discoveryRoot: discoveryPaths.root,
+            checkoutRoot,
+            stateRoot: paths.root,
+            daemonBin,
+            authorityRank,
+        },
     })));
     const pendingInboundMax = 100;
     bus.setDispatchSink({
@@ -351,6 +358,7 @@ export async function runDaemon(options) {
     // AGE-55: async boot restore — never block daemon readiness on comm bring-up.
     void runBootScopeRestore({
         stateRoot: paths.root,
+        discoveryRoot: discoveryPaths.root,
         storage,
         ensureCommsForSession: ensureCommsForSessionFn,
         audit,

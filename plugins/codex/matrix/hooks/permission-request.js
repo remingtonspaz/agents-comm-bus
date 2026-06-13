@@ -3656,13 +3656,13 @@ var AGENTS_COMM_BUS_DEGRADED_MESSAGE = "\u26A0\uFE0F agents-comm-bus: daemon unr
 
 // ../hosts/common/install/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { mkdir as mkdir3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
-import path3 from "node:path";
+import path4 from "node:path";
 
 // dist/core-daemon/storage/audit.js
 import { mkdir } from "node:fs/promises";
@@ -3717,36 +3717,57 @@ function isProtocolCompatible(daemonProtocolVersion, clientProtocolVersion) {
 
 // dist/core-daemon/paths.js
 import os from "node:os";
+import path2 from "node:path";
+
+// dist/core-daemon/project-path.js
 import path from "node:path";
+function normalizeProjectPath(project) {
+  let resolved = path.resolve(project);
+  if (path.sep === "\\") {
+    resolved = resolved.replace(/\//g, "\\");
+  } else {
+    resolved = resolved.replace(/\\/g, "/");
+  }
+  if (/^[A-Za-z]:/.test(resolved)) {
+    resolved = resolved[0].toUpperCase() + resolved.slice(1);
+  }
+  const isBareRoot = resolved === path.sep || path.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path.sep) && !isBareRoot) {
+    resolved = resolved.slice(0, -1);
+  }
+  return resolved;
+}
+
+// dist/core-daemon/paths.js
 function stateRoot(options = {}) {
-  return path.resolve(options.stateRoot ?? path.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
+  return path2.resolve(options.stateRoot ?? path2.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
 }
 function resolveStatePaths(options = {}) {
   const root = stateRoot(options);
-  const database = path.join(root, `${DAEMON_NAME}.db`);
+  const database = path2.join(root, `${DAEMON_NAME}.db`);
   return {
     root,
     database,
     databaseWal: `${database}-wal`,
     databaseShm: `${database}-shm`,
-    auditDir: path.join(root, "audit"),
-    chatsDir: path.join(root, "chats"),
-    tokensDir: path.join(root, "tokens"),
-    pidFile: path.join(root, "daemon.pid"),
-    portFile: path.join(root, "port"),
-    spawnLock: path.join(root, ".spawn.lock")
+    auditDir: path2.join(root, "audit"),
+    chatsDir: path2.join(root, "chats"),
+    tokensDir: path2.join(root, "tokens"),
+    pidFile: path2.join(root, "daemon.pid"),
+    portFile: path2.join(root, "port"),
+    spawnLock: path2.join(root, ".spawn.lock")
   };
 }
 function discoveryRoot(options = {}) {
-  return path.resolve(options.discoveryRoot ?? stateRoot(options));
+  return path2.resolve(options.discoveryRoot ?? stateRoot(options));
 }
 function resolveDiscoveryPaths(options = {}) {
   const root = discoveryRoot(options);
   return {
     root,
-    pidFile: path.join(root, "daemon.pid"),
-    portFile: path.join(root, "port"),
-    spawnLock: path.join(root, ".spawn.lock")
+    pidFile: path2.join(root, "daemon.pid"),
+    portFile: path2.join(root, "port"),
+    spawnLock: path2.join(root, ".spawn.lock")
   };
 }
 
@@ -3942,7 +3963,7 @@ async function probeDaemon(options) {
 // dist/core-daemon/bootstrap/spawn-lock.js
 import { constants } from "node:fs";
 import { open as open2, mkdir as mkdir2, readFile, rm } from "node:fs/promises";
-import path2 from "node:path";
+import path3 from "node:path";
 function parseSpawnLockToken(raw) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -3999,7 +4020,7 @@ async function removeStaleSpawnLock(lockPath, options = {}) {
   return removeSpawnLockIfTokenMatches(lockPath, observedToken);
 }
 async function tryAcquireSpawnLock(lockPath, options = {}) {
-  await mkdir2(path2.dirname(lockPath), { recursive: true });
+  await mkdir2(path3.dirname(lockPath), { recursive: true });
   const acquired = await createSpawnLock(lockPath);
   if (acquired) {
     return acquired;
@@ -4194,7 +4215,7 @@ async function waitForDaemon(portFile, probe, deadline, retryMs) {
   return void 0;
 }
 function daemonStderrLogPath(stateRoot2) {
-  return path3.join(stateRoot2, "daemon.stderr.log");
+  return path4.join(stateRoot2, "daemon.stderr.log");
 }
 function daemonSpawnStdio(stateRoot2) {
   mkdirSync(stateRoot2, { recursive: true });
@@ -4249,7 +4270,7 @@ function defaultTerminateDaemon(pid) {
 }
 function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const binOverride = env.AGENTS_COMM_BUS_BIN;
-  const daemonEntry = binOverride ? path3.resolve(binOverride) : path3.join(paths.root, "bin", "daemon.js");
+  const daemonEntry = binOverride ? path4.resolve(binOverride) : path4.join(paths.root, "bin", "daemon.js");
   const stdio = daemonSpawnStdio(paths.root);
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
@@ -4269,7 +4290,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
 function warnIfSourceModeSharesDiscoveryRoot(input) {
   if (!input.env.AGENTS_COMM_BUS_BIN)
     return;
-  if (path3.resolve(input.stateRoot) !== path3.resolve(input.discoveryRoot))
+  if (path4.resolve(input.stateRoot) !== path4.resolve(input.discoveryRoot))
     return;
   input.log("agents-comm-bus: source/dev daemon is sharing the production discovery root; set discoveryRoot in .agents-comm-bus-dev.json (for example .agents-comm-bus-discovery/) to let dev and prod daemons coexist.");
 }
@@ -4278,12 +4299,12 @@ function sleep(ms) {
 }
 
 // ../hosts/common/install/ensure-central-install.js
-import path7 from "node:path";
+import path8 from "node:path";
 import { existsSync as existsSync2 } from "node:fs";
 import { readFile as readFile5 } from "node:fs/promises";
 
 // ../hosts/common/install/run-central-install.js
-import path6 from "node:path";
+import path7 from "node:path";
 import { existsSync } from "node:fs";
 
 // ../hosts/common/install/reconcile-central-install.js
@@ -4488,7 +4509,7 @@ function join2(dir, name) {
 
 // ../hosts/common/install/node-fs-seam.js
 import { mkdir as mkdir4, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3, chmod } from "node:fs/promises";
-import path4 from "node:path";
+import path5 from "node:path";
 
 // ../hosts/common/install/strip-bom.js
 function stripBom(text) {
@@ -4542,23 +4563,23 @@ async function readJsonOrNull(p) {
   }
 }
 function resolveCentralPaths(stateRoot2, comm) {
-  const bin = path4.join(stateRoot2, "bin");
-  const adapters = path4.join(stateRoot2, "adapters");
+  const bin = path5.join(stateRoot2, "bin");
+  const adapters = path5.join(stateRoot2, "adapters");
   return {
-    daemonBundle: path4.join(bin, "daemon.js"),
-    daemonVersionFile: path4.join(bin, "version.json"),
+    daemonBundle: path5.join(bin, "daemon.js"),
+    daemonVersionFile: path5.join(bin, "version.json"),
     // The admin CLI is centrally installed next to the daemon (it rides under
     // the daemon version) so `agents-comm` / `agents-comm-bus` work without npm.
-    cliBundle: path4.join(bin, "cli.js"),
-    adapterBundle: path4.join(adapters, `${comm}.js`),
-    adapterVersionFile: path4.join(adapters, `${comm}.version.json`)
+    cliBundle: path5.join(bin, "cli.js"),
+    adapterBundle: path5.join(adapters, `${comm}.js`),
+    adapterVersionFile: path5.join(adapters, `${comm}.version.json`)
   };
 }
 
 // ../hosts/common/install/install-lock.js
 import { constants as constants2 } from "node:fs";
 import { open as open3, readFile as readFile4, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
-import path5 from "node:path";
+import path6 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
 async function acquireInstallLock(lockPath, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs;
@@ -4566,7 +4587,7 @@ async function acquireInstallLock(lockPath, options = {}) {
   const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? Date.now;
   const sleep2 = options.sleep ?? defaultSleep;
-  await mkdir5(path5.dirname(lockPath), { recursive: true });
+  await mkdir5(path6.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
@@ -4626,7 +4647,7 @@ function isAlreadyExistsError2(error) {
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
   const fs = deps.fs ?? createAtomicNodeFsSeam();
-  const lockPath = path6.join(stateRoot2, INSTALL_LOCK_NAME);
+  const lockPath = path7.join(stateRoot2, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
     const state = await readCentralState(stateRoot2, actor.comm);
@@ -4635,7 +4656,7 @@ async function runCentralInstall(stateRoot2, actor, deps = {}) {
     const paths = resolveCentralPaths(stateRoot2, actor.comm);
     const result = await executeInstallPlan(plan, actor, paths, fs);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
-      const cliSrc = path6.join(actor.pluginInstallDir, "cli.bundle.js");
+      const cliSrc = path7.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
         await installCliLaunchers(paths, cliSrc, fs);
         result.wroteBundles.push(paths.cliBundle);
@@ -4656,7 +4677,7 @@ async function readInstallStamp(pluginInstallDir, deps = {}) {
   if (!pluginInstallDir) return null;
   const read = deps.readFile ?? readFile5;
   try {
-    const raw = await read(path7.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
+    const raw = await read(path8.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
     const parsed = JSON.parse(stripBom(raw));
     if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string" || !isValidAdapterBundleVersionsMap(parsed.adapter_bundle_versions)) {
       return null;
@@ -4674,7 +4695,7 @@ async function ensureCentralInstall(options) {
   }
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
-    if (options.stateRoot && existsSync2(path7.join(options.stateRoot, "bin", "daemon.js"))) {
+    if (options.stateRoot && existsSync2(path8.join(options.stateRoot, "bin", "daemon.js"))) {
       return { mode: "production", skipped: true };
     }
     throw new Error(
@@ -4764,12 +4785,12 @@ async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
 
 // ../hosts/common/install/dev-config-resolver.js
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
-import path8 from "node:path";
+import path9 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 function resolveDevConfig(projectRoot, deps = {}) {
   const exists = deps.exists ?? existsSync3;
   const readFile6 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
-  const markerPath = path8.join(projectRoot, DEV_MARKER_NAME);
+  const markerPath = path9.join(projectRoot, DEV_MARKER_NAME);
   if (!exists(markerPath)) {
     return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
   }
@@ -4787,7 +4808,7 @@ function resolveDevConfig(projectRoot, deps = {}) {
   if (!daemonBinRaw) {
     return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
   }
-  const daemonBin = path8.resolve(projectRoot, daemonBinRaw);
+  const daemonBin = path9.resolve(projectRoot, daemonBinRaw);
   if (!isInside(projectRoot, daemonBin)) {
     return { env: {}, status: "rejected", reasons: [`dev marker daemonBin escapes project root: ${daemonBinRaw}`] };
   }
@@ -4797,17 +4818,17 @@ function resolveDevConfig(projectRoot, deps = {}) {
   const env = { AGENTS_COMM_BUS_BIN: daemonBin };
   const reasons = [`dev marker applied from ${markerPath}`];
   if (typeof parsed.stateRoot === "string" && parsed.stateRoot.length > 0) {
-    const stateRoot2 = path8.resolve(projectRoot, parsed.stateRoot);
+    const stateRoot2 = path9.resolve(projectRoot, parsed.stateRoot);
     if (isInside(projectRoot, stateRoot2)) env.AGENTS_COMM_BUS_ROOT = stateRoot2;
     else reasons.push(`ignoring stateRoot outside project root: ${parsed.stateRoot}`);
   }
   if (typeof parsed.discoveryRoot === "string" && parsed.discoveryRoot.length > 0) {
-    const discoveryRoot2 = path8.resolve(projectRoot, parsed.discoveryRoot);
+    const discoveryRoot2 = path9.resolve(projectRoot, parsed.discoveryRoot);
     if (isInside(projectRoot, discoveryRoot2)) env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot2;
     else reasons.push(`ignoring discoveryRoot outside project root: ${parsed.discoveryRoot}`);
   }
   if (typeof parsed.adaptersDir === "string" && parsed.adaptersDir.length > 0) {
-    const adaptersDir = path8.resolve(projectRoot, parsed.adaptersDir);
+    const adaptersDir = path9.resolve(projectRoot, parsed.adaptersDir);
     if (isInside(projectRoot, adaptersDir)) env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
     else reasons.push(`ignoring adaptersDir outside project root: ${parsed.adaptersDir}`);
   }
@@ -4818,9 +4839,9 @@ function applyDevConfig(baseEnv, projectRoot, deps = {}) {
   return { env: { ...baseEnv, ...devConfig.env }, devConfig };
 }
 function isInside(root, candidate) {
-  const rel = path8.relative(root, candidate);
+  const rel = path9.relative(root, candidate);
   if (rel === "") return true;
-  return !rel.startsWith("..") && !path8.isAbsolute(rel);
+  return !rel.startsWith("..") && !path9.isAbsolute(rel);
 }
 
 // ../hosts/common/install/entry-ensures.js
@@ -4832,10 +4853,10 @@ function resolveEntryContext(fromDir, deps = {}) {
   };
 }
 function findAncestorContaining(dir, name, exists) {
-  let current = path9.resolve(dir);
+  let current = path10.resolve(dir);
   for (; ; ) {
-    if (exists(path9.join(current, name))) return current;
-    const parent = path9.dirname(current);
+    if (exists(path10.join(current, name))) return current;
+    const parent = path10.dirname(current);
     if (parent === current) return void 0;
     current = parent;
   }
@@ -4897,25 +4918,6 @@ async function entryEnsures(options) {
       AGENTS_COMM_BUS_DISCOVERY_ROOT: canonicalDiscoveryRoot
     }
   };
-}
-
-// dist/core-daemon/project-path.js
-import path10 from "node:path";
-function normalizeProjectPath(project) {
-  let resolved = path10.resolve(project);
-  if (path10.sep === "\\") {
-    resolved = resolved.replace(/\//g, "\\");
-  } else {
-    resolved = resolved.replace(/\\/g, "/");
-  }
-  if (/^[A-Za-z]:/.test(resolved)) {
-    resolved = resolved[0].toUpperCase() + resolved.slice(1);
-  }
-  const isBareRoot = resolved === path10.sep || path10.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
-  if (resolved.length > 1 && resolved.endsWith(path10.sep) && !isBareRoot) {
-    resolved = resolved.slice(0, -1);
-  }
-  return resolved;
 }
 
 // ../hosts/codex/hooks/permission-request.js

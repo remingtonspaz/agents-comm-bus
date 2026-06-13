@@ -1,6 +1,6 @@
 import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 export interface CodexBridgeOptions {
@@ -20,6 +20,8 @@ export interface CodexBridgeOptions {
      * composition root always supplies it.
      */
     ensureCommsForSession?: EnsureCommsForSession;
+    /** AGE-58: daemon-resolved identity for session ownership stamping. */
+    daemonOwner?: DaemonSelfIdentity;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;

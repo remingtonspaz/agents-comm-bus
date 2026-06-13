@@ -11,7 +11,7 @@ import {
   runBootScopeRestore,
 } from "../../core-daemon/bootstrap/boot-scope-restore.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
-import type { EnsureCommsForSession } from "../../core-daemon/runtime/agent-bridge.js";
+import type { DaemonSelfIdentity, EnsureCommsForSession } from "../../core-daemon/runtime/agent-bridge.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 
@@ -20,12 +20,34 @@ registerTempDirCleanup();
 const NOW = 1_700_000_000_000;
 const RECENT = NOW - 60_000;
 const STALE = NOW - DEFAULT_BOOT_RESTORE_RECENCY_MS - 1;
+const DISCOVERY_ROOT = "C:\\Users\\me\\.agents-comm-bus";
+const OTHER_DISCOVERY_ROOT = "D:\\dev\\.agents-comm-bus-discovery";
+
+type SessionDaemonOwnerColumns = Pick<
+  Session,
+  | "lease_owner_daemon_discovery_root"
+  | "lease_owner_daemon_checkout_root"
+  | "lease_owner_daemon_state_root"
+  | "lease_owner_daemon_bin"
+  | "lease_owner_daemon_authority_rank"
+>;
+
+function daemonOwner(discoveryRoot: string): SessionDaemonOwnerColumns {
+  return {
+    lease_owner_daemon_discovery_root: discoveryRoot,
+    lease_owner_daemon_checkout_root: "C:\\work\\repo",
+    lease_owner_daemon_state_root: "C:\\Users\\me\\.agents-comm-bus",
+    lease_owner_daemon_bin: "C:\\bin\\daemon.js",
+    lease_owner_daemon_authority_rank: "production",
+  };
+}
 
 function session(
   id: string,
   project: string,
   agent: AgentId,
   owner: { pid: number | null; registeredAt: number | null },
+  ownerDaemon: SessionDaemonOwnerColumns | null = daemonOwner(DISCOVERY_ROOT),
 ): Session {
   return {
     schema_version: SCHEMA_VERSION_SESSION,
@@ -39,6 +61,11 @@ function session(
     lease_owner_process_pid: owner.pid,
     lease_owner_process_label: owner.pid == null ? null : agent,
     lease_owner_process_registered_at: owner.registeredAt,
+    lease_owner_daemon_discovery_root: ownerDaemon?.lease_owner_daemon_discovery_root ?? null,
+    lease_owner_daemon_checkout_root: ownerDaemon?.lease_owner_daemon_checkout_root ?? null,
+    lease_owner_daemon_state_root: ownerDaemon?.lease_owner_daemon_state_root ?? null,
+    lease_owner_daemon_bin: ownerDaemon?.lease_owner_daemon_bin ?? null,
+    lease_owner_daemon_authority_rank: ownerDaemon?.lease_owner_daemon_authority_rank ?? null,
     most_recent_inbound_conversation_id: null,
     status: "active",
   };
@@ -87,48 +114,65 @@ function auditRecorder(): { events: AuditEvent[]; audit: { append: (e: AuditEven
   };
 }
 
+function bootRestoreInput(
+  overrides: Partial<Parameters<typeof runBootScopeRestore>[0]> & {
+    storage: ReturnType<typeof fakeStorage>;
+    ensureCommsForSession: EnsureCommsForSession;
+  },
+): Parameters<typeof runBootScopeRestore>[0] {
+  return {
+    stateRoot: "/state",
+    discoveryRoot: DISCOVERY_ROOT,
+    now: () => NOW,
+    isPidAlive: () => true,
+    pathExists: async () => false,
+    ...overrides,
+  };
+}
+
 describe("AGE-55 boot scope restore", () => {
   it("restores a scope whose owner pid is alive and recent", async () => {
     const { fn, calls } = recordingEnsure();
     const project = normalizeProjectPath("D:\\work\\proj-a");
     const { events, audit } = auditRecorder();
 
-    const summary = await runBootScopeRestore({
-      stateRoot: "/state",
-      storage: fakeStorage([
-        session("s1", project, "claude", { pid: 42, registeredAt: RECENT }),
-      ]),
-      ensureCommsForSession: fn,
-      audit,
-      now: () => NOW,
-      isPidAlive: (pid) => pid === 42,
-      pathExists: async () => false,
-    });
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", project, "claude", { pid: 42, registeredAt: RECENT }),
+        ]),
+        ensureCommsForSession: fn,
+        audit,
+        isPidAlive: (pid) => pid === 42,
+      }),
+    );
 
     assert.equal(summary.status, "completed");
     assert.equal(summary.candidates, 1);
     assert.equal(summary.restored, 1);
     assert.equal(summary.skipped_dead, 0);
     assert.equal(summary.skipped_stale, 0);
+    assert.equal(summary.skipped_no_daemon_owner, 0);
+    assert.equal(summary.skipped_foreign_owner, 0);
     assert.deepEqual(calls, [{ project, agent: "claude" }]);
     assert.equal(events.length, 1);
     assert.equal(events[0].kind, "daemon_boot_restore");
     assert.equal(events[0].detail?.restored, 1);
+    assert.equal(events[0].detail?.skipped_no_daemon_owner, 0);
   });
 
   it("does not restore a dead-owner scope", async () => {
     const { fn, calls } = recordingEnsure();
 
-    const summary = await runBootScopeRestore({
-      stateRoot: "/state",
-      storage: fakeStorage([
-        session("s1", "D:\\work\\proj-a", "claude", { pid: 99, registeredAt: RECENT }),
-      ]),
-      ensureCommsForSession: fn,
-      now: () => NOW,
-      isPidAlive: () => false,
-      pathExists: async () => false,
-    });
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", "D:\\work\\proj-a", "claude", { pid: 99, registeredAt: RECENT }),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: () => false,
+      }),
+    );
 
     assert.equal(summary.restored, 0);
     assert.equal(summary.skipped_dead, 1);
@@ -138,16 +182,14 @@ describe("AGE-55 boot scope restore", () => {
   it("does not restore beyond the recency window", async () => {
     const { fn, calls } = recordingEnsure();
 
-    const summary = await runBootScopeRestore({
-      stateRoot: "/state",
-      storage: fakeStorage([
-        session("s1", "D:\\work\\proj-a", "claude", { pid: 42, registeredAt: STALE }),
-      ]),
-      ensureCommsForSession: fn,
-      now: () => NOW,
-      isPidAlive: () => true,
-      pathExists: async () => false,
-    });
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", "D:\\work\\proj-a", "claude", { pid: 42, registeredAt: STALE }),
+        ]),
+        ensureCommsForSession: fn,
+      }),
+    );
 
     assert.equal(summary.restored, 0);
     assert.equal(summary.skipped_stale, 1);
@@ -158,17 +200,16 @@ describe("AGE-55 boot scope restore", () => {
     const { fn, calls } = recordingEnsure();
     const { events, audit } = auditRecorder();
 
-    const summary = await runBootScopeRestore({
-      stateRoot: "/state",
-      storage: fakeStorage([
-        session("s1", "D:\\work\\proj-a", "claude", { pid: 42, registeredAt: RECENT }),
-      ]),
-      ensureCommsForSession: fn,
-      audit,
-      now: () => NOW,
-      isPidAlive: () => true,
-      pathExists: async (path) => path.endsWith("/paused") || path.endsWith("\\paused"),
-    });
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", "D:\\work\\proj-a", "claude", { pid: 42, registeredAt: RECENT }),
+        ]),
+        ensureCommsForSession: fn,
+        audit,
+        pathExists: async (path) => path.endsWith("/paused") || path.endsWith("\\paused"),
+      }),
+    );
 
     assert.equal(summary.status, "skipped_paused");
     assert.equal(summary.restored, 0);
@@ -180,17 +221,16 @@ describe("AGE-55 boot scope restore", () => {
     const { fn, calls } = recordingEnsure();
     const project = normalizeProjectPath("D:\\work\\proj-a");
 
-    const summary = await runBootScopeRestore({
-      stateRoot: "/state",
-      storage: fakeStorage([
-        session("s1", project, "claude", { pid: 10, registeredAt: RECENT }),
-        session("s2", project, "claude", { pid: 11, registeredAt: RECENT }),
-      ]),
-      ensureCommsForSession: fn,
-      now: () => NOW,
-      isPidAlive: (pid) => pid === 10 || pid === 11,
-      pathExists: async () => false,
-    });
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", project, "claude", { pid: 10, registeredAt: RECENT }),
+          session("s2", project, "claude", { pid: 11, registeredAt: RECENT }),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: (pid) => pid === 10 || pid === 11,
+      }),
+    );
 
     assert.equal(summary.candidates, 2);
     assert.equal(summary.restored, 1);
@@ -201,17 +241,16 @@ describe("AGE-55 boot scope restore", () => {
     const { fn, calls } = recordingEnsure();
     const canonical = normalizeProjectPath("D:\\work\\example-project");
 
-    const summary = await runBootScopeRestore({
-      stateRoot: "/state",
-      storage: fakeStorage([
-        session("s1", "D:\\work\\example-project", "codex", { pid: 20, registeredAt: RECENT }),
-        session("s2", "d:\\work\\example-project", "codex", { pid: 21, registeredAt: RECENT }),
-      ]),
-      ensureCommsForSession: fn,
-      now: () => NOW,
-      isPidAlive: (pid) => pid === 20 || pid === 21,
-      pathExists: async () => false,
-    });
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", "D:\\work\\example-project", "codex", { pid: 20, registeredAt: RECENT }),
+          session("s2", "d:\\work\\example-project", "codex", { pid: 21, registeredAt: RECENT }),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: (pid) => pid === 20 || pid === 21,
+      }),
+    );
 
     assert.equal(summary.restored, 1);
     assert.deepEqual(calls, [{ project: canonical, agent: "codex" }]);
@@ -225,11 +264,20 @@ describe("AGE-55 boot scope restore", () => {
     const sessionId = "claude-s1" as SessionId;
     const connectionId = "claude:conn-1";
     const ownerPid = process.pid;
+    const discoveryRoot = join(dir, "discovery");
+    const daemonOwnerIdentity: DaemonSelfIdentity = {
+      discoveryRoot,
+      checkoutRoot: "C:\\work\\repo",
+      stateRoot: dir,
+      daemonBin: "daemon.js",
+      authorityRank: "production",
+    };
 
     const bridge = new ClaudeBridge({
       storage,
       bus: {} as never,
       pendingInbound: [],
+      daemonOwner: daemonOwnerIdentity,
     });
 
     try {
@@ -249,6 +297,7 @@ describe("AGE-55 boot scope restore", () => {
       assert.equal(during?.lease_owner_process_pid, ownerPid);
       assert.equal(during?.lease_owner_process_label, "claude");
       assert.notEqual(during?.lease_owner_process_registered_at, null);
+      assert.equal(during?.lease_owner_daemon_discovery_root, discoveryRoot);
 
       socket.close();
 
@@ -258,9 +307,11 @@ describe("AGE-55 boot scope restore", () => {
       assert.equal(afterClose?.lease_owner_process_pid, ownerPid);
       assert.equal(afterClose?.lease_owner_process_label, "claude");
       assert.notEqual(afterClose?.lease_owner_process_registered_at, null);
+      assert.equal(afterClose?.lease_owner_daemon_discovery_root, discoveryRoot);
 
       const summary = await runBootScopeRestore({
         stateRoot: dir,
+        discoveryRoot,
         storage,
         ensureCommsForSession: fn,
         now: () => Date.now(),
@@ -270,9 +321,106 @@ describe("AGE-55 boot scope restore", () => {
 
       assert.equal(summary.restored, 1);
       assert.equal(summary.skipped_no_owner, 0);
+      assert.equal(summary.skipped_no_daemon_owner, 0);
+      assert.equal(summary.skipped_foreign_owner, 0);
       assert.deepEqual(calls, [{ project, agent: "claude" }]);
     } finally {
       await storage.close();
     }
+  });
+});
+
+describe("AGE-58 boot scope restore daemon ownership", () => {
+  it("restores when stamped discovery root matches current daemon", async () => {
+    const { fn, calls } = recordingEnsure();
+    const project = normalizeProjectPath("D:\\work\\proj-a");
+
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        discoveryRoot: DISCOVERY_ROOT,
+        storage: fakeStorage([
+          session("s1", project, "codex", { pid: 42, registeredAt: RECENT }, daemonOwner(DISCOVERY_ROOT)),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: (pid) => pid === 42,
+      }),
+    );
+
+    assert.equal(summary.restored, 1);
+    assert.equal(summary.skipped_no_daemon_owner, 0);
+    assert.equal(summary.skipped_foreign_owner, 0);
+    assert.deepEqual(calls, [{ project, agent: "codex" }]);
+  });
+
+  it("canonicalizes discovery-root separators before comparing", async () => {
+    const { fn, calls } = recordingEnsure();
+    const project = normalizeProjectPath("D:\\work\\proj-a");
+
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        discoveryRoot: "C:/Users/me/.agents-comm-bus",
+        storage: fakeStorage([
+          session(
+            "s1",
+            project,
+            "codex",
+            { pid: 42, registeredAt: RECENT },
+            daemonOwner("C:\\Users\\me\\.agents-comm-bus"),
+          ),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: (pid) => pid === 42,
+      }),
+    );
+
+    assert.equal(summary.restored, 1);
+    assert.equal(summary.skipped_no_daemon_owner, 0);
+    assert.equal(summary.skipped_foreign_owner, 0);
+    assert.deepEqual(calls, [{ project, agent: "codex" }]);
+  });
+
+  it("skips foreign-owner scopes with a different discovery root", async () => {
+    const { fn, calls } = recordingEnsure();
+
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        discoveryRoot: DISCOVERY_ROOT,
+        storage: fakeStorage([
+          session(
+            "s1",
+            "D:\\work\\proj-a",
+            "codex",
+            { pid: 42, registeredAt: RECENT },
+            daemonOwner(OTHER_DISCOVERY_ROOT),
+          ),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: (pid) => pid === 42,
+      }),
+    );
+
+    assert.equal(summary.restored, 0);
+    assert.equal(summary.skipped_no_daemon_owner, 0);
+    assert.equal(summary.skipped_foreign_owner, 1);
+    assert.equal(calls.length, 0);
+  });
+
+  it("fails closed when daemon owner metadata is missing", async () => {
+    const { fn, calls } = recordingEnsure();
+
+    const summary = await runBootScopeRestore(
+      bootRestoreInput({
+        storage: fakeStorage([
+          session("s1", "D:\\work\\proj-a", "codex", { pid: 42, registeredAt: RECENT }, null),
+        ]),
+        ensureCommsForSession: fn,
+        isPidAlive: (pid) => pid === 42,
+      }),
+    );
+
+    assert.equal(summary.restored, 0);
+    assert.equal(summary.skipped_no_daemon_owner, 1);
+    assert.equal(summary.skipped_foreign_owner, 0);
+    assert.equal(calls.length, 0);
   });
 });

@@ -25,8 +25,10 @@ import type {
   AgentBridge,
   AgentBridgeContext,
   AgentBridgeFactory,
+  DaemonSelfIdentity,
   EnsureCommsForSession,
 } from "../../runtime/agent-bridge.js";
+import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import {
   CodexAgentAdapter,
@@ -53,6 +55,8 @@ export interface CodexBridgeOptions {
    * composition root always supplies it.
    */
   ensureCommsForSession?: EnsureCommsForSession;
+  /** AGE-58: daemon-resolved identity for session ownership stamping. */
+  daemonOwner?: DaemonSelfIdentity;
 }
 
 export interface RegisterCodexSessionResult {
@@ -278,13 +282,20 @@ export class CodexBridge implements AgentBridge {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_daemon_discovery_root: null,
+      lease_owner_daemon_checkout_root: null,
+      lease_owner_daemon_state_root: null,
+      lease_owner_daemon_bin: null,
+      lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
       status: "active",
     });
     const replaceExistingLease =
       params.replace_existing_lease === true ||
       params.persist_after_disconnect === true;
-    const leaseOwner = sessionLeaseOwnerFromParams(params, "codex");
+    const leaseOwner = this.options.daemonOwner
+      ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params, "codex"), this.options.daemonOwner)
+      : sessionLeaseOwnerFromParams(params, "codex");
     let acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
@@ -970,6 +981,7 @@ export class CodexBridgeFactory implements AgentBridgeFactory {
       audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
+      daemonOwner: context.daemonOwner,
     });
   }
 }

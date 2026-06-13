@@ -17,6 +17,7 @@ import {
   conversationRegistrationKeyMigration,
 } from "../../core-daemon/storage/schema/runner.js";
 import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
+import { sessionFixture } from "./_session-fixture.js";
 import type { AccountRegistration, Conversation, QueryRecord, Session } from "../../packages/core-contracts/src/records/index.js";
 import type { AccountId, AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "../../packages/core-contracts/src/types.js";
 
@@ -47,22 +48,12 @@ function account(overrides: Partial<AccountRegistration> = {}): AccountRegistrat
 }
 
 function session(overrides: Partial<Session> = {}): Session {
-  return {
-    schema_version: 1,
+  return sessionFixture({
     session_id: "session-1" as SessionId,
     agent: "claude" as AgentId,
     project: "project-a",
-    created_at: 1,
-    lease_holder_connection_id: null,
-    lease_acquired_at: null,
-    lease_released_at: null,
-    lease_owner_process_pid: null,
-    lease_owner_process_label: null,
-    lease_owner_process_registered_at: null,
-    most_recent_inbound_conversation_id: null,
-    status: "active",
     ...overrides,
-  };
+  });
 }
 
 function query(overrides: Partial<QueryRecord> = {}): QueryRecord {
@@ -267,6 +258,44 @@ describe("SQLite storage schema", () => {
     });
   });
 
+  it("records daemon owner identity on lease acquire and clears on full release", async () => {
+    await withStorage(async (dbPath) => {
+      const storage = await openSqliteStorage(dbPath);
+      await storage.upsertSession(session());
+
+      assert.equal(
+        await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10, {
+          process_pid: 12345,
+          process_label: "codex",
+          daemon: {
+            discovery_root: "C:\\Users\\me\\.agents-comm-bus-discovery",
+            checkout_root: "D:\\work\\repo",
+            state_root: "C:\\Users\\me\\.agents-comm-bus",
+            daemon_bin: "daemon.js",
+            authority_rank: "main-dev",
+          },
+        }),
+        true,
+      );
+      const acquired = await storage.getSession("session-1" as SessionId);
+      assert.equal(
+        acquired?.lease_owner_daemon_discovery_root,
+        "C:\\Users\\me\\.agents-comm-bus-discovery",
+      );
+      assert.equal(acquired?.lease_owner_daemon_checkout_root, "D:\\work\\repo");
+      assert.equal(acquired?.lease_owner_daemon_state_root, "C:\\Users\\me\\.agents-comm-bus");
+      assert.equal(acquired?.lease_owner_daemon_bin, "daemon.js");
+      assert.equal(acquired?.lease_owner_daemon_authority_rank, "main-dev");
+
+      await storage.releaseSessionLease("session-1" as SessionId, "conn-1", 20);
+      const released = await storage.getSession("session-1" as SessionId);
+      assert.equal(released?.lease_owner_daemon_discovery_root, null);
+      assert.equal(released?.lease_owner_daemon_checkout_root, null);
+
+      await storage.close();
+    });
+  });
+
   it("releaseSessionConnectionLeasePreservingOwner clears connection lease but keeps owner", async () => {
     await withStorage(async (dbPath) => {
       const storage = await openSqliteStorage(dbPath);
@@ -276,6 +305,13 @@ describe("SQLite storage schema", () => {
         await storage.acquireSessionLease("session-1" as SessionId, "conn-1", 10, {
           process_pid: 12345,
           process_label: "claude",
+          daemon: {
+            discovery_root: "C:\\Users\\me\\.agents-comm-bus-discovery",
+            checkout_root: "D:\\work\\repo",
+            state_root: "C:\\Users\\me\\.agents-comm-bus",
+            daemon_bin: "daemon.js",
+            authority_rank: "main-dev",
+          },
         }),
         true,
       );
@@ -291,6 +327,10 @@ describe("SQLite storage schema", () => {
       assert.equal(released?.lease_owner_process_pid, 12345);
       assert.equal(released?.lease_owner_process_label, "claude");
       assert.equal(released?.lease_owner_process_registered_at, 10);
+      assert.equal(
+        released?.lease_owner_daemon_discovery_root,
+        "C:\\Users\\me\\.agents-comm-bus-discovery",
+      );
 
       await storage.close();
     });

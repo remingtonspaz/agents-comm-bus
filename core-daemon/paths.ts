@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { DAEMON_NAME } from "./config.js";
+import { normalizeProjectPath } from "./project-path.js";
 
 export interface StatePathOptions {
   homeDir?: string;
@@ -74,6 +75,14 @@ export function resolveStatePaths(options: StatePathOptions = {}): AgentsCommBus
 
 export function discoveryRoot(options: DiscoveryPathOptions = {}): string {
   return path.resolve(options.discoveryRoot ?? stateRoot(options));
+}
+
+/**
+ * Canonical daemon discovery/state root for ownership comparisons (AGE-58).
+ * Reuses project-path normalization: drive-letter casing, separators, trailing slash.
+ */
+export function normalizeDaemonRootPath(root: string): string {
+  return normalizeProjectPath(root);
 }
 
 export function resolveDiscoveryPaths(

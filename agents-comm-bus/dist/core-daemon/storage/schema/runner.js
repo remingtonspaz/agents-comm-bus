@@ -105,6 +105,14 @@ export const durablePendingInboundMigration = {
         await ctx.exec(sql);
     },
 };
+export const sessionDaemonOwnerMigration = {
+    version: 11,
+    description: "AGE-58: stamp daemon-instance identity on session leases",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "011_session_daemon_owner.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -117,6 +125,7 @@ export async function runStorageMigrations(db) {
         conversationRegistrationKeyMigration,
         multiOpenQueriesMigration,
         durablePendingInboundMigration,
+        sessionDaemonOwnerMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

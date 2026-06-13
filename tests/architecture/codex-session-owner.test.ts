@@ -234,6 +234,11 @@ function sessionRecord(id: SessionId, project = PROJECT_A): Session {
     lease_owner_process_pid: null,
     lease_owner_process_label: null,
     lease_owner_process_registered_at: null,
+    lease_owner_daemon_discovery_root: null,
+    lease_owner_daemon_checkout_root: null,
+    lease_owner_daemon_state_root: null,
+    lease_owner_daemon_bin: null,
+    lease_owner_daemon_authority_rank: null,
     most_recent_inbound_conversation_id: null,
     status: "active",
   };

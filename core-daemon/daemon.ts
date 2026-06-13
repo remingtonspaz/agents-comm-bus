@@ -269,6 +269,13 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         audit,
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
+        daemonOwner: {
+          discoveryRoot: discoveryPaths.root,
+          checkoutRoot,
+          stateRoot: paths.root,
+          daemonBin,
+          authorityRank,
+        },
       }),
     ),
   );
@@ -460,6 +467,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // AGE-55: async boot restore — never block daemon readiness on comm bring-up.
   void runBootScopeRestore({
     stateRoot: paths.root,
+    discoveryRoot: discoveryPaths.root,
     storage,
     ensureCommsForSession: ensureCommsForSessionFn,
     audit,

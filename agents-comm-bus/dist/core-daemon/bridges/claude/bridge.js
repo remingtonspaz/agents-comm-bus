@@ -10,6 +10,7 @@
  */
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
+import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { normalizeProjectPath } from "../../project-path.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
@@ -232,10 +233,17 @@ export class ClaudeBridge {
             lease_owner_process_pid: null,
             lease_owner_process_label: null,
             lease_owner_process_registered_at: null,
+            lease_owner_daemon_discovery_root: null,
+            lease_owner_daemon_checkout_root: null,
+            lease_owner_daemon_state_root: null,
+            lease_owner_daemon_bin: null,
+            lease_owner_daemon_authority_rank: null,
             most_recent_inbound_conversation_id: null,
             status: "active",
         });
-        const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, sessionLeaseOwnerFromParams(params));
+        const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, this.options.daemonOwner
+            ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
+            : sessionLeaseOwnerFromParams(params));
         if (!acquired) {
             await this.ensureCommsBestEffort(project);
             return { ok: false, reason: "same-project claude session lease already held" };
@@ -772,6 +780,7 @@ export class ClaudeBridgeFactory {
             audit: context.audit,
             pendingInbound: context.pendingInbound,
             ensureCommsForSession: context.ensureCommsForSession,
+            daemonOwner: context.daemonOwner,
         });
     }
 }

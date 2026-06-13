@@ -79,6 +79,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/011_session_daemon_owner.sql",
+      "artifact": "plugins/claude/curl/011_session_daemon_owner.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/claude/curl/package.json",
       "type": "package-json"
