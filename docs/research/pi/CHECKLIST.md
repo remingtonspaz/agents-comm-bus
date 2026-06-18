@@ -192,15 +192,15 @@ Legend:
 
 ### 3.1 Package files
 
-- [ ] Package source lives under `plugins/pi/agents-comm/` in the monorepo
+- [x] Package source lives under `plugins/pi/agents-comm/` in the monorepo
       (parallel to `plugins/claude/<comm>/` and `plugins/codex/<comm>/`).
-- [ ] Create `package.json` with:
-  - [ ] `name`, `keywords: ["pi-package"]`
-  - [ ] `pi` manifest pointing at `./extensions` and `./skills`
-  - [ ] `peerDependencies` for `@earendil-works/pi-coding-agent`,
+- [x] Create `package.json` with:
+  - [x] `name`, `keywords: ["pi-package"]`
+  - [x] `pi` manifest pointing at `./extensions` and `./skills`
+  - [x] `peerDependencies` for `@earendil-works/pi-coding-agent`,
         `@earendil-works/pi-ai`, `@earendil-works/pi-tui`, `typebox` at `"*"`
-  - [ ] `dependencies` for any runtime deps (e.g. ws, if needed directly)
-- [ ] Create `README.md` for the package
+  - [x] `dependencies` for any runtime deps (e.g. ws, if needed directly)
+- [x] Create `README.md` for the package
 
 ### 3.1b Release sync (Option B)
 
@@ -222,12 +222,12 @@ Legend:
 
 ### 3.2 Extension module layout
 
-- [ ] `extensions/agents-comm/index.ts` — entrypoint
-- [ ] `extensions/agents-comm/daemon-client.ts`
-- [ ] `extensions/agents-comm/session-id.ts`
-- [ ] `extensions/agents-comm/inbound-format.ts`
-- [ ] `extensions/agents-comm/tools.ts`
-- [ ] `extensions/agents-comm/commands.ts` (optional for MVP)
+- [x] `extensions/agents-comm/index.ts` — entrypoint
+- [x] `extensions/agents-comm/daemon-client.ts`
+- [x] `extensions/agents-comm/session-id.ts`
+- [x] `extensions/agents-comm/inbound-format.ts`
+- [x] `extensions/agents-comm/tools.ts`
+- [x] `extensions/agents-comm/commands.ts` (optional for MVP)
 
 ## Phase 4 — Pi extension core
 

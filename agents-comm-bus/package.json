@@ -47,6 +47,10 @@
       "import": "./dist/core-daemon/ipc/client.js",
       "types": "./dist/core-daemon/ipc/client.d.ts"
     },
+    "./ipc/persistent-client": {
+      "import": "./dist/core-daemon/ipc/persistent-client.js",
+      "types": "./dist/core-daemon/ipc/persistent-client.d.ts"
+    },
     "./bus": {
       "import": "./dist/core-daemon/bus.js",
       "types": "./dist/core-daemon/bus.d.ts"
