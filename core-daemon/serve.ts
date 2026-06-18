@@ -20,6 +20,7 @@ import { DAEMON_NAME } from "./config.js";
 import { resolveStatePaths } from "./paths.js";
 import { ClaudeBridgeFactory } from "./bridges/claude/bridge.js";
 import { CodexBridgeFactory } from "./bridges/codex/bridge.js";
+import { PiBridgeFactory } from "./bridges/pi/bridge.js";
 import { loadCommAdapterFactories } from "./runtime/comm-adapter-loader.js";
 
 export async function startConfiguredDaemon(): Promise<void> {
@@ -32,7 +33,11 @@ export async function startConfiguredDaemon(): Promise<void> {
     commAdapterFactories,
     adaptersDir,
     loadCommAdapterFactories: () => loadCommAdapterFactories({ adaptersDir }),
-    agentBridgeFactories: [new ClaudeBridgeFactory(), new CodexBridgeFactory()],
+    agentBridgeFactories: [
+      new ClaudeBridgeFactory(),
+      new CodexBridgeFactory(),
+      new PiBridgeFactory(),
+    ],
   });
 }
 
