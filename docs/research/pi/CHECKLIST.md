@@ -35,107 +35,110 @@ Legend:
 
 ### 1.1 Pi bridge module
 
-- [ ] Create `core-daemon/bridges/pi/bridge.ts`
-- [ ] Implement `PiBridgeFactory` (`agentId = "pi"`, `create(context)`)
-- [ ] Implement `PiBridge` class implementing `AgentBridge`:
-  - [ ] `readonly agentId = "pi"`
-  - [ ] `readonly ipcMethods = new Set(["pi_register_session", "pi_drain_inbound", "pi_unregister_session"])`
-  - [ ] `attach(comms)` — no-op or minimal for MVP (no wake watcher)
-  - [ ] OMIT optional bridge methods (`attachComm`/`detachComm`/
+- [x] Create `core-daemon/bridges/pi/bridge.ts`
+- [x] Implement `PiBridgeFactory` (`agentId = "pi"`, `create(context)`)
+- [x] Implement `PiBridge` class implementing `AgentBridge`:
+  - [x] `readonly agentId = "pi"`
+  - [x] `readonly ipcMethods = new Set(["pi_register_session", "pi_drain_inbound", "pi_unregister_session"])`
+  - [x] `attach(comms)` — no-op or minimal for MVP (no wake watcher)
+  - [x] OMIT optional bridge methods (`attachComm`/`detachComm`/
         `invalidateRegistrationCaches`/`onInboundConversation`) — only
         `agentId`/`ipcMethods`/`attach()`/`handleIpcMethod` are required; a
         no-op `attach()` is fine for MVP (Pi needs no resolve-sink/onCallback yet)
-  - [ ] `handleIpcMethod(method, params, ctx)` — dispatch to the three methods
-- [ ] Decide whether to split into `inbound.ts` / `session.ts` / `query.ts`
-      later; keep one file for MVP.
+  - [x] `handleIpcMethod(method, params, ctx)` — dispatch to the three methods
+- [x] Decide whether to split into `inbound.ts` / `session.ts` / `query.ts`
+      later; keep one file for MVP. (Kept one file for MVP.)
 
 ### 1.2 `pi_register_session`
 
-- [ ] Validate `session` and `project` params
-- [ ] Read **stable per-runtime `connection_id`** from params (extension-
+- [x] Validate `session` and `project` params
+- [x] Read **stable per-runtime `connection_id`** from params (extension-
       generated; see README § Bridge correctness requirements #1)
-- [ ] Normalize project path via shared project normalizer
-- [ ] **Ordering: ensure-comms LAST** (AGE-38/AGE-45): upsert → acquireLease
+- [x] Normalize project path via shared project normalizer
+- [x] **Ordering: ensure-comms LAST** (AGE-38/AGE-45): upsert → acquireLease
       → wire state + socket-close handler → `ensureCommsBestEffort` LAST
-- [ ] Upsert session row with `agent = "pi"`
-- [ ] **Stamp daemon-owner identity** via
+- [x] Upsert session row with `agent = "pi"`
+- [x] **Stamp daemon-owner identity** via
       `sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params),
       this.options.daemonOwner)` when calling `acquireSessionLease` (AGE-58,
       load-bearing for boot-scope-restore — see README § `pi_register_session`)
-- [ ] `acquireSessionLease` uses the stable `connection_id` (not a bridge-
+- [x] `acquireSessionLease` uses the stable `connection_id` (not a bridge-
       generated random id) so `registerReplay` re-acquires after daemon crash
-- [ ] Wire socket-close handler that releases lease on clean close
+- [x] Wire socket-close handler that releases lease on clean close
       (mirror `claude/bridge.ts:388-390`)
-- [ ] `PiBridgeFactory.create(context)` threads `context.daemonOwner` into
+- [x] `PiBridgeFactory.create(context)` threads `context.daemonOwner` into
       `PiBridgeOptions.daemonOwner` (mirror `codex/bridge.ts:984`)
-- [ ] Return `{ ok, session, project, agent }`
-- [ ] Idempotent on repeated registration (hooks/extension re-register often)
+- [x] Return `{ ok, session, project, agent }`
+- [x] Idempotent on repeated registration (hooks/extension re-register often)
 
 ### 1.3 `pi_drain_inbound`
 
-- [ ] Resolve scope from `storage.getSession(session)` (NOT caller-supplied
+- [x] Resolve scope from `storage.getSession(session)` (NOT caller-supplied
       `project`); reject/no-op on mismatch
-- [ ] Reuse shared `ownedAccountKeys(session)` scoping helper
+- [x] Reuse shared `ownedAccountKeys(session)` scoping helper
       (`claude/bridge.ts:315`) — do not reimplement `(project, agent)` scoping
-- [ ] Drain only entries owned by Pi registrations
-- [ ] Honor `limit`
-- [ ] Honor optional `comm` filter without sweeping other comms' entries
-- [ ] Remove drained entries by composite key `(message_id, comm, account)`
-- [ ] **Stamp `most_recent_inbound`** = `drained[last].conversation.conversation_id`
+- [x] Drain only entries owned by Pi registrations
+- [x] Honor `limit`
+- [x] Honor optional `comm` filter without sweeping other comms' entries
+- [x] Remove drained entries by composite key `(message_id, comm, account)`
+- [x] **Stamp `most_recent_inbound`** = `drained[last].conversation.conversation_id`
       via `storage.setSessionMostRecentInbound(...)` (mirror
       `claude/bridge.ts:404-408`) — load-bearing: Pi's no-op
       `onInboundConversation` means drain is the ONLY place this gets set;
       without it every no-target `comm_send_message` throws
       (`bus.ts:632-635`)
-- [ ] Return `{ messages: PendingInboundEntry[] }`
+- [x] Return `{ messages: PendingInboundEntry[] }`
 
 ### 1.4 `pi_unregister_session`
 
-- [ ] Resolve session by `storage.getSession(session)` (NOT caller-supplied
+- [x] Resolve session by `storage.getSession(session)` (NOT caller-supplied
       `project`); reject/no-op on mismatch
-- [ ] `storage.releaseSessionLease(session, connectionId, now)` — `connectionId`
+- [x] `storage.releaseSessionLease(session, connectionId, now)` — `connectionId`
       MUST be the same stable id used at register so the daemon matches the
       lease row
-- [ ] Clears owner/lease metadata so boot-scope-restore will not try to
+- [x] Clears owner/lease metadata so boot-scope-restore will not try to
       restore a released Pi scope
-- [ ] Untrack session from bridge-internal state
-- [ ] Idempotent (no-op on already-released session)
-- [ ] Return `{ ok: true }`
-- [ ] No protocol-layer edit (method-name-agnostic dispatch; see README §
+- [x] Untrack session from bridge-internal state
+- [x] Idempotent (no-op on already-released session)
+- [x] Return `{ ok: true }`
+- [x] No protocol-layer edit (method-name-agnostic dispatch; see README §
       Session replacement & lease release / "Why no protocol-layer edit")
 
 ### 1.5 Composition root wiring
 
-- [ ] Import `PiBridgeFactory` in `core-daemon/serve.ts`
-- [ ] Add `new PiBridgeFactory()` to `agentBridgeFactories`
-- [ ] Verify no comm-neutral invariants break (daemon.ts must stay Pi-agnostic)
+- [x] Import `PiBridgeFactory` in `core-daemon/serve.ts`
+- [x] Add `new PiBridgeFactory()` to `agentBridgeFactories`
+- [x] Verify no comm-neutral invariants break (daemon.ts must stay Pi-agnostic)
 
 ### 1.6 Daemon build + assets
 
-- [ ] `npm run build` in `agents-comm-bus/` compiles the new bridge
-- [ ] `npm run verify:clean-build` passes (tracked artifacts in sync)
-- [ ] `npm run check:ipc-protocol` — bump `IPC_PROTOCOL_VERSION` major if the
+- [x] `npm run build` in `agents-comm-bus/` compiles the new bridge
+- [x] `npm run verify:clean-build` passes (tracked artifacts in sync)
+- [x] `npm run check:ipc-protocol` — bump `IPC_PROTOCOL_VERSION` major if the
       wire schema changed in a backward-incompatible way; otherwise add
-      `IPC_COMPAT_NOTE` if additive
-- [ ] Bump `DAEMON_VERSION` via `npm run bump:daemon` if required by the
-      version-bump gate
+      `IPC_COMPAT_NOTE` if additive  (Confirmed: protocol unchanged vs `main`
+      — additive `pi_*` methods only. Note the gate's default base ref is
+      `origin/universal-overhaul`, which lags `main`; run with `-- main` for
+      an accurate comparison.)
+- [x] Bump `DAEMON_VERSION` via `npm run bump:daemon` if required by the
+      version-bump gate  (0.2.28 -> 0.2.29)
 
 ## Phase 2 — daemon bridge tests
 
 ### 2.1 Architecture test scaffold
 
-- [ ] Create `tests/architecture/pi-bridge.test.ts`
-- [ ] Reuse existing test harness/fakes from `claude-hooks.test.ts` /
+- [x] Create `tests/architecture/pi-bridge.test.ts`
+- [x] Reuse existing test harness/fakes from `claude-hooks.test.ts` /
       `codex-agent-adapter.test.ts` where possible
 
 ### 2.2 Registration tests
 
-- [ ] `pi_register_session` calls `ensureCommsForSession(project, "pi")`
-- [ ] Session row upserted with `agent = "pi"`
-- [ ] Repeated registration is idempotent (no duplicate rows, no errors)
-- [ ] Missing/invalid params fail loudly and predictably
-- [ ] Owner stamping reflects host-supplied pid/label + daemon identity
-- [ ] **Daemon-owner identity stamped** (AGE-58): the lease row carries
+- [x] `pi_register_session` calls `ensureCommsForSession(project, "pi")`
+- [x] Session row upserted with `agent = "pi"`
+- [x] Repeated registration is idempotent (no duplicate rows, no errors)
+- [x] Missing/invalid params fail loudly and predictably
+- [x] Owner stamping reflects host-supplied pid/label + daemon identity
+- [x] **Daemon-owner identity stamped** (AGE-58): the lease row carries
       `daemon.{discovery_root,checkout_root,state_root,daemon_bin,authority_rank}`
       from `context.daemonOwner`, not null — otherwise
       `classifySessionDaemonOwner` returns `"missing"` and boot-scope-restore
@@ -143,47 +146,47 @@ Legend:
 
 ### 2.3 Drain tests
 
-- [ ] `pi_drain_inbound` returns only Pi-scoped entries
-- [ ] Does not cannibalize Claude or Codex pending inbound
-- [ ] Honors `limit`
-- [ ] Honors `comm` filter; non-matching comms' entries stay queued
-- [ ] Removes by `(message_id, comm, account)` composite key
-- [ ] Same message_id across two bots in one chat does not wipe the sibling
+- [x] `pi_drain_inbound` returns only Pi-scoped entries
+- [x] Does not cannibalize Claude or Codex pending inbound
+- [x] Honors `limit`
+- [x] Honors `comm` filter; non-matching comms' entries stay queued
+- [x] Removes by `(message_id, comm, account)` composite key
+- [x] Same message_id across two bots in one chat does not wipe the sibling
       entry (the AGE-15 / multi-agent invariant)
-- [ ] **Most-recent stamp**: after drain, session row's
+- [x] **Most-recent stamp**: after drain, session row's
       `most_recent_inbound_conversation_id` = last drained conversation
-- [ ] **No-target send routes to drained conversation**: after drain, a
+- [x] **No-target send routes to drained conversation**: after drain, a
       `comm_send_message` with no `target` resolves via `targetFromSession`
       to that conversation (does not throw "no most-recent inbound")
-- [ ] Wrong-project drain (`project` mismatch) is rejected/no-op and cannot
+- [x] Wrong-project drain (`project` mismatch) is rejected/no-op and cannot
       affect another scope
 
 ### 2.4 Unregister tests
 
-- [ ] `pi_unregister_session` releases the lease + untracks (using the SAME
+- [x] `pi_unregister_session` releases the lease + untracks (using the SAME
       stable `connection_id` as register)
-- [ ] Idempotent (no error on already-released session)
-- [ ] Does not release a different session's lease
-- [ ] After unregister, a fresh `pi_register_session` for the same UUID
+- [x] Idempotent (no error on already-released session)
+- [x] Does not release a different session's lease
+- [x] After unregister, a fresh `pi_register_session` for the same UUID
       re-acquires cleanly (simulating `/new` then later `/resume` back)
-- [ ] Wrong-project unregister is rejected/no-op and cannot affect another scope
-- [ ] After unregister, boot-scope-restore does NOT restore the released
+- [x] Wrong-project unregister is rejected/no-op and cannot affect another scope
+- [x] After unregister, boot-scope-restore does NOT restore the released
       scope (owner/lease metadata cleared)
 
 ### 2.4b Connection-id replay tests
 
-- [ ] Register with stable `connection_id`, simulate daemon crash (no clean
+- [x] Register with stable `connection_id`, simulate daemon crash (no clean
       socket close), replay `pi_register_session` with the SAME id →
       `acquireSessionLease` re-acquires (WHERE `IS NULL OR = ?` matches)
-- [ ] Replay with a DIFFERENT random id → re-acquire fails (proves the
+- [x] Replay with a DIFFERENT random id → re-acquire fails (proves the
       stable id is load-bearing, not just a nicety)
-- [ ] Boot-restore restores Pi scope ONLY when the daemon-owner discovery
+- [x] Boot-restore restores Pi scope ONLY when the daemon-owner discovery
       root matches (AGE-58 stamp)
 
 ### 2.5 Build gate
 
-- [ ] `npm test` (default suite) passes
-- [ ] `npm run test:bridge` passes with the new Pi suite included
+- [x] `npm test` (default suite) passes  (674 pass / 0 fail / 1 skipped)
+- [x] `npm run test:bridge` passes with the new Pi suite included  (12 pass / 0 fail)
 
 ## Phase 3 — Pi package skeleton
 
@@ -421,8 +424,8 @@ Tracked here for planning continuity; do not implement in the MVP cut.
 
 All of the following must be ticked:
 
-- [ ] Phase 1 (daemon bridge) complete and merged
-- [ ] Phase 2 (bridge tests) green
+- [x] Phase 1 (daemon bridge) complete and merged  (merged to main @ 2cc45f0, 2026-06-17)
+- [x] Phase 2 (bridge tests) green  (26 tests, 674 total pass)
 - [ ] Phase 3 (package skeleton) exists
 - [ ] Phase 4 (extension core) implemented
 - [ ] Phase 5 (four comm tools) implemented
