@@ -233,78 +233,79 @@ Legend:
 
 ### 4.1 Daemon client wrapper (`daemon-client.ts`)
 
-- [ ] Own a `PersistentIpcClient` from
+- [x] Own a `PersistentIpcClient` from
       `agents-comm-bus/dist/core-daemon/ipc/persistent-client.js` (in-process
       WS, not a sidecar)
-- [ ] `start()` on `session_start`, `close()` on `session_shutdown`
-- [ ] `registerReplay("pi_register_session", ...)` so daemon restarts
+- [x] `start()` on `session_start`, `close()` on `session_shutdown`
+- [x] `registerReplay("pi_register_session", ...)` so daemon restarts
       transparently re-register the session + lease
-- [ ] `registerPiSession(params)` -> `pi_register_session`
-- [ ] `drainPiInbound(params)` -> `pi_drain_inbound`
-- [ ] `sendCommMessage(params)` -> `${comm}_send`
-- [ ] `sendCommAttachment(params)` -> `${comm}_send_image`
-- [ ] `unregisterPiSession(params)` -> `pi_unregister_session`
-- [ ] `listConversations(params)` -> `list_conversations`
-- [ ] Surface `DisconnectedError` concisely to tools/poller (do not crash
+- [x] `registerPiSession(params)` -> `pi_register_session`
+- [x] `drainPiInbound(params)` -> `pi_drain_inbound`
+- [x] `sendCommMessage(params)` -> `${comm}_send`
+- [x] `sendCommAttachment(params)` -> `${comm}_send_image`
+- [x] `unregisterPiSession(params)` -> `pi_unregister_session`
+- [x] `listConversations(params)` -> `list_conversations`
+- [x] Surface `DisconnectedError` concisely to tools/poller (do not crash
       the extension; client auto-reconnects in background)
 
 ### 4.1b Dev mode (see README § Dev mode)
 
-- [ ] `daemon-client.ts` calls the shared `entryEnsures` from
-      `hosts/common/install/entry-ensures.js` — do NOT hand-roll env detection
-- [ ] Pass `fromDir: import.meta.dirname` so the project-root walk resolves
+- [x] `daemon-client.ts` calls the shared `entryEnsures` from
+      `agents-comm-bus/host-entry` — do NOT hand-roll env detection
+- [x] Pass `fromDir: import.meta.dirname` so the project-root walk resolves
       `.agents-comm-bus-dev.json` in dev and falls through to strict prod
 - [ ] In dev, daemon runs from `agents-comm-bus/dist/core-daemon/serve.js`;
       state root `.agents-comm-bus-dev/`; discovery `.agents-comm-bus-discovery/`
+      (requires live Pi load — Phase 8.4)
 - [ ] In prod, `entryEnsures` bootstraps the central daemon at
-      `~/.agents-comm-bus/` (no dev marker present)
-- [ ] Comm-resource leases stay homedir/global in both modes (dev and prod
+      `~/.agents-comm-bus/` (no dev marker present) (requires live Pi load)
+- [x] Comm-resource leases stay homedir/global in both modes (dev and prod
       arbitrate the same bot leases)
-- [ ] Released package excludes `.agents-comm-bus-dev.json`,
+- [x] Released package excludes `.agents-comm-bus-dev.json`,
       `.agents-comm-bus-discovery/`, and dev-local `.pi/settings.json`
-- [ ] `package.json` declares `agents-comm-bus` in `dependencies` so prod
+- [x] `package.json` declares `agents-comm-bus` in `dependencies` so prod
       resolves from `node_modules/`; dev resolves from the monorepo workspace
 
 ### 4.2 Session identity (`session-id.ts`)
 
-- [ ] Implement `piSessionId(sm)` = `pi_${sm.getSessionId()}`
-- [ ] No hashing, no cwd fallback, no env override
-- [ ] Read fresh inside each `session_start` (do not cache across reload)
+- [x] Implement `piSessionId(sm)` = `pi_${sm.getSessionId()}`
+- [x] No hashing, no cwd fallback, no env override
+- [x] Read fresh inside each `session_start` (do not cache across reload)
 
 ### 4.3 Inbound formatting (`inbound-format.ts`)
 
-- [ ] Port the `[Daemon Inbound Messages] ... [End Daemon Inbound Messages]`
+- [x] Port the `[Daemon Inbound Messages] ... [End Daemon Inbound Messages]`
       block format from `hosts/claude/hooks/user-prompt-submit.js`
-- [ ] Include envelope fields: `comm`, `account`, `account_label`,
+- [x] Include envelope fields: `comm`, `account`, `account_label`,
       `chat_native_id`, `thread_native_id`, `conversation_id`,
       `platform_message_id`, `message_id`
-- [ ] Format attachment lines (mime, filename, size, local_path / blob_hash)
-- [ ] No Pi-specific envelope fields — keep parity with Claude/Codex
+- [x] Format attachment lines (mime, filename, size, local_path / blob_hash)
+- [x] No Pi-specific envelope fields — keep parity with Claude/Codex
 
 ### 4.4 Extension entrypoint (`index.ts`)
 
-- [ ] Register all comm tools on load
-- [ ] `session_start` handler:
-  - [ ] compute/restore stable Pi session id via `piSessionId(ctx.sessionManager)`
-  - [ ] `client.start()` the `PersistentIpcClient`
-  - [ ] `client.registerReplay("pi_register_session", ...)`
-  - [ ] start inbound polling loop
-  - [ ] optional `ctx.ui.notify` in TUI mode
-- [ ] `session_shutdown` handler (reason-branched):
-  - [ ] stop polling loop
-  - [ ] if `reason` in {new, resume, fork, quit}: call
+- [x] Register all comm tools on load (guarded try/catch — Phase 5 stubs)
+- [x] `session_start` handler:
+  - [x] compute/restore stable Pi session id via `piSessionId(ctx.sessionManager)`
+  - [x] `client.start()` the `PersistentIpcClient`
+  - [x] `client.registerReplay("pi_register_session", ...)`
+  - [x] start inbound polling loop
+  - [x] optional `ctx.ui.notify` in TUI mode
+- [x] `session_shutdown` handler (reason-branched):
+  - [x] stop polling loop
+  - [x] if `reason` in {new, resume, fork, quit}: call
         `pi_unregister_session` (release lease + untrack) **before** close
-  - [ ] if `reason === "reload"`: skip unregister (same UUID continues;
+  - [x] if `reason === "reload"`: skip unregister (same UUID continues;
         `registerReplay` re-registers idempotently)
-  - [ ] `client.close()`
-  - [ ] clear transient status/widgets
-- [ ] Inbound polling loop:
-  - [ ] serialize drain calls (no overlapping polls)
-  - [ ] on zero messages: no-op
-  - [ ] on messages: format block, inject via `pi.sendUserMessage(...)`
-  - [ ] idle: send immediately
-  - [ ] streaming: use `{ deliverAs: "followUp" }` for MVP
-- [ ] Only one loop per active extension runtime
+  - [x] `client.close()`
+  - [x] clear transient status/widgets
+- [x] Inbound polling loop:
+  - [x] serialize drain calls (no overlapping polls)
+  - [x] on zero messages: no-op
+  - [x] on messages: format block, inject via `pi.sendUserMessage(...)`
+  - [x] idle: send immediately
+  - [x] streaming: use `{ deliverAs: "followUp" }` for MVP
+- [x] Only one loop per active extension runtime
 
 ## Phase 5 — Pi tools
 
@@ -426,8 +427,8 @@ All of the following must be ticked:
 
 - [x] Phase 1 (daemon bridge) complete and merged  (merged to main @ 2cc45f0, 2026-06-17)
 - [x] Phase 2 (bridge tests) green  (26 tests, 674 total pass)
-- [ ] Phase 3 (package skeleton) exists
-- [ ] Phase 4 (extension core) implemented
+- [x] Phase 3 (package skeleton) exists
+- [x] Phase 4 (extension core) implemented
 - [ ] Phase 5 (four comm tools) implemented
 - [ ] Phase 6.1 + 6.2 for at least Telegram
 - [ ] Phase 8.1 (Telegram E2E) passes manually

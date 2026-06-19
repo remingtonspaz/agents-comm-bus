@@ -37,17 +37,17 @@ Replace `telegram` with `discord`, `matrix`, or `curl` as needed.
 
 ## Dev mode
 
-When developing against a monorepo checkout, place `.agents-comm-bus-dev.json` at the repo root. The extension's daemon client will use the shared `entryEnsures` seam (see `docs/research/pi/README.md` § Dev mode) so the dev daemon, discovery root, and state paths resolve correctly.
+When developing against a monorepo checkout, place `.agents-comm-bus-dev.json` at the repo root. The extension's daemon client imports `entryEnsures` from `agents-comm-bus/host-entry` (AGE-61) with `fromDir: import.meta.dirname`, so dev vs prod discovery resolves automatically:
 
-**Phase 4 prerequisite:** `entryEnsures` lives in `hosts/common/install/` and is not yet published from `agents-comm-bus`. Phase 4 must either:
+- **Dev:** daemon from `agents-comm-bus/dist/core-daemon/serve.js`, state root `.agents-comm-bus-dev/`, discovery `.agents-comm-bus-discovery/`
+- **Prod:** central install at `~/.agents-comm-bus/` (no dev marker)
 
-1. **Vendor a thin copy** in this package that calls `applyDevConfig` + `ensureDaemon` from `agents-comm-bus/bootstrap/ensure-daemon`, or
-2. **Publish `entryEnsures`** as a new `agents-comm-bus` export (cleaner long-term).
+Comm-resource leases stay homedir/global in both modes.
 
 ## Status
 
-- **Phase 3 (this tree):** package skeleton — extension modules are stubs with documented signatures.
-- **Phase 4:** implement daemon client, inbound polling, session lifecycle, and comm tools.
+- **Phase 4 (this tree):** daemon client, inbound polling, and session lifecycle implemented; comm tools deferred to Phase 5.
+- **Phase 5:** implement the four comm tools (`comm_send_message`, etc.).
 - **Phase 6:** fill in per-comm `skills/*/SKILL.md` content.
 
 ## Design docs

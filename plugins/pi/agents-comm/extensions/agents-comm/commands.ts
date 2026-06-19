@@ -11,5 +11,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export function registerCommCommands(_pi: ExtensionAPI): void {
-  throw new Error("phase4: not implemented");
+  throw new Error("phase7: not implemented");
 }

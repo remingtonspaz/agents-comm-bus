@@ -9,7 +9,7 @@
     "skills": ["./skills"]
   },
   "dependencies": {
-    "agents-comm-bus": "0.2.29"
+    "agents-comm-bus": "0.2.30"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

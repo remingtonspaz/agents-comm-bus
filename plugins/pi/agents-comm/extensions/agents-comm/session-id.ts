@@ -1,8 +1,9 @@
 /**
  * Pi session identity — derive the daemon session id from Pi's SessionManager.
  *
- * Phase 4 owns the usage rule: read `sm.getSessionId()` fresh inside each
- * `session_start` handler (do not cache across reloads).
+ * Usage rule: call `piSessionId(ctx.sessionManager)` fresh inside each
+ * `session_start` handler. Do not cache the return value across reloads — Pi may
+ * keep the same UUID on `/reload`, but the handler must still re-read it.
  */
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 

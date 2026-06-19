@@ -1,38 +1,42 @@
 /**
  * Daemon IPC client wrapper for the Pi extension lifetime.
  *
- * Phase 4 responsibilities:
- * - Own a `PersistentIpcClient` from `agents-comm-bus/ipc/persistent-client`
- *   (in-process WebSocket, not a sidecar).
- * - `start()` on `session_start`, `close()` on `session_shutdown`.
- * - `registerReplay("pi_register_session", ...)` for transparent re-registration
- *   after daemon restarts.
- * - Wrap `request(method, params)` for Pi IPC: `pi_register_session`,
- *   `pi_drain_inbound`, `pi_unregister_session`, `${comm}_send`,
- *   `${comm}_send_image`, `list_conversations`.
- * - Surface `DisconnectedError` concisely to tools/poller (auto-reconnect in background).
- *
- * Phase 4 prerequisite — `entryEnsures` seam:
- * `entryEnsures` + `applyDevConfig` live in `hosts/common/install/` (host glue,
- * not published from `agents-comm-bus`). Phase 4 must either:
- *   1. Vendor a thin copy calling `applyDevConfig` + `ensureDaemon` from
- *      `agents-comm-bus/bootstrap/ensure-daemon` with `fromDir: import.meta.dirname`, or
- *   2. Publish `entryEnsures` as a new `agents-comm-bus` export.
- * See package README § Dev mode.
+ * Owns a `PersistentIpcClient` from `agents-comm-bus/ipc/persistent-client`
+ * (in-process WebSocket, not a sidecar). Bootstrap uses `entryEnsures` from
+ * `agents-comm-bus/host-entry` (AGE-61 public export) with `fromDir` so dev
+ * vs prod discovery resolves via `.agents-comm-bus-dev.json`.
  */
 
-// Phase 4: import { PersistentIpcClient } from "agents-comm-bus/ipc/persistent-client";
+import { entryEnsures } from "agents-comm-bus/host-entry";
+import {
+  DisconnectedError,
+  PersistentIpcClient,
+} from "agents-comm-bus/ipc/persistent-client";
+import type { EnsureDaemonOptions } from "agents-comm-bus/bootstrap/ensure-daemon";
+
+import type { PendingInboundEntry } from "./inbound-format.js";
+
+const CLIENT_VERSION = "pi-extension-1";
+
+/** MVP comm set — extend here when adding Discord/Matrix/curl support. */
+export const SUPPORTED_COMMS = ["telegram"] as const;
 
 export interface PiRegisterSessionParams {
+  agent: "pi";
   session: string;
   project: string;
+  cwd: string;
   connection_id: string;
-  replace_existing_lease?: boolean;
-  owner_process_pid?: number;
-  owner_process_label?: string;
+  host: {
+    pid: number;
+    label: string;
+    mode: string;
+    session_file: string | null;
+  };
 }
 
 export interface PiDrainInboundParams {
+  agent: "pi";
   session: string;
   project?: string;
   comm?: string;
@@ -40,6 +44,7 @@ export interface PiDrainInboundParams {
 }
 
 export interface PiUnregisterSessionParams {
+  agent: "pi";
   session: string;
   connection_id: string;
 }
@@ -68,38 +73,132 @@ export interface ListConversationsParams {
   limit?: number;
 }
 
+export interface PiDrainInboundResult {
+  messages: PendingInboundEntry[];
+}
+
+function disconnectedMessage(): string {
+  return "agents-comm-bus disconnected (reconnecting in background)";
+}
+
+function rethrowUnlessDisconnected(error: unknown): never {
+  if (error instanceof DisconnectedError) {
+    throw new Error(disconnectedMessage());
+  }
+  throw error;
+}
+
 export class PiDaemonClient {
-  // Phase 4: private client: PersistentIpcClient | null = null;
+  private client: PersistentIpcClient | null = null;
+  private ensureDaemonOptions: EnsureDaemonOptions = {};
+
+  constructor(
+    private readonly project: string,
+    private readonly log: (message: string) => void = defaultLog,
+  ) {}
 
   async start(): Promise<void> {
-    throw new Error("phase4: not implemented");
+    let lastEnsured: Awaited<ReturnType<typeof entryEnsures>> | null = null;
+
+    for (const comm of SUPPORTED_COMMS) {
+      try {
+        lastEnsured = await entryEnsures({
+          agent: "pi",
+          comm,
+          fromDir: import.meta.dirname,
+          readOnlyCentralInstall: true,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(`entryEnsures failed for comm=${comm}: ${message}`);
+      }
+    }
+
+    if (!lastEnsured) {
+      throw new Error("agents-comm-bus bootstrap failed for all supported comms");
+    }
+
+    this.ensureDaemonOptions = {
+      stateRoot: lastEnsured.stateRoot,
+      discoveryRoot: lastEnsured.discoveryRoot,
+      env: lastEnsured.env,
+    };
+
+    this.client = new PersistentIpcClient({
+      clientVersion: CLIENT_VERSION,
+      metadata: {
+        agent: "pi",
+        project: this.project,
+        shimName: "pi-agents-comm",
+      },
+      ensureDaemonOptions: this.ensureDaemonOptions,
+      onError: (error) => this.log(`ipc error: ${error.message}`),
+      onDisconnected: (reason) => this.log(`ipc disconnected: ${reason}`),
+      onReconnected: () => this.log("ipc reconnected"),
+      log: (message) => this.log(message),
+    });
+
+    await this.client.start();
   }
 
   async close(): Promise<void> {
-    throw new Error("phase4: not implemented");
+    this.client?.close();
+    this.client = null;
   }
 
-  async registerPiSession(_params: PiRegisterSessionParams): Promise<unknown> {
-    throw new Error("phase4: not implemented");
+  async registerPiSession(params: PiRegisterSessionParams): Promise<unknown> {
+    if (!this.client) throw new Error("PiDaemonClient not started");
+    try {
+      return await this.client.registerReplay("pi_register_session", params);
+    } catch (error) {
+      rethrowUnlessDisconnected(error);
+    }
   }
 
-  async unregisterPiSession(_params: PiUnregisterSessionParams): Promise<unknown> {
-    throw new Error("phase4: not implemented");
+  async unregisterPiSession(params: PiUnregisterSessionParams): Promise<unknown> {
+    return this.request("pi_unregister_session", params);
   }
 
-  async drainPiInbound(_params: PiDrainInboundParams): Promise<unknown> {
-    throw new Error("phase4: not implemented");
+  async drainPiInbound(params: PiDrainInboundParams): Promise<PiDrainInboundResult> {
+    if (!this.client) throw new Error("PiDaemonClient not started");
+    try {
+      const result = await this.client.request("pi_drain_inbound", params);
+      if (result && typeof result === "object" && Array.isArray((result as PiDrainInboundResult).messages)) {
+        return result as PiDrainInboundResult;
+      }
+      return { messages: [] };
+    } catch (error) {
+      if (error instanceof DisconnectedError) throw error;
+      throw error;
+    }
   }
 
-  async sendCommMessage(_params: CommSendMessageParams): Promise<unknown> {
-    throw new Error("phase4: not implemented");
+  async sendCommMessage(params: CommSendMessageParams): Promise<unknown> {
+    const { comm, text, target } = params;
+    return this.request(`${comm}_send`, { message: text, target });
   }
 
-  async sendCommAttachment(_params: CommSendAttachmentParams): Promise<unknown> {
-    throw new Error("phase4: not implemented");
+  async sendCommAttachment(params: CommSendAttachmentParams): Promise<unknown> {
+    const { comm, path, caption, target } = params;
+    return this.request(`${comm}_send_image`, { path, caption, target });
   }
 
-  async listConversations(_params?: ListConversationsParams): Promise<unknown> {
-    throw new Error("phase4: not implemented");
+  async listConversations(params: ListConversationsParams = {}): Promise<unknown> {
+    return this.request("list_conversations", params);
+  }
+
+  private async request(method: string, params: unknown): Promise<unknown> {
+    if (!this.client) throw new Error("PiDaemonClient not started");
+    try {
+      return await this.client.request(method, params);
+    } catch (error) {
+      rethrowUnlessDisconnected(error);
+    }
   }
 }
+
+function defaultLog(message: string): void {
+  console.error(`[pi-agents-comm] ${message}`);
+}
+
+export { DisconnectedError };
