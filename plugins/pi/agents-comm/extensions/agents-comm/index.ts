@@ -88,7 +88,7 @@ function startPolling(pi: ExtensionAPI, ctx: ExtensionContext): void {
 export default function agentsCommExtension(pi: ExtensionAPI): void {
   // Phase 5/7 stubs throw — guard so Phase 4 inbound polling can load without tools/commands.
   try {
-    registerCommTools(pi);
+    registerCommTools(pi, () => client);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[pi-agents-comm] comm tools not registered: ${message}`);

@@ -311,32 +311,32 @@ Legend:
 
 ### 5.1 `comm_send_message`
 
-- [ ] typebox schema matching existing MCP semantics
-- [ ] `comm` required, `message` required, `target` optional
-- [ ] `target.account` must be concrete bot id (validate / surface error
+- [x] typebox schema matching existing MCP semantics
+- [x] `comm` required, `message` required, `target` optional
+- [x] `target.account` must be concrete bot id (validate / surface error
       clearly if a label is supplied)
-- [ ] Calls `sendCommMessage`
-- [ ] Returns concise success text with `message_id`
-- [ ] `promptSnippet` + `promptGuidelines` set
+- [x] Calls `sendCommMessage`
+- [x] Returns concise success text with `message_id`
+- [x] `promptSnippet` + `promptGuidelines` set
 
 ### 5.2 `comm_send_attachment`
 
-- [ ] typebox schema: `comm`, `path` required; `caption`, `target` optional
-- [ ] Validate path exists before daemon request
-- [ ] Calls `sendCommAttachment`
-- [ ] Returns concise success text with `message_id`
+- [x] typebox schema: `comm`, `path` required; `caption`, `target` optional
+- [x] Validate path exists before daemon request
+- [x] Calls `sendCommAttachment`
+- [x] Returns concise success text with `message_id`
 
 ### 5.3 `comm_check_messages`
 
-- [ ] typebox schema: optional `comm` filter
-- [ ] Calls `drainPiInbound` (keep scoping consistent with session reg)
-- [ ] Returns formatted message list or "no pending" text
+- [x] typebox schema: optional `comm` filter
+- [x] Calls `drainPiInbound` (keep scoping consistent with session reg)
+- [x] Returns formatted message list or "no pending" text
 
 ### 5.4 `list_conversations`
 
-- [ ] typebox schema: optional `comm`, `limit`
-- [ ] Calls `listConversations`
-- [ ] Returns bot-id-oriented display (surface `bot_user_id` explicitly)
+- [x] typebox schema: optional `comm`, `limit`
+- [x] Calls `listConversations`
+- [x] Returns bot-id-oriented display (surface `bot_user_id` explicitly)
 
 ## Phase 6 — Pi skills
 
@@ -436,7 +436,7 @@ All of the following must be ticked:
 - [x] Phase 2 (bridge tests) green  (26 tests, 674 total pass)
 - [x] Phase 3 (package skeleton) exists
 - [x] Phase 4 (extension core) implemented
-- [ ] Phase 5 (four comm tools) implemented
+- [x] Phase 5 (four comm tools) implemented
 - [ ] Phase 6.1 + 6.2 for at least Telegram
 - [ ] Phase 8.1 (Telegram E2E) passes manually
 - [ ] Phase 8.4 (dev mode iteration loop) passes manually
