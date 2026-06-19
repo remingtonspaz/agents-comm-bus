@@ -91,6 +91,13 @@ function rethrowUnlessDisconnected(error: unknown): never {
 export class PiDaemonClient {
   private client: PersistentIpcClient | null = null;
   private ensureDaemonOptions: EnsureDaemonOptions = {};
+  /**
+   * The Pi session id (`pi_<uuid>`), captured at `registerPiSession` and
+   * injected into every subsequent request so the daemon can resolve
+   * no-target sends via `bus.targetFromSession(session)` (mirrors the MCP
+   * shim's `createDaemonRequester` injecting `session: sessionInUse()`).
+   */
+  private session: string | null = null;
 
   constructor(
     private readonly project: string,
@@ -148,6 +155,7 @@ export class PiDaemonClient {
 
   async registerPiSession(params: PiRegisterSessionParams): Promise<unknown> {
     if (!this.client) throw new Error("PiDaemonClient not started");
+    this.session = params.session;
     try {
       return await this.client.registerReplay("pi_register_session", params);
     } catch (error) {
@@ -189,8 +197,17 @@ export class PiDaemonClient {
 
   private async request(method: string, params: unknown): Promise<unknown> {
     if (!this.client) throw new Error("PiDaemonClient not started");
+    // Inject the session id into every request (mirrors the MCP shim's
+    // createDaemonRequester) so the daemon can resolve no-target sends via
+    // bus.targetFromSession(session). Methods that already carry `session`
+    // in their params (pi_register_session etc.) are unaffected because the
+    // explicit field wins; the send/list methods rely on this injection.
+    const paramsWithSession =
+      this.session && typeof params === "object" && params !== null
+        ? { session: this.session, ...(params as Record<string, unknown>) }
+        : params;
     try {
-      return await this.client.request(method, params);
+      return await this.client.request(method, paramsWithSession);
     } catch (error) {
       rethrowUnlessDisconnected(error);
     }
