@@ -1,0 +1,1 @@
+{"version":3,"file":"strip-bom.js","sourceRoot":"","sources":["../../../../core-daemon/host-runtime/strip-bom.ts"],"names":[],"mappings":"AAAA;;GAEG;AACH,MAAM,UAAU,QAAQ,CAAC,IAAY;IACnC,OAAO,OAAO,IAAI,KAAK,QAAQ,IAAI,IAAI,CAAC,UAAU,CAAC,CAAC,CAAC,KAAK,MAAM,CAAC,CAAC,CAAC,IAAI,CAAC,KAAK,CAAC,CAAC,CAAC,CAAC,CAAC,CAAC,IAAI,CAAC;AAC1F,CAAC"}

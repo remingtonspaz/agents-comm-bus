@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.29";
+var DAEMON_VERSION = "0.2.30";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {

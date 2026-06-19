@@ -3654,7 +3654,7 @@ import crypto from "node:crypto";
 // ../hosts/common/hook-degraded.js
 var AGENTS_COMM_BUS_DEGRADED_MESSAGE = "\u26A0\uFE0F agents-comm-bus: daemon unreachable \u2014 comm integration degraded this turn";
 
-// ../hosts/common/install/entry-ensures.js
+// dist/core-daemon/host-runtime/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
 import path10 from "node:path";
 
@@ -3702,7 +3702,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.29";
+var DAEMON_VERSION = "0.2.30";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4298,16 +4298,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ../hosts/common/install/ensure-central-install.js
+// dist/core-daemon/host-runtime/ensure-central-install.js
 import path8 from "node:path";
 import { existsSync as existsSync2 } from "node:fs";
 import { readFile as readFile5 } from "node:fs/promises";
 
-// ../hosts/common/install/run-central-install.js
+// dist/core-daemon/host-runtime/run-central-install.js
 import path7 from "node:path";
 import { existsSync } from "node:fs";
 
-// ../hosts/common/install/reconcile-central-install.js
+// dist/core-daemon/host-runtime/reconcile-central-install.js
 var VERSION_FILE_SCHEMA = 1;
 function reconcileInstall(actor, state) {
   const daemon = reconcileArtifact("daemon", actor, state.daemonVersionFile, state.daemonExists, void 0);
@@ -4412,11 +4412,13 @@ function compareVersions(a, b) {
     const x = pa[i] ?? 0;
     const y = pb[i] ?? 0;
     if (typeof x === "number" && typeof y === "number") {
-      if (x !== y) return x < y ? -1 : 1;
+      if (x !== y)
+        return x < y ? -1 : 1;
     } else {
       const xs = String(x);
       const ys = String(y);
-      if (xs !== ys) return xs < ys ? -1 : 1;
+      if (xs !== ys)
+        return xs < ys ? -1 : 1;
     }
   }
   return 0;
@@ -4431,25 +4433,17 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
   if (plan.daemon.writeBundle && !daemonSrc) {
-    throw new Error(
-      "executeInstallPlan: daemon bundle write required but actor.pluginInstallDir is unset"
-    );
+    throw new Error("executeInstallPlan: daemon bundle write required but actor.pluginInstallDir is unset");
   }
   if (plan.adapter.writeBundle && !adapterSrc) {
-    throw new Error(
-      "executeInstallPlan: adapter bundle write required but actor.pluginInstallDir is unset"
-    );
+    throw new Error("executeInstallPlan: adapter bundle write required but actor.pluginInstallDir is unset");
   }
   const wroteBundles = [];
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
     const binDir = dirname2(paths.daemonBundle);
     await fs.mkdirp(binDir);
-    await fs.copyFile(
-      /** @type {string} */
-      daemonSrc,
-      paths.daemonBundle
-    );
+    await fs.copyFile(daemonSrc, paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
       await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
@@ -4464,11 +4458,7 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   if (plan.adapter.writeBundle) {
     const adapterDir = dirname2(paths.adapterBundle);
     await fs.mkdirp(adapterDir);
-    await fs.copyFile(
-      /** @type {string} */
-      adapterSrc,
-      paths.adapterBundle
-    );
+    await fs.copyFile(adapterSrc, paths.adapterBundle);
     await fs.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
@@ -4507,16 +4497,16 @@ function join2(dir, name) {
   return `${dir}/${name}`;
 }
 
-// ../hosts/common/install/node-fs-seam.js
+// dist/core-daemon/host-runtime/node-fs-seam.js
 import { mkdir as mkdir4, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3, chmod } from "node:fs/promises";
 import path5 from "node:path";
 
-// ../hosts/common/install/strip-bom.js
+// dist/core-daemon/host-runtime/strip-bom.js
 function stripBom(text) {
   return typeof text === "string" && text.charCodeAt(0) === 65279 ? text.slice(1) : text;
 }
 
-// ../hosts/common/install/node-fs-seam.js
+// dist/core-daemon/host-runtime/node-fs-seam.js
 function createAtomicNodeFsSeam() {
   return {
     mkdirp: async (dir) => {
@@ -4568,15 +4558,13 @@ function resolveCentralPaths(stateRoot2, comm) {
   return {
     daemonBundle: path5.join(bin, "daemon.js"),
     daemonVersionFile: path5.join(bin, "version.json"),
-    // The admin CLI is centrally installed next to the daemon (it rides under
-    // the daemon version) so `agents-comm` / `agents-comm-bus` work without npm.
     cliBundle: path5.join(bin, "cli.js"),
     adapterBundle: path5.join(adapters, `${comm}.js`),
     adapterVersionFile: path5.join(adapters, `${comm}.version.json`)
   };
 }
 
-// ../hosts/common/install/install-lock.js
+// dist/core-daemon/host-runtime/install-lock.js
 import { constants as constants2 } from "node:fs";
 import { open as open3, readFile as readFile4, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
 import path6 from "node:path";
@@ -4612,7 +4600,8 @@ async function acquireInstallLock(lockPath, options = {}) {
         }
       };
     } catch (error) {
-      if (!isAlreadyExistsError2(error)) throw error;
+      if (!isAlreadyExistsError2(error))
+        throw error;
       if (await stealIfStale(lockPath, staleMs, now)) {
         stoleStale = true;
         continue;
@@ -4639,11 +4628,10 @@ function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function isAlreadyExistsError2(error) {
-  return typeof error === "object" && error !== null && "code" in error && /** @type {any} */
-  error.code === "EEXIST";
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 
-// ../hosts/common/install/run-central-install.js
+// dist/core-daemon/host-runtime/run-central-install.js
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
   const fs = deps.fs ?? createAtomicNodeFsSeam();
@@ -4668,13 +4656,14 @@ async function runCentralInstall(stateRoot2, actor, deps = {}) {
   }
 }
 
-// ../hosts/common/install/ensure-central-install.js
+// dist/core-daemon/host-runtime/ensure-central-install.js
 var INSTALL_STAMP_NAME = "install-stamp.json";
 function resolveInstallMode(env) {
   return env && env.AGENTS_COMM_BUS_BIN ? "source" : "production";
 }
 async function readInstallStamp(pluginInstallDir, deps = {}) {
-  if (!pluginInstallDir) return null;
+  if (!pluginInstallDir)
+    return null;
   const read = deps.readFile ?? readFile5;
   try {
     const raw = await read(path8.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
@@ -4698,28 +4687,21 @@ async function ensureCentralInstall(options) {
     if (options.stateRoot && existsSync2(path8.join(options.stateRoot, "bin", "daemon.js"))) {
       return { mode: "production", skipped: true };
     }
-    throw new Error(
-      `central install (production mode): missing or invalid plugin install metadata.
+    throw new Error(`central install (production mode): missing or invalid plugin install metadata.
   - no source-mode signal (no AGENTS_COMM_BUS_BIN, no .agents-comm-bus-dev.json marker resolved)
   - no valid packaged install artifact (expected ${INSTALL_STAMP_NAME} under pluginInstallDir=${options.pluginInstallDir ?? "<unset>"})
 Fix one of:
   - source/dev checkout: create .agents-comm-bus-dev.json at the repo root (see .agents-comm-bus-dev.json.example), or set AGENTS_COMM_BUS_BIN
-  - packaged install: provide the staged plugin artifacts incl. ${INSTALL_STAMP_NAME}`
-    );
+  - packaged install: provide the staged plugin artifacts incl. ${INSTALL_STAMP_NAME}`);
   }
   const resolvedAgent = options.agent ?? stamp.agent;
   const resolvedComm = options.comm ?? stamp.comm;
-  const resolvedAdapterBundleVersion = resolveAdapterBundleVersion(stamp, resolvedComm);
+  const resolvedAdapterBundleVersion = resolveAdapterBundleVersion(stamp, resolvedComm ?? "");
   if (typeof resolvedAgent !== "string" || resolvedAgent.length === 0 || typeof resolvedComm !== "string" || resolvedComm.length === 0) {
-    throw new Error(
-      `central install (production mode): install stamp resolved an invalid actor identity (agent=${JSON.stringify(resolvedAgent)}, comm=${JSON.stringify(resolvedComm)}). The stamp must carry agent + comm, or the caller must supply them.`
-    );
+    throw new Error(`central install (production mode): install stamp resolved an invalid actor identity (agent=${JSON.stringify(resolvedAgent)}, comm=${JSON.stringify(resolvedComm)}). The stamp must carry agent + comm, or the caller must supply them.`);
   }
   const actor = {
-    agent: (
-      /** @type {any} */
-      resolvedAgent
-    ),
+    agent: resolvedAgent,
     comm: resolvedComm,
     pluginVersion: stamp.plugin_version,
     daemonBundleVersion: stamp.daemon_bundle_version,
@@ -4728,13 +4710,7 @@ Fix one of:
     installedAt: options.installedAt ?? (/* @__PURE__ */ new Date()).toISOString(),
     ...Array.isArray(stamp.daemon_sidecars) ? { daemonSidecars: stamp.daemon_sidecars } : {}
   };
-  if (await centralInstallContentIsCurrent(
-    options.stateRoot,
-    resolvedComm,
-    stamp,
-    resolvedAdapterBundleVersion,
-    options.deps
-  )) {
+  if (await centralInstallContentIsCurrent(options.stateRoot, resolvedComm, stamp, resolvedAdapterBundleVersion, options.deps)) {
     return { mode: "production", actor, skipped: true };
   }
   if (options.readOnlyIfCentralInstalled && await centralInstallHasRunnableContent(options.stateRoot, resolvedComm, options.deps)) {
@@ -4752,9 +4728,7 @@ async function centralInstallContentIsCurrent(stateRoot2, comm, stamp, adapterBu
   const readState = deps.readCentralState ?? readCentralState;
   try {
     const state = await readState(stateRoot2, comm);
-    return Boolean(
-      state.daemonExists && state.adapterExists && state.daemonVersionFile?.content_version === stamp.daemon_bundle_version && state.adapterVersionFile?.content_version === adapterBundleVersion
-    );
+    return Boolean(state.daemonExists && state.adapterExists && state.daemonVersionFile?.content_version === stamp.daemon_bundle_version && state.adapterVersionFile?.content_version === adapterBundleVersion);
   } catch {
     return false;
   }
@@ -4767,11 +4741,11 @@ function resolveAdapterBundleVersion(stamp, comm) {
   return stamp.adapter_bundle_version;
 }
 function isValidAdapterBundleVersionsMap(value) {
-  if (value === void 0) return true;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return Object.entries(value).every(
-    ([k, v]) => typeof k === "string" && k.length > 0 && typeof v === "string" && v.length > 0
-  );
+  if (value === void 0)
+    return true;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  return Object.entries(value).every(([k, v]) => typeof k === "string" && k.length > 0 && typeof v === "string" && v.length > 0);
 }
 async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
   const readState = deps.readCentralState ?? readCentralState;
@@ -4783,7 +4757,7 @@ async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
   }
 }
 
-// ../hosts/common/install/dev-config-resolver.js
+// dist/core-daemon/host-runtime/dev-config-resolver.js
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
 import path9 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
@@ -4804,7 +4778,7 @@ function resolveDevConfig(projectRoot, deps = {}) {
       reasons: [`dev marker unparseable: ${error instanceof Error ? error.message : String(error)}`]
     };
   }
-  const daemonBinRaw = parsed && typeof parsed.daemonBin === "string" ? parsed.daemonBin : null;
+  const daemonBinRaw = parsed && typeof parsed === "object" && parsed !== null && "daemonBin" in parsed && typeof parsed.daemonBin === "string" ? parsed.daemonBin : null;
   if (!daemonBinRaw) {
     return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
   }
@@ -4817,20 +4791,27 @@ function resolveDevConfig(projectRoot, deps = {}) {
   }
   const env = { AGENTS_COMM_BUS_BIN: daemonBin };
   const reasons = [`dev marker applied from ${markerPath}`];
-  if (typeof parsed.stateRoot === "string" && parsed.stateRoot.length > 0) {
-    const stateRoot2 = path9.resolve(projectRoot, parsed.stateRoot);
-    if (isInside(projectRoot, stateRoot2)) env.AGENTS_COMM_BUS_ROOT = stateRoot2;
-    else reasons.push(`ignoring stateRoot outside project root: ${parsed.stateRoot}`);
+  const record = parsed;
+  if (typeof record.stateRoot === "string" && record.stateRoot.length > 0) {
+    const stateRoot2 = path9.resolve(projectRoot, record.stateRoot);
+    if (isInside(projectRoot, stateRoot2))
+      env.AGENTS_COMM_BUS_ROOT = stateRoot2;
+    else
+      reasons.push(`ignoring stateRoot outside project root: ${record.stateRoot}`);
   }
-  if (typeof parsed.discoveryRoot === "string" && parsed.discoveryRoot.length > 0) {
-    const discoveryRoot2 = path9.resolve(projectRoot, parsed.discoveryRoot);
-    if (isInside(projectRoot, discoveryRoot2)) env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot2;
-    else reasons.push(`ignoring discoveryRoot outside project root: ${parsed.discoveryRoot}`);
+  if (typeof record.discoveryRoot === "string" && record.discoveryRoot.length > 0) {
+    const discoveryRoot2 = path9.resolve(projectRoot, record.discoveryRoot);
+    if (isInside(projectRoot, discoveryRoot2))
+      env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot2;
+    else
+      reasons.push(`ignoring discoveryRoot outside project root: ${record.discoveryRoot}`);
   }
-  if (typeof parsed.adaptersDir === "string" && parsed.adaptersDir.length > 0) {
-    const adaptersDir = path9.resolve(projectRoot, parsed.adaptersDir);
-    if (isInside(projectRoot, adaptersDir)) env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
-    else reasons.push(`ignoring adaptersDir outside project root: ${parsed.adaptersDir}`);
+  if (typeof record.adaptersDir === "string" && record.adaptersDir.length > 0) {
+    const adaptersDir = path9.resolve(projectRoot, record.adaptersDir);
+    if (isInside(projectRoot, adaptersDir))
+      env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
+    else
+      reasons.push(`ignoring adaptersDir outside project root: ${record.adaptersDir}`);
   }
   return { env, status: "applied", reasons };
 }
@@ -4840,11 +4821,12 @@ function applyDevConfig(baseEnv, projectRoot, deps = {}) {
 }
 function isInside(root, candidate) {
   const rel = path9.relative(root, candidate);
-  if (rel === "") return true;
+  if (rel === "")
+    return true;
   return !rel.startsWith("..") && !path9.isAbsolute(rel);
 }
 
-// ../hosts/common/install/entry-ensures.js
+// dist/core-daemon/host-runtime/entry-ensures.js
 function resolveEntryContext(fromDir, deps = {}) {
   const exists = deps.exists ?? existsSync4;
   return {
@@ -4855,27 +4837,16 @@ function resolveEntryContext(fromDir, deps = {}) {
 function findAncestorContaining(dir, name, exists) {
   let current = path10.resolve(dir);
   for (; ; ) {
-    if (exists(path10.join(current, name))) return current;
+    if (exists(path10.join(current, name)))
+      return current;
     const parent = path10.dirname(current);
-    if (parent === current) return void 0;
+    if (parent === current)
+      return void 0;
     current = parent;
   }
 }
 async function entryEnsures(options) {
-  const {
-    agent,
-    comm,
-    stateRoot: stateRoot2,
-    discoveryRoot: discoveryRoot2,
-    fromDir,
-    projectRoot,
-    pluginInstallDir,
-    env = process.env,
-    ensureDaemonOptions = {},
-    daemonRunning = false,
-    readOnlyCentralInstall = false,
-    deps = {}
-  } = options ?? {};
+  const { agent, comm, stateRoot: stateRoot2, discoveryRoot: discoveryRoot2, fromDir, projectRoot, pluginInstallDir, env = process.env, ensureDaemonOptions = {}, daemonRunning = false, readOnlyCentralInstall = false, deps = {} } = options ?? {};
   const ensureDaemonFn = deps.ensureDaemon ?? ensureDaemon;
   const ensureCentralInstallFn = deps.ensureCentralInstall ?? ensureCentralInstall;
   let resolvedProjectRoot = projectRoot;
