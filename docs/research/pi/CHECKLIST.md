@@ -369,17 +369,24 @@ Legend:
 
 ### 8.1 Telegram E2E (first vertical)
 
-- [ ] Register a Telegram bot: `agents-comm account-add --project <path>
+- [x] Register a Telegram bot: `agents-comm account-add --project <path>
       --agent pi --account-label main --comm telegram --bot-token <token>`
-- [ ] Allowlist sender: `agents-comm allowlist add --comm telegram
+      (done 2026-06-19: bot 8821195591, account_label=main)
+- [x] Allowlist sender: `agents-comm allowlist add --comm telegram
       --user <sender_id> --bot-id <bot_id>`
-- [ ] Load Pi package: `pi -e ./path/to/pi-agents-comm` (or `pi install`)
-- [ ] Start Pi in the project
-- [ ] Send inbound message from Telegram
-- [ ] Verify Pi receives a user turn containing the daemon inbound block
-- [ ] Have Pi reply via `comm_send_message`
-- [ ] Verify correct Telegram bot + chat receive the reply
+- [x] Load Pi package: `pi -e ./plugins/pi/agents-comm` (dev mode, against
+      the running dev daemon)
+- [x] Start Pi in the project
+- [x] Send inbound message from Telegram
+- [x] **Verify Pi receives a user turn containing the daemon inbound block**
+      (LIVE 2026-06-19: `[Daemon Inbound Messages]` block with
+      comm=telegram account=8821195591 conversation_id=conv_37386ea97ff72d6c…
+      landed in the Pi session via the 2s poller + `pi.sendUserMessage`.)
+- [ ] Have Pi reply via `comm_send_message`  (blocked on Phase 5 — tools not
+      implemented yet; inbound-only proven, round-trip pending Phase 5)
+- [ ] Verify correct Telegram bot + chat receive the reply  (Phase 5)
 - [ ] Verify busy Pi receives inbound as follow-up (not lost, not duplicated)
+      (Phase 5 — needs a round-trip to observe follow-up semantics meaningfully)
 
 ### 8.2 Multi-agent coexistence
 
