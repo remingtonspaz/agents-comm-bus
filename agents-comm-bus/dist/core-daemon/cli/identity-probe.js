@@ -3,11 +3,15 @@ import { DAEMON_VERSION } from "../config.js";
 // The CLI is shipped at the plugin root in production, and under
 // core-daemon/cli in source/dev. entryEnsures handles both: production central
 // install from install-stamp.json, or source mode from the dev marker/env.
-// @ts-expect-error JS install wrapper has no TypeScript declarations.
-import { entryEnsures } from "../../hosts/common/install/entry-ensures.js";
+import { entryEnsures } from "../host-runtime/entry-ensures.js";
 export async function probeIdentityViaDaemon(options) {
     const daemon = await entryEnsures({
-        agent: options.agent,
+        // CLI identity probing is agent-agnostic; `agent` only scopes central-install
+        // adapter selection. account-add always passes a concrete agent; the rare
+        // caller that omits it (account-update-token by bot-id) falls back to the
+        // primary agent. (Previously this passed `undefined` through an untyped JS
+        // wrapper; the moved TS module makes the contract explicit.)
+        agent: options.agent ?? "claude",
         comm: options.comm,
         stateRoot: options.stateRoot,
         fromDir: import.meta.dirname,
