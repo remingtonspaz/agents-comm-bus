@@ -382,9 +382,13 @@ Legend:
       (LIVE 2026-06-19: `[Daemon Inbound Messages]` block with
       comm=telegram account=8821195591 conversation_id=conv_37386ea97ff72d6c…
       landed in the Pi session via the 2s poller + `pi.sendUserMessage`.)
-- [ ] Have Pi reply via `comm_send_message`  (blocked on Phase 5 — tools not
-      implemented yet; inbound-only proven, round-trip pending Phase 5)
-- [ ] Verify correct Telegram bot + chat receive the reply  (Phase 5)
+- [x] **Have Pi reply via `comm_send_message`**  (LIVE 2026-06-19 after
+      `/reload` picked up the 3a79b11 session-injection fix: Pi called
+      comm_send_message with no target -> `Message sent via agents-comm-bus
+      (telegram:5)`)
+- [x] **Verify correct Telegram bot + chat receive the reply**  (LIVE
+      2026-06-19: reply routed to conv_37386ea97ff72d6cad0a3519 / bot
+      8821195591 / chat 8296218244 via bus.targetFromSession)
 - [ ] Verify busy Pi receives inbound as follow-up (not lost, not duplicated)
       (Phase 5 — needs a round-trip to observe follow-up semantics meaningfully)
 
