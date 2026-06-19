@@ -230,6 +230,28 @@ the Claude session to force a fresh spawn.
 message arrives with HTML formatting + inline keyboard; tap a button; Claude's
 CLI should auto-receive the corresponding digit + Enter.
 
+## Working an issue (AGE pipeline)
+
+Every substantial change is one Linear issue (`AGE-NN`; `LE-NN` = lighter board),
+run through: **file → delegate (cursor-agent in an isolated worktree) →
+cross-review (Claude↔Codex) → `--ff-only` merge → Linear/chat trail**. Full
+runbook: the `age-issue-pipeline` skill. Load-bearing invariants:
+
+- **One isolated worktree per issue** (`D:\tmp\acb-ageNN`), never the shared
+  checkout. Editing the shared checkout while a worktree is active is a recurring
+  bug — restore and redo in the worktree.
+- **The reviewer re-runs the full suite in a fresh worktree** — never trust the
+  author's run. Catches test-invisible blockers (lease lifecycle, TOCTOU,
+  missing gates); it's the highest-value step.
+- **Fast-forward-only merges**; Linear comment + chat update at every state
+  transition (implemented / reviewed / merged).
+- Delegation rarely one-shots — budget 1–2 `cursor-agent --resume` fix rounds,
+  and first-review Cursor's output yourself before handing to cross-review.
+
+In the shared multi-agent room, before acting on an imperative that wasn't
+addressed to you, draw an owner with the `figure-out-who-does-what` skill so
+eager agents don't collide on the same task.
+
 ## Running the daemon
 
 The daemon is per-user, not per-project. It bootstraps lazily; any hook or
@@ -550,6 +572,13 @@ handshake before deciding whether to reuse or spawn.
 - **Don't wake Codex with `turn/start` unconditionally.** If Codex is already
   busy after a tool call, another `turn/start` can leave the session in a long
   `"working..."` state. Use the steer-first path and keep the fallback.
+- **Don't report an action done before confirming it landed.** The auto-mode
+  approval classifier can't see Telegram/Discord approvals, so it silently
+  blocks already-authorized pushes/merges/Linear flips — and an action announced
+  first, then blocked, produces a false "done" report that needs retraction.
+  Confirm by SHA / re-read, and use the cross-agent unblock pattern: route the
+  blocked action to whichever agent's gate is clear (Claude's push blocked →
+  Codex pushes; Codex's Linear write blocked → Claude files).
 
 ## State paths
 
