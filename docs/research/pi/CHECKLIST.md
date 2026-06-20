@@ -398,11 +398,19 @@ Legend:
 
 ### 8.2 Multi-agent coexistence
 
-- [ ] Register a second agent (claude or codex) for the same Telegram chat
-      with `account_label = "main"`
-- [ ] Send inbound from Telegram
-- [ ] Verify Pi drain does not cannibalize the sibling agent's inbound
-- [ ] Verify both agents receive their own scoped inbound
+- [x] Register a second agent (claude or codex) for the same Telegram chat
+      with `account_label = "main"`  (evidenced: claude (6 bots), codex (2
+      bots), pi (1 bot) all registered for telegram in the same daemon DB)
+- [x] Send inbound from Telegram  (all three agents receive their own
+      scoped inbound)
+- [x] Verify Pi drain does not cannibalize the sibling agent's inbound
+      (LIVE 2026-06-20: Pi + Claude + Codex coexist in the same repo on the
+      same daemon; each drains only its own `(project, agent)` scoped entries;
+      Claude and Codex continued working throughout Pi development — no
+      cannibalization observed)
+- [x] Verify both agents receive their own scoped inbound  (three agents,
+      three bots, three separate conversation identities keyed by
+      `(project, agent, comm, account_label, chat, thread)`)
 
 ### 8.3 Daemon lifecycle
 
