@@ -344,21 +344,21 @@ Legend:
 
 ### 6.1 Per-comm skills
 
-- [ ] `skills/telegram/SKILL.md`
-- [ ] `skills/discord/SKILL.md`
-- [ ] `skills/matrix/SKILL.md`
-- [ ] `skills/curl/SKILL.md`
+- [x] `skills/telegram/SKILL.md`  (implemented 2026-06-20, commit f32b906)
+- [ ] `skills/discord/SKILL.md`  (when discord comes online)
+- [ ] `skills/matrix/SKILL.md`  (when matrix comes online)
+- [ ] `skills/curl/SKILL.md`  (when curl comes online)
 
 ### 6.2 Skill content checklist (each comm)
 
-- [ ] Explain the `[Daemon Inbound Messages]` block contract
-- [ ] Instruct: user-visible remote replies go via `comm_send_message`
-- [ ] Instruct: omit `target` to reply to most-recent inbound
-- [ ] Instruct: use `list_conversations` only when targeting elsewhere
-- [ ] Instruct: use `comm_check_messages` when suspecting new inbound
-- [ ] Note: local terminal output ≠ replying to remote comm user
-- [ ] Note: `account=<bot_id>` is the routing key; labels like `"main"` are
-      rejected as send targets
+- [x] Explain the `[Daemon Inbound Messages]` block contract  (telegram)
+- [x] Instruct: user-visible remote replies go via `comm_send_message`  (telegram)
+- [x] Instruct: omit `target` to reply to most-recent inbound  (telegram)
+- [x] Instruct: use `list_conversations` only when targeting elsewhere  (telegram)
+- [x] Instruct: use `comm_check_messages` when suspecting new inbound  (telegram)
+- [x] Note: local terminal output ≠ replying to remote comm user  (telegram)
+- [x] Note: `account=<bot_id>` is the routing key; labels like `"main"` are
+      rejected as send targets  (telegram)
 
 ## Phase 7 — diagnostic commands (optional but recommended)
 
