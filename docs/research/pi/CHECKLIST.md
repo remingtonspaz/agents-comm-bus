@@ -201,6 +201,7 @@ Legend:
 
 ### 3.1b Release sync (Option B)
 
+- [x] Restructure: split `plugins/pi/agents-comm/` → `plugins/pi/core/` + `plugins/pi/telegram/` (per-comm packages bundling a shared core; per README § Distribution).
 - [x] **Resolve packaging-shape gap** (cross-review 2026-06-17, RESOLVED 2026-06-19):
       per-comm packages bundling a shared core. Slots directly into the existing
       `scripts/stage-plugins.js` per-`(agent, comm)` release train — no new

@@ -1,0 +1,33 @@
+{
+  "name": "@agents-comm-bus/pi-telegram",
+  "version": "0.1.0",
+  "description": "Pi host extension for agents-comm-bus — Telegram comm (bundles the shared pi-core).",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": [
+      "node_modules/@agents-comm-bus/pi-core/extensions",
+      "./extensions/telegram"
+    ],
+    "skills": ["./skills"]
+  },
+  "dependencies": {
+    "agents-comm-bus": "*",
+    "@agents-comm-bus/pi-core": "0.1.0",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "bundledDependencies": ["@agents-comm-bus/pi-core"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "postinstall": "node ./scripts/link-workspace-core.mjs"
+  },
+  "license": "MIT"
+}

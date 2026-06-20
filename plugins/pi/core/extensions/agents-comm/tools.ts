@@ -113,6 +113,13 @@ export function registerCommTools(
   pi: ExtensionAPI,
   getClient: () => PiDaemonClient | null,
 ): void {
+  // Idempotent guard: if multiple per-comm packages bundle this core, Pi loads
+  // the core extension once per package's module root. The comm-generic tools
+  // must register exactly once (Pi keeps the first by name; duplicates shadow).
+  if (pi.getAllTools().some((t) => t.name === "comm_send_message")) {
+    return; // already registered by another bundled-core instance
+  }
+
   pi.registerTool({
     name: "comm_send_message",
     label: "Send Comm Message",

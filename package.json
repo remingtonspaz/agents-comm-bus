@@ -8,7 +8,9 @@
     "agents-comm-bus",
     "packages/*",
     "hosts",
-    "mcp-server"
+    "mcp-server",
+    "plugins/pi/core",
+    "plugins/pi/telegram"
   ],
   "scripts": {
     "install-telegram": "node install.js",

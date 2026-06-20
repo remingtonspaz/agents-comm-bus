@@ -107,6 +107,10 @@ export class PiDaemonClient {
   async start(): Promise<void> {
     let lastEnsured: Awaited<ReturnType<typeof entryEnsures>> | null = null;
 
+    // TODO(age-XX): Follow-up — core should stop calling entryEnsures; per-comm
+    // extensions own it. Requires comm-less entryEnsures mode (core daemon-resolution
+    // only) OR core-side comm discovery. Multi-comm prod correctness depends on this.
+    // See docs/research/pi/README.md § Distribution.
     for (const comm of SUPPORTED_COMMS) {
       try {
         lastEnsured = await entryEnsures({

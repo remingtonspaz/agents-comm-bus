@@ -1,0 +1,20 @@
+{
+  "name": "@agents-comm-bus/pi-core",
+  "version": "0.1.0",
+  "description": "Bundled core for agents-comm-bus Pi per-comm packages (comm-generic tools + lifecycle).",
+  "type": "module",
+  "private": false,
+  "dependencies": {
+    "agents-comm-bus": "*"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

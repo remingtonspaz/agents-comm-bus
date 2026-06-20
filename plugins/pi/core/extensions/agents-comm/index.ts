@@ -18,6 +18,8 @@ import { registerCommTools } from "./tools.js";
 
 const POLL_INTERVAL_MS = 2_000;
 
+let lifecycleWired = false;
+
 /** Stable for this extension runtime — sent on register and unregister. */
 const connectionId = `pi-conn-${crypto.randomUUID()}`;
 
@@ -100,67 +102,71 @@ export default function agentsCommExtension(pi: ExtensionAPI): void {
     console.warn(`[pi-agents-comm] comm commands not registered: ${message}`);
   }
 
-  pi.on("session_start", async (_event, ctx) => {
-    piSession = piSessionId(ctx.sessionManager);
-    client = new PiDaemonClient(ctx.cwd, log);
-    try {
-      await client.start();
-      await client.registerPiSession({
-        agent: "pi",
-        session: piSession,
-        project: ctx.cwd,
-        cwd: ctx.cwd,
-        connection_id: connectionId,
-        host: {
-          pid: process.pid,
-          label: "pi",
-          mode: ctx.mode,
-          session_file: ctx.sessionManager.getSessionFile() ?? null,
-        },
-      });
-      startPolling(pi, ctx);
-      if (ctx.mode === "tui") {
-        ctx.ui.notify("agents-comm-bus connected", "info");
+  if (!lifecycleWired) {
+    lifecycleWired = true;
+
+    pi.on("session_start", async (_event, ctx) => {
+      piSession = piSessionId(ctx.sessionManager);
+      client = new PiDaemonClient(ctx.cwd, log);
+      try {
+        await client.start();
+        await client.registerPiSession({
+          agent: "pi",
+          session: piSession,
+          project: ctx.cwd,
+          cwd: ctx.cwd,
+          connection_id: connectionId,
+          host: {
+            pid: process.pid,
+            label: "pi",
+            mode: ctx.mode,
+            session_file: ctx.sessionManager.getSessionFile() ?? null,
+          },
+        });
+        startPolling(pi, ctx);
+        if (ctx.mode === "tui") {
+          ctx.ui.notify("agents-comm-bus connected", "info");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`session_start failed: ${message}`);
+        await client?.close();
+        client = null;
+        stopPolling();
+        pollPi = null;
+        pollCtx = null;
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`session_start failed: ${message}`);
-      await client?.close();
-      client = null;
+    });
+
+    pi.on("session_shutdown", async (event, _ctx) => {
       stopPolling();
       pollPi = null;
       pollCtx = null;
-    }
-  });
 
-  pi.on("session_shutdown", async (event, _ctx) => {
-    stopPolling();
-    pollPi = null;
-    pollCtx = null;
+      const reason = event.reason;
+      const shouldUnregister =
+        reason === "new" || reason === "resume" || reason === "fork" || reason === "quit";
 
-    const reason = event.reason;
-    const shouldUnregister =
-      reason === "new" || reason === "resume" || reason === "fork" || reason === "quit";
+      if (shouldUnregister && client && piSession) {
+        try {
+          await client.unregisterPiSession({
+            agent: "pi",
+            session: piSession,
+            connection_id: connectionId,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          log(`unregister skipped: ${message}`);
+        }
+      }
 
-    if (shouldUnregister && client && piSession) {
       try {
-        await client.unregisterPiSession({
-          agent: "pi",
-          session: piSession,
-          connection_id: connectionId,
-        });
+        await client?.close();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        log(`unregister skipped: ${message}`);
+        log(`client close error: ${message}`);
       }
-    }
-
-    try {
-      await client?.close();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`client close error: ${message}`);
-    }
-    client = null;
-  });
+      client = null;
+    });
+  }
 }
