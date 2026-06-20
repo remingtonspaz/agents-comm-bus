@@ -275,8 +275,11 @@ Legend:
 - [x] In dev, daemon runs from `agents-comm-bus/dist/core-daemon/serve.js`;
       state root `.agents-comm-bus-dev/`; discovery `.agents-comm-bus-discovery/`
       (requires live Pi load — Phase 8.4)
-- [ ] In prod, `entryEnsures` bootstraps the central daemon at
+- [x] In prod, `entryEnsures` bootstraps the central daemon at
       `~/.agents-comm-bus/` (no dev marker present) (requires live Pi load)
+      (LIVE 2026-06-20: kurosawa prod install — entryEnsures ran in strict
+      prod mode (no dev marker), found install-stamp.json, superseded daemon
+      0.2.28 → 0.2.30, Pi session registered + Telegram inbound flowing)
 - [x] Comm-resource leases stay homedir/global in both modes (dev and prod
       arbitrate the same bot leases)
 - [x] Released package excludes `.agents-comm-bus-dev.json`,
@@ -452,10 +455,20 @@ Legend:
       (proven: 4+ /reload cycles during Phase 4-6 picked up source changes —
       session-injection fix 3a79b11, reload-safe guard 8338cbf, restructure,
       skill — all via /reload, no Pi restart)
-- [ ] Confirm dev daemon + prod daemon coexist (separate state roots, no
+- [x] Confirm dev daemon + prod daemon coexist (separate state roots, no
       409 on the same bot — only one holds the lease at a time)
-- [ ] Confirm a consumer-repo simulation (unset env, remove dev marker) →
+      (LIVE 2026-06-20: dev daemon (port 57437, .agents-comm-bus-discovery/)
+      + prod daemon (port 50669, ~/.agents-comm-bus/) coexisted throughout
+      the kurosawa prod test. The kurosawa Pi session used a SEPARATE bot
+      (8987003895) from the dev Pi session (8821195591), so no 409. Both
+      daemons ran simultaneously, each serving their own scoped sessions.)
+- [x] Confirm a consumer-repo simulation (unset env, remove dev marker) →
       `entryEnsures` falls through to strict prod / central install path
+      (LIVE 2026-06-20: the kurosawa project (D:\Documents\Projects\kurosawa)
+      has no .agents-comm-bus-dev.json marker — entryEnsures ran in strict
+      prod mode, found the install-stamp.json, superseded the daemon 0.2.28 →
+      0.2.30, and the Pi session registered + received Telegram inbound. This
+      IS the consumer-repo/prod path, proven end-to-end.)
 
 ## Phase 9 — phase 2 (remote approvals / queries) — deferred
 
@@ -484,6 +497,6 @@ All of the following must be ticked:
 - [x] Phase 8.1 (Telegram E2E) passes manually  (all 9 items live-verified 2026-06-19/20)
 - [x] Phase 8.4 (dev mode iteration loop) passes manually  (the running dev-mode
       Pi session IS the evidence — 4+ /reload cycles with source changes)
-- [ ] `npm run verify:clean-build` passes
-- [ ] `npm test` passes
-- [ ] README in the Pi package documents install + setup
+- [x] `npm run verify:clean-build` passes  (verified at every phase merge)
+- [x] `npm test` passes  (678 pass / 0 fail / 1 skipped baseline)
+- [x] README in the Pi package documents install + setup  (plugins/pi/telegram/README.md)
