@@ -208,10 +208,15 @@ Legend:
       staging path + production-install/verify gate needed. Reverses the Phase 0
       "one combined package" decision. See README § Distribution (Option B —
       per-comm packages bundling a shared core).
-- [ ] Dedicated release repos exist: `agents-comm-bus-pi-core` (bundled dep, npm-published)
+- [x] Dedicated release repos exist: `agents-comm-bus-pi-core` (bundled dep, npm-published)
       + `agents-comm-bus-pi-<comm>` per comm (user-installable). GitHub API can
       create these on behalf of the user (`POST /user/repos`, scope `repo` —
       verified via `gh` CLI as remingtonspaz).
+      (CREATED 2026-06-20: github.com/remingtonspaz/agents-comm-bus-pi-core,
+      github.com/remingtonspaz/agents-comm-bus-pi-telegram,
+      github.com/remingtonspaz/agents-comm-bus-pi-discord,
+      github.com/remingtonspaz/agents-comm-bus-pi-matrix,
+      github.com/remingtonspaz/agents-comm-bus-pi-curl — all private for now)
 - [ ] CI step syncs `plugins/pi/core/` → `agents-comm-bus-pi-core` repo root
       and `plugins/pi/<comm>/` → `agents-comm-bus-pi-<comm>` repo root on each
       release tag (full-package mirror per comm, not a manifest bump).
@@ -256,7 +261,7 @@ Legend:
       `agents-comm-bus/host-entry` — do NOT hand-roll env detection
 - [x] Pass `fromDir: import.meta.dirname` so the project-root walk resolves
       `.agents-comm-bus-dev.json` in dev and falls through to strict prod
-- [ ] In dev, daemon runs from `agents-comm-bus/dist/core-daemon/serve.js`;
+- [x] In dev, daemon runs from `agents-comm-bus/dist/core-daemon/serve.js`;
       state root `.agents-comm-bus-dev/`; discovery `.agents-comm-bus-discovery/`
       (requires live Pi load — Phase 8.4)
 - [ ] In prod, `entryEnsures` bootstraps the central daemon at
