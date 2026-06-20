@@ -364,9 +364,9 @@ Legend:
 ### 6.1 Per-comm skills
 
 - [x] `skills/telegram/SKILL.md`  (implemented 2026-06-20, commit f32b906)
-- [ ] `skills/discord/SKILL.md`  (when discord comes online)
-- [ ] `skills/matrix/SKILL.md`  (when matrix comes online)
-- [ ] `skills/curl/SKILL.md`  (when curl comes online)
+- [x] `skills/discord/SKILL.md`  (implemented 2026-06-20, commit 7eb639f)
+- [x] `skills/matrix/SKILL.md`  (implemented 2026-06-20, commit 7eb639f)
+- [x] `skills/curl/SKILL.md`  (implemented 2026-06-20, commit 7eb639f)
 
 ### 6.2 Skill content checklist (each comm)
 
