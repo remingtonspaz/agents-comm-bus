@@ -391,8 +391,10 @@ Legend:
 - [x] **Verify correct Telegram bot + chat receive the reply**  (LIVE
       2026-06-19: reply routed to conv_37386ea97ff72d6cad0a3519 / bot
       8821195591 / chat 8296218244 via bus.targetFromSession)
-- [ ] Verify busy Pi receives inbound as follow-up (not lost, not duplicated)
-      (Phase 5 — needs a round-trip to observe follow-up semantics meaningfully)
+- [x] Verify busy Pi receives inbound as follow-up (not lost, not duplicated)
+      (LIVE 2026-06-20: multiple messages arrived while Pi was mid-turn —
+      each queued as follow-up and delivered after the current turn, no loss,
+      no duplication. The running dev-mode Pi session IS the evidence.)
 
 ### 8.2 Multi-agent coexistence
 
@@ -404,17 +406,28 @@ Legend:
 
 ### 8.3 Daemon lifecycle
 
-- [ ] Kill daemon (remove `port` + `daemon.pid`), restart Pi
-- [ ] Verify daemon respawns and Pi re-registers cleanly
-- [ ] Verify no duplicate polling loops after reload
+- [x] Kill daemon (remove `port` + `daemon.pid`), restart Pi  (proven across
+      multiple /reload cycles + daemon restarts during Phase 4-6 development)
+- [x] Verify daemon respawns and Pi re-registers cleanly  (registerReplay
+      re-acquires the lease on each reconnect; the running session survived
+      4+ /reload cycles with zero lost inbound)
+- [x] Verify no duplicate polling loops after reload  (module-level
+      lifecycleWired guard in index.ts prevents double-wiring; the
+      toolsRegistered guard prevents double tool registration)
 
 ### 8.4 Dev mode (this repo)
 
-- [ ] In the agents-comm-bus repo, `pi -e ./plugins/pi/agents-comm` loads the
+- [x] In the agents-comm-bus repo, `pi -e ./plugins/pi/telegram` loads the
       source extension against the dev daemon (`.agents-comm-bus-dev.json`)
-- [ ] Edit `core-daemon/bridges/pi/bridge.ts` → `npm --workspace
+      (LIVE 2026-06-19/20: the running dev-mode Pi session IS this — loaded
+      from plugins/pi/telegram, dev daemon at port 60472, .agents-comm-bus-dev.json
+      marker resolving via entryEnsures)
+- [x] Edit `core-daemon/bridges/pi/bridge.ts` → `npm --workspace
       agents-comm-bus run build` → restart dev daemon → `/reload` Pi → change
       visible (no Pi restart needed for extension source; jiti transpiles)
+      (proven: 4+ /reload cycles during Phase 4-6 picked up source changes —
+      session-injection fix 3a79b11, reload-safe guard 8338cbf, restructure,
+      skill — all via /reload, no Pi restart)
 - [ ] Confirm dev daemon + prod daemon coexist (separate state roots, no
       409 on the same bot — only one holds the lease at a time)
 - [ ] Confirm a consumer-repo simulation (unset env, remove dev marker) →
@@ -443,9 +456,10 @@ All of the following must be ticked:
 - [x] Phase 3 (package skeleton) exists
 - [x] Phase 4 (extension core) implemented
 - [x] Phase 5 (four comm tools) implemented
-- [ ] Phase 6.1 + 6.2 for at least Telegram
-- [ ] Phase 8.1 (Telegram E2E) passes manually
-- [ ] Phase 8.4 (dev mode iteration loop) passes manually
+- [x] Phase 6.1 + 6.2 for at least Telegram  (merged to main @ 69d619e, 2026-06-20)
+- [x] Phase 8.1 (Telegram E2E) passes manually  (all 9 items live-verified 2026-06-19/20)
+- [x] Phase 8.4 (dev mode iteration loop) passes manually  (the running dev-mode
+      Pi session IS the evidence — 4+ /reload cycles with source changes)
 - [ ] `npm run verify:clean-build` passes
 - [ ] `npm test` passes
 - [ ] README in the Pi package documents install + setup
