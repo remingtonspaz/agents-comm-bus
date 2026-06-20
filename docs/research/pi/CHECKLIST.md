@@ -19,15 +19,12 @@ Legend:
 - [x] Confirm Pi session identity strategy. **Resolved** — derive from
       `ctx.sessionManager.getSessionId()` as `pi_<uuid>`. No hashing, no cwd
       fallback. See README § Pi session identity.
-- [x] Confirm distribution shape for the Pi package. **Resolved — Option B**
-      of `docs/research/install-model.md`. Source of truth in
-      `plugins/pi/agents-comm/`; dedicated full-package-mirror Pi repo for
-      releases; local-path install for dev. See README § Distribution
-      (Option B).
-- [x] Confirm whether Pi package ships one combined skill set or per-comm
-      packages reusing a shared base. **Resolved — one combined package**
-      mirroring the Option B full-package shape; per-comm skills live as
-      siblings under `skills/`.
+- [x] Confirm distribution shape for the Pi package. **Resolved — per-comm packages bundling a shared core** (reverses the Phase 0 "one combined package" decision; closes open question #6). Source of truth: `plugins/pi/core/` + `plugins/pi/<comm>/` in the monorepo. User installs one package per comm (`pi install npm:@agents-comm-bus/pi-<comm>`); each bundles `pi-core` via `bundledDependencies` + `node_modules/` paths. See README § Distribution (Option B — per-comm packages bundling a shared core).
+- [x] Confirm whether Pi package ships one combined skill set or separate per-comm
+      packages reusing a shared base. **Resolved — per-comm packages**; each
+      contributes its own `skills/<comm>/SKILL.md`. The comm-generic tools live
+      in the shared `pi-core` (Pi's flat tool namespace forbids per-comm tool
+      registration — see README § "Why per-comm + bundled-core").
 - [x] Confirm `agent = "pi"` as the canonical AgentId string in registrations
       and CLI usage. **Resolved** — use `"pi"`.
 
@@ -204,21 +201,25 @@ Legend:
 
 ### 3.1b Release sync (Option B)
 
-- [ ] **Resolve packaging-shape gap** (cross-review 2026-06-17): existing
-      `scripts/stage-plugins.js` is per-`(agent, comm)` with one adapter bundle
-      each; the one-package-all-comms Pi shape needs either (a) a new Pi staging
-      path assembling all adapter bundles + `adapter_bundle_versions` + its
-      own production-install/verify gate, or (b) a switch to per-comm Pi
-      packages reusing the current model. Not an MVP code blocker; must be
-      resolved before the first real release. See README § Release-pipeline gap.
-- [ ] Dedicated Pi package repo exists (root = the Pi package).
-- [ ] CI step syncs `plugins/pi/agents-comm/` → dedicated repo root on each
-      release tag (full-package mirror, not a manifest bump).
-- [ ] Verify `pi install git:github.com/<you>/pi-agents-comm@v1` works from
-      the synced repo.
-- [ ] Production-install test for the chosen Pi artifact shape (verifies the
-      staged bundle set + install stamp).
-- [ ] (Optional) publish to npm and verify `pi install npm:@<scope>/pi-agents-comm`.
+- [x] **Resolve packaging-shape gap** (cross-review 2026-06-17, RESOLVED 2026-06-19):
+      per-comm packages bundling a shared core. Slots directly into the existing
+      `scripts/stage-plugins.js` per-`(agent, comm)` release train — no new
+      staging path + production-install/verify gate needed. Reverses the Phase 0
+      "one combined package" decision. See README § Distribution (Option B —
+      per-comm packages bundling a shared core).
+- [ ] Dedicated release repos exist: `agents-comm-bus-pi-core` (bundled dep, npm-published)
+      + `agents-comm-bus-pi-<comm>` per comm (user-installable). GitHub API can
+      create these on behalf of the user (`POST /user/repos`, scope `repo` —
+      verified via `gh` CLI as remingtonspaz).
+- [ ] CI step syncs `plugins/pi/core/` → `agents-comm-bus-pi-core` repo root
+      and `plugins/pi/<comm>/` → `agents-comm-bus-pi-<comm>` repo root on each
+      release tag (full-package mirror per comm, not a manifest bump).
+- [ ] Verify `pi install git:github.com/remingtonspaz/agents-comm-bus-pi-telegram@v1`
+      works from the synced repo (core resolves via `bundledDependencies` +
+      `node_modules/`).
+- [ ] Production-install test for the per-comm artifact shape (verifies the
+      staged adapter bundle + install stamp + bundled core).
+- [ ] (Optional) publish to npm and verify `pi install npm:@agents-comm-bus/pi-telegram`.
 
 ### 3.2 Extension module layout
 

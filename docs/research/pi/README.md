@@ -373,28 +373,31 @@ The intended rule is: if Pi needs a helper, prefer extracting a **generic** help
 
 ## 1. Package shape
 
-Create a new Pi package (source of truth under `plugins/pi/agents-comm/` in this monorepo; see [Distribution (Option B)](#distribution-option-b) for how it ships), with a structure like:
+Per-comm packages bundling a shared core — see [Distribution (Option B — per-comm packages bundling a shared core)](#distribution-option-b--per-comm-packages-bundling-a-shared-core). Source of truth in this monorepo:
 
 ```text
-pi-agents-comm/
-  package.json
-  extensions/
-    agents-comm/
-      index.ts
-      daemon-client.ts
-      inbound-format.ts
-      session-id.ts
-      tools.ts
-      commands.ts
-  skills/
-    telegram/SKILL.md
-    discord/SKILL.md
-    matrix/SKILL.md
-    curl/SKILL.md
-  README.md
+plugins/pi/
+├── core/                         ← agents-comm-bus-pi-core (bundled, never user-installed standalone)
+│   ├── extensions/agents-comm/    ← comm-generic tools + lifecycle + poller
+│   │     ├── index.ts
+│   │     ├── daemon-client.ts
+│   │     ├── inbound-format.ts
+│   │     ├── session-id.ts
+│   │     ├── tools.ts
+│   │     └── commands.ts
+│   └── package.json            ← NOT pi-package keyword; dep, not user install target
+├── telegram/                      ← agents-comm-bus-pi-telegram (user installs this)
+│   ├── extensions/telegram/index.ts  ← thin: entryEnsures({agent:'pi',comm:'telegram'}) for its own comm
+│   ├── skills/telegram/SKILL.md
+│   ├── telegram.adapter.bundle.js
+│   ├── install-stamp.json          ← agent=pi, comm=telegram
+│   └── package.json              ← pi.extensions: ["node_modules/@agents-comm-bus/pi-core/extensions", "./extensions/telegram"]; bundledDependencies: ["@agents-comm-bus/pi-core"]
+├── discord/ ... (same shape)
+├── matrix/ ...                    (same shape)
+└── curl/ ...                      (same shape)
 ```
 
-This package is the Pi equivalent of `plugins/claude/<comm>/` and `plugins/codex/<comm>/`. See [Distribution (Option B)](#distribution-option-b) below for how it ships.
+This mirrors `plugins/claude/<comm>/` (per-comm) plus a `core/` peer (the Pi asymmetry: flat tool namespace forces a shared core, per [Distribution (Option B)](#distribution-option-b--per-comm-packages-bundling-a-shared-core)).
 
 ## 2. `package.json` shape
 
@@ -499,45 +502,86 @@ These are not required for MVP correctness, but they make smoke testing and oper
 
 ---
 
-## Distribution (Option B)
+## Distribution (Option B — per-comm packages bundling a shared core)
 
 This is the Pi-specific instance of **Option B** in [`docs/research/install-model.md`](../install-model.md) (the fallback for any agent whose marketplace/package format lacks git-subdir support). Pi packages do **not** support git-subdir sources: a `pi install git:<url>@<ref>` clones the whole repo and looks for the `pi` manifest at the repo root, so a subdirectory of the agents-comm-bus monorepo cannot be a Pi git source directly. Local paths *do* support subdirectories, so dev loading works either way.
 
-### Source of truth
+### Shape: per-comm packages, each bundling a shared core
 
-The package source and built artifacts live in this monorepo under `plugins/pi/agents-comm/`, parallel to `plugins/claude/<comm>/` and `plugins/codex/<comm>/`. CI builds and commits artifacts here on each release, same Option A discipline as the other agents.
+The user installs **one package per comm they want**. Each per-comm package bundles the shared `pi-core` package (via `bundledDependencies` + `node_modules/` paths in the `pi` manifest — see [Pi packages § Dependencies](https://pi.dev/docs/latest/packages#dependencies)) and contributes its own adapter bundle + `install-stamp.json` + that comm's skill. This achieves the **lean-install philosophy** git-subdir gives Claude/Codex: a user who never uses Discord never carries `@discordjs/rest` + `@discordjs/ws` + the discord adapter.
+
+```
+plugins/pi/                              (in-repo source of truth)
+├── core/                                ← agents-comm-bus-pi-core (bundled, NEVER user-installed standalone)
+│   ├── extensions/agents-comm/          ← comm-generic tools + lifecycle + poller (the Phase 4/5 code)
+│   └── package.json                     ← NOT a pi-package keyword; it's a dep, not a user install target
+├── telegram/                            ← agents-comm-bus-pi-telegram (user installs this)
+│   ├── extensions/telegram/index.ts     ← thin: entryEnsures({ agent:'pi', comm:'telegram', fromDir }) for its own comm
+│   ├── skills/telegram/SKILL.md
+│   ├── telegram.adapter.bundle.js
+│   ├── install-stamp.json               ← agent=pi, comm=telegram
+│   └── package.json                     ← pi.extensions: ["node_modules/@agents-comm-bus/pi-core/extensions", "./extensions/telegram"]; pi.skills: ["./skills"]; bundledDependencies: ["@agents-comm-bus/pi-core"]
+├── discord/ ...                         (same shape, discord)
+├── matrix/ ...                          (same shape, matrix)
+└── curl/ ...                            (same shape, curl)
+```
+
+```bash
+# user installs ONE package per comm:
+pi install npm:@agents-comm-bus/pi-telegram    # brings telegram libs only (+ bundled core)
+# add discord later:
+pi install npm:@agents-comm-bus/pi-discord     # brings discord libs only (+ its own bundled core)
+```
+
+This **reverses the Phase 0 "one combined package" decision** (made before the cross-review surfaced the `stage-plugins.js` gap) and **closes open question #6** — per-comm packages slot directly into the existing `scripts/stage-plugins.js` per-`(agent, comm)` release train, so no new staging path + production-install/verify gate is needed.
+
+### Why per-comm + bundled-core (not self-contained per-comm)
+
+Claude/Codex get away with one-self-contained-plugin-per-comm because their comm tools are namespaced by MCP server (`mcp__telegram__comm_send_message` vs `mcp__discord__comm_send_message` coexist as separate tools). Pi extensions register tools **flat** (`pi.registerTool({ name: "comm_send_message" })`) — no namespacing. If each per-comm package registered `comm_send_message`, Pi would keep the first by name and shadow the rest (load-order-dependent, fragile).
+
+So the comm-generic tools (`comm_send_message` / `comm_send_attachment` / `comm_check_messages` / `list_conversations`) live in the shared `pi-core` extension **once**. Per-comm packages bundle that core and contribute only their adapter bundle + skill + a thin `entryEnsures`-only extension. This preserves the comm-generic tool surface (matching Claude/Codex) AND the lean install.
+
+### Handling duplicate core loads (idempotent tool registration)
+
+If a user installs both `pi-telegram` and `pi-discord`, the `pi-core` extension is bundled in each tarball and loads twice (once per package's separate module root — Pi explicitly supports this: "separate installs do not collide or share modules"). The four comm-generic tools would then be registered twice → Pi keeps the first by name, shadows the second.
+
+Fix: **idempotent registration guard** in `registerCommTools` — check `pi.getAllTools()` (or a module-level `Set`) at the top and skip if `comm_send_message` already exists. One-line guard, order-independent, no architectural changes. Same guard applies to the session lifecycle handlers in the core's `index.ts` (only the first-loaded core instance wires `session_start`/`session_shutdown`).
+
+### Per-comm `entryEnsures` (not core-side discovery)
+
+`entryEnsures({ agent:'pi', comm })` is called by each per-comm package's thin `extensions/<comm>/index.ts` for **its own comm** — `fromDir: import.meta.dirname` walks up from that package's own dir to find its own `install-stamp.json`. No cross-package discovery of registered comms is needed; each package knows its own comm. The core extension handles tools + lifecycle + polling only; it does NOT call `entryEnsures`. This is cleaner than the alternative (core queries the daemon for registered comms + scans installed packages for stamps).
+
+### What `pi-core` is NOT
+
+- **NOT user-installed standalone.** It has no `pi-package` keyword; it's only ever a `bundledDependency` of a per-comm package. A user running `pi install npm:@agents-comm-bus/pi-core` would get nothing useful (no adapter bundle, no install stamp, no skill).
+- **NOT a comm.** It carries no adapter bundle and no `install-stamp.json`. It owns the comm-agnostic extension code only.
+
+### Comm liveness = account registration (no package-level enable/disable)
+
+There is **no per-comm enable/disable config** in the Pi packages. Whether a comm is live is an account-registration concern (AGE-38 lazy loading): a comm adapter only instantiates and polls when a `(project, agent=pi)` session has an account registration for it. `entryEnsures` central-installs the adapter bundle (copies to `~/.agents-comm-bus/adapters/<comm>.js`) — but that's just "make the bundle available on disk"; it does NOT start polling. No registration → no adapter → no polling.
+
+So "turn off discord" = `don't run agents-comm account-add --comm discord --agent pi`. The package shipping the discord adapter bundle is harmless if no discord bot is registered. This sidesteps the leakiness of a package-level config (central-install copies regardless of any config flag).
 
 ### Release path
 
-A dedicated Pi package repo (root = the Pi package) hosts the installable package. Its contents are a **full-package mirror** of `plugins/pi/agents-comm/`, synced by CI on each release tag. Install with either:
+Each per-comm package has its own release repo (e.g. `github.com/remingtonspaz/agents-comm-bus-pi-telegram`). CI syncs `plugins/pi/<comm>/` → that repo's root on each release tag (full-package mirror, per Option B). The GitHub API can create these repos on behalf of the user (`POST /user/repos`, scope `repo` — verified via `gh` CLI as remingtonspaz). The core package `plugins/pi/core/` syncs to its own `agents-comm-bus-pi-core` repo (also never user-installed standalone, but published to npm so per-comm packages can declare it as a `dependency`).
 
+Install with either:
 ```bash
-pi install git:github.com/<you>/pi-agents-comm@v1   # git source
+pi install git:github.com/remingtonspaz/agents-comm-bus-pi-telegram@v1   # git source
 # or
-pi install npm:@<scope>/pi-agents-comm              # if published to npm
+pi install npm:@agents-comm-bus/pi-telegram                              # npm
 ```
-
-### Pi-specific nuance vs. Claude/Codex
-
-Unlike Claude and Codex marketplace repos (thin manifest files pointing into the monorepo via git-subdir), the Pi package repo is **not** a thin manifest. Pi packages are self-contained: `package.json` with a `pi` manifest + `extensions/` + `skills/`. So CI's release step for Pi is a straight directory sync from `plugins/pi/agents-comm/` into the dedicated repo root, not a manifest pin bump.
-
-### Release-pipeline gap (needs resolution before release)
-
-Cross-review (Codex + Claude, 2026-06-17) flagged a real packaging gap. The existing `scripts/stage-plugins.js` emits **one artifact per `(agent, comm)`** and copies exactly one `${comm}.adapter.bundle.js` plus an install stamp for that comm. The Pi plan wants **one combined package for all comms**, which does not fit that model. Two options:
-
-1. **New Pi staging path** — a dedicated staging step that assembles a single Pi package containing all adapter bundles + `adapter_bundle_versions` for all comms, plus its own production-install/verify gate. More upfront work; matches the one-package-all-comms product shape.
-2. **Per-comm Pi packages** — reuse the current `stage-plugins.js` model: one Pi package per comm (`plugins/pi/<comm>/`), each carrying one adapter bundle. Less new plumbing; closer to the Claude/Codex release train; but diverges from the "one combined package" decision in Phase 0 and means a user installing Pi+Telegram and Pi+Discord gets two packages.
-
-This is a release-pipeline decision, not an MVP code blocker — the daemon bridge + extension can be built and smoke-tested against either shape. It must be resolved before the first real release. Tracked as an open item below.
 
 ### Local dev
 
-During development, load the in-repo subfolder directly:
-
+During development, load the in-repo source directly. With the per-comm split, dev loading targets the per-comm package (which bundles the core via the monorepo workspace):
 ```bash
-pi -e ./plugins/pi/agents-comm       # ephemeral try
-pi install /abs/path/to/plugins/pi/agents-comm   # persisted local install
+pi -e ./plugins/pi/telegram       # ephemeral try (core resolves via workspace link)
+pi install /abs/path/to/plugins/pi/telegram   # persisted local install
 ```
+
+The monorepo's npm workspaces link `plugins/pi/core` so the per-comm package's `import`/`node_modules` resolution finds the core without a publish step. Relative local paths resolve against the settings file, so an in-repo subfolder works for dev regardless of the git-subdir limitation.
 
 Relative local paths resolve against the settings file, so an in-repo subfolder works for dev regardless of the git-subdir limitation.
 
@@ -553,7 +597,7 @@ There are two distinct Pi scenarios, and the README did not previously codify th
 |---|---|---|
 | Who runs Pi here | a developer iterating on the Pi host/extension in the agents-comm-bus monorepo | a user in some other project who `pi install`ed the released package |
 | Pi cwd | the agents-comm-bus repo root | the consumer's project |
-| Extension source | `plugins/pi/agents-comm/` loaded via `pi -e` or project `.pi/settings.json` local path | the installed package under `~/.pi/agent/...` (npm/git) or `.pi/...` (project) |
+| Extension source | `plugins/pi/<comm>/` (the per-comm package) loaded via `pi -e` or project `.pi/settings.json` local path; the core resolves via the monorepo workspace link | the installed per-comm package under `~/.pi/agent/...` (npm/git) or `.pi/...` (project) |
 | Daemon the extension talks to | source daemon at `agents-comm-bus/dist/core-daemon/serve.js` | central daemon at `~/.agents-comm-bus/bin/daemon.js` |
 | State root | `.agents-comm-bus-dev/` (gitignored, repo-local) | `~/.agents-comm-bus/` (per-user) |
 | Discovery root | `.agents-comm-bus-discovery/` (gitignored, repo-local) | `~/.agents-comm-bus/` |
@@ -581,17 +625,17 @@ Two equivalent dev load paths:
 
 ```bash
 # ephemeral, one-off:
-pi -e ./plugins/pi/agents-comm
+pi -e ./plugins/pi/telegram
 
 # persisted for this checkout (project-scoped, shareable with teammates):
 #   .pi/settings.json
 {
   "packages": [
-    "/abs/path/to/agents-comm-bus/plugins/pi/agents-comm"
+    "/abs/path/to/agents-comm-bus/plugins/pi/telegram"
   ]
 }
 ```
-Project-scoped `.pi/settings.json` is the dev equivalent of Claude's `.mcp.json` + `.claude/settings.local.json`: it points Pi at the source extension without touching the user-scope package install.
+Project-scoped `.pi/settings.json` is the dev equivalent of Claude's `.mcp.json` + `.claude/settings.local.json`: it points Pi at the source per-comm package (which bundles the core via the workspace link) without touching the user-scope package install.
 
 ### Iteration loop
 
@@ -601,7 +645,7 @@ Because the Pi extension is in-process to Pi and the bridge is daemon-side, dev 
 2. `npm --workspace agents-comm-bus run build` (rebuild dist).
 3. Restart the dev daemon: stop the pid in `.agents-comm-bus-discovery/daemon.pid`, delete `.agents-comm-bus-discovery/port` + `daemon.pid`. The next `entryEnsures` call respawns it from the new `serve.js`.
 4. `/reload` in Pi (or restart Pi). The extension's `session_start` re-fires; `registerReplay("pi_register_session", ...)` idempotently re-registers the same `pi_<uuid>` against the restarted daemon. No re-acquire dance needed.
-5. Edit extension source (`plugins/pi/agents-comm/extensions/...`) — TypeScript via jiti, so `/reload` picks it up without a separate build step (jiti transpiles on load).
+5. Edit extension source (`plugins/pi/<comm>/extensions/...` or `plugins/pi/core/extensions/...`) — TypeScript via jiti, so `/reload` picks it up without a separate build step (jiti transpiles on load).
 
 ### What must NOT ship in the released package
 
@@ -899,8 +943,8 @@ Mitigation:
    new/resume/fork/quit; skip on reload). No Codex-style bootstrapper
    needed. See [§ Session replacement & lease release](#session-replacement--lease-release).
 4. For Phase 2, should remote approvals use a polling model from the extension or a more event-like query wait path?
-5. ~~Does the eventual distribution shape want one Pi package for all comms or separate per-comm Pi packages that reuse a shared base?~~ Resolved — see [Distribution (Option B)](#distribution-option-b).
-6. **Release-pipeline shape for the combined Pi package.** `scripts/stage-plugins.js` is per-`(agent, comm)` with one adapter bundle each; the one-package-all-comms Pi shape needs either a new Pi staging path + production-install/verify gate, or a switch to per-comm Pi packages. Not an MVP code blocker, but must be resolved before the first real release. See [§ Release-pipeline gap](#release-pipeline-gap-needs-resolution-before-release).
+5. ~~Does the eventual distribution shape want one Pi package for all comms or separate per-comm Pi packages that reuse a shared base?~~ Resolved — **per-comm packages bundling a shared core**. Reverses the Phase 0 "one combined package" decision. See [Distribution (Option B — per-comm packages bundling a shared core)](#distribution-option-b--per-comm-packages-bundling-a-shared-core).
+6. ~~**Release-pipeline shape for the combined Pi package.**~~ Resolved — per-comm packages slot directly into the existing `scripts/stage-plugins.js` per-`(agent, comm)` release train; no new staging path + production-install/verify gate needed. See [Distribution (Option B)](#distribution-option-b--per-comm-packages-bundling-a-shared-core).
 
 ---
 
