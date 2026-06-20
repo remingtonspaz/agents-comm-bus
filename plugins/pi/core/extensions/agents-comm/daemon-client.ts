@@ -117,7 +117,8 @@ export class PiDaemonClient {
           agent: "pi",
           comm,
           fromDir: import.meta.dirname,
-          readOnlyCentralInstall: true,
+          // readOnlyCentralInstall defaults to false — let the supersede fire
+          // when the stamp's daemon_bundle_version > installed version.
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

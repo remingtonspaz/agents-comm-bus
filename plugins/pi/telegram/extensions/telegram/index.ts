@@ -21,7 +21,9 @@ export default async function telegramCommExtension(): Promise<void> {
       agent: "pi",
       comm: "telegram",
       fromDir: import.meta.dirname,
-      readOnlyCentralInstall: true,
+      // readOnlyCentralInstall: false (default) — let the supersede fire when
+      // the stamp's daemon_bundle_version > installed version. readOnly would
+      // skip the upgrade if a daemon already exists, even if it's stale.
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
