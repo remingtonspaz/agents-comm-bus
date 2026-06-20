@@ -184,6 +184,22 @@ npm install
 npm run build
 ```
 
+**Bundle regeneration (load-bearing).** The `agents-comm-bus` workspace also
+produces self-contained esbuild bundles in `agents-comm-bus/dist-bundle/`
+(`daemon.bundle.js`, `<comm>.adapter.bundle.js`, `cli.bundle.js`, SQL sidecars,
+hooks). These are what `scripts/stage-plugins.js` copies into the per-`(agent,
+comm)` plugin trees and what central install deploys to `~/.agents-comm-bus/bin/`.
+**A `DAEMON_VERSION` bump (or any change to daemon/bridge/adapter source) MUST be
+accompanied by `npm --workspace agents-comm-bus run build:bundles` to regenerate
+the bundles.** A version bump without a bundle rebuild produces a stamp that
+claims the new version while the binary is stale — the supersede fires, copies
+the old bundle, and the new code is silently absent. This burned the first prod
+Pi install (daemon claimed 0.2.30 but the Pi bridge was missing from the
+stale bundle). `npm run verify:clean-build` checks tracked artifacts against
+source but does **not** yet rebuild bundles — always run `build:bundles`
+explicitly after daemon/bridge/adapter changes, then `stage-plugins`/
+`stage-pi-plugins` to propagate.
+
 **The `agents-comm` / `agents-comm-bus` command (AGE-30).** In a
 production/marketplace install, central install lays the admin CLI down at
 `~/.agents-comm-bus/bin/cli.js` and writes `agents-comm` / `agents-comm-bus`
