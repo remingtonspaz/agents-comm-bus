@@ -10,7 +10,10 @@
     "hosts",
     "mcp-server",
     "plugins/pi/core",
-    "plugins/pi/telegram"
+    "plugins/pi/telegram",
+    "plugins/pi/discord",
+    "plugins/pi/matrix",
+    "plugins/pi/curl"
   ],
   "scripts": {
     "install-telegram": "node install.js",
