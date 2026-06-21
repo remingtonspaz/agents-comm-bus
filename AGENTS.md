@@ -118,11 +118,13 @@ Three perpendicular layers meeting at the bus:
 │   │   │   ├── adapter.ts     # ClaudeAgentAdapter (v3 contract, currently unused)
 │   │   │   ├── bridge.ts      # ClaudeBridge + ClaudeBridgeFactory (v4 IPC handler)
 │   │   │   └── wake.ts        # ClaudeWakeRegistry, writeClaudeWakeTrigger/Response
-│   │   └── codex/
-│   │       ├── adapter.ts     # CodexAgentAdapter capabilities + hook/query mapping
-│   │       ├── app-server.ts  # Codex app-server turn/start + turn/steer client
-│   │       ├── app-server-lifecycle.ts # Codex app-server stop/kill logic
-│   │       └── bridge.ts      # CodexBridge + CodexBridgeFactory (v4 IPC handler)
+│   │   ├── codex/
+│   │   │   ├── adapter.ts     # CodexAgentAdapter capabilities + hook/query mapping
+│   │   │   ├── app-server.ts  # Codex app-server turn/start + turn/steer client
+│   │   │   ├── app-server-lifecycle.ts # Codex app-server stop/kill logic
+│   │   │   └── bridge.ts      # CodexBridge + CodexBridgeFactory (v4 IPC handler)
+│   │   └── pi/
+│   │       └── bridge.ts      # PiBridge + PiBridgeFactory (pi_* IPC, inbound drain)
 │   ├── bootstrap/             # ensure-daemon, spawn-lock, handshake
 │   ├── cli/                   # account-add, account-list, account-remove, account-update-token CLI
 │   ├── ipc/                   # WebSocket protocol + server + client
@@ -157,10 +159,30 @@ Three perpendicular layers meeting at the bus:
 │   │       └── user-prompt-submit.js   # UserPromptSubmit hook → codex_drain_inbound
 │   └── common/
 │       └── mcp-shim-shared.js      # Shared MCP shim plumbing
+├── plugins/                   # Built install artifacts (staged from source + bundles)
+│   ├── claude/<comm>/         # Claude Code plugin trees (MCP shim, hooks, skills)
+│   ├── codex/<comm>/          # Codex plugin trees (.mcp.json, hooks, skills)
+│   └── pi/
+│       ├── core/              # Shared @agents-comm-bus/pi-core extension (comm tools + lifecycle)
+│       │   └── extensions/agents-comm/
+│       │       ├── index.ts   # Pi extension entry (session register/drain/unregister)
+│       │       ├── tools.ts   # comm_* tool registrations
+│       │       └── daemon-client.ts
+│       └── <comm>/            # Per-comm Pi packages (telegram, discord, matrix, curl)
+│           ├── extensions/<comm>/index.ts
+│           ├── skills/<comm>/SKILL.md
+│           ├── daemon.bundle.js + <comm>.adapter.bundle.js + cli.bundle.js
+│           ├── *.sql          # Schema sidecars (copied with daemon bundle)
+│           └── install-stamp.json
 ├── scripts/
-│   └── enter-watcher.ps1      # The wake watcher; polls trigger-enter, types via WM_CHAR
+│   ├── enter-watcher.ps1      # The wake watcher; polls trigger-enter, types via WM_CHAR
+│   ├── stage-plugins.js       # Stage Claude/Codex plugin trees from hosts/ + bundles
+│   └── stage-pi-plugins.js    # Stage Pi per-comm bundles into plugins/pi/<comm>/
 ├── tests/architecture/        # bootstrap-race, ipc-versioning, plus per-adapter
-└── docs/architecture/         # Sequence diagrams, e2e test guide + reports
+├── docs/
+│   ├── architecture/          # Sequence diagrams, e2e test guide + reports
+│   └── research/pi/           # Pi host integration plan, checklist, AGE-59 plans
+└── .pi/                       # Local dev Pi settings (gitignored workspace wiring)
 ```
 
 ## Build + test
@@ -330,271 +352,75 @@ handshake before deciding whether to reuse or spawn.
 
 ## Generic patterns
 
-- **Composition root pattern.** `daemon.ts` is the library; `serve.ts` is
-  the only file that wires it to specific adapters. Anything in `daemon.ts`
-  with the words "claude" or "telegram" is a smell.
-- **Daemon version vs IPC protocol (these are different axes — don't conflate).**
-  Two version constants live in `core-daemon/config.ts`:
-  - `IPC_PROTOCOL_VERSION` is the **wire/schema contract** between the agent
-    surfaces (MCP shim + hooks) and the daemon. Compatibility is keyed on the
-    **major** component (`isProtocolCompatible` / `protocolMajor`). This is the
-    ONLY thing that decides whether a running daemon can serve a client.
-  - `DAEMON_VERSION` is the **bundle/artifact version**. It governs
-    central-install superseding of `bin/daemon.js` (highest-wins) and the
-    AGE-25 CI version-bump gate. It is **not** a runtime compatibility signal.
-
-  `ensureDaemon` reuse is therefore gated on protocol only: a running daemon at
-  a *different* `DAEMON_VERSION` but the same protocol major is **reused, never
-  terminated** — so a 0.2.1 shim happily talks to a 0.2.2 daemon. Termination
-  happens only on protocol **incompatibility**, and an older-protocol daemon is
-  replaced while a *newer*-protocol daemon is never downgraded (it errors asking
-  for a session restart). Practical consequence: a non-breaking `DAEMON_VERSION`
-  bump (CLI/adapter/daemon patch) does **not** require a coordinated fleet
-  restart; only an `IPC_PROTOCOL_VERSION` **major** bump does — so bump the
-  protocol major (and only then) when you change the wire/schema in a
-  backward-incompatible way. The earlier exact-`DAEMON_VERSION`-equality reuse
-  check (in both directions) is what let two shims at different patch versions
-  terminate each other's daemon forever; see `bootstrap/ensure-daemon.ts`.
-  `npm run check:ipc-protocol` (AGE-34) enforces the same distinction in CI:
-  it fingerprints the exported IPC protocol type/signature surface, ignores
-  function bodies, and fails when that contract changes without an
-  `IPC_PROTOCOL_VERSION` bump or explicit `IPC_COMPAT_NOTE`.
-- **IPC method namespacing.** Bridges own `<agent>_*` methods (e.g.
-  `claude_register_session`). Comm factories own `<comm>_*` methods (e.g.
-  `telegram_send` on the daemon IPC side). The MCP shim exposes generic
-  `comm_*` tools such as `comm_send_message`, `comm_send_attachment`, and
-  `comm_check_messages`; explicit targets flow through the nested
-  `target.{chat_native_id, thread_native_id?}` shape rather than flat
-  Telegram-specific fields. Generic methods like `list_conversations` are
-  intrinsic to the daemon library.
-- **Sinks for cross-cutting concerns.** `bus.setDispatchSink` (on each
-  inbound) and `bus.setResolveSink` (on each query resolution) let the
-  daemon route generic events to the agent bridge without bus.ts knowing
-  about specific agents.
-- **Shared inbound queue.** `pendingInbound` is owned by the daemon runtime
-  and passed by reference to bridges + comm IPC handlers. Bridges drain it
-  with their session-id stamping; comm-MCP handlers drain it generically.
-- **Lazy, session-triggered comm-adapter instantiation (AGE-38).** The daemon
-  does **not** eager-load every registered bot at startup — it boots with
-  **zero adapters** and brings up only the bots a `(project, agent)` session
-  needs, via `ensureCommsForSession(project, agent)` (in `daemon.ts`) called
-  from each bridge's register-session handler (`claude_register_session` /
-  `codex_register_session`). This makes the daemon *courteous*: a daemon only
-  contends for (and leases, AGE-35) the bots its live sessions actually use, so
-  a dev/main-dev daemon working on one project no longer reclaims every prod
-  bot across all projects. The instantiation is idempotent (skip bots already
-  live or in-flight) and best-effort per bot (a bad credential is logged, not
-  thrown — it must not fail session registration). The shared add-sequence
-  (`addAdapterForRegistration`) is `createAdapterFromRegistration` →
-  `bus.registerComm` → `bridge.attachComm` *for every bridge* (this wires
-  button-tap callback resolution — easy to forget) → `adapter.start()`, with
-  rollback (best-effort `adapter.stop()` — a partial start can leak a poller,
-  e.g. the Telegram adapter spins up its `getUpdates` poller before `getMe()`
-  resolves — then `unregisterComm` + `detachComm`) on a failed start so a
-  failed-to-start adapter is never wedged in `bus.comms` or left polling
-  outside the lease. The lease wrapper (`wrapWithLease.start`) does the same
-  `inner.stop()` before releasing the lease on an inner-start failure. A
-  **zero-adapter
-  daemon is a valid steady state** — `checkDaemonPidOwnership` keys on
-  pid-file ownership, never adapter count, so a daemon with no live sessions
-  does not self-retire. Consistency invariants that ride with this: (a) the
-  **reload path is scope-gated** — `reloadAdapters` hot-adds a row only if it is
-  already live OR its `(agent, project)` scope is active (a session for it
-  registered this daemon-lifetime, tracked in `activeScopes`); rows for projects
-  the daemon isn't serving stay lazy, so a CLI write firing
-  `reload_registrations` can't re-introduce eager global loading, while
-  `account-add` for an actively-served project still takes effect immediately
-  (active-scope eviction rides with the deferred session-exit work); (b)
-  **drains are scoped to the session's
-  `(project, agent)`**, not agent-wide — `ownedAccountKeys(session)` /
-  `resolveOwnedAccountKeys` resolve the session's project so one project's
-  session can't sweep another project's pending inbound. **No release-on-exit
-  yet:** an instantiated adapter stays until daemon stop. The rare case where a
-  would-be-outranked daemon needs a bot a higher-rank daemon holds is handled
-  manually (drop the dev marker, kill the dev daemon + its pid marker, let the
-  account's session re-ensure into prod); robust refcount-release is deferred
-  until per-host session-*exit* tracking is reliable.
-- **Credentials are daemon-owned file references, not inline secrets.** The
-  DB stores `credentials_ref` as `file:/abs/path.json`. Adapter factories
-  resolve them at startup; secrets never sit in the records table.
-- **Curl comm adapter is local inbound-only (AGE-50).** `adapters/curl/`
-  binds a loopback-only (`127.0.0.1`) HTTP server per registration; local
-  systems (cron, CI, Hermes, scripts) inject context with `POST /messages`
-  authenticated by the bearer token from the daemon-owned token file ref.
-  The body's required `project`/`agent` must match the registration scope
-  (404 otherwise); `sender_id` flows through the normal
-  allowlist/filter/audit path (unauthorized → 401 + `inbound_filter_drop`),
-  and an omitted `chat_native_id` bins into the deterministic synthetic
-  conversation `curl:<sender_id>`. Accepted messages ride the standard bus
-  path (transcript, `pendingInbound`, bridge wake, `[Daemon Inbound
-  Messages]`), and the response echoes `{ message_id, conversation_id }`.
-  The bound port is ephemeral by default and published at
-  `~/.agents-comm-bus/curl/<account>/endpoint.json` (pin it by adding a
-  `"port"` field to the token file). Identity is synthetic — `account-add
-  --comm curl --bot-token <secret>` defaults to account id `curl:local`;
-  pass `--account-id <id>` to register additional scopes. There is no
-  outbound: `send()` and the `curl_send` IPC method fail loudly by design,
-  so agents reply over a bidirectional comm instead.
-- **Callback resolutions bypass TTL.** When a user actively taps a button or
-  sends a text reply, the query resolves even if its TTL passed. TTL is for
-  abandoned queries, not slow ones.
-- **Supersede prior open queries when opening a new one.** Claude Code never
-  re-invokes hooks with the user's local selection, so hook-opened queries
-  never close themselves. `daemon.openClaudeQuery` calls
-  `supersedeOpenQueriesForSession` before each `bus.openQuery` to keep the
-  partial unique index `idx_queries_one_open_per_session` from deadlocking.
-- **Multi-bot support via `(commId, accountId)` keying.** `MessageBus.comms`
-  is `Map<string, CommAdapter>` keyed by `${commId}:${accountId}` so a
-  single daemon can host one bot per agent (Claude bot + Codex bot, both
-  with `comm.id="telegram"`) without collision. Every `CommAdapter` is
-  required to expose `readonly accountId` (e.g. Telegram `bot_user_id`)
-  and `CommAdapterFactory.create(credentials, accountId)` takes it from
-  the registration. `bus.send` requires `target.account` to be a concrete
-  `bot_user_id` (AGE-15): `registrationFor` resolves it via `getAccountByBot`
-  only and rejects account labels — labels like `"main"` are ambiguous across
-  agents (Claude and Codex both register `"main"`). The inbound block surfaces
-  the bot id as `account=<id>`; omit `target` entirely to reply to the
-  session's most-recent inbound.
-- **Conversation identity includes `agent`.** `conversation_id` and the
-  SQLite conversations primary key include `project + agent + comm +
-  account_label + chat_native_id + thread_native_id`. Claude and Codex may
-  both use `account_label="main"` for the same Telegram chat; they must still
-  get separate transcript files and query-resolution windows.
-- **Codex wake is steer-first.** Telegram inbound for Codex calls
-  `turn/steer` with the actual daemon-delivered message context, then falls
-  back to `turn/start` only if steering fails. A successful steer removes the
-  delivered messages from `pendingInbound` so a later `UserPromptSubmit` does
-  not inject duplicates.
-- **Path-only Codex MCP config is intentional.** Global Codex config should
-  only point at `mcp-server/dist/codex-mcp-shim.js`. Session-specific app-server URL,
-  thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1`
-  and runtime discovery in `hosts/codex/codex-mcp-shim.js`.
-- **Codex `SessionStart` is first-prompt repair, not true process startup.**
-  `hosts/codex/hooks/session-start.js` only schedules a same-terminal bootstrap
-  restart when daemon IPC reports that this project has a Codex comm account
-  registration and the current process lacks a reachable managed app-server
-  (`CODEX_APP_SERVER_URL` + `AGENTS_COMM_BUS_SESSION_ID`). It has a short
-  restart-loop guard under `~/.agents-comm-bus/codex-bootstrapper/`. The hook
-  must pass the detected Codex thread id to the bootstrapper with `-ThreadId`;
-  relying on inherited env alone can relaunch Codex on a fresh comm-bus session
-  instead of the existing thread.
-- **Codex `PermissionRequest` hooks disable auto-mode classification.**
-  Unlike Claude, enabling a Codex `PermissionRequest` hook currently disables
-  Codex's auto-mode classifier. The current workaround for the most seamless
-  Codex experience is to manually disable the `PermissionRequest` hook and
-  rely on local Codex permission handling rather than comm-bus-routed
-  permission prompts.
-- **Codex app-server lifecycle is MCP-owned.** The MCP shim registers the
-  Codex session with `manage_app_server_lifecycle=true` and
-  `replace_existing_lease=true`. When that lease closes and remains idle after
-  a short grace delay, `CodexBridge` stops the bootstrapper-tracked app-server
-  PID and terminal PID, but only after command-line verification against the
-  recorded `appServerUrl` / wrapper path. Short-lived hook registrations must
-  not own app-server cleanup.
+- **Composition root pattern.** `daemon.ts` is the library; `serve.ts` is the only file that wires it to specific adapters. Anything in `daemon.ts` with the words "claude" or "telegram" is a smell.
+- **Daemon version vs IPC protocol (these are different axes — don't conflate).** Two version constants live in `core-daemon/config.ts`:  
+  - `IPC_PROTOCOL_VERSION` is the **wire/schema contract** between the agent surfaces (MCP shim + hooks) and the daemon. Compatibility is keyed on the **major** component (`isProtocolCompatible` / `protocolMajor`). This is the ONLY thing that decides whether a running daemon can serve a client.  
+  - `DAEMON_VERSION` is the **bundle/artifact version**. It governs central-install superseding of `bin/daemon.js` (highest-wins) and the AGE-25 CI version-bump gate. It is **not** a runtime compatibility signal.  
+  `ensureDaemon` reuse is therefore gated on protocol only: a running daemon at a *different* `DAEMON_VERSION` but the same protocol major is **reused, never terminated** — so a 0.2.1 shim happily talks to a 0.2.2 daemon. Termination happens only on protocol **incompatibility**, and an older-protocol daemon is replaced while a *newer*-protocol daemon is never downgraded (it errors asking for a session restart). Practical consequence: a non-breaking `DAEMON_VERSION` bump (CLI/adapter/daemon patch) does **not** require a coordinated fleet restart; only an `IPC_PROTOCOL_VERSION` **major** bump does — so bump the protocol major (and only then) when you change the wire/schema in a backward-incompatible way. The earlier exact-`DAEMON_VERSION`-equality reuse check (in both directions) is what let two shims at different patch versions terminate each other's daemon forever; see `bootstrap/ensure-daemon.ts`. `npm run check:ipc-protocol` (AGE-34) enforces the same distinction in CI: it fingerprints the exported IPC protocol type/signature surface, ignores function bodies, and fails when that contract changes without an `IPC_PROTOCOL_VERSION` bump or explicit `IPC_COMPAT_NOTE`.
+- **IPC method namespacing.** Bridges own `<agent>_*` methods (e.g. `claude_register_session`). Comm factories own `<comm>_*` methods (e.g. `telegram_send` on the daemon IPC side). The MCP shim exposes generic `comm_*` tools such as `comm_send_message`, `comm_send_attachment`, and `comm_check_messages`; explicit targets flow through the nested `target.{chat_native_id, thread_native_id?}` shape rather than flat Telegram-specific fields. Generic methods like `list_conversations` are intrinsic to the daemon library.
+- **Sinks for cross-cutting concerns.** `bus.setDispatchSink` (on each inbound) and `bus.setResolveSink` (on each query resolution) let the daemon route generic events to the agent bridge without bus.ts knowing about specific agents.
+- **Shared inbound queue.** `pendingInbound` is owned by the daemon runtime and passed by reference to bridges + comm IPC handlers. Bridges drain it with their session-id stamping; comm-MCP handlers drain it generically.
+- **Lazy, session-triggered comm-adapter instantiation (AGE-38).** Daemon starts with **no adapters** and creates only those needed for active `(project, agent)` sessions (`ensureCommsForSession` in `daemon.ts`). Inactive adapters are not started, saving resources. Instantiation is **idempotent** (no effect if already running) and **best-effort** (failures log errors but don't block sessions). Registration: `createAdapterFromRegistration` → `bus.registerComm` → `bridge.attachComm` (for callbacks) → `adapter.start()`. On failure, rollbacks (`adapter.stop()`, `unregisterComm`, `detachComm`) and lease wrappers prevent leaks. Daemons can run with **zero active adapters**; lifecycle tracks pid-file, not adapter count. (a) **Reloads are scoped**—adapters reload only if live or if their `(agent, project)` scope is active; registrations for inactive projects remain lazy. (b) **Inbound drains are session-scoped**—pending inbound messages resolve per session, preventing cross-session message leaks. Adapters persist until daemon shutdown (no auto-release yet); manual intervention needed for forced handoff. Automated release is planned for future session-exit tracking.
+- **Credentials are daemon-owned file references, not inline secrets.** The DB stores `credentials_ref` as `file:/abs/path.json`. Adapter factories resolve them at startup; secrets never sit in the records table.
+- **Curl comm adapter is local inbound-only (AGE-50).** `adapters/curl/` binds a loopback-only (`127.0.0.1`) HTTP server per registration; local systems (cron, CI, Hermes, scripts) inject context with `POST /messages` authenticated by the bearer token from the daemon-owned token file ref. The body's required `project`/`agent` must match the registration scope (404 otherwise); `sender_id` flows through the normal allowlist/filter/audit path (unauthorized → 401 + `inbound_filter_drop`), and an omitted `chat_native_id` bins into the deterministic synthetic conversation `curl:<sender_id>`. Accepted messages ride the standard bus path (transcript, `pendingInbound`, bridge wake, `[Daemon Inbound Messages]`), and the response echoes `{ message_id, conversation_id }`. The bound port is ephemeral by default and published at `~/.agents-comm-bus/curl/<account>/endpoint.json` (pin it by adding a `"port"` field to the token file). Identity is synthetic — `account-add --comm curl --bot-token <secret>` defaults to account id `curl:local`; pass `--account-id <id>` to register additional scopes. There is no outbound: `send()` and the `curl_send` IPC method fail loudly by design, so agents reply over a bidirectional comm instead.
+- **Callback resolutions bypass TTL.** When a user actively taps a button or sends a text reply, the query resolves even if its TTL passed. TTL is for abandoned queries, not slow ones.
+- **Supersede prior open queries when opening a new one.** Claude Code never re-invokes hooks with the user's local selection, so hook-opened queries never close themselves. `daemon.openClaudeQuery` calls `supersedeOpenQueriesForSession` before each `bus.openQuery` to keep the partial unique index `idx_queries_one_open_per_session` from deadlocking.
+- **Multi-bot support via `(commId, accountId)` keying.** `MessageBus.comms` is `Map<string, CommAdapter>` keyed by `${commId}:${accountId}` so a single daemon can host one bot per agent (Claude bot + Codex bot, both with `comm.id="telegram"`) without collision. Every `CommAdapter` is required to expose `readonly accountId` (e.g. Telegram `bot_user_id`) and `CommAdapterFactory.create(credentials, accountId)` takes it from the registration. `bus.send` requires `target.account` to be a concrete `bot_user_id` (AGE-15): `registrationFor` resolves it via `getAccountByBot` only and rejects account labels — labels like `"main"` are ambiguous across agents (Claude and Codex both register `"main"`). The inbound block surfaces the bot id as `account=<id>`; omit `target` entirely to reply to the session's most-recent inbound.
+- **Conversation identity includes `agent`.** `conversation_id` and the SQLite conversations primary key include `project + agent + comm + account_label + chat_native_id + thread_native_id`. Claude and Codex may both use `account_label="main"` for the same Telegram chat; they must still get separate transcript files and query-resolution windows.
+- **Codex wake is steer-first.** Telegram inbound for Codex calls `turn/steer` with the actual daemon-delivered message context, then falls back to `turn/start` only if steering fails. A successful steer removes the delivered messages from `pendingInbound` so a later `UserPromptSubmit` does not inject duplicates.
+- **Path-only Codex MCP config is intentional.** Global Codex config should only point at `mcp-server/dist/codex-mcp-shim.js`. Session-specific app-server URL, thread id, and daemon session id come from `scripts/bootstrap-codex-session.ps1` and runtime discovery in `hosts/codex/codex-mcp-shim.js`.
+- **Codex `SessionStart` is first-prompt repair, not true process startup.** `hosts/codex/hooks/session-start.js` only schedules a same-terminal bootstrap restart when daemon IPC reports that this project has a Codex comm account registration and the current process lacks a reachable managed app-server (`CODEX_APP_SERVER_URL` + `AGENTS_COMM_BUS_SESSION_ID`). It has a short restart-loop guard under `~/.agents-comm-bus/codex-bootstrapper/`. The hook must pass the detected Codex thread id to the bootstrapper with `-ThreadId`; relying on inherited env alone can relaunch Codex on a fresh comm-bus session instead of the existing thread.
+- **Codex `PermissionRequest` hooks disable auto-mode classification.** Unlike Claude, enabling a Codex `PermissionRequest` hook currently disables Codex's auto-mode classifier. The current workaround for the most seamless Codex experience is to manually disable the `PermissionRequest` hook and rely on local Codex permission handling rather than comm-bus-routed permission prompts.
+- **Codex app-server lifecycle is MCP-owned.** The MCP shim registers the Codex session with `manage_app_server_lifecycle=true` and `replace_existing_lease=true`. When that lease closes and remains idle after a short grace delay, `CodexBridge` stops the bootstrapper-tracked app-server PID and terminal PID, but only after command-line verification against the recorded `appServerUrl` / wrapper path. Short-lived hook registrations must not own app-server cleanup.
 
 ## Anti-patterns (don't do these)
 
-- **Don't import adapter modules from `daemon.ts`** — that's what the
-  composition root in `serve.ts` is for. If `daemon.ts` needs to know about
-  a specific adapter, add a generic interface in `runtime/` first.
-- **Don't use `child_process.spawn(..., { detached: true })` to launch
-  PowerShell scripts on Windows** — it's unreliable, the process often dies
-  immediately or returns a phantom PID. Use `Start-Process -PassThru |
-  Select-Object -ExpandProperty Id` via `execSync` instead. See
-  `hosts/claude/hooks/wake-support.js`.
-- **Don't return the first `cmd.exe` walking up the process tree from a
-  hook** — that's the *transient* cmd.exe (child of `claude.exe`), which
-  dies when the hook exits. Walk the full chain and return the cmd.exe
-  whose direct child is `claude.exe` (the *persistent* one with the visible
-  console window). See `findCmdAncestor` in `wake-support.js`.
-- **Don't call `PostMessage(hwnd, WM_CHAR, ch, 0)`** — `lParam = 0` triggers
-  **65536 repeats** because the 16-bit repeat count wraps. Always use
-  `lParam = 1`. See `scripts/enter-watcher.ps1`.
-- **Don't use `WM_KEYDOWN` for console windows via PostMessage** — only
-  `WM_CHAR` reaches them. VT escape sequences (`ESC [ B`) also don't
-  combine — each char processed individually. Use number-key selection.
-- **Don't clobber DB columns on UPSERT that have their own update path.**
-  `upsertSession`'s `ON CONFLICT DO UPDATE SET` excludes
-  `most_recent_inbound_conversation_id` because `setSessionMostRecentInbound`
-  writes it independently — including it in the upsert nulled out the value
-  every time `claude_register_session` fired (which is before *every* hook
-  IPC call). One commit's worth of debugging avoided by this rule.
-- **Don't enforce TTL on callback-resolution paths** — the user actively
-  responded; "expired" is the wrong outcome. Only enforce TTL when the
-  resolution path is "I assume you weren't going to answer."
-- **Don't bundle multiple comm tokens behind one bot account.** Telegram
-  rejects duplicate `getUpdates` consumers with a 409 Conflict; multiple
-  daemons polling the same bot is the same correctness bug. The
-  `account_registrations` unique index on `(comm, bot_user_id)` enforces
-  this.
-- **Don't add comm-specific fields to `OutboundPayload`** — keep it generic
-  (`format`, `inline_keyboard`, `attachments`). Adapters that don't support
-  a field ignore it.
-- **Don't key `MessageBus.comms` by `comm.id` alone.** A daemon legitimately
-  hosts multiple adapters with the same `comm.id` (e.g. one Telegram bot
-  per agent). The map key must be `(commId, accountId)`. The first version
-  of the multi-agent setup keyed by `commId` only, and the second adapter
-  silently overwrote the first — its bot's polling never started, messages
-  sat unread on Telegram, and the surviving adapter 409'd against whichever
-  external process was already polling its bot. See commit `db8b4fd`.
-- **Don't key conversations by `(project, comm, account_label, chat)` alone.**
-  Claude and Codex can both register Telegram as `account_label="main"` for
-  the same chat. Omitting `agent` mixes transcripts and can let plain-text
-  query replies resolve against the wrong agent. See commit `ef0c96e`.
-- **Don't remove `pendingInbound` entries by `message_id` alone in a bridge.**
-  The shared queue can hold two entries with the same `message_id` when the
-  same platform message reaches two bots (e.g. one Telegram group chat with
-  both a Claude bot and a Codex bot — each adapter pushes its own entry,
-  distinguished only by `chat.account`). Scoping a remove by message_id
-  alone wipes the sibling entry, so the *other* agent's drain hook
-  subsequently finds an empty queue and never injects the inbound into the
-  prompt. Symptom from the user's perspective: "wake fires but no inbound
-  appears." Remove by the composite key `(message_id, chat.comm, chat.account)`
-  — same shape `accountKey` already uses for filter paths. The Claude side
-  doesn't hit this because `ClaudeBridge.drainPendingInbound` removes by
-  index inside an `accountKey`-filtered loop; only the Codex side's
-  post-steer cleanup carried the bug.
-- **Don't forget to rebundle `mcp-server` after changing
-  `bootstrap/ensure-daemon.ts`.** `mcp-server/dist/claude-mcp-shim.js` is an esbuild
-  bundle that *inlines* `defaultSpawnDaemon`. The bundle stays stale until
-  `npm run build` in `mcp-server/` rebakes it. If the bundle still spawns
-  the old entry path, a cold start where the MCP server is the first to
-  call `ensureDaemon()` will launch the wrong file (or a library-only
-  daemon with no `main()`). In a lab with an always-running daemon this
-  hides because the bundle's discovery probe finds the live daemon and
-  skips the spawn. See commit `438f48b`. The shim also inlines the whole
-  central-install path (`executeInstallPlan` etc.), so the same staleness bit
-  AGE-23 Phase B / AGE-26 (missing schema sidecars + ESM pins). **`npm run
-  verify:clean-build` (AGE-29) now guards this**: it rebuilds every tracked
-  generated artifact and fails if any drifted from source. Run it (and the CI
-  on `windows-latest` runs it) after touching the install path / daemon /
-  adapters; it's the enforcement for this whole anti-pattern.
-- **Route outbound by `bot_user_id`, never by `account_label` (AGE-15).**
-  `registrationFor` resolves `target.account` via `getAccountByBot` ONLY; an
-  account label fails loud with an actionable error. The old label fallback
-  (try the daemon's cwd-project, then widen to all projects) was the source of
-  the 2026-05-30 cross-agent misroute — `"main"` resolved to whichever
-  registration was found first — so it has been removed. `getAccountByBot` is
-  already project-independent, so the daemon-is-per-user concern that once
-  motivated the project-widening (`081b550`) no longer applies to routing:
-  there is no label resolution left to widen. Agents must send a concrete bot
-  id (surfaced as `account=<id>` in the inbound block / `bot=<id>` from
-  `list_conversations`) or omit `target` to reply to the most-recent inbound.
-- **Don't use account labels when sending session-derived targets.** When a
-  session has a recent conversation, resolve it back to the concrete
-  `(project, agent, comm, account_label)` registration and send with
-  `bot_user_id`. Labels like `"main"` are only human aliases and are
-  ambiguous across agents. See commit `cbc4a43`.
-- **Don't wake Codex with `turn/start` unconditionally.** If Codex is already
-  busy after a tool call, another `turn/start` can leave the session in a long
-  `"working..."` state. Use the steer-first path and keep the fallback.
-- **Don't report an action done before confirming it landed.** The auto-mode
-  approval classifier can't see Telegram/Discord approvals, so it silently
-  blocks already-authorized pushes/merges/Linear flips — and an action announced
-  first, then blocked, produces a false "done" report that needs retraction.
-  Confirm by SHA / re-read, and use the cross-agent unblock pattern: route the
-  blocked action to whichever agent's gate is clear (Claude's push blocked →
-  Codex pushes; Codex's Linear write blocked → Claude files).
+- **Don't import adapter modules from `daemon.ts`** — that's what the composition root in `serve.ts` is for. If `daemon.ts` needs to know about a specific adapter, add a generic interface in `runtime/` first.
+- **Don't use `child_process.spawn(..., { detached: true })` to launch PowerShell scripts on Windows** — it's unreliable, the process often dies immediately or returns a phantom PID. Use `Start-Process -PassThru | Select-Object -ExpandProperty Id` via `execSync` instead. See `hosts/claude/hooks/wake-support.js`.
+- **Don't return the first `cmd.exe` walking up the process tree from a hook** — that's the *transient* cmd.exe (child of `claude.exe`), which dies when the hook exits. Walk the full chain and return the cmd.exe whose direct child is `claude.exe` (the *persistent* one with the visible console window). See `findCmdAncestor` in `wake-support.js`.
+- **Don't call `PostMessage(hwnd, WM_CHAR, ch, 0)`** — `lParam = 0` triggers **65536 repeats** because the 16-bit repeat count wraps. Always use `lParam = 1`. See `scripts/enter-watcher.ps1`.
+- **Don't use `WM_KEYDOWN` for console windows via PostMessage** — only `WM_CHAR` reaches them. VT escape sequences (`ESC [ B`) also don't combine — each char processed individually. Use number-key selection.
+- **Don't clobber DB columns on UPSERT that have their own update path.** `upsertSession`'s `ON CONFLICT DO UPDATE SET` excludes `most_recent_inbound_conversation_id` because `setSessionMostRecentInbound` writes it independently — including it in the upsert nulled out the value every time `claude_register_session` fired (which is before *every* hook IPC call). One commit's worth of debugging avoided by this rule.
+- **Don't enforce TTL on callback-resolution paths** — the user actively responded; "expired" is the wrong outcome. Only enforce TTL when the resolution path is "I assume you weren't going to answer."
+- **Don't bundle multiple comm tokens behind one bot account.** Telegram rejects duplicate `getUpdates` consumers with a 409 Conflict; multiple daemons polling the same bot is the same correctness bug. The `account_registrations` unique index on `(comm, bot_user_id)` enforces this.
+- **Don't add comm-specific fields to `OutboundPayload`** — keep it generic (`format`, `inline_keyboard`, `attachments`). Adapters that don't support a field ignore it.
+- **Don't key `MessageBus.comms` by `comm.id` alone.** A daemon legitimately hosts multiple adapters with the same `comm.id` (e.g. one Telegram bot per agent). The map key must be `(commId, accountId)`. The first version of the multi-agent setup keyed by `commId` only, and the second adapter silently overwrote the first — its bot's polling never started, messages sat unread on Telegram, and the surviving adapter 409'd against whichever external process was already polling its bot. See commit `db8b4fd`.
+- **Don't key conversations by `(project, comm, account_label, chat)` alone.** Claude and Codex can both register Telegram as `account_label="main"` for the same chat. Omitting `agent` mixes transcripts and can let plain-text query replies resolve against the wrong agent. See commit `ef0c96e`.
+- **Don't remove `pendingInbound` by `message_id` alone.** Multiple bots (e.g., Claude and Codex in the same Telegram chat) can enqueue entries with the same `message_id` but different `chat.account`. Removing by `message_id` clears both, causing one bot to miss its inbound. Instead, remove using the composite key `(message_id, chat.comm, chat.account)`. Claude already does this; the bug was in Codex's post-steer cleanup.
+- **Always rebuild `mcp-server` after changing `bootstrap/ensure-daemon.ts`.** The esbuild bundle (`dist/claude-mcp-shim.js`) inlines critical code and will be stale until you run `npm run build` in `mcp-server/`. A stale bundle can launch the wrong daemon or a library-only file on cold start—hidden if the real daemon is already running. Run `npm run verify:clean-build` (enforced in CI) after changing install, daemon, or adapter paths to catch unrebuilt artifacts.
+- **Route outbound by `bot_user_id`, not `account_label` (AGE-15).** Outbound routing uses `getAccountByBot` only; account labels now error if used. The old label-based resolution was removed due to misrouting. Always provide a concrete bot id (`account=<id>` or `bot=<id>`); omit `target` to reply to the last inbound.
+- **Don't use account labels when sending session-derived targets.** When a session has a recent conversation, resolve it back to the concrete `(project, agent, comm, account_label)` registration and send with `bot_user_id`. Labels like `"main"` are only human aliases and are ambiguous across agents. See commit `cbc4a43`.
+- **Don't wake Codex with `turn/start` unconditionally.** If Codex is already busy after a tool call, another `turn/start` can leave the session in a long `"working..."` state. Use the steer-first path and keep the fallback.
+- **Don't report an action done before confirming it landed.** The auto-mode approval classifier can't see Telegram/Discord approvals, so it silently blocks already-authorized pushes/merges/Linear flips — and an action announced first, then blocked, produces a false "done" report that needs retraction. Confirm by SHA / re-read, and use the cross-agent unblock pattern: route the blocked action to whichever agent's gate is clear (Claude's push blocked → Codex pushes; Codex's Linear write blocked → Claude files).
+
+## Plugin release repos
+
+Current plugin release repos for supported coding agents live as siblings to
+this checkout under `D:\Documents\`. Built artifacts are staged in this
+monorepo (`plugins/<agent>/<comm>/`); release repos are what marketplaces /
+`pi install` consume.
+
+### Claude Code
+
+| Local path | Note |
+|------------|------|
+| `D:\Documents\agents-comm-bus-claude` | Thin `.claude-plugin/marketplace.json` catalog; git-subdir pointers into `plugins/claude/<comm>/`. |
+
+### Codex
+
+| Local path | Note |
+|------------|------|
+| `D:\Documents\agents-comm-bus-codex` | Thin `.agents/plugins/marketplace.json` catalog; git-subdir pointers into `plugins/codex/<comm>/`. |
+
+### Pi
+
+| Local path | Note |
+|------------|------|
+| `D:\Documents\agents-comm-bus-pi-core` | Bundled `@agents-comm-bus/pi-core` dep; not installed standalone. |
+| `D:\Documents\agents-comm-bus-pi-telegram` | Per-comm Pi extension (Telegram); full bundle mirror of `plugins/pi/telegram/`. |
+| `D:\Documents\agents-comm-bus-pi-discord` | Per-comm Pi extension (Discord). |
+| `D:\Documents\agents-comm-bus-pi-matrix` | Per-comm Pi extension (Matrix). |
+| `D:\Documents\agents-comm-bus-pi-curl` | Per-comm Pi extension (local HTTP ingress). |
 
 ## State paths
 
