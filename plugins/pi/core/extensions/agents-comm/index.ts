@@ -64,7 +64,7 @@ async function pollOnce(): Promise<void> {
       if (pollCtx.isIdle()) {
         pollPi.sendUserMessage(block);
       } else {
-        pollPi.sendUserMessage(block, { deliverAs: "followUp" });
+        pollPi.sendUserMessage(block, { deliverAs: "steer" });
       }
     }
   } catch (error) {
