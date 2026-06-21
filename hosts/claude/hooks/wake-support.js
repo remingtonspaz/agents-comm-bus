@@ -38,21 +38,51 @@ export function readWatcherPid(wakeDir) {
   }
 }
 
-function wmicProcess(pid) {
-  try {
-    const result = execSync(
-      `wmic process where ProcessId=${pid} get Name,ParentProcessId /format:value`,
-      { encoding: 'utf-8', windowsHide: true, timeout: 5000 },
-    );
-    const nameMatch = result.match(/Name=([^\r\n]+)/);
-    const parentMatch = result.match(/ParentProcessId=(\d+)/);
-    return {
-      name: nameMatch ? nameMatch[1].trim() : null,
-      parentPid: parentMatch ? Number.parseInt(parentMatch[1], 10) : null,
-    };
-  } catch {
-    return { name: null, parentPid: null };
+// Walk the full process ancestry from `startPid` in ONE PowerShell invocation
+// using an in-process Get-CimInstance loop. This replaces a previous per-pid
+// `wmic.exe` loop (one exe spawn per process, up to 15 per walk) that
+// intermittently failed under session-restart churn: a single transient wmic
+// hiccup truncated the walk and yielded ClaudePid=0, so the watcher fuzzy-matched
+// the wrong window and never self-exited (zombie). Stress testing measured ~56%
+// failures even with a resolvable cmd.exe -> claude.exe tree present. One PS
+// process (CIM is in-process, no per-pid exe spawn) is far more robust under
+// contention; a single retry covers a transient PS-spawn failure. EncodedCommand
+// avoids all nested-quote escaping.
+function readProcessChainViaCim(startPid, log = () => {}) {
+  const psScript =
+    `$ProgressPreference='SilentlyContinue';` +
+    `$cur=${Number.parseInt(startPid, 10)};` +
+    `for($i=0;$i -lt 15;$i++){` +
+    `$p=Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction SilentlyContinue;` +
+    `if(-not $p){break};` +
+    `Write-Output ("{0}:{1}" -f $p.ProcessId,$p.Name);` +
+    `if(-not $p.ParentProcessId -or $p.ParentProcessId -le 0){break};` +
+    `$cur=$p.ParentProcessId}`;
+  const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+        { encoding: 'utf-8', windowsHide: true, timeout: 8000 },
+      );
+      const chain = result
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const idx = line.indexOf(':');
+          if (idx < 0) return null;
+          const pid = Number.parseInt(line.slice(0, idx), 10);
+          const name = line.slice(idx + 1).trim().toLowerCase();
+          return Number.isFinite(pid) ? { pid, name: name || null } : null;
+        })
+        .filter(Boolean);
+      if (chain.length > 0) return chain;
+    } catch (error) {
+      log(`readProcessChainViaCim attempt ${attempt + 1} failed: ${error.message}`);
+    }
   }
+  return [];
 }
 
 function resolveMainWindowHandle(pid) {
@@ -72,14 +102,7 @@ export function findCmdAncestor(log = () => {}) {
   if (os.platform() !== 'win32') return null;
 
   try {
-    const chain = [];
-    let currentPid = process.pid;
-    for (let i = 0; i < 15; i += 1) {
-      const info = wmicProcess(currentPid);
-      chain.push({ pid: currentPid, name: info.name?.toLowerCase() || null });
-      if (!info.parentPid || info.parentPid <= 0) break;
-      currentPid = info.parentPid;
-    }
+    const chain = readProcessChainViaCim(process.pid, log);
 
     log(`process chain: ${chain.map((c) => `${c.name || '?'}#${c.pid}`).join(' <- ')}`);
 

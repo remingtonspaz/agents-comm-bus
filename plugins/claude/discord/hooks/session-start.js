@@ -73,21 +73,29 @@ function readWatcherPid(wakeDir) {
     return null;
   }
 }
-function wmicProcess(pid) {
-  try {
-    const result = execSync(
-      `wmic process where ProcessId=${pid} get Name,ParentProcessId /format:value`,
-      { encoding: "utf-8", windowsHide: true, timeout: 5e3 }
-    );
-    const nameMatch = result.match(/Name=([^\r\n]+)/);
-    const parentMatch = result.match(/ParentProcessId=(\d+)/);
-    return {
-      name: nameMatch ? nameMatch[1].trim() : null,
-      parentPid: parentMatch ? Number.parseInt(parentMatch[1], 10) : null
-    };
-  } catch {
-    return { name: null, parentPid: null };
+function readProcessChainViaCim(startPid, log2 = () => {
+}) {
+  const psScript = `$ProgressPreference='SilentlyContinue';$cur=${Number.parseInt(startPid, 10)};for($i=0;$i -lt 15;$i++){$p=Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction SilentlyContinue;if(-not $p){break};Write-Output ("{0}:{1}" -f $p.ProcessId,$p.Name);if(-not $p.ParentProcessId -or $p.ParentProcessId -le 0){break};$cur=$p.ParentProcessId}`;
+  const encoded = Buffer.from(psScript, "utf16le").toString("base64");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result = execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+        { encoding: "utf-8", windowsHide: true, timeout: 8e3 }
+      );
+      const chain = result.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+        const idx = line.indexOf(":");
+        if (idx < 0) return null;
+        const pid = Number.parseInt(line.slice(0, idx), 10);
+        const name = line.slice(idx + 1).trim().toLowerCase();
+        return Number.isFinite(pid) ? { pid, name: name || null } : null;
+      }).filter(Boolean);
+      if (chain.length > 0) return chain;
+    } catch (error) {
+      log2(`readProcessChainViaCim attempt ${attempt + 1} failed: ${error.message}`);
+    }
   }
+  return [];
 }
 function resolveMainWindowHandle(pid) {
   try {
@@ -105,14 +113,7 @@ function findCmdAncestor(log2 = () => {
 }) {
   if (os2.platform() !== "win32") return null;
   try {
-    const chain = [];
-    let currentPid = process.pid;
-    for (let i = 0; i < 15; i += 1) {
-      const info = wmicProcess(currentPid);
-      chain.push({ pid: currentPid, name: info.name?.toLowerCase() || null });
-      if (!info.parentPid || info.parentPid <= 0) break;
-      currentPid = info.parentPid;
-    }
+    const chain = readProcessChainViaCim(process.pid, log2);
     log2(`process chain: ${chain.map((c) => `${c.name || "?"}#${c.pid}`).join(" <- ")}`);
     for (let i = 1; i < chain.length; i += 1) {
       if (chain[i].name === "cmd.exe" && chain[i - 1].name === "claude.exe") {
