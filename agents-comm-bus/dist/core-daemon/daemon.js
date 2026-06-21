@@ -241,7 +241,7 @@ export async function runDaemon(options) {
                                 queue_length: pendingInbound.length,
                             },
                         });
-                        await bridge.onInboundConversation(conversation);
+                        await bridge.onInboundConversation(conversation, message);
                         await audit.append({
                             timestamp: Date.now(),
                             kind: "inbound_dispatch_bridge_completed",

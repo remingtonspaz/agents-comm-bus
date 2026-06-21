@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.30";
+var DAEMON_VERSION = "0.2.31";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -7083,7 +7083,7 @@ async function runDaemon(options) {
                 queue_length: pendingInbound.length
               }
             });
-            await bridge.onInboundConversation(conversation);
+            await bridge.onInboundConversation(conversation, message);
             await audit.append({
               timestamp: Date.now(),
               kind: "inbound_dispatch_bridge_completed",
@@ -7772,6 +7772,16 @@ async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
   await writeFile2(path4.join(wakeDir, "trigger-enter"), `${now()}
 `, "utf8");
 }
+var WAKE_SEED_MAX_CHARS = 2e3;
+function sanitizeWakeSeed(text) {
+  if (!text) return "";
+  const singleLine = text.replace(/[\r\n]+/g, " ").trim();
+  return singleLine.length > WAKE_SEED_MAX_CHARS ? singleLine.slice(0, WAKE_SEED_MAX_CHARS) : singleLine;
+}
+async function writeClaudeWakeSeed(wakeDir, text) {
+  await mkdir7(wakeDir, { recursive: true });
+  await writeFile2(path4.join(wakeDir, "wake-seed.txt"), text, "utf8");
+}
 async function writeClaudeWakeResponse(wakeDir, payload) {
   await mkdir7(wakeDir, { recursive: true });
   await writeFile2(
@@ -7831,10 +7841,17 @@ var ClaudeWakeRegistry = class {
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
     return true;
   }
-  async wakeConversation(conversation) {
+  async wakeConversation(conversation, message) {
     if (conversation.agent !== "claude") return false;
     const registration = this.latestForProject(conversation.project) ?? await this.hydrateLatestForProject(conversation.project);
     if (!registration) return false;
+    const seed = sanitizeWakeSeed(message?.text);
+    if (seed) {
+      try {
+        await writeClaudeWakeSeed(registration.wakeDir, seed);
+      } catch {
+      }
+    }
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
     return true;
   }
@@ -7943,10 +7960,10 @@ var ClaudeBridge = class {
   invalidateRegistrationCaches() {
     this.ownedAccountsCache = null;
   }
-  async onInboundConversation(conversation) {
+  async onInboundConversation(conversation, message) {
     if (conversation.agent !== this.agentId) return;
     try {
-      const delivered = await this.wake.wakeConversation(conversation);
+      const delivered = await this.wake.wakeConversation(conversation, message);
       if (!delivered) {
         await this.auditWakeFailure({
           reason: "hydration_miss",

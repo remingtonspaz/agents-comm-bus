@@ -23,6 +23,7 @@ import {
   type Conversation,
   type ConversationId,
   type InlineKeyboardButton,
+  type Message,
   type Query,
   type QueryId,
   type QueryRecord,
@@ -204,10 +205,13 @@ export class ClaudeBridge implements AgentBridge {
     this.ownedAccountsCache = null;
   }
 
-  async onInboundConversation(conversation: Conversation): Promise<void> {
+  async onInboundConversation(
+    conversation: Conversation,
+    message?: Message,
+  ): Promise<void> {
     if (conversation.agent !== this.agentId) return;
     try {
-      const delivered = await this.wake.wakeConversation(conversation);
+      const delivered = await this.wake.wakeConversation(conversation, message);
       if (!delivered) {
         await this.auditWakeFailure({
           reason: "hydration_miss",

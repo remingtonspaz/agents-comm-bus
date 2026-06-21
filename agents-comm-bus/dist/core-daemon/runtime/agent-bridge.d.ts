@@ -1,4 +1,4 @@
-import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Storage } from "agents-comm-bus-core";
+import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Message, Storage } from "agents-comm-bus-core";
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
@@ -64,9 +64,11 @@ export interface AgentBridge {
     /**
      * Optional: notification that a fresh inbound conversation just landed.
      * Bridges can use this to wake the agent (e.g. ClaudeBridge writes a
-     * `trigger-enter` file).
+     * `trigger-enter` file). `message` is the inbound message that triggered
+     * the dispatch — ClaudeBridge uses its text as the verbatim wake seed
+     * (AGE-65). Optional so existing bridges can ignore it.
      */
-    onInboundConversation?(conversation: Conversation): Promise<void>;
+    onInboundConversation?(conversation: Conversation, message?: Message): Promise<void>;
     /** Handle an IPC method that this bridge advertised in `ipcMethods`. */
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {

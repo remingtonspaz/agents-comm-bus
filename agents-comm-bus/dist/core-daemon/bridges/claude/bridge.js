@@ -96,11 +96,11 @@ export class ClaudeBridge {
     invalidateRegistrationCaches() {
         this.ownedAccountsCache = null;
     }
-    async onInboundConversation(conversation) {
+    async onInboundConversation(conversation, message) {
         if (conversation.agent !== this.agentId)
             return;
         try {
-            const delivered = await this.wake.wakeConversation(conversation);
+            const delivered = await this.wake.wakeConversation(conversation, message);
             if (!delivered) {
                 await this.auditWakeFailure({
                     reason: "hydration_miss",

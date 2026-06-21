@@ -27,7 +27,10 @@ Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public class Win32 {
-    [DllImport("user32.dll")]
+    // AGE-65: PostMessageW (not the default ANSI PostMessageA) so WM_CHAR carries
+    // full UTF-16 code units — Latin-1 (<=0xFF) survives PostMessageA but em-dash,
+    // smart quotes, emoji, CJK, etc. get dropped/truncated without the W variant.
+    [DllImport("user32.dll", EntryPoint="PostMessageW")]
     public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")]
     public static extern bool IsWindow(IntPtr hWnd);
@@ -39,7 +42,7 @@ public class Win32 {
 $WM_CHAR = 0x0102
 $VK_RETURN = 0x0D
 $LPARAM_REPEAT_1 = [IntPtr]1
-$CHAR_DELAY_MS = 20
+$CHAR_DELAY_MS = 2   # AGE-65: validated reliable to ~2000 chars; ~1ms drops at length
 
 # Determine Claude wake/session directory. -SessionDir is kept as-is so legacy
 # hooks that still pass ~/.claude-telegram/<session> continue to work during the
@@ -55,6 +58,11 @@ $triggerFile = Join-Path $sessionPath "trigger-enter"
 # they are not durable comm/query ownership state.
 $permissionResponseFile = Join-Path $sessionPath "permission-response.json"
 $slashCommandFile = Join-Path $sessionPath "slash-command.json"
+# AGE-65: verbatim wake seed — the inbound message text the daemon dropped for a
+# normal inbound wake. Typed in place of "." so the auto-mode classifier sees real
+# intent. Consumed (deleted) on read; the UserPromptSubmit hook's inbound block
+# remains the authoritative full-content + routing channel.
+$seedFile = Join-Path $sessionPath "wake-seed.txt"
 $debugLog = Join-Path $sessionPath "debug.log"
 
 # Ensure directory exists
@@ -74,6 +82,24 @@ function Log($msg) {
     try { Add-Content -Path $debugLog -Value $line -ErrorAction SilentlyContinue } catch {}
 }
 
+# AGE-65: Start-Sleep's timer granularity is ~15.6ms, so it can't honor the 2ms
+# per-char delay (a long verbatim seed would take ~15ms/char ≈ 30s for 2000).
+# Use a Stopwatch busy-wait for sub-15ms precision (validated reliable at 2ms).
+$STOPWATCH_FREQ = [System.Diagnostics.Stopwatch]::Frequency
+function Wait-PreciseMs([double]$ms) {
+    if ($ms -le 0) { return }
+    $targetTicks = [long]($ms * $STOPWATCH_FREQ / 1000)
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($sw.ElapsedTicks -lt $targetTicks) {
+        # AGE-65: yield the core each spin so a mid-type inbound (the daemon
+        # processing it + claude.exe reading TUI input) isn't CPU-starved by a
+        # pure busy-spin -> that starvation dropped chars (notably spaces) from
+        # the in-flight typing during the concurrency test. Sleep(0) keeps ~2ms
+        # timing when idle but relinquishes the core when others are ready.
+        [System.Threading.Thread]::Sleep(0)
+    }
+}
+
 # Send characters to a window handle via PostMessage WM_CHAR (no focus required)
 function Send-PostMessageChars($hwnd, [string]$text) {
     foreach ($char in $text.ToCharArray()) {
@@ -82,7 +108,7 @@ function Send-PostMessageChars($hwnd, [string]$text) {
             Log "  PostMessage failed for char '$char'"
             return $false
         }
-        Start-Sleep -Milliseconds $CHAR_DELAY_MS
+        Wait-PreciseMs $CHAR_DELAY_MS
     }
     # Send Enter
     $result = [Win32]::PostMessage($hwnd, $WM_CHAR, [IntPtr]$VK_RETURN, $LPARAM_REPEAT_1)
@@ -227,6 +253,27 @@ while ($true) {
                 Remove-Item $slashCommandFile -Force
             } catch {
                 Log "WARNING: Failed to parse slash command file"
+            }
+        } elseif (Test-Path $seedFile) {
+            try {
+                # AGE-65: type the inbound message verbatim (single line, bounded)
+                # so the auto-mode classifier sees real intent instead of ".".
+                # Stale guard mirrors the slash path; consume the seed on read.
+                $seedAge = (Get-Date) - (Get-Item $seedFile).LastWriteTime
+                if ($seedAge.TotalSeconds -lt 30) {
+                    $seedText = (Get-Content $seedFile -Raw -Encoding UTF8)
+                    $seedText = ($seedText -replace "[\r\n]+", " ").Trim()
+                    if ($seedText.Length -gt 2000) { $seedText = $seedText.Substring(0, 2000) }
+                    if ($seedText) {
+                        $charsToSend = $seedText
+                        $logMessage = "Wake seed ($($seedText.Length) chars)"
+                    }
+                } else {
+                    Log "WARNING: Stale wake seed (age=$($seedAge.TotalSeconds)s), using '.'"
+                }
+                Remove-Item $seedFile -Force
+            } catch {
+                Log "WARNING: Failed to read wake seed"
             }
         }
 
