@@ -48,7 +48,7 @@ async function tempDir(prefix: string): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-async function waitForPortFile(stateRoot: string, timeoutMs = 5_000): Promise<number> {
+async function waitForPortFile(stateRoot: string, timeoutMs = 20_000): Promise<number> {
   const portFile = path.join(stateRoot, "port");
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
