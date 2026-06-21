@@ -12,7 +12,7 @@
     "skills": ["./skills"]
   },
   "dependencies": {
-    "@agents-comm-bus/pi-core": "git+https://github.com/remingtonspaz/agents-comm-bus-pi-core.git"
+    "@agents-comm-bus/pi-core": "0.1.0"
   },
   "bundledDependencies": ["@agents-comm-bus/pi-core"],
   "peerDependencies": {
