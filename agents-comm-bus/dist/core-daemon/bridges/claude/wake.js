@@ -19,21 +19,37 @@ export async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
     await mkdir(wakeDir, { recursive: true });
     await writeFile(path.join(wakeDir, "trigger-enter"), `${now()}\n`, "utf8");
 }
-// AGE-65: the wake "seed" is the inbound message text typed verbatim into the
-// Claude prompt slot (so the auto-mode classifier sees real user intent instead
-// of a bare "."). It must be a single line — a newline would submit the prompt
-// mid-message — and bounded so a pathological message can't make the watcher type
-// for too long (validated reliable to ~2000 chars at 2ms/char). The hook's
-// [Daemon Inbound Messages] block remains the authoritative full-content +
-// routing channel; this seed is best-effort prompt-slot/classifier affordance.
+// AGE-65: the wake "seed" is the inbound message typed into the Claude prompt
+// slot (so the auto-mode classifier sees real user intent instead of a bare ".").
+// It is DECORATED with the comm + sender ("<comm> message from <sender>: <body>")
+// so another agent's message (Codex/Pi) can't be misread as the user's. Newlines
+// are PRESERVED — the watcher types each as backslash+Enter for a real multi-line
+// TUI prompt — while other control chars are stripped and the whole is bounded.
+// The hook's [Daemon Inbound Messages] block stays the authoritative full-content
+// + routing channel; this seed is best-effort.
 export const WAKE_SEED_MAX_CHARS = 2000;
+// Normalize CRLF->LF, keep newlines (0x0A), strip other control chars, cap, trim.
 export function sanitizeWakeSeed(text) {
     if (!text)
         return "";
-    const singleLine = text.replace(/[\r\n]+/g, " ").trim();
-    return singleLine.length > WAKE_SEED_MAX_CHARS
-        ? singleLine.slice(0, WAKE_SEED_MAX_CHARS)
-        : singleLine;
+    const normalized = text
+        .replace(/\r\n?/g, "\n")
+        .replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "")
+        .trim();
+    return normalized.length > WAKE_SEED_MAX_CHARS
+        ? normalized.slice(0, WAKE_SEED_MAX_CHARS)
+        : normalized;
+}
+// Build the decorated, sanitized seed. The "<comm> message from <sender>:" prefix
+// attributes the message so a Codex/Pi message isn't misconstrued as the user's.
+// Returns "" when there's no text to seed (e.g. attachment-only) -> bare "." wake.
+export function buildWakeSeed(input) {
+    const body = (input.body ?? "").trim();
+    if (!body)
+        return "";
+    const comm = input.comm && input.comm.length > 0 ? input.comm : "message";
+    const sender = input.sender && input.sender.length > 0 ? input.sender : "unknown sender";
+    return sanitizeWakeSeed(`${comm} message from ${sender}: ${body}`);
 }
 export async function writeClaudeWakeSeed(wakeDir, text) {
     await mkdir(wakeDir, { recursive: true });
@@ -104,10 +120,14 @@ export class ClaudeWakeRegistry {
             (await this.hydrateLatestForProject(conversation.project));
         if (!registration)
             return false;
-        // AGE-65: drop the inbound text as a seed BEFORE the trigger so it is in
-        // place when the watcher consumes the trigger. Best-effort: a seed write
-        // failure must not block the wake itself.
-        const seed = sanitizeWakeSeed(message?.text);
+        // AGE-65: drop the decorated inbound text as a seed BEFORE the trigger so it
+        // is in place when the watcher consumes the trigger. Best-effort: a seed
+        // write failure must not block the wake itself.
+        const seed = buildWakeSeed({
+            comm: message?.chat.comm,
+            sender: message?.sender?.display_name ?? message?.sender?.id,
+            body: message?.text,
+        });
         if (seed) {
             try {
                 await writeClaudeWakeSeed(registration.wakeDir, seed);

@@ -103,6 +103,17 @@ function Wait-PreciseMs([double]$ms) {
 # Send characters to a window handle via PostMessage WM_CHAR (no focus required)
 function Send-PostMessageChars($hwnd, [string]$text) {
     foreach ($char in $text.ToCharArray()) {
+        if ($char -eq "`r") { continue }  # belt: never let a stray CR fire Enter
+        if ($char -eq "`n") {
+            # AGE-65: newline -> backslash + Enter inserts a real newline in the
+            # Claude TUI (line continuation) WITHOUT submitting. Risk: a dropped
+            # backslash lets the Enter submit early, fragmenting the message.
+            [Win32]::PostMessage($hwnd, $WM_CHAR, [IntPtr][int][char]'\', $LPARAM_REPEAT_1) | Out-Null
+            Wait-PreciseMs $CHAR_DELAY_MS
+            [Win32]::PostMessage($hwnd, $WM_CHAR, [IntPtr]$VK_RETURN, $LPARAM_REPEAT_1) | Out-Null
+            Wait-PreciseMs $CHAR_DELAY_MS
+            continue
+        }
         $result = [Win32]::PostMessage($hwnd, $WM_CHAR, [IntPtr][int][char]$char, $LPARAM_REPEAT_1)
         if (-not $result) {
             Log "  PostMessage failed for char '$char'"
@@ -256,13 +267,13 @@ while ($true) {
             }
         } elseif (Test-Path $seedFile) {
             try {
-                # AGE-65: type the inbound message verbatim (single line, bounded)
-                # so the auto-mode classifier sees real intent instead of ".".
-                # Stale guard mirrors the slash path; consume the seed on read.
+                # AGE-65: type the decorated inbound message verbatim (bounded) so
+                # the auto-mode classifier sees real intent + attribution instead
+                # of ".". Newlines are PRESERVED and typed as backslash+Enter by
+                # Send-PostMessageChars. Stale guard mirrors slash; consume on read.
                 $seedAge = (Get-Date) - (Get-Item $seedFile).LastWriteTime
                 if ($seedAge.TotalSeconds -lt 30) {
-                    $seedText = (Get-Content $seedFile -Raw -Encoding UTF8)
-                    $seedText = ($seedText -replace "[\r\n]+", " ").Trim()
+                    $seedText = (Get-Content $seedFile -Raw -Encoding UTF8).Trim()
                     if ($seedText.Length -gt 2000) { $seedText = $seedText.Substring(0, 2000) }
                     if ($seedText) {
                         $charsToSend = $seedText

@@ -7775,8 +7775,15 @@ async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
 var WAKE_SEED_MAX_CHARS = 2e3;
 function sanitizeWakeSeed(text) {
   if (!text) return "";
-  const singleLine = text.replace(/[\r\n]+/g, " ").trim();
-  return singleLine.length > WAKE_SEED_MAX_CHARS ? singleLine.slice(0, WAKE_SEED_MAX_CHARS) : singleLine;
+  const normalized = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").trim();
+  return normalized.length > WAKE_SEED_MAX_CHARS ? normalized.slice(0, WAKE_SEED_MAX_CHARS) : normalized;
+}
+function buildWakeSeed(input) {
+  const body = (input.body ?? "").trim();
+  if (!body) return "";
+  const comm = input.comm && input.comm.length > 0 ? input.comm : "message";
+  const sender = input.sender && input.sender.length > 0 ? input.sender : "unknown sender";
+  return sanitizeWakeSeed(`${comm} message from ${sender}: ${body}`);
 }
 async function writeClaudeWakeSeed(wakeDir, text) {
   await mkdir7(wakeDir, { recursive: true });
@@ -7845,7 +7852,11 @@ var ClaudeWakeRegistry = class {
     if (conversation.agent !== "claude") return false;
     const registration = this.latestForProject(conversation.project) ?? await this.hydrateLatestForProject(conversation.project);
     if (!registration) return false;
-    const seed = sanitizeWakeSeed(message?.text);
+    const seed = buildWakeSeed({
+      comm: message?.chat.comm,
+      sender: message?.sender?.display_name ?? message?.sender?.id,
+      body: message?.text
+    });
     if (seed) {
       try {
         await writeClaudeWakeSeed(registration.wakeDir, seed);

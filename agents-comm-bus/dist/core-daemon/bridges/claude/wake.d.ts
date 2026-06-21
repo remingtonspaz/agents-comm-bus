@@ -10,6 +10,11 @@ export declare function claudeWakeDirForProject(projectPath: string, homeDir?: s
 export declare function writeClaudeWakeTrigger(wakeDir: string, now?: () => number): Promise<void>;
 export declare const WAKE_SEED_MAX_CHARS = 2000;
 export declare function sanitizeWakeSeed(text: string | undefined): string;
+export declare function buildWakeSeed(input: {
+    comm?: string;
+    sender?: string;
+    body?: string;
+}): string;
 export declare function writeClaudeWakeSeed(wakeDir: string, text: string): Promise<void>;
 export type ClaudeWakeResponsePromptType = "permission" | "question" | "freetext";
 export interface ClaudeWakeResponsePayload {
