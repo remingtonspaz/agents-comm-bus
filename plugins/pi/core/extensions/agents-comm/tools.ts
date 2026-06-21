@@ -17,8 +17,6 @@ import { DisconnectedError, PiDaemonClient } from "./daemon-client.js";
 import { formatInboundMessages } from "./inbound-format.js";
 import { piSessionId } from "./session-id.js";
 
-let toolsRegistered = false;
-
 const stringOrNumber = Type.Union([Type.String(), Type.Number()]);
 
 const targetSchema = Type.Object({
@@ -115,18 +113,14 @@ export function registerCommTools(
   pi: ExtensionAPI,
   getClient: () => PiDaemonClient | null,
 ): void {
-  // Idempotent guard: module-level flag resets on /reload (module re-evaluated),
-  // so tools re-register fresh each reload. Prevents double-registration if the
-  // same module instance is called twice. For the cross-package case (two
-  // per-comm packages both bundle this core), each package has its own module
-  // root with its own flag — both register, but both point at the same daemon,
-  // and Pi keeps the first by name (harmless: identical behavior either way).
-  // NOTE: do NOT use pi.getAllTools() here — Pi preserves the tool list across
-  // /reload, so that check would skip re-registration and leave stale tools.
-  if (toolsRegistered) {
+  // Idempotent guard: check pi.getAllTools() at session_start time (not load
+  // time). At session_start, stale tools from a prior runtime are cleared, so
+  // getAllTools() is accurate. If another per-comm package's core already
+  // registered the comm tools (multi-package install), skip — both cores point
+  // at the same daemon, so the first registration is sufficient.
+  if (pi.getAllTools().some((t) => t.name === "comm_send_message")) {
     return;
   }
-  toolsRegistered = true;
 
   pi.registerTool({
     name: "comm_send_message",

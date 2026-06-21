@@ -88,24 +88,35 @@ function startPolling(pi: ExtensionAPI, ctx: ExtensionContext): void {
 }
 
 export default function agentsCommExtension(pi: ExtensionAPI): void {
-  // Phase 5/7 stubs throw — guard so Phase 4 inbound polling can load without tools/commands.
-  try {
-    registerCommTools(pi, () => client);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[pi-agents-comm] comm tools not registered: ${message}`);
-  }
-  try {
-    registerCommCommands(pi);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[pi-agents-comm] comm commands not registered: ${message}`);
-  }
+  // Tool/command registration moved to session_start (not load time) to fix:
+  // 1. Multi-package conflict: when multiple per-comm packages are installed,
+  //    each bundles its own copy of this core. At load time, each copy's
+  //    module-level flag is independent → both try to register the same tools
+  //    → Pi rejects with "Tool conflicts". At session_start time, the first
+  //    package registers; the second sees them via getAllTools() and skips.
+  // 2. Reload safety: old runtime torn down before new session_start → stale
+  //    tools cleared → getAllTools() is accurate → fresh registration succeeds.
 
   if (!lifecycleWired) {
     lifecycleWired = true;
 
     pi.on("session_start", async (_event, ctx) => {
+      // Register comm tools (idempotent via getAllTools check — see tools.ts).
+      // Moved here from load time so the check is accurate (stale tools from
+      // a prior runtime are cleared before session_start fires).
+      try {
+        registerCommTools(pi, () => client);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[pi-agents-comm] comm tools not registered: ${message}`);
+      }
+      try {
+        registerCommCommands(pi);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[pi-agents-comm] comm commands not registered: ${message}`);
+      }
+
       piSession = piSessionId(ctx.sessionManager);
       client = new PiDaemonClient(ctx.cwd, log);
       try {
