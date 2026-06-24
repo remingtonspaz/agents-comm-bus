@@ -35,11 +35,13 @@ repositories.
 - One Telegram bot per registered agent/project account. Telegram rejects
   multiple `getUpdates` consumers for the same bot token.
 
-## Marketplace Installation
+## Installation
 
 The intended end-user path is marketplace installation, then explicit account
 registration. The plugin should not require users to clone this repository or run
 source install scripts.
+
+Jump to your agent: [Claude Code](#claude-code) · [Codex](#codex) · [Pi](#pi)
 
 ### Claude Code
 
