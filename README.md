@@ -94,16 +94,52 @@ source install scripts.
 
 ### Codex
 
-Install the Codex Telegram plugin through the Codex plugin flow for the staged
-artifact, then register the account with `--agent codex`:
+1. Add the marketplace.
 
-```powershell
-agents-comm account-add `
-  --project "<absolute project path>" `
-  --agent codex `
-  --account-label main `
-  --bot-token "<telegram bot token>"
-```
+   ```text
+   /plugin marketplace add https://github.com/remingtonspaz/agents-comm-bus-codex
+   ```
+
+2. Install the comm plugin(s) you want. Each comm is its own plugin under the
+   `agents-comm-bus-codex` marketplace; installing any one ships the shared
+   per-user daemon runtime.
+
+   ```text
+   /plugin install agents-comm-bus-telegram@agents-comm-bus-codex
+   /plugin install agents-comm-bus-discord@agents-comm-bus-codex
+   /plugin install agents-comm-bus-matrix@agents-comm-bus-codex
+   /plugin install agents-comm-bus-curl@agents-comm-bus-codex
+   ```
+
+3. Restart Codex so the MCP server and hooks are loaded.
+
+4. Register the bot account from a terminal. The `agents-comm` command is
+   installed by the daemon's central install at `~/.agents-comm-bus/bin` (it
+   appears after the first session/hook runs). Add that directory to PATH once
+   so the command resolves from any shell:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:USERPROFILE\.agents-comm-bus\bin", "User")
+   ```
+
+   Then register the account (open a new shell so PATH is refreshed). Set `--comm`
+   to the channel you installed:
+
+   ```powershell
+   agents-comm account-add `
+     --project "<absolute project path>" `
+     --agent codex `
+     --account-label main `
+     --comm telegram `
+     --bot-token "<bot token>"
+   ```
+
+   See [Account Management](#account-management) for token rotation, relabel, and
+   removal.
+
+5. Hand the bot a first message so the channel allows it to reply (message the bot
+   on Telegram / Discord / Matrix). The curl comm is local inbound-only - POST to
+   its loopback endpoint instead.
 
 Codex session startup currently needs the project-local hook configuration that
 points at the staged Codex MCP shim. Keep the global Codex MCP config path-only;
