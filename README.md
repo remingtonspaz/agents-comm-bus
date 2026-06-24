@@ -145,6 +145,64 @@ Codex session startup currently needs the project-local hook configuration that
 points at the staged Codex MCP shim. Keep the global Codex MCP config path-only;
 session URL, thread ID, and daemon session ID are discovered at runtime.
 
+### Pi
+
+1. Install the comm package(s) you want. Each comm is its own Pi package that
+   bundles the shared `@agents-comm-bus/pi-core` extension (comm-generic tools +
+   lifecycle + poller). Installing one brings the daemon runtime via the
+   `agents-comm-bus` dependency.
+
+   ```bash
+   pi install git:github.com/remingtonspaz/agents-comm-bus-pi-telegram
+   pi install git:github.com/remingtonspaz/agents-comm-bus-pi-discord
+   pi install git:github.com/remingtonspaz/agents-comm-bus-pi-matrix
+   pi install git:github.com/remingtonspaz/agents-comm-bus-pi-curl
+   ```
+
+2. Restart Pi so the extension is loaded.
+
+3. Register the bot account from a terminal. The `agents-comm` command is
+   installed by the daemon's central install at `~/.agents-comm-bus/bin` (it
+   appears after the first session runs). Add that directory to PATH once
+   so the command resolves from any shell:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:USERPROFILE\.agents-comm-bus\bin", "User")
+   ```
+
+   Then register the account (open a new shell so PATH is refreshed). Set `--comm`
+   to the channel you installed:
+
+   ```powershell
+   agents-comm account-add `
+     --project "<absolute project path>" `
+     --agent pi `
+     --account-label main `
+     --comm telegram `
+     --bot-token "<bot token>"
+   ```
+
+   See [Account Management](#account-management) for token rotation, relabel, and
+   removal.
+
+4. Allowlist the sender so the bot accepts their messages:
+
+   ```powershell
+   agents-comm allowlist add --comm telegram --user <your_telegram_id> --bot-id <bot_id>
+   ```
+
+5. Hand the bot a first message so the channel allows it to reply (message the bot
+   on Telegram / Discord / Matrix). The curl comm is local inbound-only - POST to
+   its loopback endpoint instead.
+
+Pi uses a per-comm package model: each `pi-<comm>` package bundles `pi-core`
+(comm-generic tools + lifecycle + poller) via `bundledDependencies`. The core
+holds the four `comm_send_message` / `comm_send_attachment` /
+`comm_check_messages` / `list_conversations` tools; the per-comm package
+contributes its adapter bundle + install-stamp + skill. Installing multiple
+comms is additive — each brings its own adapter + skill, all sharing the same
+comm-generic tool surface.
+
 ## Account Management
 
 Account registration is explicit. The daemon stores the bot token in a
