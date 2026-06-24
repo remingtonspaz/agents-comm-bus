@@ -1,28 +1,18 @@
-# agents-comm-bus Telegram Plugin
+# agents-comm-bus
 
-Bidirectional Telegram messaging for Claude Code and Codex through a shared
-per-user `agents-comm-bus` daemon. Agent host plugins stay thin: they expose MCP
-tools and hooks, while Telegram polling, account ownership, conversations,
+Bidirectional messaging for Claude Code, Codex, and Pi through a shared
+per-user `agents-comm-bus` daemon. Agent host plugins stay thin: they expose
+tools and lifecycle hooks, while comm polling, account ownership, conversations,
 queries, transcripts, and audit logs live under `~/.agents-comm-bus/`.
-
-## Release Status
-
-`universal-overhaul` is not marketplace-release ready until the production
-install gate added in `0a20bf3` passes as a hard test. AGE-23 owns the packaging
-work that makes staged marketplace artifacts self-contained. Until that lands,
-source/dev mode can work, but fresh marketplace installs are expected to fail the
-`production marketplace install (release gate)` tests.
-
-Use [docs/architecture/release-readiness.md](docs/architecture/release-readiness.md)
-as the checklist before publishing this branch as `main` or updating marketplace
-repositories.
+Supports Telegram, Discord, Matrix, and local curl ingress.
 
 ## What It Provides
 
-- Send Telegram messages and attachments from Claude Code or Codex.
-- Receive Telegram messages into the active agent session.
-- Route permission and question prompts through Telegram inline buttons.
-- Share one per-user daemon across multiple agents and Telegram bot accounts.
+- Send messages and attachments from Claude Code, Codex, or Pi.
+- Receive messages into the active agent session from Telegram, Discord, Matrix,
+  or local curl ingress.
+- Route permission and question prompts through comm inline buttons (Claude/Codex).
+- Share one per-user daemon across multiple agents and bot accounts.
 - Keep routing keyed by concrete bot IDs, not human labels.
 - Persist state in SQLite plus JSONL transcript/audit files under
   `~/.agents-comm-bus/`.
@@ -30,10 +20,12 @@ repositories.
 ## Requirements
 
 - Node.js 22 or newer. The daemon uses `node:sqlite`.
-- A Telegram bot token from [@BotFather](https://t.me/botfather).
-- Your Telegram numeric user ID, if you want allowlist restrictions.
-- One Telegram bot per registered agent/project account. Telegram rejects
-  multiple `getUpdates` consumers for the same bot token.
+- A bot token for your chosen comm (e.g. Telegram from
+  [@BotFather](https://t.me/botfather), Discord application token, Matrix
+  access token).
+- Your platform user ID, if you want allowlist restrictions.
+- One bot per registered agent/project account. Platforms reject multiple
+  consumers for the same token.
 
 ## Installation
 
