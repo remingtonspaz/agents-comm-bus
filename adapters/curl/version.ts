@@ -5,4 +5,4 @@
  * `DAEMON_VERSION` and plugin package versions. Bump when shipped curl adapter
  * behavior changes.
  */
-export const ADAPTER_VERSION = "0.1.0";
+export const ADAPTER_VERSION = "0.1.1";

@@ -54,7 +54,9 @@ export type AuditEventKind =
   // AGE-56: in-memory pending queue overflow spilled oldest entries; durable rows remain.
   | "pending_inbound_overflow_spill"
   // AGE-56: durable pending row could not be replayed from transcript storage.
-  | "durable_inbound_replay_miss";
+  | "durable_inbound_replay_miss"
+  // AGE-43: credential file exists but failed to parse or validate.
+  | "credential_resolution_failed";
 
 export interface AuditEvent {
   timestamp: number;

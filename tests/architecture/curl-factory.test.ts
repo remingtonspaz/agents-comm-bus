@@ -53,7 +53,7 @@ describe("curl factory credential resolution", () => {
       registration(`file:${tokenFile}`),
       { CURL_SENDER_ID: "hermes, ci" },
     );
-    assert.ok(resolved);
+    assert.ok(resolved.status === "ok");
     assert.equal(resolved.credentials.token, "s3cret");
     assert.equal(resolved.credentials.port, 8930);
     assert.equal(resolved.credentials.project, PROJECT);
@@ -65,14 +65,18 @@ describe("curl factory credential resolution", () => {
   it("returns undefined for non-file refs and unreadable/tokenless files", async () => {
     const dir = await makeTempDir("acb-curl-cred-");
     const factory = new CurlCommAdapterFactory();
-    assert.equal(await factory.resolveCredentials(registration("env:CURL_TOKEN"), {}), undefined);
+    assert.equal((await factory.resolveCredentials(registration("env:CURL_TOKEN"), {})).status, "absent");
     assert.equal(
-      await factory.resolveCredentials(registration(`file:${join(dir, "missing.json")}`), {}),
-      undefined,
+      (await factory.resolveCredentials(registration(`file:${join(dir, "missing.json")}`), {})).status,
+      "absent",
     );
     const tokenless = join(dir, "tokenless.json");
     await writeFile(tokenless, JSON.stringify({ port: 8930 }), "utf8");
-    assert.equal(await factory.resolveCredentials(registration(`file:${tokenless}`), {}), undefined);
+    const tokenlessResult = await factory.resolveCredentials(registration(`file:${tokenless}`), {});
+    assert.equal(tokenlessResult.status, "invalid");
+    if (tokenlessResult.status === "invalid") {
+      assert.equal(tokenlessResult.failureKind, "missing_field");
+    }
   });
 });
 

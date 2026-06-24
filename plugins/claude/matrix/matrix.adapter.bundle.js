@@ -1,12 +1,45 @@
 import { createRequire as __acbCreateRequire } from 'module'; const require = __acbCreateRequire(import.meta.url);
 
 // ../adapters/matrix/factory.ts
-import { readFile as readFile2 } from "node:fs/promises";
 import path2 from "node:path";
+
+// ../core-daemon/runtime/credential-resolution.ts
+import { readFile } from "node:fs/promises";
+async function readCredentialFile(ref) {
+  if (!ref.startsWith("file:")) {
+    return { status: "absent" };
+  }
+  const path3 = ref.slice("file:".length);
+  let raw;
+  try {
+    raw = await readFile(path3, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "UNKNOWN";
+    if (code === "ENOENT") {
+      return { status: "absent" };
+    }
+    return {
+      status: "invalid",
+      failureKind: "unreadable",
+      reason: `credential file unreadable: ${code}`,
+      path: path3
+    };
+  }
+  try {
+    return { status: "ok", path: path3, json: JSON.parse(raw) };
+  } catch {
+    return {
+      status: "invalid",
+      failureKind: "malformed_json",
+      reason: "credential file is not valid JSON",
+      path: path3
+    };
+  }
+}
 
 // ../adapters/matrix/adapter.ts
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 import path from "node:path";
 
 // ../adapters/matrix/html.ts
@@ -573,7 +606,7 @@ var MatrixCommAdapter = class {
   }
   async buildOutboundMediaContent(attachment, replyTo) {
     const localPath = attachment.local_path;
-    const bytes = await readFile(localPath);
+    const bytes = await readFile2(localPath);
     const mime = attachment.mime || "application/octet-stream";
     const filename = attachment.filename || uploadFilenameFromLocalPath(localPath);
     const mxcUri = await this.mediaClient.upload({
@@ -708,21 +741,32 @@ var MatrixCommAdapterFactory = class {
   commId = MATRIX_COMM_ID;
   async resolveCredentials(registration, env, context) {
     const ref = registration.credentials_ref ?? "";
-    if (!ref.startsWith("file:")) return void 0;
-    const fromFile = await readJsonMatrixConfig(ref.slice("file:".length));
-    if (!fromFile) return void 0;
+    if (!ref.startsWith("file:")) return { status: "absent" };
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+    const validated = validateMatrixCredentialJson(fileResult.json, fileResult.path);
+    if (validated.status !== "ok") {
+      return validated;
+    }
     const envAllowed = normalizeCsv(env.MATRIX_USER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
     return {
+      status: "ok",
       credentials: {
-        homeserverUrl: fromFile.homeserverUrl,
-        accessToken: fromFile.accessToken,
-        userId: fromFile.userId,
-        deviceId: fromFile.deviceId,
-        allowedUserIds: mergeAllowed(envAllowed, fromFile.allowedUserIds, dbAllowed),
-        allowedRoomIds: fromFile.allowedRoomIds ?? [],
-        autoJoinInvites: fromFile.autoJoinInvites ?? false,
-        encryptedRoomPolicy: fromFile.encryptedRoomPolicy ?? "decline"
+        homeserverUrl: validated.credentials.homeserverUrl,
+        accessToken: validated.credentials.accessToken,
+        userId: validated.credentials.userId,
+        deviceId: validated.credentials.deviceId,
+        allowedUserIds: mergeAllowed(
+          envAllowed,
+          validated.credentials.allowedUserIds,
+          dbAllowed
+        ),
+        allowedRoomIds: validated.credentials.allowedRoomIds ?? [],
+        autoJoinInvites: validated.credentials.autoJoinInvites ?? false,
+        encryptedRoomPolicy: validated.credentials.encryptedRoomPolicy ?? "decline"
       }
     };
   }
@@ -916,19 +960,55 @@ async function readAllowlistFromDb(context, bot_user_id) {
   }
   return out;
 }
-async function readJsonMatrixConfig(filePath) {
-  try {
-    const raw = await readFile2(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const homeserverUrl = typeof parsed.homeserverUrl === "string" ? normalizeHomeserverUrl(parsed.homeserverUrl) : void 0;
-    const accessToken = typeof parsed.accessToken === "string" ? parsed.accessToken.trim() : void 0;
-    const userId = typeof parsed.userId === "string" ? parsed.userId.trim() : void 0;
-    if (!homeserverUrl || !accessToken || !userId || !isMatrixMxid(userId)) {
-      return void 0;
-    }
-    const encryptedRoomPolicy = parsed.encryptedRoomPolicy === "decline" ? "decline" : parsed.encryptedRoomPolicy == null ? "decline" : void 0;
-    if (encryptedRoomPolicy == null) return void 0;
+function validateMatrixCredentialJson(json, path3) {
+  const parsed = json;
+  const homeserverUrl = typeof parsed.homeserverUrl === "string" ? normalizeHomeserverUrl(parsed.homeserverUrl) : void 0;
+  if (!homeserverUrl) {
     return {
+      status: "invalid",
+      failureKind: "missing_field",
+      reason: "missing required field: homeserverUrl",
+      path: path3
+    };
+  }
+  const accessToken = typeof parsed.accessToken === "string" ? parsed.accessToken.trim() : void 0;
+  if (!accessToken) {
+    return {
+      status: "invalid",
+      failureKind: "missing_field",
+      reason: "missing required field: accessToken",
+      path: path3
+    };
+  }
+  const userId = typeof parsed.userId === "string" ? parsed.userId.trim() : void 0;
+  if (!userId) {
+    return {
+      status: "invalid",
+      failureKind: "missing_field",
+      reason: "missing required field: userId",
+      path: path3
+    };
+  }
+  if (!isMatrixMxid(userId)) {
+    return {
+      status: "invalid",
+      failureKind: "validation",
+      reason: "userId is not a valid Matrix MXID",
+      path: path3
+    };
+  }
+  const encryptedRoomPolicy = parsed.encryptedRoomPolicy === "decline" ? "decline" : parsed.encryptedRoomPolicy == null ? "decline" : void 0;
+  if (encryptedRoomPolicy == null) {
+    return {
+      status: "invalid",
+      failureKind: "validation",
+      reason: 'encryptedRoomPolicy must be "decline" when set',
+      path: path3
+    };
+  }
+  return {
+    status: "ok",
+    credentials: {
       homeserverUrl,
       accessToken,
       userId,
@@ -937,10 +1017,8 @@ async function readJsonMatrixConfig(filePath) {
       allowedRoomIds: normalizeStringArray(parsed.allowedRoomIds),
       autoJoinInvites: parsed.autoJoinInvites === true,
       encryptedRoomPolicy
-    };
-  } catch {
-    return void 0;
-  }
+    }
+  };
 }
 export {
   MatrixCommAdapterFactory,

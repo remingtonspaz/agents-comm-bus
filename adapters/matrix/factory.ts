@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -17,6 +16,10 @@ import type {
   CommIpcDeps,
   ResolveCredentialsContext,
 } from "../../core-daemon/runtime/comm-factory.js";
+import {
+  readCredentialFile,
+  type CredentialResolution,
+} from "../../core-daemon/runtime/credential-resolution.js";
 import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
 import {
   isMatrixMxid,
@@ -54,26 +57,38 @@ export class MatrixCommAdapterFactory implements CommAdapterFactory {
     registration: AccountRegistration,
     env: CommAdapterFactoryEnv,
     context?: ResolveCredentialsContext,
-  ): Promise<{ credentials: Record<string, unknown> } | undefined> {
+  ): Promise<CredentialResolution> {
     const ref = registration.credentials_ref ?? "";
-    if (!ref.startsWith("file:")) return undefined;
+    if (!ref.startsWith("file:")) return { status: "absent" };
 
-    const fromFile = await readJsonMatrixConfig(ref.slice("file:".length));
-    if (!fromFile) return undefined;
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+
+    const validated = validateMatrixCredentialJson(fileResult.json, fileResult.path);
+    if (validated.status !== "ok") {
+      return validated;
+    }
 
     const envAllowed = normalizeCsv(env.MATRIX_USER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
 
     return {
+      status: "ok",
       credentials: {
-        homeserverUrl: fromFile.homeserverUrl,
-        accessToken: fromFile.accessToken,
-        userId: fromFile.userId,
-        deviceId: fromFile.deviceId,
-        allowedUserIds: mergeAllowed(envAllowed, fromFile.allowedUserIds, dbAllowed),
-        allowedRoomIds: fromFile.allowedRoomIds ?? [],
-        autoJoinInvites: fromFile.autoJoinInvites ?? false,
-        encryptedRoomPolicy: fromFile.encryptedRoomPolicy ?? "decline",
+        homeserverUrl: validated.credentials.homeserverUrl,
+        accessToken: validated.credentials.accessToken,
+        userId: validated.credentials.userId,
+        deviceId: validated.credentials.deviceId,
+        allowedUserIds: mergeAllowed(
+          envAllowed,
+          validated.credentials.allowedUserIds,
+          dbAllowed,
+        ),
+        allowedRoomIds: validated.credentials.allowedRoomIds ?? [],
+        autoJoinInvites: validated.credentials.autoJoinInvites ?? false,
+        encryptedRoomPolicy: validated.credentials.encryptedRoomPolicy ?? "decline",
       },
     };
   }
@@ -326,29 +341,68 @@ async function readAllowlistFromDb(
   return out;
 }
 
-async function readJsonMatrixConfig(
-  filePath: string,
-): Promise<MatrixCredentials | undefined> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const homeserverUrl = typeof parsed.homeserverUrl === "string"
-      ? normalizeHomeserverUrl(parsed.homeserverUrl)
-      : undefined;
-    const accessToken = typeof parsed.accessToken === "string"
-      ? parsed.accessToken.trim()
-      : undefined;
-    const userId = typeof parsed.userId === "string" ? parsed.userId.trim() : undefined;
-    if (!homeserverUrl || !accessToken || !userId || !isMatrixMxid(userId)) {
-      return undefined;
-    }
-    const encryptedRoomPolicy = parsed.encryptedRoomPolicy === "decline"
-      ? "decline"
-      : parsed.encryptedRoomPolicy == null
-        ? "decline"
-        : undefined;
-    if (encryptedRoomPolicy == null) return undefined;
+function validateMatrixCredentialJson(
+  json: unknown,
+  path: string,
+):
+  | Extract<CredentialResolution, { status: "invalid" }>
+  | { status: "ok"; credentials: MatrixCredentials } {
+  const parsed = json as Record<string, unknown>;
+  const homeserverUrl = typeof parsed.homeserverUrl === "string"
+    ? normalizeHomeserverUrl(parsed.homeserverUrl)
+    : undefined;
+  if (!homeserverUrl) {
     return {
+      status: "invalid",
+      failureKind: "missing_field",
+      reason: "missing required field: homeserverUrl",
+      path,
+    };
+  }
+  const accessToken = typeof parsed.accessToken === "string"
+    ? parsed.accessToken.trim()
+    : undefined;
+  if (!accessToken) {
+    return {
+      status: "invalid",
+      failureKind: "missing_field",
+      reason: "missing required field: accessToken",
+      path,
+    };
+  }
+  const userId = typeof parsed.userId === "string" ? parsed.userId.trim() : undefined;
+  if (!userId) {
+    return {
+      status: "invalid",
+      failureKind: "missing_field",
+      reason: "missing required field: userId",
+      path,
+    };
+  }
+  if (!isMatrixMxid(userId)) {
+    return {
+      status: "invalid",
+      failureKind: "validation",
+      reason: "userId is not a valid Matrix MXID",
+      path,
+    };
+  }
+  const encryptedRoomPolicy = parsed.encryptedRoomPolicy === "decline"
+    ? "decline"
+    : parsed.encryptedRoomPolicy == null
+      ? "decline"
+      : undefined;
+  if (encryptedRoomPolicy == null) {
+    return {
+      status: "invalid",
+      failureKind: "validation",
+      reason: "encryptedRoomPolicy must be \"decline\" when set",
+      path,
+    };
+  }
+  return {
+    status: "ok",
+    credentials: {
       homeserverUrl,
       accessToken,
       userId,
@@ -357,8 +411,6 @@ async function readJsonMatrixConfig(
       allowedRoomIds: normalizeStringArray(parsed.allowedRoomIds),
       autoJoinInvites: parsed.autoJoinInvites === true,
       encryptedRoomPolicy,
-    };
-  } catch {
-    return undefined;
-  }
+    },
+  };
 }

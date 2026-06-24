@@ -35,6 +35,7 @@ import type {
   EnsureCommsForSession,
 } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
+import type { CredentialResolution } from "./runtime/credential-resolution.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
@@ -524,8 +525,11 @@ export async function addAdapterForRegistration(input: {
   stateRoot: string;
   storage: Storage;
   leaseArbiter: CommLeaseArbiter;
-}): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const adapter = await createAdapterFromRegistration({
+}): Promise<
+  | { ok: true }
+  | { ok: false; reason: string; resolution: CredentialResolution }
+> {
+  const { adapter, resolution } = await createAdapterFromRegistration({
     factory: input.factory,
     registration: input.registration,
     env: input.env,
@@ -535,7 +539,16 @@ export async function addAdapterForRegistration(input: {
     leaseArbiter: input.leaseArbiter,
   });
   if (!adapter) {
-    return { ok: false, reason: unresolvedCredentialsReason(input.registration.credentials_ref) };
+    if (resolution.status === "invalid") {
+      logInvalidCredentialResolution(input.registration, input.factory.commId, resolution);
+    }
+    return {
+      ok: false,
+      reason: resolution.status === "invalid"
+        ? resolution.reason
+        : unresolvedCredentialsReason(input.registration.credentials_ref),
+      resolution,
+    };
   }
   const accountId = input.registration.bot_user_id as AccountId;
   try {
@@ -559,6 +572,7 @@ export async function addAdapterForRegistration(input: {
     return {
       ok: false,
       reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`,
+      resolution,
     };
   }
 }
@@ -656,23 +670,32 @@ export async function ensureCommsForSession(input: {
         leaseArbiter: input.leaseArbiter,
       });
       if (!result.ok) {
-        console.error(
-          `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`,
-        );
-        await input.audit
-          ?.append({
-            timestamp: Date.now(),
-            kind: "comm_adapter_skip",
-            agent: input.agent,
-            detail: {
-              comm: registration.comm,
-              account_id: registration.bot_user_id,
-              account_label: registration.account_label,
-              project,
-              reason: result.reason,
-            },
-          })
-          .catch(() => {});
+        if (result.resolution.status === "invalid") {
+          await appendCredentialResolutionFailedAudit(
+            input.audit,
+            registration,
+            factory.commId,
+            result.resolution,
+          );
+        } else {
+          console.error(
+            `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`,
+          );
+          await input.audit
+            ?.append({
+              timestamp: Date.now(),
+              kind: "comm_adapter_skip",
+              agent: input.agent,
+              detail: {
+                comm: registration.comm,
+                account_id: registration.bot_user_id,
+                account_label: registration.account_label,
+                project,
+                reason: result.reason,
+              },
+            })
+            .catch(() => {});
+        }
       }
     } finally {
       input.inFlight.delete(key);
@@ -688,18 +711,13 @@ async function createAdapterFromRegistration(input: {
   stateRoot: string;
   storage?: Storage;
   leaseArbiter: CommLeaseArbiter;
-}): Promise<CommAdapter | null> {
+}): Promise<{ adapter: CommAdapter | null; resolution: CredentialResolution }> {
   const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
     storage: input.storage,
     stateRoot: input.stateRoot,
   });
-  if (!resolved) {
-    const reason = unresolvedCredentialsReason(input.registration.credentials_ref);
-    console.error(
-      `agents-comm-bus: skipping ${input.factory.commId} account ${input.registration.account_label} ` +
-        `for project ${input.registration.project} (${reason})`,
-    );
-    return null;
+  if (resolved.status !== "ok") {
+    return { adapter: null, resolution: resolved };
   }
   const adapter = input.factory.create(
     resolved.credentials,
@@ -714,9 +732,9 @@ async function createAdapterFromRegistration(input: {
   // the composition root stays clean. Adapters with no exclusive backend (null)
   // pass through unwrapped.
   if (adapter.exclusiveResource?.() != null) {
-    return wrapWithLease(adapter, input.leaseArbiter);
+    return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
   }
-  return adapter;
+  return { adapter, resolution: resolved };
 }
 
 export interface ReloadSummary {
@@ -828,21 +846,30 @@ export async function reloadAdapters(input: {
         account_id: entry.registration.bot_user_id,
         reason: result.reason,
       });
-      await input.audit
-        ?.append({
-          timestamp: Date.now(),
-          kind: "comm_adapter_skip",
-          agent: entry.registration.agent,
-          detail: {
-            comm: entry.registration.comm,
-            account_id: entry.registration.bot_user_id,
-            account_label: entry.registration.account_label,
-            project: entry.registration.project,
-            reason: result.reason,
-            via: "reload_registrations",
-          },
-        })
-        .catch(() => {});
+      if (result.resolution.status === "invalid") {
+        await appendCredentialResolutionFailedAudit(
+          input.audit,
+          entry.registration,
+          entry.registration.comm,
+          result.resolution,
+        );
+      } else {
+        await input.audit
+          ?.append({
+            timestamp: Date.now(),
+            kind: "comm_adapter_skip",
+            agent: entry.registration.agent,
+            detail: {
+              comm: entry.registration.comm,
+              account_id: entry.registration.bot_user_id,
+              account_label: entry.registration.account_label,
+              project: entry.registration.project,
+              reason: result.reason,
+              via: "reload_registrations",
+            },
+          })
+          .catch(() => {});
+      }
     }
   }
 
@@ -882,7 +909,7 @@ export async function reloadAdapters(input: {
   for (const [key, entry] of desired) {
     if (!current.has(key)) continue;
     if (forceCredentialRefresh.has(key)) {
-      const adapter = await createAdapterFromRegistration({
+      const { adapter, resolution } = await createAdapterFromRegistration({
         factory: entry.factory,
         registration: entry.registration,
         env: input.env,
@@ -892,10 +919,21 @@ export async function reloadAdapters(input: {
         leaseArbiter: input.leaseArbiter,
       });
       if (!adapter) {
+        if (resolution.status === "invalid") {
+          logInvalidCredentialResolution(entry.registration, entry.registration.comm, resolution);
+          await appendCredentialResolutionFailedAudit(
+            input.audit,
+            entry.registration,
+            entry.registration.comm,
+            resolution,
+          );
+        }
         skipped.push({
           comm: entry.registration.comm,
           account_id: entry.registration.bot_user_id,
-          reason: unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve"),
+          reason: resolution.status === "invalid"
+            ? resolution.reason
+            : unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve"),
         });
         continue;
       }
@@ -981,17 +1019,28 @@ export async function reloadAdapters(input: {
       storage: input.storage,
       stateRoot: input.stateRoot,
     });
-    if (!resolved) {
+    if (resolved.status !== "ok") {
       // Symmetric with the attach branch: surface credential resolution
       // failures so a credentials_ref that broke between attach time and
       // reload time doesn't disappear silently. The live adapter keeps
       // running on its prior allowlist (no destructive action), but the
       // reload IPC caller learns that this registration's runtime state
       // is now stale.
+      if (resolved.status === "invalid") {
+        logInvalidCredentialResolution(entry.registration, entry.registration.comm, resolved);
+        await appendCredentialResolutionFailedAudit(
+          input.audit,
+          entry.registration,
+          entry.registration.comm,
+          resolved,
+        );
+      }
       skipped.push({
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id,
-        reason: unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve"),
+        reason: resolved.status === "invalid"
+          ? resolved.reason
+          : unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve"),
       });
       continue;
     }
@@ -1096,6 +1145,42 @@ function unresolvedCredentialsReason(ref: string, action = "resolve"): string {
       "rerun account-update-token with --bot-token to create a daemon-owned file: ref";
   }
   return `could not ${action} credentials_ref=${ref}`;
+}
+
+function logInvalidCredentialResolution(
+  registration: AccountRegistration,
+  commId: CommId,
+  resolution: Extract<CredentialResolution, { status: "invalid" }>,
+): void {
+  const pathSuffix = resolution.path ? ` [${resolution.path}]` : "";
+  console.error(
+    `agents-comm-bus: credential file for ${commId} account ${registration.account_label} ` +
+      `(project ${registration.project}) exists but failed to resolve: ${resolution.reason}${pathSuffix}`,
+  );
+}
+
+async function appendCredentialResolutionFailedAudit(
+  audit: JsonlAuditStore | undefined,
+  registration: AccountRegistration,
+  commId: CommId,
+  resolution: Extract<CredentialResolution, { status: "invalid" }>,
+): Promise<void> {
+  await audit
+    ?.append({
+      timestamp: Date.now(),
+      kind: "credential_resolution_failed",
+      agent: registration.agent,
+      detail: {
+        comm: commId,
+        account_label: registration.account_label,
+        project: registration.project,
+        bot_user_id: registration.bot_user_id,
+        credential_path: resolution.path ?? null,
+        failure_kind: resolution.failureKind,
+        reason: resolution.reason,
+      },
+    })
+    .catch(() => {});
 }
 
 function adapterMapKey(commId: CommId, accountId: AccountId | string): string {

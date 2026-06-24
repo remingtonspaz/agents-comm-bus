@@ -1,7 +1,38 @@
 import { createRequire as __acbCreateRequire } from 'module'; const require = __acbCreateRequire(import.meta.url);
 
-// ../adapters/curl/factory.ts
+// ../core-daemon/runtime/credential-resolution.ts
 import { readFile } from "node:fs/promises";
+async function readCredentialFile(ref) {
+  if (!ref.startsWith("file:")) {
+    return { status: "absent" };
+  }
+  const path3 = ref.slice("file:".length);
+  let raw;
+  try {
+    raw = await readFile(path3, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "UNKNOWN";
+    if (code === "ENOENT") {
+      return { status: "absent" };
+    }
+    return {
+      status: "invalid",
+      failureKind: "unreadable",
+      reason: `credential file unreadable: ${code}`,
+      path: path3
+    };
+  }
+  try {
+    return { status: "ok", path: path3, json: JSON.parse(raw) };
+  } catch {
+    return {
+      status: "invalid",
+      failureKind: "malformed_json",
+      reason: "credential file is not valid JSON",
+      path: path3
+    };
+  }
+}
 
 // ../adapters/curl/adapter.ts
 import crypto from "node:crypto";
@@ -377,18 +408,33 @@ var CurlCommAdapterFactory = class {
   commId = CURL_COMM_ID;
   async resolveCredentials(registration, env, context) {
     const ref = registration.credentials_ref ?? "";
-    if (!ref.startsWith("file:")) return void 0;
-    const fromFile = await readJsonCurlConfig(ref.slice("file:".length));
-    if (!fromFile?.token) return void 0;
+    if (!ref.startsWith("file:")) return { status: "absent" };
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+    const parsed = fileResult.json;
+    const token = typeof parsed.botToken === "string" && parsed.botToken.trim().length > 0 ? parsed.botToken : typeof parsed.token === "string" && parsed.token.trim().length > 0 ? parsed.token : void 0;
+    if (!token) {
+      return {
+        status: "invalid",
+        failureKind: "missing_field",
+        reason: "missing required field: token",
+        path: fileResult.path
+      };
+    }
+    const port = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0 ? parsed.port : void 0;
     const envAllowed = normalizeCsv(env.CURL_SENDER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
+    const userId = normalizeUserIdField(parsed.userId);
     return {
+      status: "ok",
       credentials: {
-        token: fromFile.token,
-        port: fromFile.port,
+        token,
+        port,
         project: registration.project,
         agent: registration.agent,
-        allowedSenderIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed)
+        allowedSenderIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : void 0, dbAllowed)
       }
     };
   }
@@ -448,18 +494,6 @@ var CurlCommAdapterFactory = class {
 };
 function createCommAdapterFactory() {
   return new CurlCommAdapterFactory();
-}
-async function readJsonCurlConfig(filePath) {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const token = typeof parsed.botToken === "string" && parsed.botToken.trim().length > 0 ? parsed.botToken : typeof parsed.token === "string" && parsed.token.trim().length > 0 ? parsed.token : void 0;
-    if (!token) return void 0;
-    const port = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0 ? parsed.port : void 0;
-    return { token, port, userId: normalizeUserIdField(parsed.userId) };
-  } catch {
-    return void 0;
-  }
 }
 function normalizeUserIdField(raw) {
   if (raw == null) return [];

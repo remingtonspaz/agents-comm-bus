@@ -86,7 +86,7 @@ describe("Telegram factory allowlist union", () => {
         },
         { storage },
       );
-      assert.ok(resolved, "resolveCredentials returned undefined");
+      assert.equal(resolved.status, "ok");
       const allowed = resolved.credentials.allowedUserIds as string[];
       assert.deepEqual(
         [...allowed].sort(),
@@ -134,7 +134,8 @@ describe("Telegram factory allowlist union", () => {
         },
         { storage },
       );
-      const allowed = (resolved!.credentials.allowedUserIds as string[]).slice();
+      assert.equal(resolved.status, "ok");
+      const allowed = (resolved.credentials.allowedUserIds as string[]).slice();
       assert.deepEqual(allowed, ["8296218244"], "expected single entry after dedup");
       await storage.close();
     });
@@ -153,7 +154,7 @@ describe("Telegram factory allowlist union", () => {
         },
         // No `context` argument
       );
-      assert.ok(resolved);
+      assert.equal(resolved.status, "ok");
       assert.deepEqual(resolved.credentials.allowedUserIds, ["env-only-sender"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -191,7 +192,7 @@ describe("Telegram factory allowlist union", () => {
             { storage, stateRoot },
           );
 
-          assert.ok(resolved, "expected legacy env ref to migrate");
+          assert.equal(resolved.status, "ok", "expected legacy env ref to migrate");
           assert.equal(resolved.credentials.botToken, "codex-token");
           assert.deepEqual(resolved.credentials.allowedUserIds, ["codex-user"]);
 
@@ -234,7 +235,7 @@ describe("Telegram factory allowlist union", () => {
           { storage, stateRoot },
         );
 
-        assert.equal(resolved, undefined);
+        assert.equal(resolved.status, "absent");
         const [unchanged] = await storage.listAccountRegistrations({ comm: TELEGRAM });
         assert.equal(unchanged.credentials_ref, "env:TELEGRAM_BOT_TOKEN");
       } finally {
@@ -259,7 +260,7 @@ describe("Telegram factory allowlist union", () => {
           { storage, stateRoot },
         );
 
-        assert.ok(resolved, "expected env var token to migrate");
+        assert.equal(resolved.status, "ok", "expected env var token to migrate");
         assert.equal(resolved.credentials.botToken, "env-token");
         const [updated] = await storage.listAccountRegistrations({ comm: TELEGRAM });
         assert.ok(updated.credentials_ref.startsWith("file:"));

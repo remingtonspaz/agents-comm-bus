@@ -8,6 +8,7 @@ import type {
 
 import type { MessageBus } from "../bus.js";
 import type { Storage } from "agents-comm-bus-core";
+import type { CredentialResolution } from "./credential-resolution.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 
@@ -24,9 +25,11 @@ export interface CommAdapterFactory {
   readonly commId: CommId;
 
   /**
-   * Resolve credentials from a stored `account_registrations` row. Returns
-   * `undefined` if the registration can't be resolved (e.g. file unreadable);
-   * the daemon will log and skip the row.
+   * Resolve credentials from a stored `account_registrations` row.
+   *
+   * - `{ status: "ok", credentials }` — resolved; daemon may instantiate the adapter.
+   * - `{ status: "absent" }` — no `file:` ref or token file not created yet; quiet skip.
+   * - `{ status: "invalid", ... }` — file exists but failed to parse/validate; loud skip.
    *
    * The optional context lets the factory query DB-backed configuration
    * (e.g. allowlist tables) and perform one-time credential migrations into
@@ -37,7 +40,7 @@ export interface CommAdapterFactory {
     registration: AccountRegistration,
     env: CommAdapterFactoryEnv,
     context?: ResolveCredentialsContext,
-  ): Promise<{ credentials: Record<string, unknown> } | undefined>;
+  ): Promise<CredentialResolution>;
 
   /**
    * Optional identity probe used by comm-agnostic admin surfaces. For example,

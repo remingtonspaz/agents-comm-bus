@@ -1,5 +1,9 @@
+/**
+ * Discord comm adapter factory + IPC method surface.
+ */
 import type { AccountId, AccountRegistration, CommAdapter, CommId } from "agents-comm-bus-core";
 import type { CommAdapterFactory, CommAdapterCreateContext, CommAdapterFactoryEnv, CommIpcDeps, ResolveCredentialsContext } from "../../core-daemon/runtime/comm-factory.js";
+import { type CredentialResolution } from "../../core-daemon/runtime/credential-resolution.js";
 import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
 export interface DiscordCredentials {
     botToken: string;
@@ -8,9 +12,7 @@ export interface DiscordCredentials {
 }
 export declare class DiscordCommAdapterFactory implements CommAdapterFactory {
     readonly commId: CommId;
-    resolveCredentials(registration: AccountRegistration, env: CommAdapterFactoryEnv, context?: ResolveCredentialsContext): Promise<{
-        credentials: Record<string, unknown>;
-    } | undefined>;
+    resolveCredentials(registration: AccountRegistration, env: CommAdapterFactoryEnv, context?: ResolveCredentialsContext): Promise<CredentialResolution>;
     probeIdentity(credentials: Record<string, unknown>): Promise<{
         accountId: AccountId;
         accountUsername?: string | null;

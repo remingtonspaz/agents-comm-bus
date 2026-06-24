@@ -12,8 +12,6 @@
  * account id is `curl:local`; an explicit id (for multi-scope setups) comes
  * through `account-add --account-id`.
  */
-import { readFile } from "node:fs/promises";
-
 import type {
   AccountId,
   AccountRegistration,
@@ -28,6 +26,10 @@ import type {
   CommIpcDeps,
   ResolveCredentialsContext,
 } from "../../core-daemon/runtime/comm-factory.js";
+import {
+  readCredentialFile,
+  type CredentialResolution,
+} from "../../core-daemon/runtime/credential-resolution.js";
 import type { IpcMethodHandler } from "../../core-daemon/runtime/ipc-method.js";
 import { CurlCommAdapter } from "./adapter.js";
 
@@ -42,23 +44,45 @@ export class CurlCommAdapterFactory implements CommAdapterFactory {
     registration: AccountRegistration,
     env: CommAdapterFactoryEnv,
     context?: ResolveCredentialsContext,
-  ): Promise<{ credentials: Record<string, unknown> } | undefined> {
+  ): Promise<CredentialResolution> {
     const ref = registration.credentials_ref ?? "";
-    if (!ref.startsWith("file:")) return undefined;
+    if (!ref.startsWith("file:")) return { status: "absent" };
 
-    const fromFile = await readJsonCurlConfig(ref.slice("file:".length));
-    if (!fromFile?.token) return undefined;
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+
+    const parsed = fileResult.json as Record<string, unknown>;
+    const token = typeof parsed.botToken === "string" && parsed.botToken.trim().length > 0
+      ? parsed.botToken
+      : typeof parsed.token === "string" && parsed.token.trim().length > 0
+        ? parsed.token
+        : undefined;
+    if (!token) {
+      return {
+        status: "invalid",
+        failureKind: "missing_field",
+        reason: "missing required field: token",
+        path: fileResult.path,
+      };
+    }
+    const port = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0
+      ? parsed.port
+      : undefined;
 
     const envAllowed = normalizeCsv(env.CURL_SENDER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
+    const userId = normalizeUserIdField(parsed.userId);
 
     return {
+      status: "ok",
       credentials: {
-        token: fromFile.token,
-        port: fromFile.port,
+        token,
+        port,
         project: registration.project,
         agent: registration.agent,
-        allowedSenderIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
+        allowedSenderIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : undefined, dbAllowed),
       },
     };
   }
@@ -134,27 +158,6 @@ export class CurlCommAdapterFactory implements CommAdapterFactory {
 
 export function createCommAdapterFactory(): CommAdapterFactory {
   return new CurlCommAdapterFactory();
-}
-
-async function readJsonCurlConfig(
-  filePath: string,
-): Promise<{ token?: string; port?: number; userId?: string[] } | undefined> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const token = typeof parsed.botToken === "string" && parsed.botToken.trim().length > 0
-      ? parsed.botToken
-      : typeof parsed.token === "string" && parsed.token.trim().length > 0
-        ? parsed.token
-        : undefined;
-    if (!token) return undefined;
-    const port = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0
-      ? parsed.port
-      : undefined;
-    return { token, port, userId: normalizeUserIdField(parsed.userId) };
-  } catch {
-    return undefined;
-  }
 }
 
 function normalizeUserIdField(raw: unknown): string[] {

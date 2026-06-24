@@ -97,8 +97,8 @@ describe("reload-path allowlist refresh", () => {
         env,
         { storage },
       );
-      assert.ok(resolved, "initial resolveCredentials should succeed");
-      const adapter = factory.create(resolved.credentials, BOT_ID as AccountId, {
+    assert.equal(resolved.status, "ok");
+    const adapter = factory.create(resolved.credentials, BOT_ID as AccountId, {
         blobs,
         stateRoot: dir,
       });
@@ -182,7 +182,8 @@ describe("reload-path allowlist refresh", () => {
         env,
         { storage },
       );
-      const adapter = factory.create(resolved!.credentials, BOT_ID as AccountId, {
+      assert.equal(resolved.status, "ok");
+      const adapter = factory.create(resolved.credentials, BOT_ID as AccountId, {
         blobs,
         stateRoot: dir,
       });
@@ -235,7 +236,8 @@ describe("reload-path allowlist refresh", () => {
         envInitial,
         { storage },
       );
-      const adapter = factory.create(resolved!.credentials, BOT_ID as AccountId, {
+      assert.equal(resolved.status, "ok");
+      const adapter = factory.create(resolved.credentials, BOT_ID as AccountId, {
         blobs,
         stateRoot: dir,
       });
@@ -291,7 +293,8 @@ describe("reload-path allowlist refresh", () => {
         envInitial,
         { storage },
       );
-      const adapter = factory.create(resolved!.credentials, BOT_ID as AccountId, {
+      assert.equal(resolved.status, "ok");
+      const adapter = factory.create(resolved.credentials, BOT_ID as AccountId, {
         blobs,
         stateRoot: dir,
       });
@@ -354,7 +357,8 @@ describe("reload-path allowlist refresh", () => {
         env,
         { storage },
       );
-      const adapter = factory.create(resolved!.credentials, BOT_ID as AccountId, {
+      assert.equal(resolved.status, "ok");
+      const adapter = factory.create(resolved.credentials, BOT_ID as AccountId, {
         blobs,
         stateRoot: dir,
       });
@@ -451,10 +455,10 @@ class FakeCredentialFactory {
   async resolveCredentials(
     rec: AccountRegistration,
     env: NodeJS.ProcessEnv,
-  ): Promise<{ credentials: Record<string, unknown> } | undefined> {
+  ): Promise<{ status: "ok"; credentials: Record<string, unknown> } | { status: "absent" }> {
     const name = rec.credentials_ref.replace(/^env:/, "");
     const token = env[name];
-    return token ? { credentials: { botToken: token } } : undefined;
+    return token ? { status: "ok", credentials: { botToken: token } } : { status: "absent" };
   }
 
   create(

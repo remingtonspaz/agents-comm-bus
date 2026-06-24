@@ -114,10 +114,10 @@ describe("Matrix factory credential resolution", () => {
         }),
         {},
       );
-      assert.ok(resolved);
-      assert.equal(resolved!.credentials.homeserverUrl, "https://matrix.example.org");
-      assert.equal(resolved!.credentials.accessToken, "syt_test_token");
-      assert.equal(resolved!.credentials.userId, BOT_MXID);
+      assert.equal(resolved.status, "ok");
+      assert.equal(resolved.credentials.homeserverUrl, "https://matrix.example.org");
+      assert.equal(resolved.credentials.accessToken, "syt_test_token");
+      assert.equal(resolved.credentials.userId, BOT_MXID);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -140,7 +140,7 @@ describe("Matrix factory credential resolution", () => {
           }),
           {},
         );
-        assert.equal(resolved, undefined, `expected undefined for ${JSON.stringify(body)}`);
+        assert.equal(resolved.status, "invalid", `expected invalid for ${JSON.stringify(body)}`);
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -182,9 +182,9 @@ describe("Matrix factory credential resolution", () => {
         { storage },
       );
 
-      assert.ok(resolved);
+      assert.equal(resolved.status, "ok");
       assert.deepEqual(
-        [...(resolved!.credentials.allowedUserIds as string[])].sort(),
+        [...(resolved.credentials.allowedUserIds as string[])].sort(),
         [
           "@env:matrix.example.org",
           "@file:matrix.example.org",

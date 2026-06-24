@@ -1,7 +1,4 @@
-/**
- * Discord comm adapter factory + IPC method surface.
- */
-import { readFile } from "node:fs/promises";
+import { readCredentialFile, } from "../../core-daemon/runtime/credential-resolution.js";
 import { DiscordCommAdapter, probeDiscordIdentity, uploadFilenameFromLocalPath } from "./adapter.js";
 const DISCORD_COMM_ID = "discord";
 export class DiscordCommAdapterFactory {
@@ -9,18 +6,34 @@ export class DiscordCommAdapterFactory {
     async resolveCredentials(registration, env, context) {
         const ref = registration.credentials_ref ?? "";
         if (!ref.startsWith("file:")) {
-            return undefined;
+            return { status: "absent" };
+        }
+        const fileResult = await readCredentialFile(ref);
+        if (fileResult.status !== "ok") {
+            return fileResult;
+        }
+        const parsed = fileResult.json;
+        const botToken = typeof parsed.botToken === "string"
+            ? parsed.botToken
+            : typeof parsed.bot_token === "string"
+                ? parsed.bot_token
+                : undefined;
+        if (!botToken) {
+            return {
+                status: "invalid",
+                failureKind: "missing_field",
+                reason: "missing required field: botToken",
+                path: fileResult.path,
+            };
         }
         const envAllowed = normalizeCsv(env.DISCORD_USER_ID);
         const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
-        const fromFile = await readJsonDiscordConfig(ref.slice("file:".length));
-        if (!fromFile?.botToken) {
-            return undefined;
-        }
+        const userId = normalizeUserIdField(parsed.userId);
         return {
+            status: "ok",
             credentials: {
-                botToken: fromFile.botToken,
-                allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
+                botToken,
+                allowedUserIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : undefined, dbAllowed),
             },
         };
     }
@@ -184,24 +197,6 @@ async function readAllowlistFromDb(context, bot_user_id) {
             out.push(row.sender_id);
     }
     return out;
-}
-async function readJsonDiscordConfig(filePath) {
-    try {
-        const raw = await readFile(filePath, "utf8");
-        const parsed = JSON.parse(raw);
-        const botToken = typeof parsed.botToken === "string"
-            ? parsed.botToken
-            : typeof parsed.bot_token === "string"
-                ? parsed.bot_token
-                : undefined;
-        const userId = normalizeUserIdField(parsed.userId);
-        if (!botToken && userId.length === 0)
-            return undefined;
-        return { botToken, userId: userId.length > 0 ? userId : undefined };
-    }
-    catch {
-        return undefined;
-    }
 }
 function normalizeUserIdField(raw) {
     if (raw == null)

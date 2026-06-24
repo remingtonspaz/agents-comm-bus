@@ -58,7 +58,7 @@ function probeFactorySource(commId: string): string {
   return `export function createCommAdapterFactory() {
   return {
     commId: ${JSON.stringify(commId)},
-    async resolveCredentials() { return undefined; },
+    async resolveCredentials() { return { status: "absent" }; },
     create() { throw new Error("not used"); },
     async probeIdentity(credentials) {
       return {
@@ -76,7 +76,7 @@ function factorySource(commId: string, ipcMethod: string): string {
   return `export function createCommAdapterFactory() {
   return {
     commId: ${JSON.stringify(commId)},
-    async resolveCredentials() { return { credentials: {} }; },
+    async resolveCredentials() { return { status: "ok", credentials: {} }; },
     create(_credentials, accountId) {
       return {
         id: ${JSON.stringify(commId)},
@@ -134,7 +134,7 @@ function stubFactory(commId: CommId, ipcMethod: string): CommAdapterFactory {
   return {
     commId,
     async resolveCredentials() {
-      return { credentials: {} };
+      return { status: "ok" as const, credentials: {} };
     },
     create(_credentials, accountId: AccountId): CommAdapter {
       return {
@@ -273,7 +273,7 @@ describe("AGE-49 hot comm factory reload", () => {
     const partialFactory: CommAdapterFactory = {
       commId: DISCORD,
       async resolveCredentials() {
-        return { credentials: {} };
+        return { status: "ok" as const, credentials: {} };
       },
       create() {
         throw new Error("not used");

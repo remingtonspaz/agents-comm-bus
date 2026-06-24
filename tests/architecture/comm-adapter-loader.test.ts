@@ -29,7 +29,7 @@ function validFactorySource(commId: string): string {
   return `export function createCommAdapterFactory() {
   return {
     commId: ${JSON.stringify(commId)},
-    async resolveCredentials() { return undefined; },
+    async resolveCredentials() { return { status: "absent" }; },
     create() { throw new Error("not used"); },
   };
 }

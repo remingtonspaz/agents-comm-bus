@@ -376,7 +376,7 @@ describe("production marketplace install (release gate)", () => {
       `export function createCommAdapterFactory() {
         return {
           commId: "fake",
-          async resolveCredentials() { return undefined; },
+          async resolveCredentials() { return { status: "absent" }; },
           create() { throw new Error("not used"); },
           async probeIdentity(credentials) {
             return {
@@ -393,7 +393,7 @@ describe("production marketplace install (release gate)", () => {
       `export function createCommAdapterFactory() {
         return {
           commId: "noprobe",
-          async resolveCredentials() { return undefined; },
+          async resolveCredentials() { return { status: "absent" }; },
           create() { throw new Error("not used"); },
         };
       }\n`,
@@ -471,7 +471,7 @@ describe("production marketplace install (release gate)", () => {
       `export function createCommAdapterFactory() {
         return {
           commId: "telegram",
-          async resolveCredentials() { return undefined; },
+          async resolveCredentials() { return { status: "absent" }; },
           create() { throw new Error("not used by this test"); },
           async probeIdentity(credentials) {
             return {
@@ -536,7 +536,7 @@ describe("production marketplace install (release gate)", () => {
       `export function createCommAdapterFactory() {
         return {
           commId: "telegram",
-          async resolveCredentials() { return undefined; },
+          async resolveCredentials() { return { status: "absent" }; },
           fallbackFromEnv() { return undefined; },
           create() { throw new Error("not used by this test"); },
           async probeIdentity(credentials) {

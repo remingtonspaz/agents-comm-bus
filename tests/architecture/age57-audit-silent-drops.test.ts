@@ -70,8 +70,8 @@ function registration(project: string, botId: string, comm: CommId = TELEGRAM): 
 
 class NoResolveFactory {
   readonly commId = TELEGRAM;
-  async resolveCredentials(): Promise<undefined> {
-    return undefined;
+  async resolveCredentials(): Promise<{ status: "absent" }> {
+    return { status: "absent" };
   }
   create(): CommAdapter {
     throw new Error("should not create");

@@ -1,18 +1,4 @@
-/**
- * Curl comm adapter factory (AGE-50).
- *
- * Credential resolution follows the daemon-owned `file:` token-ref pattern:
- * `account-add --comm curl --bot-token <secret>` writes `{ "botToken": ... }`
- * into the daemon state root and stores the file ref on the registration. The
- * token file may optionally carry a fixed `"port"`; otherwise the adapter
- * binds an ephemeral loopback port and publishes it via
- * `<stateRoot>/curl/<account>/endpoint.json`.
- *
- * Identity is synthetic — there is no remote bot API to probe. The default
- * account id is `curl:local`; an explicit id (for multi-scope setups) comes
- * through `account-add --account-id`.
- */
-import { readFile } from "node:fs/promises";
+import { readCredentialFile, } from "../../core-daemon/runtime/credential-resolution.js";
 import { CurlCommAdapter } from "./adapter.js";
 const CURL_COMM_ID = "curl";
 export const DEFAULT_CURL_ACCOUNT_ID = "curl:local";
@@ -21,19 +7,39 @@ export class CurlCommAdapterFactory {
     async resolveCredentials(registration, env, context) {
         const ref = registration.credentials_ref ?? "";
         if (!ref.startsWith("file:"))
-            return undefined;
-        const fromFile = await readJsonCurlConfig(ref.slice("file:".length));
-        if (!fromFile?.token)
-            return undefined;
+            return { status: "absent" };
+        const fileResult = await readCredentialFile(ref);
+        if (fileResult.status !== "ok") {
+            return fileResult;
+        }
+        const parsed = fileResult.json;
+        const token = typeof parsed.botToken === "string" && parsed.botToken.trim().length > 0
+            ? parsed.botToken
+            : typeof parsed.token === "string" && parsed.token.trim().length > 0
+                ? parsed.token
+                : undefined;
+        if (!token) {
+            return {
+                status: "invalid",
+                failureKind: "missing_field",
+                reason: "missing required field: token",
+                path: fileResult.path,
+            };
+        }
+        const port = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0
+            ? parsed.port
+            : undefined;
         const envAllowed = normalizeCsv(env.CURL_SENDER_ID);
         const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
+        const userId = normalizeUserIdField(parsed.userId);
         return {
+            status: "ok",
             credentials: {
-                token: fromFile.token,
-                port: fromFile.port,
+                token,
+                port,
                 project: registration.project,
                 agent: registration.agent,
-                allowedSenderIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
+                allowedSenderIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : undefined, dbAllowed),
             },
         };
     }
@@ -93,26 +99,6 @@ export class CurlCommAdapterFactory {
 }
 export function createCommAdapterFactory() {
     return new CurlCommAdapterFactory();
-}
-async function readJsonCurlConfig(filePath) {
-    try {
-        const raw = await readFile(filePath, "utf8");
-        const parsed = JSON.parse(raw);
-        const token = typeof parsed.botToken === "string" && parsed.botToken.trim().length > 0
-            ? parsed.botToken
-            : typeof parsed.token === "string" && parsed.token.trim().length > 0
-                ? parsed.token
-                : undefined;
-        if (!token)
-            return undefined;
-        const port = typeof parsed.port === "number" && Number.isInteger(parsed.port) && parsed.port > 0
-            ? parsed.port
-            : undefined;
-        return { token, port, userId: normalizeUserIdField(parsed.userId) };
-    }
-    catch {
-        return undefined;
-    }
 }
 function normalizeUserIdField(raw) {
     if (raw == null)

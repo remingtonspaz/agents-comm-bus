@@ -78,7 +78,8 @@ describe("DiscordCommAdapterFactory contract", () => {
       makeRegistration({ credentials_ref: credentialsRef }),
       {},
     );
-    assert.deepEqual(resolved?.credentials, {
+    assert.equal(resolved.status, "ok");
+    assert.deepEqual(resolved.credentials, {
       botToken: "test-token",
       allowedUserIds: [],
     });
@@ -100,9 +101,10 @@ describe("DiscordCommAdapterFactory contract", () => {
       makeRegistration({ credentials_ref: credentialsRef }),
       { DISCORD_USER_ID: "env-sender-1,env-sender-2" },
     );
-    assert.deepEqual(resolved?.credentials.botToken, "test-token");
+    assert.equal(resolved.status, "ok");
+    assert.deepEqual(resolved.credentials.botToken, "test-token");
     assert.deepEqual(
-      [...(resolved?.credentials.allowedUserIds as string[])].sort(),
+      [...(resolved.credentials.allowedUserIds as string[])].sort(),
       ["123", "env-sender-1", "env-sender-2"].sort(),
     );
   });
@@ -116,7 +118,8 @@ describe("DiscordCommAdapterFactory contract", () => {
       }),
       {},
     );
-    assert.deepEqual(resolved?.credentials, {
+    assert.equal(resolved.status, "ok");
+    assert.deepEqual(resolved.credentials, {
       botToken: "alias-token",
       allowedUserIds: [],
     });
@@ -128,10 +131,10 @@ describe("DiscordCommAdapterFactory contract", () => {
       makeRegistration({ credentials_ref: "file:/no/such/discord.json" }),
       {},
     );
-    assert.equal(resolved, undefined);
+    assert.equal(resolved.status, "absent");
   });
 
-  it("returns undefined when the credentials file contains malformed JSON", async () => {
+  it("returns invalid when the credentials file contains malformed JSON", async () => {
     const dir = await mkdtemp(join(tmpdir(), "acb-discord-bad-json-"));
     const path = join(dir, "bad.json");
     await writeFile(path, "{not-json");
@@ -140,7 +143,10 @@ describe("DiscordCommAdapterFactory contract", () => {
       makeRegistration({ credentials_ref: `file:${path}` }),
       {},
     );
-    assert.equal(resolved, undefined);
+    assert.equal(resolved.status, "invalid");
+    if (resolved.status === "invalid") {
+      assert.equal(resolved.failureKind, "malformed_json");
+    }
   });
 
   it("create() wires exclusiveResource to the bot user id", () => {

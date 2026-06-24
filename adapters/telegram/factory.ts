@@ -8,7 +8,6 @@
  *   - the MCP-tool IPC method surface: telegram_send, telegram_send_image,
  *     telegram_check_messages
  */
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -22,6 +21,10 @@ import type {
 
 import type { MessageBus } from "../../core-daemon/bus.js";
 import { writeTokenFile } from "../../core-daemon/cli/token-file.js";
+import {
+  readCredentialFile,
+  type CredentialResolution,
+} from "../../core-daemon/runtime/credential-resolution.js";
 import type {
   CommAdapterFactory,
   CommAdapterCreateContext,
@@ -46,29 +49,49 @@ export class TelegramCommAdapterFactory implements CommAdapterFactory {
     registration: AccountRegistration,
     env: CommAdapterFactoryEnv,
     context?: ResolveCredentialsContext,
-  ): Promise<{ credentials: Record<string, unknown> } | undefined> {
+  ): Promise<CredentialResolution> {
     const ref = registration.credentials_ref ?? "";
     const envAllowed = normalizeCsv(env.TELEGRAM_USER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
 
     if (ref.startsWith("env:")) {
-      return migrateLegacyEnvCredentialRef(registration, env, context, envAllowed, dbAllowed);
+      const migrated = await migrateLegacyEnvCredentialRef(
+        registration,
+        env,
+        context,
+        envAllowed,
+        dbAllowed,
+      );
+      return migrated ?? { status: "absent" };
     }
 
-    if (ref.startsWith("file:")) {
-      const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
-      if (fromFile?.botToken) {
-        return {
-          credentials: {
-            botToken: fromFile.botToken,
-            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed),
-          },
-        };
-      }
-      return undefined;
+    if (!ref.startsWith("file:")) {
+      return { status: "absent" };
     }
 
-    return undefined;
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+
+    const parsed = fileResult.json as { botToken?: unknown; userId?: unknown };
+    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : undefined;
+    if (!botToken) {
+      return {
+        status: "invalid",
+        failureKind: "missing_field",
+        reason: "missing required field: botToken",
+        path: fileResult.path,
+      };
+    }
+    const userId = normalizeUserIdField(parsed.userId);
+    return {
+      status: "ok",
+      credentials: {
+        botToken,
+        allowedUserIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : undefined, dbAllowed),
+      },
+    };
   }
 
   async probeIdentity(
@@ -259,7 +282,7 @@ async function migrateLegacyEnvCredentialRef(
   context: ResolveCredentialsContext | undefined,
   envAllowed: string[],
   dbAllowed: string[],
-): Promise<{ credentials: Record<string, unknown> } | undefined> {
+): Promise<CredentialResolution | undefined> {
   if (!context?.storage || !context.stateRoot) return undefined;
 
   const envName = registration.credentials_ref.slice("env:".length);
@@ -286,6 +309,7 @@ async function migrateLegacyEnvCredentialRef(
   });
 
   return {
+    status: "ok",
     credentials: {
       botToken,
       allowedUserIds: mergeAllowed(envAllowed, legacyFile?.userId, dbAllowed),
@@ -302,8 +326,16 @@ async function readLegacyProjectTelegramConfig(
     ...(agent === "claude" ? [] : [path.join(project, ".claude", "telegram.json")]),
   ];
   for (const candidate of candidates) {
-    const config = await readJsonTelegramConfig(candidate);
-    if (config?.botToken) return config;
+    const fileResult = await readCredentialFile(`file:${candidate}`);
+    if (fileResult.status === "invalid") {
+      // Legacy best-effort path: malformed project files are treated as absent.
+      continue;
+    }
+    if (fileResult.status !== "ok") continue;
+    const parsed = fileResult.json as { botToken?: unknown; userId?: unknown };
+    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : undefined;
+    const userId = normalizeUserIdField(parsed.userId);
+    if (botToken) return { botToken, userId: userId.length > 0 ? userId : undefined };
   }
   return undefined;
 }
@@ -325,21 +357,6 @@ async function readAllowlistFromDb(
     if (!out.includes(row.sender_id)) out.push(row.sender_id);
   }
   return out;
-}
-
-async function readJsonTelegramConfig(
-  filePath: string,
-): Promise<{ botToken?: string; userId?: string[] } | undefined> {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as { botToken?: unknown; userId?: unknown };
-    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : undefined;
-    const userId = normalizeUserIdField(parsed.userId);
-    if (!botToken && userId.length === 0) return undefined;
-    return { botToken, userId: userId.length > 0 ? userId : undefined };
-  } catch {
-    return undefined;
-  }
 }
 
 function normalizeUserIdField(raw: unknown): string[] {

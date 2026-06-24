@@ -52632,7 +52632,6 @@ var require_node_telegram_bot_api = __commonJS({
 });
 
 // ../adapters/telegram/factory.ts
-import { readFile } from "node:fs/promises";
 import path3 from "node:path";
 
 // ../core-daemon/cli/token-file.ts
@@ -52709,6 +52708,40 @@ async function writeTokenFile(options) {
   } catch {
   }
   return `file:${tokenFile}`;
+}
+
+// ../core-daemon/runtime/credential-resolution.ts
+import { readFile } from "node:fs/promises";
+async function readCredentialFile(ref) {
+  if (!ref.startsWith("file:")) {
+    return { status: "absent" };
+  }
+  const path4 = ref.slice("file:".length);
+  let raw;
+  try {
+    raw = await readFile(path4, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "UNKNOWN";
+    if (code === "ENOENT") {
+      return { status: "absent" };
+    }
+    return {
+      status: "invalid",
+      failureKind: "unreadable",
+      reason: `credential file unreadable: ${code}`,
+      path: path4
+    };
+  }
+  try {
+    return { status: "ok", path: path4, json: JSON.parse(raw) };
+  } catch {
+    return {
+      status: "invalid",
+      failureKind: "malformed_json",
+      reason: "credential file is not valid JSON",
+      path: path4
+    };
+  }
 }
 
 // ../adapters/telegram/adapter.ts
@@ -53089,21 +53122,40 @@ var TelegramCommAdapterFactory = class {
     const envAllowed = normalizeCsv(env2.TELEGRAM_USER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
     if (ref.startsWith("env:")) {
-      return migrateLegacyEnvCredentialRef(registration, env2, context, envAllowed, dbAllowed);
+      const migrated = await migrateLegacyEnvCredentialRef(
+        registration,
+        env2,
+        context,
+        envAllowed,
+        dbAllowed
+      );
+      return migrated ?? { status: "absent" };
     }
-    if (ref.startsWith("file:")) {
-      const fromFile = await readJsonTelegramConfig(ref.slice("file:".length));
-      if (fromFile?.botToken) {
-        return {
-          credentials: {
-            botToken: fromFile.botToken,
-            allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed)
-          }
-        };
+    if (!ref.startsWith("file:")) {
+      return { status: "absent" };
+    }
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+    const parsed = fileResult.json;
+    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : void 0;
+    if (!botToken) {
+      return {
+        status: "invalid",
+        failureKind: "missing_field",
+        reason: "missing required field: botToken",
+        path: fileResult.path
+      };
+    }
+    const userId = normalizeUserIdField(parsed.userId);
+    return {
+      status: "ok",
+      credentials: {
+        botToken,
+        allowedUserIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : void 0, dbAllowed)
       }
-      return void 0;
-    }
-    return void 0;
+    };
   }
   async probeIdentity(credentials) {
     const botToken = typeof credentials.botToken === "string" ? credentials.botToken : null;
@@ -53260,6 +53312,7 @@ async function migrateLegacyEnvCredentialRef(registration, env2, context, envAll
     updated_at: Date.now()
   });
   return {
+    status: "ok",
     credentials: {
       botToken,
       allowedUserIds: mergeAllowed(envAllowed, legacyFile?.userId, dbAllowed)
@@ -53272,8 +53325,15 @@ async function readLegacyProjectTelegramConfig(project, agent) {
     ...agent === "claude" ? [] : [path3.join(project, ".claude", "telegram.json")]
   ];
   for (const candidate of candidates) {
-    const config = await readJsonTelegramConfig(candidate);
-    if (config?.botToken) return config;
+    const fileResult = await readCredentialFile(`file:${candidate}`);
+    if (fileResult.status === "invalid") {
+      continue;
+    }
+    if (fileResult.status !== "ok") continue;
+    const parsed = fileResult.json;
+    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : void 0;
+    const userId = normalizeUserIdField(parsed.userId);
+    if (botToken) return { botToken, userId: userId.length > 0 ? userId : void 0 };
   }
   return void 0;
 }
@@ -53291,18 +53351,6 @@ async function readAllowlistFromDb(context, bot_user_id) {
     if (!out.includes(row.sender_id)) out.push(row.sender_id);
   }
   return out;
-}
-async function readJsonTelegramConfig(filePath) {
-  try {
-    const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : void 0;
-    const userId = normalizeUserIdField(parsed.userId);
-    if (!botToken && userId.length === 0) return void 0;
-    return { botToken, userId: userId.length > 0 ? userId : void 0 };
-  } catch {
-    return void 0;
-  }
 }
 function normalizeUserIdField(raw) {
   if (raw == null) return [];

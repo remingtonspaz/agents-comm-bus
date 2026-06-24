@@ -53,8 +53,8 @@ class RecordingFactory {
   readonly adapters = new Map<string, FakeAdapter>();
   failStartFor?: string;
 
-  async resolveCredentials(): Promise<{ credentials: Record<string, unknown> }> {
-    return { credentials: {} };
+  async resolveCredentials(): Promise<{ status: "ok"; credentials: Record<string, unknown> }> {
+    return { status: "ok", credentials: {} };
   }
 
   create(_credentials: Record<string, unknown>, accountId: AccountId): CommAdapter {

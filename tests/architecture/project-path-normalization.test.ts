@@ -103,7 +103,7 @@ describe("ensureCommsForSession near-miss diagnostic", () => {
     const factory = {
       commId: "telegram" as CommId,
       async resolveCredentials() {
-        return { credentials: {} };
+        return { status: "ok" as const, credentials: {} };
       },
       create() {
         constructed += 1;

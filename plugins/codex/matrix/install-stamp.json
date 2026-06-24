@@ -3,10 +3,10 @@
   "agent": "codex",
   "comm": "matrix",
   "plugin_version": "0.1.5",
-  "daemon_bundle_version": "0.2.31",
-  "adapter_bundle_version": "0.2.4",
+  "daemon_bundle_version": "0.2.32",
+  "adapter_bundle_version": "0.2.5",
   "adapter_bundle_versions": {
-    "matrix": "0.2.4"
+    "matrix": "0.2.5"
   },
   "daemon_sidecars": [
     "001_initial.sql",
