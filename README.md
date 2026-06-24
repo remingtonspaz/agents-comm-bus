@@ -46,19 +46,24 @@ source install scripts.
 1. Add the marketplace.
 
    ```text
-   /plugin marketplace add https://github.com/remingtonspaz/claude-code-telegram
+   /plugin marketplace add https://github.com/remingtonspaz/agents-comm-bus-claude
    ```
 
-2. Install the Telegram plugin.
+2. Install the comm plugin(s) you want. Each comm is its own plugin under the
+   `agents-comm-bus-claude` marketplace; installing any one ships the shared
+   per-user daemon runtime.
 
    ```text
-   /plugin install telegram-integration:telegram
+   /plugin install agents-comm-bus-telegram@agents-comm-bus-claude
+   /plugin install agents-comm-bus-discord@agents-comm-bus-claude
+   /plugin install agents-comm-bus-matrix@agents-comm-bus-claude
+   /plugin install agents-comm-bus-curl@agents-comm-bus-claude
    ```
 
 3. Restart Claude Code so the MCP server and hooks are loaded.
 
-4. Register the Telegram bot account from a terminal. The `agents-comm` command
-   is installed by the daemon's central install at `~/.agents-comm-bus/bin` (it
+4. Register the bot account from a terminal. The `agents-comm` command is
+   installed by the daemon's central install at `~/.agents-comm-bus/bin` (it
    appears after the first session/hook runs). Add that directory to PATH once
    so the command resolves from any shell — no `npm install`/`npm link` needed:
 
@@ -66,20 +71,26 @@ source install scripts.
    [Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:USERPROFILE\.agents-comm-bus\bin", "User")
    ```
 
-   Then register the account (open a new shell so PATH is refreshed):
+   Then register the account (open a new shell so PATH is refreshed). Set `--comm`
+   to the channel you installed:
 
    ```powershell
    agents-comm account-add `
      --project "<absolute project path>" `
      --agent claude `
      --account-label main `
-     --bot-token "<telegram bot token>"
+     --comm telegram `
+     --bot-token "<bot token>"
    ```
 
-5. Message the bot once from Telegram so Telegram allows the bot to reply.
+   See [Account Management](#account-management) for token rotation, relabel, and
+   removal.
 
-6. In Claude Code, check `/mcp` and confirm the `telegram` MCP server is
-   connected.
+5. Hand the bot a first message so the channel allows it to reply (message the bot
+   on Telegram / Discord / Matrix). The curl comm is local inbound-only — POST to
+   its loopback endpoint instead.
+
+6. In Claude Code, check `/mcp` and confirm the comm's MCP server is connected.
 
 ### Codex
 
