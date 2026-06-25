@@ -24,6 +24,23 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Run a native command, returning $true on exit code 0. Switches to Continue
+# locally so a native tool writing to stderr doesn't throw under the script's
+# Stop preference (PowerShell wraps native stderr as errors when
+# ErrorActionPreference=Stop). Native non-zero exits do NOT throw, so success
+# must be checked via $LASTEXITCODE, not try/catch.
+function Invoke-Native {
+    param([Parameter(Mandatory)][string]$Exe, [string[]]$CmdArgs)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Exe @CmdArgs 2>&1 | Out-Null
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 # --- Agent definitions ---
 $AgentDefs = @{
     "claude" = @{
@@ -94,7 +111,7 @@ foreach ($agent in $AllAgents) {
     $def = $AgentDefs[$agent]
     $installed = Test-AgentInstalled $def.ProbeCommand
     if ($installed) {
-        $version = & $def.ProbeCommand $def.VersionArg 2>&1 | Select-Object -First 1
+        $version = try { & $def.ProbeCommand $def.VersionArg 2>&1 | Select-Object -First 1 } catch { "(version unavailable)" }
         Write-Host "  [detected] $($def.Name): $version" -ForegroundColor Green
         $DetectedAgents += $agent
     } else {
@@ -166,15 +183,18 @@ foreach ($agent in $SelectedAgents) {
     $name = $def.Name
     Write-Host "[$name]" -ForegroundColor Cyan
 
-    # Add marketplace (Claude/Codex; Pi uses direct git install)
+    # Add marketplace (Claude/Codex; Pi uses direct git install). Both CLIs take
+    # a single <source> arg (URL/repo) — the marketplace NAME is read from the
+    # repo's marketplace.json, so pass ONLY the URL (not name + url).
     if ($def.MarketplaceName) {
+        $marketplaceUrl = $def.Marketplaces[$SelectedComms[0]].Url
         Write-Host "  Adding marketplace $($def.MarketplaceName)..." -NoNewline
-        try {
-            & $def.ProbeCommand plugin marketplace add $def.MarketplaceName $def.Marketplaces[$SelectedComms[0]].Url 2>&1 | Out-Null
+        if (Invoke-Native $def.ProbeCommand @("plugin", "marketplace", "add", $marketplaceUrl)) {
             Write-Host " done" -ForegroundColor Green
-        } catch {
-            # Marketplace may already exist — that's fine
-            Write-Host " already exists (ok)" -ForegroundColor Gray
+        } else {
+            # Non-zero typically means it's already configured; the plugin
+            # install below is the real gate, so don't hard-fail here.
+            Write-Host " already present or skipped (ok)" -ForegroundColor Gray
         }
     }
 
@@ -183,29 +203,26 @@ foreach ($agent in $SelectedAgents) {
         if ($agent -eq "pi") {
             # Pi: direct git install
             Write-Host "  Installing pi-$comm..." -NoNewline
-            try {
-                & pi install $mp.Url 2>&1 | Out-Null
+            if (Invoke-Native "pi" @("install", $mp.Url)) {
                 Write-Host " done" -ForegroundColor Green
-            } catch {
-                Write-Host " failed: $_" -ForegroundColor Red
+            } else {
+                Write-Host " failed (exit $LASTEXITCODE)" -ForegroundColor Red
             }
         } elseif ($agent -eq "claude") {
-            # Claude: plugin install
+            # Claude: plugin install <plugin>@<marketplace>
             Write-Host "  Installing $($mp.Plugin)..." -NoNewline
-            try {
-                & claude plugin install "$($mp.Plugin)@$($def.MarketplaceName)" --scope user 2>&1 | Out-Null
+            if (Invoke-Native "claude" @("plugin", "install", "$($mp.Plugin)@$($def.MarketplaceName)", "--scope", "user")) {
                 Write-Host " done" -ForegroundColor Green
-            } catch {
-                Write-Host " failed: $_" -ForegroundColor Red
+            } else {
+                Write-Host " failed (exit $LASTEXITCODE)" -ForegroundColor Red
             }
         } elseif ($agent -eq "codex") {
-            # Codex: plugin add (marketplace must be added first)
+            # Codex: plugin add <plugin>@<marketplace> (marketplace added above)
             Write-Host "  Installing $($mp.Plugin)..." -NoNewline
-            try {
-                & codex plugin add $mp.Plugin 2>&1 | Out-Null
+            if (Invoke-Native "codex" @("plugin", "add", "$($mp.Plugin)@$($def.MarketplaceName)")) {
                 Write-Host " done" -ForegroundColor Green
-            } catch {
-                Write-Host " failed: $_" -ForegroundColor Red
+            } else {
+                Write-Host " failed (exit $LASTEXITCODE)" -ForegroundColor Red
             }
         }
     }
