@@ -29,6 +29,19 @@ Supports Telegram, Discord, Matrix, and local curl ingress.
 
 ## Installation
 
+**Quick install (Windows PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/remingtonspaz/agents-comm-bus/main/scripts/install.ps1 | iex
+```
+
+The installer detects installed coding agents, lets you pick which comms to
+install, and runs the appropriate plugin install commands for each agent.
+Account registration (bot token, allowlist) is a separate manual step via the
+daemon CLI — see [Account Management](#account-management).
+
+---
+
 The intended end-user path is marketplace installation, then explicit account
 registration. The plugin should not require users to clone this repository or run
 source install scripts.
