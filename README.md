@@ -218,6 +218,22 @@ Legacy `env:` registrations are migrated once to daemon-owned file refs when
 the token is still available from the old env var or project-local Telegram
 config. New registrations should use `--bot-token`.
 
+### Useful Agent Prompts
+
+The Claude Code, Codex, and Pi plugins include skills that describe the
+`agents-comm` CLI, so once the plugin is installed your agent should be equipped
+to help with account setup and maintenance. Useful prompts include:
+
+- "Add a Discord account for Claude with the bot token aabbcc for the project
+  xyz."
+- "Add a Discord account for Claude for the project xyz. I have the token -
+  tell me which file to put it in after you've made the entry."
+- "Here's a Telegram token for you: aabbcc."
+- "Add allowlists for the Claude and Codex bots in project xyz so they can talk
+  to each other."
+- "Remove the Telegram bot for Codex in xyz."
+- "Tell me where the token records for Claude in xyz are located."
+
 Common commands:
 
 ```powershell
