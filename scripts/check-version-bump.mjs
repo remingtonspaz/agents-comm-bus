@@ -16,7 +16,7 @@
 //   baseRef defaults to env BASE_REF, else origin/main (the integration branch
 //   since the 2026-06-02 flip; the old origin/universal-overhaul default made
 //   local runs silently SKIP once that ref disappeared — an AGE-10-review find).
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,13 +37,26 @@ function git(args) {
 
 function fileAtRef(ref, file) {
   try {
-    return execSync(`git show ${ref}:${file}`, {
+    return execFileSync("git", ["show", `${ref}:${file}`], {
       cwd: repoRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 16 * 1024 * 1024,
     });
   } catch {
     return null; // file absent at that ref (e.g. first-ship bundle path)
+  }
+}
+
+function fileExistsAtRef(ref, file) {
+  try {
+    execFileSync("git", ["cat-file", "-e", `${ref}:${file}`], {
+      cwd: repoRoot,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -90,6 +103,7 @@ const failures = evaluateVersionBump({
   baseRef: baseSha,
   surfaces: SURFACES,
   fileAtRef,
+  fileExistsAtRef,
 });
 
 if (failures.length > 0) {

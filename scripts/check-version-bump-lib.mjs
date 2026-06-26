@@ -26,10 +26,12 @@ export function readConst(content, name) {
  * @param {string} input.baseRef    git ref for the comparison base (for errors)
  * @param {Array<{label:string, versionFile:string, versionConst:string, match:(f:string)=>boolean, bumpCmd:string}>} input.surfaces
  * @param {(ref: string, file: string) => string | null} input.fileAtRef
+ * @param {(ref: string, file: string) => boolean} [input.fileExistsAtRef]
  * @returns {Array<{label:string, versionFile:string, versionConst:string, bumpCmd:string, baseVer:string, files:string[]}>}
  */
-export function evaluateVersionBump({ changed, baseRef, surfaces, fileAtRef }) {
+export function evaluateVersionBump({ changed, baseRef, surfaces, fileAtRef, fileExistsAtRef: existsAtRef }) {
   const failures = [];
+  const fileExistsAtRef = existsAtRef ?? ((ref, file) => fileAtRef(ref, file) != null);
   for (const surface of surfaces) {
     const matched = changed.filter(surface.match);
     if (matched.length === 0) continue;
@@ -44,7 +46,7 @@ export function evaluateVersionBump({ changed, baseRef, surfaces, fileAtRef }) {
     // it; staleness of newly staged bundles cannot slip through this exemption
     // because verify:clean-build independently regenerates every tracked
     // artifact and fails on drift — the two gates together stay sound.
-    const preExistingChanged = matched.filter((file) => fileAtRef(baseRef, file) != null);
+    const preExistingChanged = matched.filter((file) => fileExistsAtRef(baseRef, file));
     if (preExistingChanged.length === 0) continue;
 
     if (baseVer === headVer) {

@@ -120,4 +120,37 @@ describe("check-version-bump first-ship semantics", () => {
     assert.equal(failures[0]!.label, "daemon");
     assert.deepEqual(failures[0]!.files, ["plugins/claude/telegram/daemon.bundle.js"]);
   });
+
+  it("uses the existence probe instead of reading pre-existing bundle contents", () => {
+    const bundlePath = "plugins/claude/discord/discord.adapter.bundle.js";
+    const filesAtBase = new Map<string, string>([
+      ["adapters/discord/version.ts", versionFileContent("0.1.0", "ADAPTER_VERSION")],
+      [bundlePath, "x".repeat(1_100_000)],
+    ]);
+    const filesAtHead = new Map(filesAtBase);
+
+    const fileAtRef = (ref: string, file: string) => {
+      if (file === bundlePath) {
+        throw new Error("bundle contents should not be read for existence checks");
+      }
+      const store = ref === "base" ? filesAtBase : filesAtHead;
+      return store.get(file) ?? null;
+    };
+    const fileExistsAtRef = (ref: string, file: string) => {
+      const store = ref === "base" ? filesAtBase : filesAtHead;
+      return store.has(file);
+    };
+
+    const failures = evaluateVersionBump({
+      changed: [bundlePath],
+      baseRef: "base",
+      surfaces: [DISCORD_SURFACE],
+      fileAtRef,
+      fileExistsAtRef,
+    });
+
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.label, "discord adapter");
+    assert.deepEqual(failures[0]!.files, [bundlePath]);
+  });
 });
