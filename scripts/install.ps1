@@ -231,15 +231,21 @@ foreach ($agent in $SelectedAgents) {
 
 # --- Step 5: Summary + next steps ---
 Write-Host ""
-Write-Host "Installation complete!" -ForegroundColor Green
+Write-Host "Install successful - congrats!" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  1. Restart your agent(s) so MCP servers and hooks load."
-Write-Host "  2. Register a bot account via the daemon CLI:"
-Write-Host '     agents-comm account-add --project "<path>" --agent <agent> --account-label main --comm <comm> --bot-token "<token>"'
-Write-Host "  3. Allowlist the sender:"
-Write-Host "     agents-comm allowlist add --comm <comm> --user <your_id> --bot-id <bot_id>"
+Write-Host "  1. Restart your agent(s) so the MCP server + hooks load."
+Write-Host "  2. Then just ask your agent to set up bot accounts for you. The plugin"
+Write-Host "     ships skills covering the agents-comm CLI, so your agent is equipped"
+Write-Host "     to register accounts, allowlists, and tokens on your behalf."
 Write-Host ""
-Write-Host "See the README Installation section for details:" -ForegroundColor Gray
-Write-Host "  https://github.com/remingtonspaz/agents-comm-bus#installation" -ForegroundColor Gray
+Write-Host "Useful prompts for your agent (replace the placeholders):" -ForegroundColor Cyan
+Write-Host '  - "Add a Discord account for Claude with the bot token aabbcc for the project xyz."'
+Write-Host '  - "Add a Discord account for Claude for the project xyz. I have the token - tell me which file to put it in after you''ve made the entry."'
+Write-Host '  - "Here''s a Telegram token for you: aabbcc."'
+Write-Host '  - "Add allowlists for the Claude and Codex bots in project xyz so they can talk to each other."'
+Write-Host '  - "Remove the Telegram bot for Codex in xyz."'
+Write-Host '  - "Tell me where the token records for Claude in xyz are located."'
+Write-Host ""
+Write-Host "Full account-management details:" -ForegroundColor Gray
+Write-Host "  https://github.com/remingtonspaz/agents-comm-bus#account-management" -ForegroundColor Gray
 Write-Host ""
