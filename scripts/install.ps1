@@ -140,7 +140,7 @@ if ($Agents) {
     for ($i = 0; $i -lt $DetectedAgents.Count; $i++) {
         $agent = $DetectedAgents[$i]
         $name = $AgentDefs[$agent].Name
-        $choice = Read-Host "  Install for $name? (y/n, default y)"
+        $choice = Read-Host "  Install for ${name}? (y/n, default y)"
         if ($choice -ne "n") {
             $SelectedAgents += $agent
         }
