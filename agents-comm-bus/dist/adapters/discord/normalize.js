@@ -11,12 +11,35 @@ export function normalizeDiscordAttachments(raw) {
         },
     }));
 }
+function mentionDisplayName(mention) {
+    const globalName = mention.global_name?.trim();
+    if (globalName)
+        return globalName;
+    const username = mention.username?.trim();
+    if (username)
+        return username;
+    return String(mention.id);
+}
+/**
+ * Replace Discord user mention tokens in message content with readable names.
+ * Role/channel mentions and unknown user ids are left unchanged.
+ */
+export function decodeDiscordMentions(content, mentions = []) {
+    const mentionById = new Map(mentions.map((mention) => [String(mention.id), mentionDisplayName(mention)]));
+    return content.replace(/<@!?(\d+)>/g, (match, id) => {
+        const name = mentionById.get(id);
+        if (name == null)
+            return match;
+        return `@${name} (<@${id}>)`;
+    });
+}
 /**
  * Map a Discord MESSAGE_CREATE payload to a core bus Message (no adapter filtering).
  */
 export function buildMessageFromDiscordCreate(raw, context, attachmentsOverride) {
     const fromId = raw.author?.id == null ? null : String(raw.author.id);
-    const text = raw.content ?? undefined;
+    const rawText = raw.content ?? undefined;
+    const text = rawText == null ? undefined : decodeDiscordMentions(rawText, raw.mentions ?? []);
     const attachments = attachmentsOverride ?? normalizeDiscordAttachments(raw);
     if (!text && attachments.length === 0)
         return null;

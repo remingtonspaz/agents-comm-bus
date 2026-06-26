@@ -6,5 +6,5 @@
  * record `adapter_bundle_versions.discord` from here so adapter-only changes
  * can bump independently of the daemon.
  */
-export declare const ADAPTER_VERSION = "0.1.1";
+export declare const ADAPTER_VERSION = "0.1.2";
 //# sourceMappingURL=version.d.ts.map

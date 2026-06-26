@@ -130,6 +130,132 @@ describe("Discord MESSAGE_CREATE normalization", () => {
     );
     assert.equal(message, null);
   });
+
+  it("leaves plain text without mention tokens unchanged", () => {
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({ id: "47", channel_id: "chan-1", content: "hello world" }),
+      baseContext,
+    );
+    assert.equal(message!.text, "hello world");
+  });
+
+  it("decodes <@id> to @globalName (<@id>)", () => {
+    const userId = "151234567890123456";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "48",
+        channel_id: "chan-1",
+        content: `ping <@${userId}> please`,
+        mentions: [{ id: userId, username: "alice", global_name: "Alice" }],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, `ping @Alice (<@${userId}>) please`);
+  });
+
+  it("decodes <@!id> to the same canonical @globalName (<@id>)", () => {
+    const userId = "151234567890123457";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "49",
+        channel_id: "chan-1",
+        content: `hey <@!${userId}>`,
+        mentions: [{ id: userId, username: "bob", global_name: "Bob" }],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, `hey @Bob (<@${userId}>)`);
+  });
+
+  it("falls back to username when global_name is absent", () => {
+    const userId = "151234567890123458";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "50",
+        channel_id: "chan-1",
+        content: `<@${userId}>`,
+        mentions: [{ id: userId, username: "carol" }],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, `@carol (<@${userId}>)`);
+  });
+
+  it("falls back to username when global_name is null", () => {
+    const userId = "151234567890123459";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "51",
+        channel_id: "chan-1",
+        content: `<@${userId}>`,
+        mentions: [{ id: userId, username: "dave", global_name: null }],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, `@dave (<@${userId}>)`);
+  });
+
+  it("falls back to id when global_name and username are absent", () => {
+    const userId = "151234567890123460";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "52",
+        channel_id: "chan-1",
+        content: `<@${userId}>`,
+        mentions: [{ id: userId }],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, `@${userId} (<@${userId}>)`);
+  });
+
+  it("preserves unknown user mention tokens not listed in raw.mentions", () => {
+    const userId = "151234567890123461";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "53",
+        channel_id: "chan-1",
+        content: `ghost <@${userId}>`,
+        mentions: [],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, `ghost <@${userId}>`);
+  });
+
+  it("decodes multiple and repeated mentions consistently", () => {
+    const userA = "151234567890123462";
+    const userB = "151234567890123463";
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "54",
+        channel_id: "chan-1",
+        content: `<@${userA}> and <@!${userB}> then <@${userA}>`,
+        mentions: [
+          { id: userA, username: "eve", global_name: "Eve" },
+          { id: userB, username: "frank", global_name: "Frank" },
+        ],
+      }),
+      baseContext,
+    );
+    assert.equal(
+      message!.text,
+      `@Eve (<@${userA}>) and @Frank (<@${userB}>) then @Eve (<@${userA}>)`,
+    );
+  });
+
+  it("leaves role mentions, channel mentions, and @everyone unchanged", () => {
+    const message = buildMessageFromDiscordCreate(
+      discordMessage({
+        id: "55",
+        channel_id: "chan-1",
+        content: "<@&999> look at <#chan-2> @everyone @here",
+        mentions: [],
+      }),
+      baseContext,
+    );
+    assert.equal(message!.text, "<@&999> look at <#chan-2> @everyone @here");
+  });
 });
 
 describe("Discord thread-parent cache cold start", () => {
@@ -316,7 +442,7 @@ function discordMessage(
     edited_timestamp: null,
     tts: false,
     mention_everyone: false,
-    mentions: [],
+    mentions: overrides.mentions ?? [],
     mention_roles: [],
     pinned: false,
     type: 0,

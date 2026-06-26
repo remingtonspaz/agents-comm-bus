@@ -1,4 +1,4 @@
-import type { APIMessage, APIAttachment } from "discord-api-types/v10";
+import type { APIMessage, APIAttachment, APIUser } from "discord-api-types/v10";
 
 import type {
   AccountId,
@@ -21,6 +21,33 @@ export function normalizeDiscordAttachments(raw: APIMessage): Attachment[] {
   }));
 }
 
+function mentionDisplayName(mention: Pick<APIUser, "id" | "username" | "global_name">): string {
+  const globalName = mention.global_name?.trim();
+  if (globalName) return globalName;
+  const username = mention.username?.trim();
+  if (username) return username;
+  return String(mention.id);
+}
+
+/**
+ * Replace Discord user mention tokens in message content with readable names.
+ * Role/channel mentions and unknown user ids are left unchanged.
+ */
+export function decodeDiscordMentions(
+  content: string,
+  mentions: readonly APIUser[] = [],
+): string {
+  const mentionById = new Map(
+    mentions.map((mention) => [String(mention.id), mentionDisplayName(mention)]),
+  );
+
+  return content.replace(/<@!?(\d+)>/g, (match, id: string) => {
+    const name = mentionById.get(id);
+    if (name == null) return match;
+    return `@${name} (<@${id}>)`;
+  });
+}
+
 export interface DiscordInboundBuildContext {
   commId: CommId;
   botUserId: string;
@@ -38,7 +65,8 @@ export function buildMessageFromDiscordCreate(
   attachmentsOverride?: Attachment[],
 ): Message | null {
   const fromId = raw.author?.id == null ? null : String(raw.author.id);
-  const text = raw.content ?? undefined;
+  const rawText = raw.content ?? undefined;
+  const text = rawText == null ? undefined : decodeDiscordMentions(rawText, raw.mentions ?? []);
   const attachments = attachmentsOverride ?? normalizeDiscordAttachments(raw);
   if (!text && attachments.length === 0) return null;
 

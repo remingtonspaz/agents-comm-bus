@@ -1,6 +1,11 @@
-import type { APIMessage } from "discord-api-types/v10";
+import type { APIMessage, APIUser } from "discord-api-types/v10";
 import type { AccountId, Attachment, CommId, Message } from "agents-comm-bus-core";
 export declare function normalizeDiscordAttachments(raw: APIMessage): Attachment[];
+/**
+ * Replace Discord user mention tokens in message content with readable names.
+ * Role/channel mentions and unknown user ids are left unchanged.
+ */
+export declare function decodeDiscordMentions(content: string, mentions?: readonly APIUser[]): string;
 export interface DiscordInboundBuildContext {
     commId: CommId;
     botUserId: string;

@@ -34016,9 +34016,27 @@ function normalizeDiscordAttachments(raw) {
     }
   }));
 }
+function mentionDisplayName(mention) {
+  const globalName = mention.global_name?.trim();
+  if (globalName) return globalName;
+  const username = mention.username?.trim();
+  if (username) return username;
+  return String(mention.id);
+}
+function decodeDiscordMentions(content, mentions = []) {
+  const mentionById = new Map(
+    mentions.map((mention) => [String(mention.id), mentionDisplayName(mention)])
+  );
+  return content.replace(/<@!?(\d+)>/g, (match, id) => {
+    const name = mentionById.get(id);
+    if (name == null) return match;
+    return `@${name} (<@${id}>)`;
+  });
+}
 function buildMessageFromDiscordCreate(raw, context, attachmentsOverride) {
   const fromId = raw.author?.id == null ? null : String(raw.author.id);
-  const text = raw.content ?? void 0;
+  const rawText = raw.content ?? void 0;
+  const text = rawText == null ? void 0 : decodeDiscordMentions(rawText, raw.mentions ?? []);
   const attachments = attachmentsOverride ?? normalizeDiscordAttachments(raw);
   if (!text && attachments.length === 0) return null;
   const threadParent = context.threadParentChannelId;
