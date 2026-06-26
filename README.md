@@ -148,9 +148,10 @@ Jump to your agent: [Claude Code](#claude-code) · [Codex](#codex) · [Pi](#pi)
    on Telegram / Discord / Matrix). The curl comm is local inbound-only - POST to
    its loopback endpoint instead.
 
-Codex session startup currently needs the project-local hook configuration that
-points at the staged Codex MCP shim. Keep the global Codex MCP config path-only;
-session URL, thread ID, and daemon session ID are discovered at runtime.
+For marketplace/plugin installs, the Codex plugins ship their MCP and hook
+configuration with the plugin. Restart Codex after install so the MCP server and
+hooks load; session URL, thread ID, and daemon session ID are discovered at
+runtime.
 
 ### Pi
 
