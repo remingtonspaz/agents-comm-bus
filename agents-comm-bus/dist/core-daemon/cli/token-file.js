@@ -1,7 +1,7 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveTokenFilePath } from "../paths.js";
-export async function writeTokenFile(options) {
+export async function writeCredentialsFile(options) {
     const tokenFile = resolveTokenFilePath({
         stateRoot: options.stateRoot,
         comm: options.comm,
@@ -10,11 +10,7 @@ export async function writeTokenFile(options) {
         accountId: options.accountId,
     });
     await mkdir(path.dirname(tokenFile), { recursive: true });
-    const body = {
-        botToken: options.botToken,
-        ...(options.userId && options.userId.length > 0 ? { userId: options.userId } : {}),
-    };
-    await writeFile(tokenFile, `${JSON.stringify(body, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await writeFile(tokenFile, `${JSON.stringify(options.credentials, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     try {
         await chmod(tokenFile, 0o600);
     }
@@ -22,5 +18,18 @@ export async function writeTokenFile(options) {
         // Best effort: Windows ACL inheritance is still per-user under the daemon state root.
     }
     return `file:${tokenFile}`;
+}
+export async function writeTokenFile(options) {
+    return writeCredentialsFile({
+        stateRoot: options.stateRoot,
+        comm: options.comm,
+        project: options.project,
+        agent: options.agent,
+        accountId: options.accountId,
+        credentials: {
+            botToken: options.botToken,
+            ...(options.userId && options.userId.length > 0 ? { userId: options.userId } : {}),
+        },
+    });
 }
 //# sourceMappingURL=token-file.js.map

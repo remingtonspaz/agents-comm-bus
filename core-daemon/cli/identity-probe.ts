@@ -11,11 +11,14 @@ export interface BotIdentity {
   bot_username?: string | null;
 }
 
-export type ProbeIdentity = (botToken: string, accountId?: string) => Promise<BotIdentity>;
+export type ProbeIdentity = (
+  credentials: Record<string, unknown>,
+  accountId?: string,
+) => Promise<BotIdentity>;
 
 export async function probeIdentityViaDaemon(options: {
   comm: string;
-  botToken: string;
+  credentials: Record<string, unknown>;
   /**
    * Explicit synthetic account id for comms without a remote identity to
    * probe (e.g. curl, AGE-50). Comms that probe a real platform identity
@@ -26,6 +29,10 @@ export async function probeIdentityViaDaemon(options: {
   stateRoot?: string;
   timeoutMs?: number;
 }): Promise<BotIdentity> {
+  const credentials = { ...options.credentials };
+  if (options.accountId && credentials.accountId === undefined) {
+    credentials.accountId = options.accountId;
+  }
   const daemon = await entryEnsures({
     // CLI identity probing is agent-agnostic; `agent` only scopes central-install
     // adapter selection. account-add always passes a concrete agent; the rare
@@ -51,10 +58,7 @@ export async function probeIdentityViaDaemon(options: {
   try {
     const result = await connection.request("probe_comm_identity", {
       comm: options.comm,
-      credentials: {
-        botToken: options.botToken,
-        ...(options.accountId ? { accountId: options.accountId } : {}),
-      },
+      credentials,
     });
     return parseProbeResult(result);
   } finally {

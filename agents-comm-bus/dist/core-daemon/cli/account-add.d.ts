@@ -6,6 +6,9 @@ export interface AccountAddOptions {
     accountLabel: string;
     comm?: string;
     botToken?: string;
+    credentials?: Record<string, unknown>;
+    credentialsFile?: string;
+    credentialsJson?: string;
     /**
      * Explicit synthetic account id for comms without a remote identity to
      * probe (e.g. curl, AGE-50). Ignored by comms that probe a real platform

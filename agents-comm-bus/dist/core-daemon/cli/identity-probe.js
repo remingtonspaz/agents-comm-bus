@@ -5,6 +5,10 @@ import { DAEMON_VERSION } from "../config.js";
 // install from install-stamp.json, or source mode from the dev marker/env.
 import { entryEnsures } from "../host-runtime/entry-ensures.js";
 export async function probeIdentityViaDaemon(options) {
+    const credentials = { ...options.credentials };
+    if (options.accountId && credentials.accountId === undefined) {
+        credentials.accountId = options.accountId;
+    }
     const daemon = await entryEnsures({
         // CLI identity probing is agent-agnostic; `agent` only scopes central-install
         // adapter selection. account-add always passes a concrete agent; the rare
@@ -30,10 +34,7 @@ export async function probeIdentityViaDaemon(options) {
     try {
         const result = await connection.request("probe_comm_identity", {
             comm: options.comm,
-            credentials: {
-                botToken: options.botToken,
-                ...(options.accountId ? { accountId: options.accountId } : {}),
-            },
+            credentials,
         });
         return parseProbeResult(result);
     }

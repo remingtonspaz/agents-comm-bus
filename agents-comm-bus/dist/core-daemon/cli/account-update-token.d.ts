@@ -7,6 +7,9 @@ export interface AccountUpdateTokenOptions {
     agent?: string;
     project?: string;
     botToken?: string;
+    credentials?: Record<string, unknown>;
+    credentialsFile?: string;
+    credentialsJson?: string;
     /**
      * Explicit synthetic account id for comms without a remote identity to
      * probe (e.g. curl, AGE-50). Without it a rotation on such a comm probes

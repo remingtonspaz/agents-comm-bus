@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,35 @@ describe("account registration CLI contract", () => {
     assert.match(rec.credentials_ref, /tokens[\\/]+telegram[\\/]+stonks-[a-f0-9]{12}[\\/]+codex[\\/]+8743694023\.json$/);
     const tokenFile = rec.credentials_ref.slice("file:".length);
     assert.equal(existsSync(tokenFile), true);
+    assert.deepEqual(JSON.parse(await readFile(tokenFile, "utf8")), {
+      botToken: "secret-token",
+    });
+  });
+
+  it("passes explicit account ids to identity probing without persisting them as credentials", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
+    let probedAccountId: string | undefined;
+
+    const rec = await accountAdd({
+      project: "D:\\Projects\\curl",
+      agent: "codex",
+      accountLabel: "local",
+      comm: "curl",
+      botToken: "secret-token",
+      accountId: "curl:buildbox",
+      stateRoot,
+      probeIdentity: async (_credentials, accountId) => {
+        probedAccountId = accountId;
+        return {
+          bot_user_id: accountId ?? "curl:local",
+          bot_username: null,
+        };
+      },
+    });
+
+    assert.equal(probedAccountId, "curl:buildbox");
+    assert.equal(rec.bot_user_id, "curl:buildbox");
+    const tokenFile = rec.credentials_ref.slice("file:".length);
     assert.deepEqual(JSON.parse(await readFile(tokenFile, "utf8")), {
       botToken: "secret-token",
     });
@@ -567,8 +596,151 @@ describe("account registration CLI contract", () => {
       },
     );
   });
+
+  it("rejects account-add without credential input", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
+
+    await assert.rejects(
+      () => accountAdd({
+        project: "D:\\Projects\\matrix",
+        agent: "claude",
+        accountLabel: "main",
+        comm: "matrix",
+        stateRoot,
+      }),
+      (error: Error) => {
+        assert.match(error.message, /credentials are required/);
+        assert.match(error.message, /--credentials-file/);
+        return true;
+      },
+    );
+  });
+
+  it("rejects ambiguous credential input sources", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
+
+    await assert.rejects(
+      () => accountAdd({
+        project: "D:\\Projects\\matrix",
+        agent: "claude",
+        accountLabel: "main",
+        comm: "matrix",
+        botToken: "secret-token",
+        credentialsJson: '{"accessToken":"x"}',
+        stateRoot,
+      }),
+      (error: Error) => {
+        assert.match(error.message, /credential input is ambiguous/);
+        assert.match(error.message, /--bot-token/);
+        assert.match(error.message, /--credentials-json/);
+        return true;
+      },
+    );
+  });
+
+  it("persists generic credentials from a credentials object", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
+    const matrixCredentials = sampleMatrixCredentials();
+
+    const rec = await accountAdd({
+      project: "D:\\Projects\\matrix",
+      agent: "claude",
+      accountLabel: "matrix-main",
+      comm: "matrix",
+      credentials: matrixCredentials,
+      stateRoot,
+      probeIdentity: identity("@bot:example.org", "matrix-bot"),
+    });
+
+    assert.equal(rec.bot_user_id, "@bot:example.org");
+    assert.match(rec.credentials_ref, /tokens[\\/]+matrix[\\/]+matrix-[a-f0-9]{12}[\\/]+claude[\\/]+_bot_example\.org\.json$/);
+    const credentialsFile = rec.credentials_ref.slice("file:".length);
+    assert.deepEqual(JSON.parse(await readFile(credentialsFile, "utf8")), matrixCredentials);
+  });
+
+  it("persists generic credentials from --credentials-file", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
+    const matrixCredentials = sampleMatrixCredentials();
+    const credentialsPath = join(stateRoot, "matrix-credentials.json");
+    await writeFile(credentialsPath, JSON.stringify(matrixCredentials, null, 2), "utf8");
+
+    const rec = await accountAdd({
+      project: "D:\\Projects\\matrix",
+      agent: "codex",
+      accountLabel: "matrix-codex",
+      comm: "matrix",
+      credentialsFile: credentialsPath,
+      stateRoot,
+      probeIdentity: identity("@bot:example.org", "matrix-bot"),
+    });
+
+    const credentialsFile = rec.credentials_ref.slice("file:".length);
+    assert.deepEqual(JSON.parse(await readFile(credentialsFile, "utf8")), matrixCredentials);
+  });
+
+  it("persists generic credentials from --credentials-json", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-add-"));
+    const matrixCredentials = sampleMatrixCredentials();
+
+    const rec = await accountAdd({
+      project: "D:\\Projects\\matrix",
+      agent: "claude",
+      accountLabel: "matrix-json",
+      comm: "matrix",
+      credentialsJson: JSON.stringify(matrixCredentials),
+      stateRoot,
+      probeIdentity: identity("@bot:example.org", "matrix-bot"),
+    });
+
+    const credentialsFile = rec.credentials_ref.slice("file:".length);
+    assert.deepEqual(JSON.parse(await readFile(credentialsFile, "utf8")), matrixCredentials);
+  });
+
+  it("rotates generic credentials without changing the account id", async () => {
+    const stateRoot = await mkdtemp(join(os.tmpdir(), "agents-comm-account-update-token-"));
+    const initialCredentials = sampleMatrixCredentials();
+
+    await accountAdd({
+      project: "D:\\Projects\\matrix",
+      agent: "claude",
+      accountLabel: "matrix-main",
+      comm: "matrix",
+      credentials: initialCredentials,
+      stateRoot,
+      probeIdentity: identity("@bot:example.org", "matrix-bot"),
+    });
+
+    const replacementCredentials = {
+      ...initialCredentials,
+      accessToken: "syt_replacement_token",
+    };
+    const result = await accountUpdateToken({
+      comm: "matrix",
+      botId: "@bot:example.org",
+      credentials: replacementCredentials,
+      stateRoot,
+      probeIdentity: identity("@bot:example.org", "matrix-bot-renamed"),
+    });
+
+    assert.equal(result.bot_changed, false);
+    assert.equal(result.next.bot_username, "matrix-bot-renamed");
+    const credentialsFile = result.next.credentials_ref.slice("file:".length);
+    assert.deepEqual(JSON.parse(await readFile(credentialsFile, "utf8")), replacementCredentials);
+  });
 });
 
 function identity(bot_user_id: string, bot_username: string) {
-  return async () => ({ bot_user_id, bot_username });
+  return async (_credentials?: Record<string, unknown>) => ({ bot_user_id, bot_username });
+}
+
+function sampleMatrixCredentials(): Record<string, unknown> {
+  return {
+    homeserverUrl: "https://matrix.example.org",
+    accessToken: "syt_test_token",
+    userId: "@bot:example.org",
+    allowedUserIds: ["@user:example.org"],
+    allowedRoomIds: [],
+    autoJoinInvites: false,
+    encryptedRoomPolicy: "decline",
+  };
 }

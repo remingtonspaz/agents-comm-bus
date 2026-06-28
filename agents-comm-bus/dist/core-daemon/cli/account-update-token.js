@@ -2,20 +2,24 @@ import { rm } from "node:fs/promises";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 import { resolveAccountByLabel } from "./account-selector.js";
+import { resolveCredentialInput } from "./credential-input.js";
 import { probeIdentityViaDaemon } from "./identity-probe.js";
-import { writeTokenFile } from "./token-file.js";
+import { writeCredentialsFile } from "./token-file.js";
 export async function accountUpdateToken(options) {
     const comm = (options.comm ?? "telegram");
-    if (!options.botToken) {
-        throw new Error("--bot-token is required for account-update-token");
-    }
-    const identity = await (options.probeIdentity ?? ((token, accountId) => probeIdentityViaDaemon({
+    const credentials = await resolveCredentialInput({
+        botToken: options.botToken,
+        credentials: options.credentials,
+        credentialsFile: options.credentialsFile,
+        credentialsJson: options.credentialsJson,
+    });
+    const identity = await (options.probeIdentity ?? ((creds, accountId) => probeIdentityViaDaemon({
         comm,
-        botToken: token,
+        credentials: creds,
         accountId,
         agent: options.agent,
         stateRoot: options.stateRoot,
-    })))(options.botToken, options.accountId);
+    })))(credentials, options.accountId);
     const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
     let wroteTokenRef = null;
     let wroteReplacementToken = false;
@@ -42,13 +46,13 @@ export async function accountUpdateToken(options) {
                     `replace ${current.bot_user_id} with an already-registered bot.`);
             }
         }
-        const credentialsRef = await writeTokenFile({
+        const credentialsRef = await writeCredentialsFile({
             stateRoot: options.stateRoot,
             comm,
             project: current.project,
             agent: current.agent,
             accountId: identity.bot_user_id,
-            botToken: options.botToken,
+            credentials,
         });
         wroteTokenRef = credentialsRef;
         wroteReplacementToken = botChanged;

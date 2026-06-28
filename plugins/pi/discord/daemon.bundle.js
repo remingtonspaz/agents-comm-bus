@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.30";
+var DAEMON_VERSION = "0.2.33";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -7083,7 +7083,7 @@ async function runDaemon(options) {
                 queue_length: pendingInbound.length
               }
             });
-            await bridge.onInboundConversation(conversation);
+            await bridge.onInboundConversation(conversation, message);
             await audit.append({
               timestamp: Date.now(),
               kind: "inbound_dispatch_bridge_completed",
@@ -7230,7 +7230,7 @@ async function bestEffortWithTimeout(action, timeoutMs, label) {
   }
 }
 async function addAdapterForRegistration(input) {
-  const adapter = await createAdapterFromRegistration({
+  const { adapter, resolution } = await createAdapterFromRegistration({
     factory: input.factory,
     registration: input.registration,
     env: input.env,
@@ -7240,7 +7240,14 @@ async function addAdapterForRegistration(input) {
     leaseArbiter: input.leaseArbiter
   });
   if (!adapter) {
-    return { ok: false, reason: unresolvedCredentialsReason(input.registration.credentials_ref) };
+    if (resolution.status === "invalid") {
+      logInvalidCredentialResolution(input.registration, input.factory.commId, resolution);
+    }
+    return {
+      ok: false,
+      reason: resolution.status === "invalid" ? resolution.reason : unresolvedCredentialsReason(input.registration.credentials_ref),
+      resolution
+    };
   }
   const accountId = input.registration.bot_user_id;
   try {
@@ -7259,7 +7266,8 @@ async function addAdapterForRegistration(input) {
     }
     return {
       ok: false,
-      reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`
+      reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`,
+      resolution
     };
   }
 }
@@ -7324,22 +7332,31 @@ async function ensureCommsForSession(input) {
         leaseArbiter: input.leaseArbiter
       });
       if (!result.ok) {
-        console.error(
-          `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
-        );
-        await input.audit?.append({
-          timestamp: Date.now(),
-          kind: "comm_adapter_skip",
-          agent: input.agent,
-          detail: {
-            comm: registration.comm,
-            account_id: registration.bot_user_id,
-            account_label: registration.account_label,
-            project,
-            reason: result.reason
-          }
-        }).catch(() => {
-        });
+        if (result.resolution.status === "invalid") {
+          await appendCredentialResolutionFailedAudit(
+            input.audit,
+            registration,
+            factory.commId,
+            result.resolution
+          );
+        } else {
+          console.error(
+            `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
+          );
+          await input.audit?.append({
+            timestamp: Date.now(),
+            kind: "comm_adapter_skip",
+            agent: input.agent,
+            detail: {
+              comm: registration.comm,
+              account_id: registration.bot_user_id,
+              account_label: registration.account_label,
+              project,
+              reason: result.reason
+            }
+          }).catch(() => {
+          });
+        }
       }
     } finally {
       input.inFlight.delete(key);
@@ -7351,12 +7368,8 @@ async function createAdapterFromRegistration(input) {
     storage: input.storage,
     stateRoot: input.stateRoot
   });
-  if (!resolved) {
-    const reason = unresolvedCredentialsReason(input.registration.credentials_ref);
-    console.error(
-      `agents-comm-bus: skipping ${input.factory.commId} account ${input.registration.account_label} for project ${input.registration.project} (${reason})`
-    );
-    return null;
+  if (resolved.status !== "ok") {
+    return { adapter: null, resolution: resolved };
   }
   const adapter = input.factory.create(
     resolved.credentials,
@@ -7367,9 +7380,9 @@ async function createAdapterFromRegistration(input) {
     }
   );
   if (adapter.exclusiveResource?.() != null) {
-    return wrapWithLease(adapter, input.leaseArbiter);
+    return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
   }
-  return adapter;
+  return { adapter, resolution: resolved };
 }
 async function reloadAdapters(input) {
   const added = [];
@@ -7414,20 +7427,29 @@ async function reloadAdapters(input) {
         account_id: entry.registration.bot_user_id,
         reason: result.reason
       });
-      await input.audit?.append({
-        timestamp: Date.now(),
-        kind: "comm_adapter_skip",
-        agent: entry.registration.agent,
-        detail: {
-          comm: entry.registration.comm,
-          account_id: entry.registration.bot_user_id,
-          account_label: entry.registration.account_label,
-          project: entry.registration.project,
-          reason: result.reason,
-          via: "reload_registrations"
-        }
-      }).catch(() => {
-      });
+      if (result.resolution.status === "invalid") {
+        await appendCredentialResolutionFailedAudit(
+          input.audit,
+          entry.registration,
+          entry.registration.comm,
+          result.resolution
+        );
+      } else {
+        await input.audit?.append({
+          timestamp: Date.now(),
+          kind: "comm_adapter_skip",
+          agent: entry.registration.agent,
+          detail: {
+            comm: entry.registration.comm,
+            account_id: entry.registration.bot_user_id,
+            account_label: entry.registration.account_label,
+            project: entry.registration.project,
+            reason: result.reason,
+            via: "reload_registrations"
+          }
+        }).catch(() => {
+        });
+      }
     }
   }
   for (const [key, entry] of current) {
@@ -7455,7 +7477,7 @@ async function reloadAdapters(input) {
   for (const [key, entry] of desired) {
     if (!current.has(key)) continue;
     if (forceCredentialRefresh.has(key)) {
-      const adapter = await createAdapterFromRegistration({
+      const { adapter, resolution } = await createAdapterFromRegistration({
         factory: entry.factory,
         registration: entry.registration,
         env: input.env,
@@ -7465,10 +7487,19 @@ async function reloadAdapters(input) {
         leaseArbiter: input.leaseArbiter
       });
       if (!adapter) {
+        if (resolution.status === "invalid") {
+          logInvalidCredentialResolution(entry.registration, entry.registration.comm, resolution);
+          await appendCredentialResolutionFailedAudit(
+            input.audit,
+            entry.registration,
+            entry.registration.comm,
+            resolution
+          );
+        }
         skipped.push({
           comm: entry.registration.comm,
           account_id: entry.registration.bot_user_id,
-          reason: unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve")
+          reason: resolution.status === "invalid" ? resolution.reason : unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve")
         });
         continue;
       }
@@ -7547,11 +7578,20 @@ async function reloadAdapters(input) {
       storage: input.storage,
       stateRoot: input.stateRoot
     });
-    if (!resolved) {
+    if (resolved.status !== "ok") {
+      if (resolved.status === "invalid") {
+        logInvalidCredentialResolution(entry.registration, entry.registration.comm, resolved);
+        await appendCredentialResolutionFailedAudit(
+          input.audit,
+          entry.registration,
+          entry.registration.comm,
+          resolved
+        );
+      }
       skipped.push({
         comm: entry.registration.comm,
         account_id: entry.registration.bot_user_id,
-        reason: unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve")
+        reason: resolved.status === "invalid" ? resolved.reason : unresolvedCredentialsReason(entry.registration.credentials_ref, "re-resolve")
       });
       continue;
     }
@@ -7595,6 +7635,29 @@ function unresolvedCredentialsReason(ref, action = "resolve") {
     return `could not ${action} credentials_ref=${ref}: env: credential refs are retired; rerun account-update-token with --bot-token to create a daemon-owned file: ref`;
   }
   return `could not ${action} credentials_ref=${ref}`;
+}
+function logInvalidCredentialResolution(registration, commId, resolution) {
+  const pathSuffix = resolution.path ? ` [${resolution.path}]` : "";
+  console.error(
+    `agents-comm-bus: credential file for ${commId} account ${registration.account_label} (project ${registration.project}) exists but failed to resolve: ${resolution.reason}${pathSuffix}`
+  );
+}
+async function appendCredentialResolutionFailedAudit(audit, registration, commId, resolution) {
+  await audit?.append({
+    timestamp: Date.now(),
+    kind: "credential_resolution_failed",
+    agent: registration.agent,
+    detail: {
+      comm: commId,
+      account_label: registration.account_label,
+      project: registration.project,
+      bot_user_id: registration.bot_user_id,
+      credential_path: resolution.path ?? null,
+      failure_kind: resolution.failureKind,
+      reason: resolution.reason
+    }
+  }).catch(() => {
+  });
 }
 function adapterMapKey(commId, accountId) {
   return `${commId}:${accountId}`;
@@ -7772,6 +7835,23 @@ async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
   await writeFile2(path4.join(wakeDir, "trigger-enter"), `${now()}
 `, "utf8");
 }
+var WAKE_SEED_MAX_CHARS = 2e3;
+function sanitizeWakeSeed(text) {
+  if (!text) return "";
+  const normalized = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "").trim();
+  return normalized.length > WAKE_SEED_MAX_CHARS ? normalized.slice(0, WAKE_SEED_MAX_CHARS) : normalized;
+}
+function buildWakeSeed(input) {
+  const body = (input.body ?? "").trim();
+  if (!body) return "";
+  const comm = input.comm && input.comm.length > 0 ? input.comm : "message";
+  const sender = input.sender && input.sender.length > 0 ? input.sender : "unknown sender";
+  return sanitizeWakeSeed(`${comm} message from ${sender}: ${body}`);
+}
+async function writeClaudeWakeSeed(wakeDir, text) {
+  await mkdir7(wakeDir, { recursive: true });
+  await writeFile2(path4.join(wakeDir, "wake-seed.txt"), text, "utf8");
+}
 async function writeClaudeWakeResponse(wakeDir, payload) {
   await mkdir7(wakeDir, { recursive: true });
   await writeFile2(
@@ -7831,10 +7911,21 @@ var ClaudeWakeRegistry = class {
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
     return true;
   }
-  async wakeConversation(conversation) {
+  async wakeConversation(conversation, message) {
     if (conversation.agent !== "claude") return false;
     const registration = this.latestForProject(conversation.project) ?? await this.hydrateLatestForProject(conversation.project);
     if (!registration) return false;
+    const seed = buildWakeSeed({
+      comm: message?.chat.comm,
+      sender: message?.sender?.display_name ?? message?.sender?.id,
+      body: message?.text
+    });
+    if (seed) {
+      try {
+        await writeClaudeWakeSeed(registration.wakeDir, seed);
+      } catch {
+      }
+    }
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
     return true;
   }
@@ -7943,10 +8034,10 @@ var ClaudeBridge = class {
   invalidateRegistrationCaches() {
     this.ownedAccountsCache = null;
   }
-  async onInboundConversation(conversation) {
+  async onInboundConversation(conversation, message) {
     if (conversation.agent !== this.agentId) return;
     try {
-      const delivered = await this.wake.wakeConversation(conversation);
+      const delivered = await this.wake.wakeConversation(conversation, message);
       if (!delivered) {
         await this.auditWakeFailure({
           reason: "hydration_miss",

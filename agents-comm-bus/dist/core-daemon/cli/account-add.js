@@ -4,22 +4,25 @@ import { SCHEMA_VERSION_ACCOUNT, } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../project-path.js";
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
+import { resolveCredentialInput } from "./credential-input.js";
 import { probeIdentityViaDaemon } from "./identity-probe.js";
-import { writeTokenFile } from "./token-file.js";
+import { writeCredentialsFile } from "./token-file.js";
 export async function accountAdd(options) {
     const project = normalizeProjectPath(options.project);
     const comm = (options.comm ?? "telegram");
-    const botToken = options.botToken;
-    if (!botToken) {
-        throw new Error("--bot-token is required for account-add");
-    }
-    const identity = await (options.probeIdentity ?? ((token, accountId) => probeIdentityViaDaemon({
+    const credentials = await resolveCredentialInput({
+        botToken: options.botToken,
+        credentials: options.credentials,
+        credentialsFile: options.credentialsFile,
+        credentialsJson: options.credentialsJson,
+    });
+    const identity = await (options.probeIdentity ?? ((creds, accountId) => probeIdentityViaDaemon({
         comm,
-        botToken: token,
+        credentials: creds,
         accountId,
         agent: options.agent,
         stateRoot: options.stateRoot,
-    })))(botToken, options.accountId);
+    })))(credentials, options.accountId);
     const paths = resolveStatePaths({ stateRoot: options.stateRoot });
     await mkdir(paths.root, { recursive: true });
     const storage = await openSqliteStorage(paths.database);
@@ -43,13 +46,13 @@ export async function accountAdd(options) {
                 `account_label=${existing.account_label}; use account-list to inspect it ` +
                 `or account-remove --comm ${comm} --bot-id ${identity.bot_user_id} before re-adding.`);
         }
-        const credentialsRef = await writeTokenFile({
+        const credentialsRef = await writeCredentialsFile({
             stateRoot: options.stateRoot,
             comm,
             project,
             agent: options.agent,
             accountId: identity.bot_user_id,
-            botToken,
+            credentials,
         });
         const now = Date.now();
         const registration = {

@@ -27031,11 +27031,42 @@ var require_websocket_server = __commonJS({
   }
 });
 
-// ../adapters/discord/factory.ts
-import { readFile as readFile2 } from "node:fs/promises";
+// ../core-daemon/runtime/credential-resolution.ts
+import { readFile } from "node:fs/promises";
+async function readCredentialFile(ref) {
+  if (!ref.startsWith("file:")) {
+    return { status: "absent" };
+  }
+  const path3 = ref.slice("file:".length);
+  let raw;
+  try {
+    raw = await readFile(path3, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "UNKNOWN";
+    if (code === "ENOENT") {
+      return { status: "absent" };
+    }
+    return {
+      status: "invalid",
+      failureKind: "unreadable",
+      reason: `credential file unreadable: ${code}`,
+      path: path3
+    };
+  }
+  try {
+    return { status: "ok", path: path3, json: JSON.parse(raw) };
+  } catch {
+    return {
+      status: "invalid",
+      failureKind: "malformed_json",
+      reason: "credential file is not valid JSON",
+      path: path3
+    };
+  }
+}
 
 // ../adapters/discord/adapter.ts
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 import path2 from "node:path";
 
 // ../node_modules/@discordjs/rest/dist/index.mjs
@@ -33985,9 +34016,27 @@ function normalizeDiscordAttachments(raw) {
     }
   }));
 }
+function mentionDisplayName(mention) {
+  const globalName = mention.global_name?.trim();
+  if (globalName) return globalName;
+  const username = mention.username?.trim();
+  if (username) return username;
+  return String(mention.id);
+}
+function decodeDiscordMentions(content, mentions = []) {
+  const mentionById = new Map(
+    mentions.map((mention) => [String(mention.id), mentionDisplayName(mention)])
+  );
+  return content.replace(/<@!?(\d+)>/g, (match, id) => {
+    const name = mentionById.get(id);
+    if (name == null) return match;
+    return `@${name} (<@${id}>)`;
+  });
+}
 function buildMessageFromDiscordCreate(raw, context, attachmentsOverride) {
   const fromId = raw.author?.id == null ? null : String(raw.author.id);
-  const text = raw.content ?? void 0;
+  const rawText = raw.content ?? void 0;
+  const text = rawText == null ? void 0 : decodeDiscordMentions(rawText, raw.mentions ?? []);
   const attachments = attachmentsOverride ?? normalizeDiscordAttachments(raw);
   if (!text && attachments.length === 0) return null;
   const threadParent = context.threadParentChannelId;
@@ -34297,7 +34346,7 @@ async function discordOutboundFiles(payload) {
   const files = [];
   for (const attachment of payload.attachments ?? []) {
     if (!attachment.local_path) continue;
-    const data = await readFile(attachment.local_path);
+    const data = await readFile2(attachment.local_path);
     files.push({
       name: attachment.filename ?? uploadFilenameFromLocalPath(attachment.local_path),
       data,
@@ -34319,18 +34368,30 @@ var DiscordCommAdapterFactory = class {
   async resolveCredentials(registration, env, context) {
     const ref = registration.credentials_ref ?? "";
     if (!ref.startsWith("file:")) {
-      return void 0;
+      return { status: "absent" };
+    }
+    const fileResult = await readCredentialFile(ref);
+    if (fileResult.status !== "ok") {
+      return fileResult;
+    }
+    const parsed = fileResult.json;
+    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : typeof parsed.bot_token === "string" ? parsed.bot_token : void 0;
+    if (!botToken) {
+      return {
+        status: "invalid",
+        failureKind: "missing_field",
+        reason: "missing required field: botToken",
+        path: fileResult.path
+      };
     }
     const envAllowed = normalizeCsv(env.DISCORD_USER_ID);
     const dbAllowed = await readAllowlistFromDb(context, registration.bot_user_id);
-    const fromFile = await readJsonDiscordConfig(ref.slice("file:".length));
-    if (!fromFile?.botToken) {
-      return void 0;
-    }
+    const userId = normalizeUserIdField(parsed.userId);
     return {
+      status: "ok",
       credentials: {
-        botToken: fromFile.botToken,
-        allowedUserIds: mergeAllowed(envAllowed, fromFile.userId, dbAllowed)
+        botToken,
+        allowedUserIds: mergeAllowed(envAllowed, userId.length > 0 ? userId : void 0, dbAllowed)
       }
     };
   }
@@ -34477,18 +34538,6 @@ async function readAllowlistFromDb(context, bot_user_id) {
     if (!out.includes(row.sender_id)) out.push(row.sender_id);
   }
   return out;
-}
-async function readJsonDiscordConfig(filePath) {
-  try {
-    const raw = await readFile2(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    const botToken = typeof parsed.botToken === "string" ? parsed.botToken : typeof parsed.bot_token === "string" ? parsed.bot_token : void 0;
-    const userId = normalizeUserIdField(parsed.userId);
-    if (!botToken && userId.length === 0) return void 0;
-    return { botToken, userId: userId.length > 0 ? userId : void 0 };
-  } catch {
-    return void 0;
-  }
 }
 function normalizeUserIdField(raw) {
   if (raw == null) return [];

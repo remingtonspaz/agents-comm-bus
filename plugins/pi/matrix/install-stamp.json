@@ -3,10 +3,10 @@
   "agent": "pi",
   "comm": "matrix",
   "plugin_version": "0.1.0",
-  "daemon_bundle_version": "0.2.30",
-  "adapter_bundle_version": "0.2.4",
+  "daemon_bundle_version": "0.2.33",
+  "adapter_bundle_version": "0.2.5",
   "adapter_bundle_versions": {
-    "matrix": "0.2.4"
+    "matrix": "0.2.5"
   },
   "daemon_sidecars": [
     "001_initial.sql",

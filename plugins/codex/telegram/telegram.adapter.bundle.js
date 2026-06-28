@@ -52684,7 +52684,7 @@ function safePathSegment(value) {
 }
 
 // ../core-daemon/cli/token-file.ts
-async function writeTokenFile(options) {
+async function writeCredentialsFile(options) {
   const tokenFile = resolveTokenFilePath({
     stateRoot: options.stateRoot,
     comm: options.comm,
@@ -52693,13 +52693,9 @@ async function writeTokenFile(options) {
     accountId: options.accountId
   });
   await mkdir(path2.dirname(tokenFile), { recursive: true });
-  const body = {
-    botToken: options.botToken,
-    ...options.userId && options.userId.length > 0 ? { userId: options.userId } : {}
-  };
   await writeFile(
     tokenFile,
-    `${JSON.stringify(body, null, 2)}
+    `${JSON.stringify(options.credentials, null, 2)}
 `,
     { encoding: "utf8", mode: 384 }
   );
@@ -52708,6 +52704,19 @@ async function writeTokenFile(options) {
   } catch {
   }
   return `file:${tokenFile}`;
+}
+async function writeTokenFile(options) {
+  return writeCredentialsFile({
+    stateRoot: options.stateRoot,
+    comm: options.comm,
+    project: options.project,
+    agent: options.agent,
+    accountId: options.accountId,
+    credentials: {
+      botToken: options.botToken,
+      ...options.userId && options.userId.length > 0 ? { userId: options.userId } : {}
+    }
+  });
 }
 
 // ../core-daemon/runtime/credential-resolution.ts

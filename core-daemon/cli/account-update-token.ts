@@ -9,8 +9,9 @@ import type {
 import { resolveStatePaths } from "../paths.js";
 import { openSqliteStorage } from "../storage/sqlite.js";
 import { resolveAccountByLabel } from "./account-selector.js";
+import { resolveCredentialInput } from "./credential-input.js";
 import { probeIdentityViaDaemon, type ProbeIdentity } from "./identity-probe.js";
-import { writeTokenFile } from "./token-file.js";
+import { writeCredentialsFile } from "./token-file.js";
 
 export interface AccountUpdateTokenOptions {
   comm?: string;
@@ -19,6 +20,9 @@ export interface AccountUpdateTokenOptions {
   agent?: string;
   project?: string;
   botToken?: string;
+  credentials?: Record<string, unknown>;
+  credentialsFile?: string;
+  credentialsJson?: string;
   /**
    * Explicit synthetic account id for comms without a remote identity to
    * probe (e.g. curl, AGE-50). Without it a rotation on such a comm probes
@@ -37,18 +41,21 @@ export async function accountUpdateToken(
   options: AccountUpdateTokenOptions,
 ): Promise<AccountTokenUpdateResult> {
   const comm = (options.comm ?? "telegram") as CommId;
-  if (!options.botToken) {
-    throw new Error("--bot-token is required for account-update-token");
-  }
+  const credentials = await resolveCredentialInput({
+    botToken: options.botToken,
+    credentials: options.credentials,
+    credentialsFile: options.credentialsFile,
+    credentialsJson: options.credentialsJson,
+  });
 
-  const identity = await (options.probeIdentity ?? ((token, accountId) =>
+  const identity = await (options.probeIdentity ?? ((creds, accountId) =>
     probeIdentityViaDaemon({
       comm,
-      botToken: token,
+      credentials: creds,
       accountId,
       agent: options.agent,
       stateRoot: options.stateRoot,
-    })))(options.botToken, options.accountId);
+    })))(credentials, options.accountId);
   const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
   let wroteTokenRef: string | null = null;
   let wroteReplacementToken = false;
@@ -81,13 +88,13 @@ export async function accountUpdateToken(
       }
     }
 
-    const credentialsRef = await writeTokenFile({
+    const credentialsRef = await writeCredentialsFile({
       stateRoot: options.stateRoot,
       comm,
       project: current.project,
       agent: current.agent,
       accountId: identity.bot_user_id,
-      botToken: options.botToken,
+      credentials,
     });
     wroteTokenRef = credentialsRef;
     wroteReplacementToken = botChanged;
