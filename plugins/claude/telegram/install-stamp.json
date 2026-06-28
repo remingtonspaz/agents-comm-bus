@@ -4,9 +4,9 @@
   "comm": "telegram",
   "plugin_version": "0.1.8",
   "daemon_bundle_version": "0.2.33",
-  "adapter_bundle_version": "0.1.4",
+  "adapter_bundle_version": "0.1.5",
   "adapter_bundle_versions": {
-    "telegram": "0.1.4"
+    "telegram": "0.1.5"
   },
   "daemon_sidecars": [
     "001_initial.sql",
