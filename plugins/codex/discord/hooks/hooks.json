@@ -1,5 +1,4 @@
 {
-  "description": "Telegram integration hooks for Codex session repair, inbound draining, and permission control",
   "hooks": {
     "SessionStart": [
       {
