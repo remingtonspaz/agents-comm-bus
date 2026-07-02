@@ -258,6 +258,7 @@ async function startPersistentCodexRegistration() {
     owner_process_label: ownerProcess.label,
     source: "mcp-server",
     replace_existing_lease: true,
+    persist_after_disconnect: true,
     manage_app_server_lifecycle: true,
   };
 

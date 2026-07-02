@@ -105,6 +105,7 @@ test("Codex staged MCP shim owns Codex metadata inference", async () => {
   assert.match(shim, /CODEX_SESSION_ID/);
   assert.match(shim, /CODEX_THREAD_ID/);
   assert.match(shim, /replace_existing_lease/);
+  assert.match(shim, /persist_after_disconnect/);
   assert.match(shim, /manage_app_server_lifecycle/);
   assert.match(shim, /const runtime = await ensureMcpRuntime/);
   assert.match(shim, /ensureDaemonOptions/);

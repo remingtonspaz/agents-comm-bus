@@ -2,7 +2,7 @@
   "schema_version": 1,
   "agent": "codex",
   "comm": "matrix",
-  "plugin_version": "0.1.6",
+  "plugin_version": "0.1.7",
   "daemon_bundle_version": "0.2.33",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
