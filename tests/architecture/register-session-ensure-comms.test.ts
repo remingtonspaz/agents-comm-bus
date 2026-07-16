@@ -41,8 +41,8 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
     let bridge!: CodexBridge;
     const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
       const tracked = (bridge as unknown as {
-        sessionsByProject: Map<string, Set<SessionId>>;
-      }).sessionsByProject.get(PROJECT_A)?.has(session);
+        sessionRoutes: Map<SessionId, { project: string; account_label_scope: string | null }>;
+      }).sessionRoutes.has(session);
       return tracked === true;
     });
     bridge = new CodexBridge({
@@ -74,8 +74,8 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
     let bridge!: CodexBridge;
     const { fn: ensureCommsForSession, calls } = recordingEnsureWithReadiness(() => {
       const tracked = (bridge as unknown as {
-        sessionsByProject: Map<string, Set<SessionId>>;
-      }).sessionsByProject.get(PROJECT_A)?.has(session);
+        sessionRoutes: Map<SessionId, { project: string; account_label_scope: string | null }>;
+      }).sessionRoutes.has(session);
       return tracked === true;
     });
     bridge = new CodexBridge({

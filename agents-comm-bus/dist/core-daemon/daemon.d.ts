@@ -102,6 +102,8 @@ export declare function ensureCommsForSession(input: {
     /** Raw project from the client, for near-miss diagnostics when it differs. */
     requestedProject?: string;
     agent: AgentId;
+    /** AGE-72: canonical serialized scope JSON, or null when unscoped. */
+    accountLabelScope?: string | null;
     factories: CommAdapterFactory[];
     /**
      * AGE-49: on-demand factory discovery when `factories` has no entry for a

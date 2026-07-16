@@ -144,6 +144,15 @@ export const sessionDaemonOwnerMigration: Migration = {
   },
 };
 
+export const sessionLabelScopeMigration: Migration = {
+  version: 12,
+  description: "AGE-72: per-session comm account-label scoping",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "012_session_label_scope.sql"), "utf8");
+    await ctx.exec(sql);
+  },
+};
+
 export async function runStorageMigrations(db: SqliteLike): Promise<void> {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -157,5 +166,6 @@ export async function runStorageMigrations(db: SqliteLike): Promise<void> {
     multiOpenQueriesMigration,
     durablePendingInboundMigration,
     sessionDaemonOwnerMigration,
+    sessionLabelScopeMigration,
   ]);
 }

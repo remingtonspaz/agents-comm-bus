@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { normalizeProjectPath } from "./project-path.js";
+import { registrationMatchesConversationScope } from "./session-label-scope.js";
 
 import type {
   AccountId,
@@ -639,6 +640,15 @@ export class MessageBus {
     }
     const conversation = await this.options.storage.getConversation(conversationId);
     if (!conversation) throw new Error(`conversation not found: ${conversationId}`);
+    if (
+      record &&
+      !registrationMatchesConversationScope(record.account_label_scope, conversation)
+    ) {
+      throw new Error(
+        `session ${session} account_label_scope does not match most-recent inbound ` +
+          `conversation ${conversationId} (${conversation.comm}:${conversation.account_label})`,
+      );
+    }
     const botUserId = await this.botUserIdForConversation(conversation);
     return {
       ...chatRefFromConversation(conversation),

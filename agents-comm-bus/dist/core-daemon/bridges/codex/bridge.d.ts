@@ -48,7 +48,7 @@ export declare class CodexBridge implements AgentBridge {
     readonly ipcMethods: ReadonlySet<string>;
     private readonly adapter;
     private readonly waiters;
-    private readonly sessionsByProject;
+    private readonly sessionRoutes;
     private readonly activeLeases;
     private ownedAccountsCache;
     private ownerCheckTimer;
@@ -75,6 +75,7 @@ export declare class CodexBridge implements AgentBridge {
     private ensureCommsBestEffort;
     private trackSession;
     private untrackSession;
+    private resolveSessionForConversation;
     private releaseSessionLease;
     private ensureOwnerCheckTimer;
     private stopOwnerCheckTimerIfIdle;

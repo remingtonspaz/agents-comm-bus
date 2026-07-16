@@ -239,6 +239,7 @@ export interface Storage {
     project?: string;
     agent?: AgentId;
     status?: Session["status"];
+    account_label_scope?: string | null;
   }): Promise<Session[]>;
 
   // allowlist

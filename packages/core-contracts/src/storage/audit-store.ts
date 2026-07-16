@@ -56,7 +56,9 @@ export type AuditEventKind =
   // AGE-56: durable pending row could not be replayed from transcript storage.
   | "durable_inbound_replay_miss"
   // AGE-43: credential file exists but failed to parse or validate.
-  | "credential_resolution_failed";
+  | "credential_resolution_failed"
+  // AGE-72: configured account_label_scope has no matching registration rows.
+  | "account_label_scope_miss";
 
 export interface AuditEvent {
   timestamp: number;

@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.33";
+var DAEMON_VERSION = "0.2.34";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -3860,6 +3860,14 @@ var sessionDaemonOwnerMigration = {
     await ctx.exec(sql);
   }
 };
+var sessionLabelScopeMigration = {
+  version: 12,
+  description: "AGE-72: per-session comm account-label scoping",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "012_session_label_scope.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3872,7 +3880,8 @@ async function runStorageMigrations(db) {
     conversationRegistrationKeyMigration,
     multiOpenQueriesMigration,
     durablePendingInboundMigration,
-    sessionDaemonOwnerMigration
+    sessionDaemonOwnerMigration,
+    sessionLabelScopeMigration
   ]);
 }
 
@@ -4353,11 +4362,12 @@ var SqliteStorage = class _SqliteStorage {
           lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
           lease_owner_daemon_state_root, lease_owner_daemon_bin,
           lease_owner_daemon_authority_rank,
-          most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          most_recent_inbound_conversation_id, account_label_scope, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
+          account_label_scope = excluded.account_label_scope,
           status = excluded.status
       `).run(
       rec.schema_version,
@@ -4377,6 +4387,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.lease_owner_daemon_bin,
       rec.lease_owner_daemon_authority_rank,
       rec.most_recent_inbound_conversation_id,
+      rec.account_label_scope ?? null,
       rec.status
     );
   }
@@ -4459,6 +4470,12 @@ var SqliteStorage = class _SqliteStorage {
     if (filter.status !== void 0) {
       where.push("status = ?");
       params.push(filter.status);
+    }
+    if (filter.account_label_scope === null) {
+      where.push("account_label_scope IS NULL");
+    } else if (filter.account_label_scope !== void 0) {
+      where.push("account_label_scope = ?");
+      params.push(filter.account_label_scope);
     }
     const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
     const rows = this.db.prepare(`SELECT * FROM sessions ${whereClause} ORDER BY created_at DESC`).all(...params);
@@ -4678,6 +4695,7 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_daemon_bin: r.lease_owner_daemon_bin,
       lease_owner_daemon_authority_rank: r.lease_owner_daemon_authority_rank,
       most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
+      account_label_scope: r.account_label_scope ?? null,
       status: r.status
     };
   }

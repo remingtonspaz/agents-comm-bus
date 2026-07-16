@@ -68,6 +68,7 @@ export declare class SqliteStorage implements Storage {
         project?: string;
         agent?: AgentId;
         status?: Session["status"];
+        account_label_scope?: string | null;
     }): Promise<Session[]>;
     setSessionMostRecentInbound(session: SessionId, conversation_id: ConversationId): Promise<void>;
     addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void>;

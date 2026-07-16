@@ -84,6 +84,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/012_session_label_scope.sql",
+      "artifact": "plugins/codex/discord/012_session_label_scope.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/discord/package.json",
       "type": "package-json"

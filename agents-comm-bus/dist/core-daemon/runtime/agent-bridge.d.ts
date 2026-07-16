@@ -2,6 +2,10 @@ import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation,
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
+export type EnsureCommsForSessionOptions = {
+    /** Canonical serialized account_label_scope JSON, or null when unscoped. */
+    accountLabelScope?: string | null;
+};
 /**
  * Lazily bring up the comm adapters a `(project, agent)` session needs, on
  * session entry. AGE-38: the daemon no longer eager-loads every registered bot
@@ -9,7 +13,7 @@ import type { PendingInboundEntry } from "./pending-inbound.js";
  * the daemon instantiates (and leases) only the bots its live sessions use.
  * Idempotent — safe to call on every register (hooks register frequently).
  */
-export type EnsureCommsForSession = (project: string, agent: AgentId) => Promise<void>;
+export type EnsureCommsForSession = (project: string, agent: AgentId, options?: EnsureCommsForSessionOptions) => Promise<void>;
 /** Resolved daemon self-identity; stamped onto sessions at lease acquire (AGE-58). */
 export interface DaemonSelfIdentity {
     discoveryRoot: string;

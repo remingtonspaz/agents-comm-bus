@@ -240,6 +240,7 @@ function sessionRecord(id: SessionId, project = PROJECT_A): Session {
     lease_owner_daemon_bin: null,
     lease_owner_daemon_authority_rank: null,
     most_recent_inbound_conversation_id: null,
+    account_label_scope: null,
     status: "active",
   };
 }

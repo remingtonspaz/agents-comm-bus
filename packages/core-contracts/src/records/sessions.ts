@@ -37,5 +37,11 @@ export interface Session {
   // Most recent inbound conversation linkage (used by routing / steering).
   most_recent_inbound_conversation_id: ConversationId | null;
 
+  /**
+   * AGE-72: canonical JSON map of comm → account_label when the host sets
+   * `AGENTS_COMM_LABELS`; null preserves today's unscoped behavior.
+   */
+  account_label_scope: string | null;
+
   status: "active" | "ended";
 }

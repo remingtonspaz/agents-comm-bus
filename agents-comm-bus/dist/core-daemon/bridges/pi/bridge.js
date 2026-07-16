@@ -8,6 +8,7 @@
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { normalizeProjectPath } from "../../project-path.js";
+import { accountLabelScopeFromParams, filterRegistrationsByScope } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 const PI_IPC_METHODS = new Set([
     "pi_register_session",
@@ -36,9 +37,11 @@ export class PiBridge {
                 throw new Error(`PiBridge does not handle IPC method: ${method}`);
         }
     }
-    async ensureCommsBestEffort(project) {
+    async ensureCommsBestEffort(project, accountLabelScope) {
         try {
-            await this.options.ensureCommsForSession?.(project, this.agentId);
+            await this.options.ensureCommsForSession?.(project, this.agentId, {
+                accountLabelScope: accountLabelScope ?? null,
+            });
         }
         catch (error) {
             console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
@@ -50,10 +53,10 @@ export class PiBridge {
             const sess = await this.options.storage.getSession(session);
             if (!sess)
                 return new Set();
-            const scoped = await this.options.storage.listAccountRegistrations({
+            const scoped = filterRegistrationsByScope(await this.options.storage.listAccountRegistrations({
                 project: sess.project,
                 agent: this.agentId,
-            });
+            }), sess.account_label_scope);
             return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
         }
         const registrations = await this.options.storage.listAccountRegistrations({
@@ -74,6 +77,7 @@ export class PiBridge {
         const project = normalizeProjectPath(requiredString(params.project, "project"));
         const connectionId = requiredString(params.connection_id, "connection_id");
         const now = Date.now();
+        const accountLabelScope = accountLabelScopeFromParams(params);
         await this.options.storage.upsertSession({
             schema_version: SCHEMA_VERSION_SESSION,
             session_id: session,
@@ -92,6 +96,7 @@ export class PiBridge {
             lease_owner_daemon_bin: null,
             lease_owner_daemon_authority_rank: null,
             most_recent_inbound_conversation_id: null,
+            account_label_scope: accountLabelScope,
             status: "active",
         });
         const leaseOwner = this.options.daemonOwner
@@ -99,14 +104,14 @@ export class PiBridge {
             : sessionLeaseOwnerFromParams(params);
         const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, leaseOwner);
         if (!acquired) {
-            await this.ensureCommsBestEffort(project);
+            await this.ensureCommsBestEffort(project, accountLabelScope);
             return { ok: false, reason: "pi session lease already held" };
         }
         socket?.once("close", () => {
             void this.options.storage.releaseSessionConnectionLeasePreservingOwner(session, connectionId, Date.now());
         });
         // AGE-38/AGE-45: after lease + close handler so inbound cannot race ahead.
-        await this.ensureCommsBestEffort(project);
+        await this.ensureCommsBestEffort(project, accountLabelScope);
         return { ok: true, session, project, agent: "pi" };
     }
     async drainInbound(params) {

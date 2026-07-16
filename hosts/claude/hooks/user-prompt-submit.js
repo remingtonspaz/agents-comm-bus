@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
+import { accountLabelScopeFromEnv } from '../../common/comm-labels.js';
 import {
   ensureClaudeWakeWatcher,
   findCmdAncestor,
@@ -171,6 +172,7 @@ async function main() {
       claude: hookInput,
       owner_process_pid: claudePid,
       owner_process_label: 'claude',
+      account_label_scope: accountLabelScopeFromEnv(),
     });
     const result = await ipc.request('claude_drain_inbound', {
       agent: 'claude',

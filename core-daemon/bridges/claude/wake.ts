@@ -11,12 +11,16 @@ import type {
 } from "agents-comm-bus-core";
 
 import { normalizeProjectPath } from "../../project-path.js";
+import {
+  resolveSessionForConversation,
+} from "../../session-label-scope.js";
 
 export interface ClaudeWakeRegistration {
   session: SessionId;
   project: string;
   wakeDir: string;
   registeredAt: number;
+  account_label_scope: string | null;
 }
 
 export function hashProjectKey(projectPath: string): string {
@@ -139,6 +143,7 @@ export class ClaudeWakeRegistry {
     session: SessionId;
     project: string;
     wakeDir?: string;
+    account_label_scope?: string | null;
   }): ClaudeWakeRegistration {
     const project = normalizeProjectPath(input.project);
     const registration: ClaudeWakeRegistration = {
@@ -146,21 +151,46 @@ export class ClaudeWakeRegistry {
       project,
       wakeDir: input.wakeDir ?? claudeWakeDirForProject(project),
       registeredAt: this.now(),
+      account_label_scope: input.account_label_scope ?? null,
     };
     this.registrations.set(input.session, registration);
     return registration;
   }
 
-  latestForProject(project: string): ClaudeWakeRegistration | undefined {
+  latestForProject(
+    project: string,
+    conversation?: { comm: string; account_label: string },
+  ): ClaudeWakeRegistration | undefined {
     const resolved = normalizeProjectPath(project);
-    let latest: ClaudeWakeRegistration | undefined;
-    for (const registration of this.registrations.values()) {
-      if (registration.project !== resolved) continue;
-      if (!latest || registration.registeredAt > latest.registeredAt) {
-        latest = registration;
+    const candidates = [...this.registrations.values()].filter(
+      (registration) => registration.project === resolved,
+    );
+    if (candidates.length === 0) return undefined;
+    if (!conversation) {
+      let latest: ClaudeWakeRegistration | undefined;
+      for (const registration of candidates) {
+        if (!latest || registration.registeredAt > latest.registeredAt) {
+          latest = registration;
+        }
       }
+      return latest;
     }
-    return latest;
+    const match = resolveSessionForConversation(
+      candidates.map((registration) => ({
+        project: registration.project,
+        agent: "claude",
+        account_label_scope: registration.account_label_scope,
+        session_id: registration.session,
+      })),
+      conversation,
+      (candidate) => candidate.session_id,
+    );
+    if (match) {
+      return candidates.find((registration) => registration.session === match.session_id);
+    }
+    const unlabeled = candidates.filter((registration) => registration.account_label_scope == null);
+    if (unlabeled.length === 1) return unlabeled[0];
+    return undefined;
   }
 
   getForSession(session: SessionId): ClaudeWakeRegistration | undefined {
@@ -186,8 +216,8 @@ export class ClaudeWakeRegistry {
   ): Promise<boolean> {
     if (conversation.agent !== ("claude" as AgentId)) return false;
     const registration =
-      this.latestForProject(conversation.project) ??
-      (await this.hydrateLatestForProject(conversation.project));
+      this.latestForProject(conversation.project, conversation) ??
+      (await this.hydrateLatestForProject(conversation.project, conversation));
     if (!registration) return false;
     // AGE-65: drop the decorated inbound text as a seed BEFORE the trigger so it
     // is in place when the watcher consumes the trigger. Best-effort: a seed
@@ -216,16 +246,28 @@ export class ClaudeWakeRegistry {
    */
   private async hydrateLatestForProject(
     project: string,
+    conversation?: { comm: string; account_label: string },
   ): Promise<ClaudeWakeRegistration | undefined> {
     if (!this.storage) return undefined;
     const resolved = normalizeProjectPath(project);
     const sessions = await this.storage.listSessions({
       project: resolved,
       agent: "claude" as AgentId,
+      status: "active",
     });
     if (sessions.length === 0) return undefined;
-    const latest = sessions[0]; // listSessions orders by created_at DESC.
-    return this.register({ session: latest.session_id, project: resolved });
+    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+    const pool = live.length > 0 ? live : sessions;
+    const match = conversation
+      ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id)
+      : pool[0];
+    const latest = match ?? pool[0];
+    if (!latest) return undefined;
+    return this.register({
+      session: latest.session_id,
+      project: resolved,
+      account_label_scope: latest.account_label_scope,
+    });
   }
 
   /**
@@ -239,6 +281,10 @@ export class ClaudeWakeRegistry {
     if (!this.storage) return undefined;
     const record = await this.storage.getSession(session);
     if (!record || record.agent !== ("claude" as AgentId)) return undefined;
-    return this.register({ session, project: record.project });
+    return this.register({
+      session,
+      project: record.project,
+      account_label_scope: record.account_label_scope,
+    });
   }
 }

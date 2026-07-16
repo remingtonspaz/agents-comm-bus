@@ -26,6 +26,7 @@ import type {
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { normalizeProjectPath } from "../../project-path.js";
+import { accountLabelScopeFromParams, filterRegistrationsByScope } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 
 export interface PiBridgeOptions {
@@ -79,9 +80,14 @@ export class PiBridge implements AgentBridge {
     }
   }
 
-  private async ensureCommsBestEffort(project: string): Promise<void> {
+  private async ensureCommsBestEffort(
+    project: string,
+    accountLabelScope?: string | null,
+  ): Promise<void> {
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
+      await this.options.ensureCommsForSession?.(project, this.agentId, {
+        accountLabelScope: accountLabelScope ?? null,
+      });
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
@@ -94,10 +100,13 @@ export class PiBridge implements AgentBridge {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return new Set<string>();
-      const scoped = await this.options.storage.listAccountRegistrations({
-        project: sess.project,
-        agent: this.agentId,
-      });
+      const scoped = filterRegistrationsByScope(
+        await this.options.storage.listAccountRegistrations({
+          project: sess.project,
+          agent: this.agentId,
+        }),
+        sess.account_label_scope,
+      );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
     const registrations = await this.options.storage.listAccountRegistrations({
@@ -128,6 +137,7 @@ export class PiBridge implements AgentBridge {
     const project = normalizeProjectPath(requiredString(params.project, "project"));
     const connectionId = requiredString(params.connection_id, "connection_id");
     const now = Date.now();
+    const accountLabelScope = accountLabelScopeFromParams(params);
     await this.options.storage.upsertSession({
       schema_version: SCHEMA_VERSION_SESSION,
       session_id: session,
@@ -146,6 +156,7 @@ export class PiBridge implements AgentBridge {
       lease_owner_daemon_bin: null,
       lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
+      account_label_scope: accountLabelScope,
       status: "active",
     });
     const leaseOwner = this.options.daemonOwner
@@ -158,7 +169,7 @@ export class PiBridge implements AgentBridge {
       leaseOwner,
     );
     if (!acquired) {
-      await this.ensureCommsBestEffort(project);
+      await this.ensureCommsBestEffort(project, accountLabelScope);
       return { ok: false, reason: "pi session lease already held" };
     }
     socket?.once("close", () => {
@@ -169,7 +180,7 @@ export class PiBridge implements AgentBridge {
       );
     });
     // AGE-38/AGE-45: after lease + close handler so inbound cannot race ahead.
-    await this.ensureCommsBestEffort(project);
+    await this.ensureCommsBestEffort(project, accountLabelScope);
     return { ok: true, session, project, agent: "pi" as AgentId };
   }
 

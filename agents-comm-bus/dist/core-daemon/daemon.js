@@ -16,6 +16,7 @@ import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import { deliveryRowFromEntry, drainAndAcknowledgePendingInbound, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, selectPendingInboundForDrain, } from "./runtime/durable-inbound.js";
+import { filterRegistrationsByScope, } from "./session-label-scope.js";
 /**
  * Generic daemon entry point. Knows nothing about specific agents or
  * comms — adapter wiring is supplied by the composition root.
@@ -145,13 +146,15 @@ export async function runDaemon(options) {
             registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
         }
     }
-    const ensureCommsForSessionFn = async (project, agent) => {
+    const ensureCommsForSessionFn = async (project, agent, options) => {
         const canonicalProject = normalizeProjectPath(project);
-        activeScopes.add(scopeKey(agent, canonicalProject));
+        const accountLabelScope = options?.accountLabelScope ?? null;
+        activeScopes.add(scopeKey(agent, canonicalProject, accountLabelScope));
         await ensureCommsForSession({
             project: canonicalProject,
             requestedProject: project,
             agent,
+            accountLabelScope,
             factories: commAdapterFactories,
             rescanFactories: rescanFactoriesForComm,
             bus,
@@ -460,10 +463,30 @@ export async function addAdapterForRegistration(input) {
  */
 export async function ensureCommsForSession(input) {
     const project = normalizeProjectPath(input.project);
-    const registrations = await input.storage.listAccountRegistrations({
+    const accountLabelScope = input.accountLabelScope ?? null;
+    const allRegistrations = await input.storage.listAccountRegistrations({
         project,
         agent: input.agent,
     });
+    const registrations = filterRegistrationsByScope(allRegistrations, accountLabelScope);
+    if (accountLabelScope && registrations.length === 0) {
+        const message = `agents-comm-bus: account_label_scope ${accountLabelScope} has no matching ` +
+            `account registrations for project=${project} agent=${input.agent}`;
+        console.error(message);
+        await input.audit
+            ?.append({
+            timestamp: Date.now(),
+            kind: "account_label_scope_miss",
+            agent: input.agent,
+            detail: {
+                project,
+                account_label_scope: accountLabelScope,
+                registration_count: allRegistrations.length,
+            },
+        })
+            .catch(() => { });
+        throw new Error(message);
+    }
     if (registrations.length === 0) {
         await reportRegistrationProjectNearMiss({
             agent: input.agent,
@@ -605,7 +628,8 @@ export async function reloadAdapters(input) {
         const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
         for (const reg of regs) {
             const key = adapterMapKey(factory.commId, reg.bot_user_id);
-            const scopeActive = input.activeScopes?.has(scopeKey(reg.agent, reg.project)) ?? false;
+            const scopeActive = input.activeScopes != null &&
+                isRegistrationScopeActive(reg, input.activeScopes);
             if (!current.has(key) && !scopeActive)
                 continue; // inactive project → stay lazy
             if (!desired.has(key))
@@ -871,10 +895,10 @@ async function resolveOwnedAccountKeys(storage, session) {
     const sess = await storage.getSession(session);
     if (!sess)
         return new Set();
-    const regs = await storage.listAccountRegistrations({
+    const regs = filterRegistrationsByScope(await storage.listAccountRegistrations({
         project: sess.project,
         agent: sess.agent,
-    });
+    }), sess.account_label_scope);
     return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 function sameStringSet(a, b) {
@@ -920,11 +944,25 @@ async function appendCredentialResolutionFailedAudit(audit, registration, commId
 function adapterMapKey(commId, accountId) {
     return `${commId}:${accountId}`;
 }
-// AGE-38: key for the active-(project, agent)-scope set used to gate reload
-// hot-adds. A scope is "active" once a session for it has registered this
-// daemon-lifetime.
-function scopeKey(agent, project) {
-    return `${agent}:${normalizeProjectPath(project)}`;
+// AGE-38/AGE-72: key for the active-(project, agent[, label-scope]) set used to
+// gate reload hot-adds.
+function scopeKey(agent, project, accountLabelScope) {
+    return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
+}
+function isRegistrationScopeActive(registration, activeScopes) {
+    const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
+    const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;
+    for (const key of activeScopes) {
+        if (key === legacyKey)
+            return true;
+        if (!key.startsWith(prefix))
+            continue;
+        const scopeStored = key.slice(prefix.length);
+        const scope = scopeStored.length > 0 ? scopeStored : null;
+        if (filterRegistrationsByScope([registration], scope).length > 0)
+            return true;
+    }
+    return false;
 }
 async function reportRegistrationProjectNearMiss(input) {
     const allForAgent = await input.storage.listAccountRegistrations({ agent: input.agent });
@@ -973,7 +1011,10 @@ export async function handleEnsureCommsForScope(params, ensureCommsForSession) {
         ? params.agent
         : "claude");
     const canonicalProject = normalizeProjectPath(rawProject);
-    await ensureCommsForSession(canonicalProject, agent);
+    const accountLabelScope = typeof params.account_label_scope === "string" || params.account_label_scope === null
+        ? params.account_label_scope
+        : null;
+    await ensureCommsForSession(canonicalProject, agent, { accountLabelScope });
     return { ok: true, project: canonicalProject, agent };
 }
 async function dispatchIpc(request, context) {

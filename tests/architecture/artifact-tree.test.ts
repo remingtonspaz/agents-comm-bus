@@ -62,6 +62,7 @@ async function assertInstallStamp(base: string, agent: "claude" | "codex") {
       "009_multi_open_queries.sql",
       "010_durable_pending_inbound.sql",
       "011_session_daemon_owner.sql",
+      "012_session_label_scope.sql",
     ],
   });
 }

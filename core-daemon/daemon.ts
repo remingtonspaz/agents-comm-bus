@@ -48,6 +48,9 @@ import {
   rehydratePendingInboundForScope,
   selectPendingInboundForDrain,
 } from "./runtime/durable-inbound.js";
+import {
+  filterRegistrationsByScope,
+} from "./session-label-scope.js";
 
 export type {
   AgentBridge,
@@ -234,13 +237,15 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
     }
   }
-  const ensureCommsForSessionFn: EnsureCommsForSession = async (project, agent) => {
+  const ensureCommsForSessionFn: EnsureCommsForSession = async (project, agent, options) => {
     const canonicalProject = normalizeProjectPath(project);
-    activeScopes.add(scopeKey(agent, canonicalProject));
+    const accountLabelScope = options?.accountLabelScope ?? null;
+    activeScopes.add(scopeKey(agent, canonicalProject, accountLabelScope));
     await ensureCommsForSession({
       project: canonicalProject,
       requestedProject: project,
       agent,
+      accountLabelScope,
       factories: commAdapterFactories,
       rescanFactories: rescanFactoriesForComm,
       bus,
@@ -592,6 +597,8 @@ export async function ensureCommsForSession(input: {
   /** Raw project from the client, for near-miss diagnostics when it differs. */
   requestedProject?: string;
   agent: AgentId;
+  /** AGE-72: canonical serialized scope JSON, or null when unscoped. */
+  accountLabelScope?: string | null;
   factories: CommAdapterFactory[];
   /**
    * AGE-49: on-demand factory discovery when `factories` has no entry for a
@@ -609,10 +616,31 @@ export async function ensureCommsForSession(input: {
   audit?: JsonlAuditStore;
 }): Promise<void> {
   const project = normalizeProjectPath(input.project);
-  const registrations = await input.storage.listAccountRegistrations({
+  const accountLabelScope = input.accountLabelScope ?? null;
+  const allRegistrations = await input.storage.listAccountRegistrations({
     project,
     agent: input.agent,
   });
+  const registrations = filterRegistrationsByScope(allRegistrations, accountLabelScope);
+  if (accountLabelScope && registrations.length === 0) {
+    const message =
+      `agents-comm-bus: account_label_scope ${accountLabelScope} has no matching ` +
+      `account registrations for project=${project} agent=${input.agent}`;
+    console.error(message);
+    await input.audit
+      ?.append({
+        timestamp: Date.now(),
+        kind: "account_label_scope_miss",
+        agent: input.agent,
+        detail: {
+          project,
+          account_label_scope: accountLabelScope,
+          registration_count: allRegistrations.length,
+        },
+      })
+      .catch(() => {});
+    throw new Error(message);
+  }
   if (registrations.length === 0) {
     await reportRegistrationProjectNearMiss({
       agent: input.agent,
@@ -814,7 +842,9 @@ export async function reloadAdapters(input: {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id as AccountId);
-      const scopeActive = input.activeScopes?.has(scopeKey(reg.agent, reg.project)) ?? false;
+      const scopeActive =
+        input.activeScopes != null &&
+        isRegistrationScopeActive(reg, input.activeScopes);
       if (!current.has(key) && !scopeActive) continue; // inactive project → stay lazy
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
@@ -1123,10 +1153,13 @@ async function resolveOwnedAccountKeys(
   if (typeof session !== "string" || session.length === 0) return undefined;
   const sess = await storage.getSession(session as SessionId);
   if (!sess) return new Set<string>();
-  const regs = await storage.listAccountRegistrations({
-    project: sess.project,
-    agent: sess.agent,
-  });
+  const regs = filterRegistrationsByScope(
+    await storage.listAccountRegistrations({
+      project: sess.project,
+      agent: sess.agent,
+    }),
+    sess.account_label_scope,
+  );
   return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 
@@ -1187,11 +1220,30 @@ function adapterMapKey(commId: CommId, accountId: AccountId | string): string {
   return `${commId}:${accountId}`;
 }
 
-// AGE-38: key for the active-(project, agent)-scope set used to gate reload
-// hot-adds. A scope is "active" once a session for it has registered this
-// daemon-lifetime.
-function scopeKey(agent: AgentId | string, project: string): string {
-  return `${agent}:${normalizeProjectPath(project)}`;
+// AGE-38/AGE-72: key for the active-(project, agent[, label-scope]) set used to
+// gate reload hot-adds.
+function scopeKey(
+  agent: AgentId | string,
+  project: string,
+  accountLabelScope?: string | null,
+): string {
+  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
+}
+
+function isRegistrationScopeActive(
+  registration: AccountRegistration,
+  activeScopes: ReadonlySet<string>,
+): boolean {
+  const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
+  const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;
+  for (const key of activeScopes) {
+    if (key === legacyKey) return true;
+    if (!key.startsWith(prefix)) continue;
+    const scopeStored = key.slice(prefix.length);
+    const scope = scopeStored.length > 0 ? scopeStored : null;
+    if (filterRegistrationsByScope([registration], scope).length > 0) return true;
+  }
+  return false;
 }
 
 async function reportRegistrationProjectNearMiss(input: {
@@ -1269,7 +1321,11 @@ export async function handleEnsureCommsForScope(
       : "claude"
   ) as AgentId;
   const canonicalProject = normalizeProjectPath(rawProject);
-  await ensureCommsForSession(canonicalProject, agent);
+  const accountLabelScope =
+    typeof params.account_label_scope === "string" || params.account_label_scope === null
+      ? (params.account_label_scope as string | null)
+      : null;
+  await ensureCommsForSession(canonicalProject, agent, { accountLabelScope });
   return { ok: true, project: canonicalProject, agent };
 }
 

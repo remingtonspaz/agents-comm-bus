@@ -12,6 +12,7 @@ import {
   runMcpShim,
 } from "../common/mcp-shim-shared.js";
 import { normalizeProjectPath } from "../../agents-comm-bus/dist/core-daemon/project-path.js";
+import { accountLabelScopeFromEnv } from "../common/comm-labels.js";
 
 let persistentRegistration = null;
 const codexRuntime = {
@@ -260,6 +261,7 @@ async function startPersistentCodexRegistration() {
     replace_existing_lease: true,
     persist_after_disconnect: true,
     manage_app_server_lifecycle: true,
+    account_label_scope: accountLabelScopeFromEnv(),
   };
 
   const runtime = await ensureMcpRuntime({

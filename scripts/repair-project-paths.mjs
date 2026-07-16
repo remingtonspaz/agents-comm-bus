@@ -200,7 +200,7 @@ function planSessionUpdates(rows) {
     const rawProjects = [...new Set(group.map((row) => row.project))];
     collisions.push({
       kind: "sessions",
-      unique_index: "idx_sessions_one_live_lease_per_agent_project",
+      unique_index: "idx_sessions_one_live_lease_unlabeled",
       scope_key: key,
       raw_projects: rawProjects,
       rows: group.map((row) => ({

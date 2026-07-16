@@ -3,7 +3,7 @@
   "agent": "pi",
   "comm": "matrix",
   "plugin_version": "0.1.0",
-  "daemon_bundle_version": "0.2.33",
+  "daemon_bundle_version": "0.2.34",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
     "matrix": "0.2.6"
@@ -19,6 +19,7 @@
     "008_conversation_registration_key.sql",
     "009_multi_open_queries.sql",
     "010_durable_pending_inbound.sql",
-    "011_session_daemon_owner.sql"
+    "011_session_daemon_owner.sql",
+    "012_session_label_scope.sql"
   ]
 }

@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.33";
+var DAEMON_VERSION = "0.2.34";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4680,8 +4680,8 @@ async function defaultPathExists(path8) {
     return false;
   }
 }
-function scopeDedupeKey(agent, project) {
-  return `${agent}:${normalizeProjectPath(project)}`;
+function scopeDedupeKey(agent, project, accountLabelScope) {
+  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
 }
 function classifySessionDaemonOwner(session, currentDiscoveryRoot) {
   const stamped = session.lease_owner_daemon_discovery_root;
@@ -4754,14 +4754,20 @@ async function runBootScopeRestore(input) {
         continue;
       }
       const canonicalProject = normalizeProjectPath(session.project);
-      const key = scopeDedupeKey(session.agent, canonicalProject);
+      const key = scopeDedupeKey(session.agent, canonicalProject, session.account_label_scope);
       if (!scopesToRestore.has(key)) {
-        scopesToRestore.set(key, { project: canonicalProject, agent: session.agent });
+        scopesToRestore.set(key, {
+          project: canonicalProject,
+          agent: session.agent,
+          accountLabelScope: session.account_label_scope
+        });
       }
     }
     for (const scope of scopesToRestore.values()) {
       try {
-        await input.ensureCommsForSession(scope.project, scope.agent);
+        await input.ensureCommsForSession(scope.project, scope.agent, {
+          accountLabelScope: scope.accountLabelScope
+        });
         summary.restored += 1;
       } catch (error) {
         console.error(
@@ -4963,6 +4969,109 @@ function errorMessage(error) {
 
 // ../core-daemon/bus.ts
 import crypto from "node:crypto";
+
+// ../core-daemon/session-label-scope.ts
+function parseAgentsCommLabels(raw) {
+  if (raw === void 0 || raw === null) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  const map = {};
+  for (const entry of trimmed.split(",")) {
+    const piece = entry.trim();
+    if (piece.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
+    }
+    const colon = piece.indexOf(":");
+    if (colon <= 0 || colon === piece.length - 1) {
+      throw new Error(
+        `AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`
+      );
+    }
+    const comm = piece.slice(0, colon).trim();
+    const label = piece.slice(colon + 1).trim();
+    if (comm.length === 0 || label.length === 0) {
+      throw new Error(
+        `AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`
+      );
+    }
+    if (map[comm] !== void 0) {
+      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function serializeAccountLabelScope(scope) {
+  if (!scope || Object.keys(scope).length === 0) return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function parseAccountLabelScope(stored) {
+  if (stored === void 0 || stored === null) return null;
+  const trimmed = stored.trim();
+  if (trimmed.length === 0) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`account_label_scope is not valid JSON: ${stored}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`account_label_scope must be a JSON object: ${stored}`);
+  }
+  const map = {};
+  for (const [comm, label] of Object.entries(parsed)) {
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`account_label_scope value for "${comm}" must be a non-empty string`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function accountLabelScopeFromParams(params) {
+  if (params.account_label_scope === null) return null;
+  if (typeof params.account_label_scope === "string") {
+    return serializeAccountLabelScope(parseAccountLabelScope(params.account_label_scope));
+  }
+  if (typeof params.comm_labels === "string") {
+    return serializeAccountLabelScope(parseAgentsCommLabels(params.comm_labels));
+  }
+  return null;
+}
+function filterRegistrationsByScope(registrations, scopeStored) {
+  const scope = parseAccountLabelScope(scopeStored ?? null);
+  if (!scope) return [...registrations];
+  return registrations.filter((reg) => {
+    const expected = scope[reg.comm];
+    return expected !== void 0 && reg.account_label === expected;
+  });
+}
+function registrationMatchesConversationScope(scopeStored, conversation) {
+  const scope = parseAccountLabelScope(scopeStored ?? null);
+  if (!scope) return true;
+  const expected = scope[conversation.comm];
+  return expected !== void 0 && expected === conversation.account_label;
+}
+function resolveSessionForConversation(sessions, conversation, pickSessionId) {
+  const labeledMatches = sessions.filter(
+    (sess) => sess.account_label_scope != null && registrationMatchesConversationScope(sess.account_label_scope, conversation)
+  );
+  if (labeledMatches.length > 0) {
+    return labeledMatches[0];
+  }
+  const unlabeled = sessions.filter((sess) => sess.account_label_scope == null);
+  if (unlabeled.length === 1) {
+    return unlabeled[0];
+  }
+  if (unlabeled.length > 1) {
+    return void 0;
+  }
+  return void 0;
+}
 
 // ../packages/core-contracts/dist/types.js
 var SCHEMA_VERSION_QUERY = 1;
@@ -5504,6 +5613,11 @@ var MessageBus = class {
     }
     const conversation = await this.options.storage.getConversation(conversationId);
     if (!conversation) throw new Error(`conversation not found: ${conversationId}`);
+    if (record && !registrationMatchesConversationScope(record.account_label_scope, conversation)) {
+      throw new Error(
+        `session ${session} account_label_scope does not match most-recent inbound conversation ${conversationId} (${conversation.comm}:${conversation.account_label})`
+      );
+    }
     const botUserId = await this.botUserIdForConversation(conversation);
     return {
       ...chatRefFromConversation(conversation),
@@ -5777,6 +5891,14 @@ var sessionDaemonOwnerMigration = {
     await ctx.exec(sql);
   }
 };
+var sessionLabelScopeMigration = {
+  version: 12,
+  description: "AGE-72: per-session comm account-label scoping",
+  async up(ctx) {
+    const sql = await readFile4(join3(schemaDir, "012_session_label_scope.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -5789,7 +5911,8 @@ async function runStorageMigrations(db) {
     conversationRegistrationKeyMigration,
     multiOpenQueriesMigration,
     durablePendingInboundMigration,
-    sessionDaemonOwnerMigration
+    sessionDaemonOwnerMigration,
+    sessionLabelScopeMigration
   ]);
 }
 
@@ -6270,11 +6393,12 @@ var SqliteStorage = class _SqliteStorage {
           lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
           lease_owner_daemon_state_root, lease_owner_daemon_bin,
           lease_owner_daemon_authority_rank,
-          most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          most_recent_inbound_conversation_id, account_label_scope, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
+          account_label_scope = excluded.account_label_scope,
           status = excluded.status
       `).run(
       rec.schema_version,
@@ -6294,6 +6418,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.lease_owner_daemon_bin,
       rec.lease_owner_daemon_authority_rank,
       rec.most_recent_inbound_conversation_id,
+      rec.account_label_scope ?? null,
       rec.status
     );
   }
@@ -6376,6 +6501,12 @@ var SqliteStorage = class _SqliteStorage {
     if (filter.status !== void 0) {
       where.push("status = ?");
       params.push(filter.status);
+    }
+    if (filter.account_label_scope === null) {
+      where.push("account_label_scope IS NULL");
+    } else if (filter.account_label_scope !== void 0) {
+      where.push("account_label_scope = ?");
+      params.push(filter.account_label_scope);
     }
     const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
     const rows = this.db.prepare(`SELECT * FROM sessions ${whereClause} ORDER BY created_at DESC`).all(...params);
@@ -6595,6 +6726,7 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_daemon_bin: r.lease_owner_daemon_bin,
       lease_owner_daemon_authority_rank: r.lease_owner_daemon_authority_rank,
       most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
+      account_label_scope: r.account_label_scope ?? null,
       status: r.status
     };
   }
@@ -6981,13 +7113,15 @@ async function runDaemon(options) {
       registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
     }
   }
-  const ensureCommsForSessionFn = async (project, agent) => {
+  const ensureCommsForSessionFn = async (project, agent, options2) => {
     const canonicalProject = normalizeProjectPath(project);
-    activeScopes.add(scopeKey(agent, canonicalProject));
+    const accountLabelScope = options2?.accountLabelScope ?? null;
+    activeScopes.add(scopeKey(agent, canonicalProject, accountLabelScope));
     await ensureCommsForSession({
       project: canonicalProject,
       requestedProject: project,
       agent,
+      accountLabelScope,
       factories: commAdapterFactories,
       rescanFactories: rescanFactoriesForComm,
       bus,
@@ -7273,10 +7407,28 @@ async function addAdapterForRegistration(input) {
 }
 async function ensureCommsForSession(input) {
   const project = normalizeProjectPath(input.project);
-  const registrations = await input.storage.listAccountRegistrations({
+  const accountLabelScope = input.accountLabelScope ?? null;
+  const allRegistrations = await input.storage.listAccountRegistrations({
     project,
     agent: input.agent
   });
+  const registrations = filterRegistrationsByScope(allRegistrations, accountLabelScope);
+  if (accountLabelScope && registrations.length === 0) {
+    const message = `agents-comm-bus: account_label_scope ${accountLabelScope} has no matching account registrations for project=${project} agent=${input.agent}`;
+    console.error(message);
+    await input.audit?.append({
+      timestamp: Date.now(),
+      kind: "account_label_scope_miss",
+      agent: input.agent,
+      detail: {
+        project,
+        account_label_scope: accountLabelScope,
+        registration_count: allRegistrations.length
+      }
+    }).catch(() => {
+    });
+    throw new Error(message);
+  }
   if (registrations.length === 0) {
     await reportRegistrationProjectNearMiss({
       agent: input.agent,
@@ -7398,7 +7550,7 @@ async function reloadAdapters(input) {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id);
-      const scopeActive = input.activeScopes?.has(scopeKey(reg.agent, reg.project)) ?? false;
+      const scopeActive = input.activeScopes != null && isRegistrationScopeActive(reg, input.activeScopes);
       if (!current.has(key) && !scopeActive) continue;
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
@@ -7616,10 +7768,13 @@ async function resolveOwnedAccountKeys(storage, session) {
   if (typeof session !== "string" || session.length === 0) return void 0;
   const sess = await storage.getSession(session);
   if (!sess) return /* @__PURE__ */ new Set();
-  const regs = await storage.listAccountRegistrations({
-    project: sess.project,
-    agent: sess.agent
-  });
+  const regs = filterRegistrationsByScope(
+    await storage.listAccountRegistrations({
+      project: sess.project,
+      agent: sess.agent
+    }),
+    sess.account_label_scope
+  );
   return new Set(regs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
 }
 function sameStringSet(a, b) {
@@ -7662,8 +7817,20 @@ async function appendCredentialResolutionFailedAudit(audit, registration, commId
 function adapterMapKey(commId, accountId) {
   return `${commId}:${accountId}`;
 }
-function scopeKey(agent, project) {
-  return `${agent}:${normalizeProjectPath(project)}`;
+function scopeKey(agent, project, accountLabelScope) {
+  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
+}
+function isRegistrationScopeActive(registration, activeScopes) {
+  const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
+  const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;
+  for (const key of activeScopes) {
+    if (key === legacyKey) return true;
+    if (!key.startsWith(prefix)) continue;
+    const scopeStored = key.slice(prefix.length);
+    const scope = scopeStored.length > 0 ? scopeStored : null;
+    if (filterRegistrationsByScope([registration], scope).length > 0) return true;
+  }
+  return false;
 }
 async function reportRegistrationProjectNearMiss(input) {
   const allForAgent = await input.storage.listAccountRegistrations({ agent: input.agent });
@@ -7706,7 +7873,8 @@ async function handleEnsureCommsForScope(params, ensureCommsForSession2) {
   }
   const agent = typeof params.agent === "string" && params.agent.trim() !== "" ? params.agent : "claude";
   const canonicalProject = normalizeProjectPath(rawProject);
-  await ensureCommsForSession2(canonicalProject, agent);
+  const accountLabelScope = typeof params.account_label_scope === "string" || params.account_label_scope === null ? params.account_label_scope : null;
+  await ensureCommsForSession2(canonicalProject, agent, { accountLabelScope });
   return { ok: true, project: canonicalProject, agent };
 }
 async function dispatchIpc(request, context) {
@@ -7885,21 +8053,43 @@ var ClaudeWakeRegistry = class {
       session: input.session,
       project,
       wakeDir: input.wakeDir ?? claudeWakeDirForProject(project),
-      registeredAt: this.now()
+      registeredAt: this.now(),
+      account_label_scope: input.account_label_scope ?? null
     };
     this.registrations.set(input.session, registration);
     return registration;
   }
-  latestForProject(project) {
+  latestForProject(project, conversation) {
     const resolved = normalizeProjectPath(project);
-    let latest;
-    for (const registration of this.registrations.values()) {
-      if (registration.project !== resolved) continue;
-      if (!latest || registration.registeredAt > latest.registeredAt) {
-        latest = registration;
+    const candidates = [...this.registrations.values()].filter(
+      (registration) => registration.project === resolved
+    );
+    if (candidates.length === 0) return void 0;
+    if (!conversation) {
+      let latest;
+      for (const registration of candidates) {
+        if (!latest || registration.registeredAt > latest.registeredAt) {
+          latest = registration;
+        }
       }
+      return latest;
     }
-    return latest;
+    const match = resolveSessionForConversation(
+      candidates.map((registration) => ({
+        project: registration.project,
+        agent: "claude",
+        account_label_scope: registration.account_label_scope,
+        session_id: registration.session
+      })),
+      conversation,
+      (candidate) => candidate.session_id
+    );
+    if (match) {
+      return candidates.find((registration) => registration.session === match.session_id);
+    }
+    const unlabeled = candidates.filter((registration) => registration.account_label_scope == null);
+    if (unlabeled.length === 1) return unlabeled[0];
+    return void 0;
   }
   getForSession(session) {
     return this.registrations.get(session);
@@ -7913,7 +8103,7 @@ var ClaudeWakeRegistry = class {
   }
   async wakeConversation(conversation, message) {
     if (conversation.agent !== "claude") return false;
-    const registration = this.latestForProject(conversation.project) ?? await this.hydrateLatestForProject(conversation.project);
+    const registration = this.latestForProject(conversation.project, conversation) ?? await this.hydrateLatestForProject(conversation.project, conversation);
     if (!registration) return false;
     const seed = buildWakeSeed({
       comm: message?.chat.comm,
@@ -7935,16 +8125,25 @@ var ClaudeWakeRegistry = class {
    * is deterministic from project, so reconstruction is lossless even
    * across daemon restarts.
    */
-  async hydrateLatestForProject(project) {
+  async hydrateLatestForProject(project, conversation) {
     if (!this.storage) return void 0;
     const resolved = normalizeProjectPath(project);
     const sessions = await this.storage.listSessions({
       project: resolved,
-      agent: "claude"
+      agent: "claude",
+      status: "active"
     });
     if (sessions.length === 0) return void 0;
-    const latest = sessions[0];
-    return this.register({ session: latest.session_id, project: resolved });
+    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+    const pool = live.length > 0 ? live : sessions;
+    const match = conversation ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id) : pool[0];
+    const latest = match ?? pool[0];
+    if (!latest) return void 0;
+    return this.register({
+      session: latest.session_id,
+      project: resolved,
+      account_label_scope: latest.account_label_scope
+    });
   }
   /**
    * On a miss in `writeResponseForSession`, look up the specific session
@@ -7955,7 +8154,11 @@ var ClaudeWakeRegistry = class {
     if (!this.storage) return void 0;
     const record = await this.storage.getSession(session);
     if (!record || record.agent !== "claude") return void 0;
-    return this.register({ session, project: record.project });
+    return this.register({
+      session,
+      project: record.project,
+      account_label_scope: record.account_label_scope
+    });
   }
 };
 
@@ -8116,9 +8319,11 @@ var ClaudeBridge = class {
    * Future-proofing for runtime registration would re-fetch on miss; left
    * as a follow-up.
    */
-  async ensureCommsBestEffort(project) {
+  async ensureCommsBestEffort(project, accountLabelScope) {
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
+      await this.options.ensureCommsForSession?.(project, this.agentId, {
+        accountLabelScope: accountLabelScope ?? null
+      });
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
@@ -8129,10 +8334,13 @@ var ClaudeBridge = class {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return /* @__PURE__ */ new Set();
-      const scoped = await this.options.storage.listAccountRegistrations({
-        project: sess.project,
-        agent: this.agentId
-      });
+      const scoped = filterRegistrationsByScope(
+        await this.options.storage.listAccountRegistrations({
+          project: sess.project,
+          agent: this.agentId
+        }),
+        sess.account_label_scope
+      );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;
@@ -8150,6 +8358,7 @@ var ClaudeBridge = class {
     const connectionId = typeof params.connection_id === "string" ? params.connection_id : `claude:${session}:${crypto2.randomUUID()}`;
     const now = Date.now();
     const wakeDir = typeof params.wake_dir === "string" ? params.wake_dir : typeof params.wakeDir === "string" ? params.wakeDir : void 0;
+    const accountLabelScope = accountLabelScopeFromParams(params);
     await this.options.storage.upsertSession({
       schema_version: SCHEMA_VERSION_SESSION,
       session_id: session,
@@ -8168,6 +8377,7 @@ var ClaudeBridge = class {
       lease_owner_daemon_bin: null,
       lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
+      account_label_scope: accountLabelScope,
       status: "active"
     });
     const acquired = await this.options.storage.acquireSessionLease(
@@ -8177,10 +8387,15 @@ var ClaudeBridge = class {
       this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams(params)
     );
     if (!acquired) {
-      await this.ensureCommsBestEffort(project);
+      await this.ensureCommsBestEffort(project, accountLabelScope);
       return { ok: false, reason: "same-project claude session lease already held" };
     }
-    const registration = this.wake.register({ session, project, wakeDir });
+    const registration = this.wake.register({
+      session,
+      project,
+      wakeDir,
+      account_label_scope: accountLabelScope
+    });
     socket?.once("close", () => {
       void this.options.storage.releaseSessionConnectionLeasePreservingOwner(
         session,
@@ -8188,7 +8403,7 @@ var ClaudeBridge = class {
         Date.now()
       );
     });
-    await this.ensureCommsBestEffort(project);
+    await this.ensureCommsBestEffort(project, accountLabelScope);
     return { ok: true, wake_dir: registration.wakeDir };
   }
   async drainInbound(params) {
@@ -9318,7 +9533,7 @@ var CodexBridge = class {
   ipcMethods = CODEX_IPC_METHODS;
   adapter;
   waiters = /* @__PURE__ */ new Map();
-  sessionsByProject = /* @__PURE__ */ new Map();
+  sessionRoutes = /* @__PURE__ */ new Map();
   activeLeases = /* @__PURE__ */ new Map();
   ownedAccountsCache = null;
   ownerCheckTimer = null;
@@ -9347,15 +9562,17 @@ var CodexBridge = class {
   }
   async onInboundConversation(conversation) {
     if (conversation.agent !== this.agentId) return;
-    const sessions = this.sessionsByProject.get(normalizeProjectPath(conversation.project));
-    const session = sessions?.values().next().value;
+    const session = await this.resolveSessionForConversation(conversation);
     if (!session) {
       await this.auditWake("agent_wake_skipped", conversation, void 0, {
         reason: "no_codex_session_for_project"
       });
       return;
     }
-    const pendingForSession = await this.pendingInboundForConversation(conversation);
+    const pendingForSession = await this.pendingInboundForConversation(
+      conversation,
+      session
+    );
     const mostRecentConversationId = pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
     await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
     await this.auditWake("agent_wake_attempt", conversation, session, {
@@ -9434,6 +9651,7 @@ var CodexBridge = class {
     const project = normalizeProjectPath(requiredString2(params.project, "project"));
     const connectionId = typeof params.connection_id === "string" ? params.connection_id : `codex:${session}:${crypto4.randomUUID()}`;
     const now = Date.now();
+    const accountLabelScope = accountLabelScopeFromParams(params);
     await this.options.storage.upsertSession({
       schema_version: SCHEMA_VERSION_SESSION,
       session_id: session,
@@ -9452,6 +9670,7 @@ var CodexBridge = class {
       lease_owner_daemon_bin: null,
       lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
+      account_label_scope: accountLabelScope,
       status: "active"
     });
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
@@ -9488,18 +9707,18 @@ var CodexBridge = class {
           leaseOwner
         );
         if (!reacquired) {
-          await this.ensureCommsBestEffort(project);
+          await this.ensureCommsBestEffort(project, accountLabelScope);
           return { ok: false, reason: "same-project codex session lease already held" };
         }
       } else if (existing?.lease_holder_connection_id) {
-        await this.ensureCommsBestEffort(project);
+        await this.ensureCommsBestEffort(project, accountLabelScope);
         return {
           ok: true,
           reason: "codex session lease already held; registration refreshed",
           capabilities: this.adapter.capabilities
         };
       } else {
-        await this.ensureCommsBestEffort(project);
+        await this.ensureCommsBestEffort(project, accountLabelScope);
         return { ok: false, reason: "same-project codex session lease already held" };
       }
     }
@@ -9508,8 +9727,8 @@ var CodexBridge = class {
     if (typeof params.app_server_url === "string") {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
-    this.trackSession(project, session);
-    await this.ensureCommsBestEffort(project);
+    this.trackSession(project, session, accountLabelScope);
+    await this.ensureCommsBestEffort(project, accountLabelScope);
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle = params.manage_app_server_lifecycle === true || params.source === "mcp-server";
     const lease = {
@@ -9695,25 +9914,53 @@ var CodexBridge = class {
       });
     });
   }
-  async ensureCommsBestEffort(project) {
+  async ensureCommsBestEffort(project, accountLabelScope) {
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
+      await this.options.ensureCommsForSession?.(project, this.agentId, {
+        accountLabelScope: accountLabelScope ?? null
+      });
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
-  trackSession(project, session) {
-    const sessions = this.sessionsByProject.get(project) ?? /* @__PURE__ */ new Set();
-    sessions.add(session);
-    this.sessionsByProject.set(project, sessions);
+  trackSession(project, session, accountLabelScope) {
+    this.sessionRoutes.set(session, {
+      project,
+      account_label_scope: accountLabelScope
+    });
   }
   untrackSession(project, session) {
-    const sessions = this.sessionsByProject.get(project);
-    if (!sessions) return;
-    sessions.delete(session);
-    if (sessions.size === 0) this.sessionsByProject.delete(project);
+    const route = this.sessionRoutes.get(session);
+    if (!route || route.project !== project) return;
+    this.sessionRoutes.delete(session);
+  }
+  async resolveSessionForConversation(conversation) {
+    const project = normalizeProjectPath(conversation.project);
+    const inMemory = [...this.sessionRoutes.entries()].filter(([, route]) => route.project === project).map(([sessionId, route]) => ({
+      session_id: sessionId,
+      project: route.project,
+      agent: this.agentId,
+      account_label_scope: route.account_label_scope
+    }));
+    const fromMemory = resolveSessionForConversation(
+      inMemory,
+      conversation,
+      (sess) => sess.session_id
+    );
+    if (fromMemory) return fromMemory.session_id;
+    const sessions = await this.options.storage.listSessions({
+      project,
+      agent: this.agentId,
+      status: "active"
+    });
+    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+    const pool = live.length > 0 ? live : sessions;
+    const hydrated = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
+    if (!hydrated) return void 0;
+    this.trackSession(project, hydrated.session_id, hydrated.account_label_scope);
+    return hydrated.session_id;
   }
   async releaseSessionLease(input) {
     if (input.released) return;
@@ -9844,8 +10091,8 @@ var CodexBridge = class {
       );
     }
   }
-  async pendingInboundForConversation(conversation) {
-    const owned = await this.ownedAccountKeys();
+  async pendingInboundForConversation(conversation, session) {
+    const owned = await this.ownedAccountKeys(session);
     return this.options.pendingInbound.filter(
       (entry) => owned.has(accountKey2(entry)) && entry.conversation.project === conversation.project
     );
@@ -9858,10 +10105,13 @@ var CodexBridge = class {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return /* @__PURE__ */ new Set();
-      const scoped = await this.options.storage.listAccountRegistrations({
-        project: sess.project,
-        agent: this.agentId
-      });
+      const scoped = filterRegistrationsByScope(
+        await this.options.storage.listAccountRegistrations({
+          project: sess.project,
+          agent: this.agentId
+        }),
+        sess.account_label_scope
+      );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;
@@ -10068,9 +10318,11 @@ var PiBridge = class {
         throw new Error(`PiBridge does not handle IPC method: ${method}`);
     }
   }
-  async ensureCommsBestEffort(project) {
+  async ensureCommsBestEffort(project, accountLabelScope) {
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
+      await this.options.ensureCommsForSession?.(project, this.agentId, {
+        accountLabelScope: accountLabelScope ?? null
+      });
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
@@ -10081,10 +10333,13 @@ var PiBridge = class {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return /* @__PURE__ */ new Set();
-      const scoped = await this.options.storage.listAccountRegistrations({
-        project: sess.project,
-        agent: this.agentId
-      });
+      const scoped = filterRegistrationsByScope(
+        await this.options.storage.listAccountRegistrations({
+          project: sess.project,
+          agent: this.agentId
+        }),
+        sess.account_label_scope
+      );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
     const registrations = await this.options.storage.listAccountRegistrations({
@@ -10106,6 +10361,7 @@ var PiBridge = class {
     const project = normalizeProjectPath(requiredString3(params.project, "project"));
     const connectionId = requiredString3(params.connection_id, "connection_id");
     const now = Date.now();
+    const accountLabelScope = accountLabelScopeFromParams(params);
     await this.options.storage.upsertSession({
       schema_version: SCHEMA_VERSION_SESSION,
       session_id: session,
@@ -10124,6 +10380,7 @@ var PiBridge = class {
       lease_owner_daemon_bin: null,
       lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
+      account_label_scope: accountLabelScope,
       status: "active"
     });
     const leaseOwner = this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams3(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams3(params);
@@ -10134,7 +10391,7 @@ var PiBridge = class {
       leaseOwner
     );
     if (!acquired) {
-      await this.ensureCommsBestEffort(project);
+      await this.ensureCommsBestEffort(project, accountLabelScope);
       return { ok: false, reason: "pi session lease already held" };
     }
     socket?.once("close", () => {
@@ -10144,7 +10401,7 @@ var PiBridge = class {
         Date.now()
       );
     });
-    await this.ensureCommsBestEffort(project);
+    await this.ensureCommsBestEffort(project, accountLabelScope);
     return { ok: true, session, project, agent: "pi" };
   }
   async drainInbound(params) {

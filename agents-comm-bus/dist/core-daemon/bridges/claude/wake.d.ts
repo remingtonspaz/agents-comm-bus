@@ -4,6 +4,7 @@ export interface ClaudeWakeRegistration {
     project: string;
     wakeDir: string;
     registeredAt: number;
+    account_label_scope: string | null;
 }
 export declare function hashProjectKey(projectPath: string): string;
 export declare function claudeWakeDirForProject(projectPath: string, homeDir?: string): string;
@@ -41,8 +42,12 @@ export declare class ClaudeWakeRegistry {
         session: SessionId;
         project: string;
         wakeDir?: string;
+        account_label_scope?: string | null;
     }): ClaudeWakeRegistration;
-    latestForProject(project: string): ClaudeWakeRegistration | undefined;
+    latestForProject(project: string, conversation?: {
+        comm: string;
+        account_label: string;
+    }): ClaudeWakeRegistration | undefined;
     getForSession(session: SessionId): ClaudeWakeRegistration | undefined;
     writeResponseForSession(session: SessionId, payload: ClaudeWakeResponsePayload): Promise<boolean>;
     wakeConversation(conversation: Conversation, message?: Message): Promise<boolean>;

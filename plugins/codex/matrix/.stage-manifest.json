@@ -84,6 +84,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/012_session_label_scope.sql",
+      "artifact": "plugins/codex/matrix/012_session_label_scope.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/matrix/package.json",
       "type": "package-json"

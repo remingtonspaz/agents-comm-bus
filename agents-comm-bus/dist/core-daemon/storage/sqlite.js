@@ -504,14 +504,15 @@ export class SqliteStorage {
           lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
           lease_owner_daemon_state_root, lease_owner_daemon_bin,
           lease_owner_daemon_authority_rank,
-          most_recent_inbound_conversation_id, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          most_recent_inbound_conversation_id, account_label_scope, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
+          account_label_scope = excluded.account_label_scope,
           status = excluded.status
       `)
-            .run(rec.schema_version, rec.session_id, rec.agent, project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.lease_owner_process_pid, rec.lease_owner_process_label, rec.lease_owner_process_registered_at, rec.lease_owner_daemon_discovery_root, rec.lease_owner_daemon_checkout_root, rec.lease_owner_daemon_state_root, rec.lease_owner_daemon_bin, rec.lease_owner_daemon_authority_rank, rec.most_recent_inbound_conversation_id, rec.status);
+            .run(rec.schema_version, rec.session_id, rec.agent, project, rec.created_at, rec.lease_holder_connection_id, rec.lease_acquired_at, rec.lease_released_at, rec.lease_owner_process_pid, rec.lease_owner_process_label, rec.lease_owner_process_registered_at, rec.lease_owner_daemon_discovery_root, rec.lease_owner_daemon_checkout_root, rec.lease_owner_daemon_state_root, rec.lease_owner_daemon_bin, rec.lease_owner_daemon_authority_rank, rec.most_recent_inbound_conversation_id, rec.account_label_scope ?? null, rec.status);
     }
     async acquireSessionLease(session, connection_id, at, owner) {
         try {
@@ -589,6 +590,13 @@ export class SqliteStorage {
         if (filter.status !== undefined) {
             where.push("status = ?");
             params.push(filter.status);
+        }
+        if (filter.account_label_scope === null) {
+            where.push("account_label_scope IS NULL");
+        }
+        else if (filter.account_label_scope !== undefined) {
+            where.push("account_label_scope = ?");
+            params.push(filter.account_label_scope);
         }
         const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
         const rows = this.db
@@ -810,6 +818,7 @@ export class SqliteStorage {
             lease_owner_daemon_bin: r.lease_owner_daemon_bin,
             lease_owner_daemon_authority_rank: r.lease_owner_daemon_authority_rank,
             most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
+            account_label_scope: r.account_label_scope ?? null,
             status: r.status,
         };
     }

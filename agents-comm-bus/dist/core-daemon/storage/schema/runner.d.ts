@@ -25,5 +25,6 @@ export declare const conversationRegistrationKeyMigration: Migration;
 export declare const multiOpenQueriesMigration: Migration;
 export declare const durablePendingInboundMigration: Migration;
 export declare const sessionDaemonOwnerMigration: Migration;
+export declare const sessionLabelScopeMigration: Migration;
 export declare function runStorageMigrations(db: SqliteLike): Promise<void>;
 //# sourceMappingURL=runner.d.ts.map

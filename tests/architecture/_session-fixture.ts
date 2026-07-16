@@ -50,6 +50,7 @@ export function sessionFixture(
     ...NULL_SESSION_PROCESS_OWNER,
     ...NULL_SESSION_DAEMON_OWNER,
     most_recent_inbound_conversation_id: null,
+    account_label_scope: null,
     status: "active",
     ...overrides,
   };

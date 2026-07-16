@@ -51,8 +51,12 @@ async function defaultPathExists(path: string): Promise<boolean> {
   }
 }
 
-function scopeDedupeKey(agent: AgentId | string, project: string): string {
-  return `${agent}:${normalizeProjectPath(project)}`;
+function scopeDedupeKey(
+  agent: AgentId | string,
+  project: string,
+  accountLabelScope?: string | null,
+): string {
+  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
 }
 
 function classifySessionDaemonOwner(
@@ -123,7 +127,10 @@ export async function runBootScopeRestore(
     const sessions = await input.storage.listSessions({ status: "active" });
     summary.candidates = sessions.length;
 
-    const scopesToRestore = new Map<string, { project: string; agent: AgentId }>();
+    const scopesToRestore = new Map<
+      string,
+      { project: string; agent: AgentId; accountLabelScope: string | null }
+    >();
 
     for (const session of sessions) {
       const pid = session.lease_owner_process_pid;
@@ -160,15 +167,21 @@ export async function runBootScopeRestore(
       // idempotent comm adapter for a defunct session (recoverable, not destructive).
 
       const canonicalProject = normalizeProjectPath(session.project);
-      const key = scopeDedupeKey(session.agent, canonicalProject);
+      const key = scopeDedupeKey(session.agent, canonicalProject, session.account_label_scope);
       if (!scopesToRestore.has(key)) {
-        scopesToRestore.set(key, { project: canonicalProject, agent: session.agent });
+        scopesToRestore.set(key, {
+          project: canonicalProject,
+          agent: session.agent,
+          accountLabelScope: session.account_label_scope,
+        });
       }
     }
 
     for (const scope of scopesToRestore.values()) {
       try {
-        await input.ensureCommsForSession(scope.project, scope.agent);
+        await input.ensureCommsForSession(scope.project, scope.agent, {
+          accountLabelScope: scope.accountLabelScope,
+        });
         summary.restored += 1;
       } catch (error) {
         console.error(

@@ -19,6 +19,11 @@ import {
 } from "agents-comm-bus-core";
 
 import { normalizeProjectPath } from "../../project-path.js";
+import {
+  accountLabelScopeFromParams,
+  filterRegistrationsByScope,
+  resolveSessionForConversation,
+} from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import type { MessageBus } from "../../bus.js";
 import type {
@@ -114,7 +119,10 @@ export class CodexBridge implements AgentBridge {
 
   private readonly adapter: CodexAgentAdapter;
   private readonly waiters = new Map<QueryId, (decision: ResolvedDecision) => void>();
-  private readonly sessionsByProject = new Map<string, Set<SessionId>>();
+  private readonly sessionRoutes = new Map<
+    SessionId,
+    { project: string; account_label_scope: string | null }
+  >();
   private readonly activeLeases = new Map<SessionId, CodexSessionLease>();
   private ownedAccountsCache: Set<string> | null = null;
   private ownerCheckTimer: NodeJS.Timeout | null = null;
@@ -157,15 +165,17 @@ export class CodexBridge implements AgentBridge {
 
   async onInboundConversation(conversation: Conversation): Promise<void> {
     if (conversation.agent !== this.agentId) return;
-    const sessions = this.sessionsByProject.get(normalizeProjectPath(conversation.project));
-    const session = sessions?.values().next().value as SessionId | undefined;
+    const session = await this.resolveSessionForConversation(conversation);
     if (!session) {
       await this.auditWake("agent_wake_skipped", conversation, undefined, {
         reason: "no_codex_session_for_project",
       });
       return;
     }
-    const pendingForSession = await this.pendingInboundForConversation(conversation);
+    const pendingForSession = await this.pendingInboundForConversation(
+      conversation,
+      session,
+    );
     const mostRecentConversationId =
       pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
     await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
@@ -270,6 +280,7 @@ export class CodexBridge implements AgentBridge {
       ? params.connection_id
       : `codex:${session}:${crypto.randomUUID()}`;
     const now = Date.now();
+    const accountLabelScope = accountLabelScopeFromParams(params);
     await this.options.storage.upsertSession({
       schema_version: SCHEMA_VERSION_SESSION,
       session_id: session,
@@ -288,6 +299,7 @@ export class CodexBridge implements AgentBridge {
       lease_owner_daemon_bin: null,
       lease_owner_daemon_authority_rank: null,
       most_recent_inbound_conversation_id: null,
+      account_label_scope: accountLabelScope,
       status: "active",
     });
     const replaceExistingLease =
@@ -328,18 +340,18 @@ export class CodexBridge implements AgentBridge {
           leaseOwner,
         );
         if (!reacquired) {
-          await this.ensureCommsBestEffort(project);
+          await this.ensureCommsBestEffort(project, accountLabelScope);
           return { ok: false, reason: "same-project codex session lease already held" };
         }
       } else if (existing?.lease_holder_connection_id) {
-        await this.ensureCommsBestEffort(project);
+        await this.ensureCommsBestEffort(project, accountLabelScope);
         return {
           ok: true,
           reason: "codex session lease already held; registration refreshed",
           capabilities: this.adapter.capabilities,
         };
       } else {
-        await this.ensureCommsBestEffort(project);
+        await this.ensureCommsBestEffort(project, accountLabelScope);
         return { ok: false, reason: "same-project codex session lease already held" };
       }
     }
@@ -349,9 +361,9 @@ export class CodexBridge implements AgentBridge {
     if (typeof params.app_server_url === "string") {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
-    this.trackSession(project, session);
+    this.trackSession(project, session, accountLabelScope);
     // AGE-38/AGE-45: after connect + trackSession so inbound cannot race ahead of setup.
-    await this.ensureCommsBestEffort(project);
+    await this.ensureCommsBestEffort(project, accountLabelScope);
 
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle =
@@ -568,9 +580,14 @@ export class CodexBridge implements AgentBridge {
     });
   }
 
-  private async ensureCommsBestEffort(project: string): Promise<void> {
+  private async ensureCommsBestEffort(
+    project: string,
+    accountLabelScope?: string | null,
+  ): Promise<void> {
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId);
+      await this.options.ensureCommsForSession?.(project, this.agentId, {
+        accountLabelScope: accountLabelScope ?? null,
+      });
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
@@ -579,17 +596,53 @@ export class CodexBridge implements AgentBridge {
     }
   }
 
-  private trackSession(project: string, session: SessionId): void {
-    const sessions = this.sessionsByProject.get(project) ?? new Set<SessionId>();
-    sessions.add(session);
-    this.sessionsByProject.set(project, sessions);
+  private trackSession(
+    project: string,
+    session: SessionId,
+    accountLabelScope: string | null,
+  ): void {
+    this.sessionRoutes.set(session, {
+      project,
+      account_label_scope: accountLabelScope,
+    });
   }
 
   private untrackSession(project: string, session: SessionId): void {
-    const sessions = this.sessionsByProject.get(project);
-    if (!sessions) return;
-    sessions.delete(session);
-    if (sessions.size === 0) this.sessionsByProject.delete(project);
+    const route = this.sessionRoutes.get(session);
+    if (!route || route.project !== project) return;
+    this.sessionRoutes.delete(session);
+  }
+
+  private async resolveSessionForConversation(
+    conversation: Conversation,
+  ): Promise<SessionId | undefined> {
+    const project = normalizeProjectPath(conversation.project);
+    const inMemory = [...this.sessionRoutes.entries()]
+      .filter(([, route]) => route.project === project)
+      .map(([sessionId, route]) => ({
+        session_id: sessionId,
+        project: route.project,
+        agent: this.agentId,
+        account_label_scope: route.account_label_scope,
+      }));
+    const fromMemory = resolveSessionForConversation(
+      inMemory,
+      conversation,
+      (sess) => sess.session_id,
+    );
+    if (fromMemory) return fromMemory.session_id;
+
+    const sessions = await this.options.storage.listSessions({
+      project,
+      agent: this.agentId,
+      status: "active",
+    });
+    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+    const pool = live.length > 0 ? live : sessions;
+    const hydrated = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
+    if (!hydrated) return undefined;
+    this.trackSession(project, hydrated.session_id, hydrated.account_label_scope);
+    return hydrated.session_id;
   }
 
   private async releaseSessionLease(input: CodexSessionLease): Promise<void> {
@@ -744,8 +797,9 @@ export class CodexBridge implements AgentBridge {
 
   private async pendingInboundForConversation(
     conversation: Conversation,
+    session: SessionId,
   ): Promise<PendingInboundEntry[]> {
-    const owned = await this.ownedAccountKeys();
+    const owned = await this.ownedAccountKeys(session);
     return this.options.pendingInbound.filter((entry) =>
       owned.has(accountKey(entry)) &&
       entry.conversation.project === conversation.project,
@@ -766,10 +820,13 @@ export class CodexBridge implements AgentBridge {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return new Set<string>();
-      const scoped = await this.options.storage.listAccountRegistrations({
-        project: sess.project,
-        agent: this.agentId,
-      });
+      const scoped = filterRegistrationsByScope(
+        await this.options.storage.listAccountRegistrations({
+          project: sess.project,
+          agent: this.agentId,
+        }),
+        sess.account_label_scope,
+      );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
     if (this.ownedAccountsCache) return this.ownedAccountsCache;

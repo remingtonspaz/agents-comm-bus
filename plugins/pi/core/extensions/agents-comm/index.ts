@@ -15,6 +15,10 @@ import { PiDaemonClient, DisconnectedError } from "./daemon-client.js";
 import { formatInboundMessages } from "./inbound-format.js";
 import { piSessionId } from "./session-id.js";
 import { registerCommTools } from "./tools.js";
+import {
+  parseAgentsCommLabels,
+  serializeAccountLabelScope,
+} from "../../../../../core-daemon/session-label-scope.js";
 
 const POLL_INTERVAL_MS = 2_000;
 
@@ -127,6 +131,9 @@ export default function agentsCommExtension(pi: ExtensionAPI): void {
           project: ctx.cwd,
           cwd: ctx.cwd,
           connection_id: connectionId,
+          account_label_scope: serializeAccountLabelScope(
+            parseAgentsCommLabels(process.env.AGENTS_COMM_LABELS),
+          ),
           host: {
             pid: process.pid,
             label: "pi",

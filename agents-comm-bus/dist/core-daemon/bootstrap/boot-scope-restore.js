@@ -22,8 +22,8 @@ async function defaultPathExists(path) {
         return false;
     }
 }
-function scopeDedupeKey(agent, project) {
-    return `${agent}:${normalizeProjectPath(project)}`;
+function scopeDedupeKey(agent, project, accountLabelScope) {
+    return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
 }
 function classifySessionDaemonOwner(session, currentDiscoveryRoot) {
     const stamped = session.lease_owner_daemon_discovery_root;
@@ -107,14 +107,20 @@ export async function runBootScopeRestore(input) {
             // Node built-ins — accepted-narrow v1 residual; worst case re-ensures an
             // idempotent comm adapter for a defunct session (recoverable, not destructive).
             const canonicalProject = normalizeProjectPath(session.project);
-            const key = scopeDedupeKey(session.agent, canonicalProject);
+            const key = scopeDedupeKey(session.agent, canonicalProject, session.account_label_scope);
             if (!scopesToRestore.has(key)) {
-                scopesToRestore.set(key, { project: canonicalProject, agent: session.agent });
+                scopesToRestore.set(key, {
+                    project: canonicalProject,
+                    agent: session.agent,
+                    accountLabelScope: session.account_label_scope,
+                });
             }
         }
         for (const scope of scopesToRestore.values()) {
             try {
-                await input.ensureCommsForSession(scope.project, scope.agent);
+                await input.ensureCommsForSession(scope.project, scope.agent, {
+                    accountLabelScope: scope.accountLabelScope,
+                });
                 summary.restored += 1;
             }
             catch (error) {

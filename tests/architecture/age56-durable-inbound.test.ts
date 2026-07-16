@@ -198,6 +198,7 @@ describe("AGE-56 durable inbound delivery", () => {
         lease_owner_daemon_bin: null,
         lease_owner_daemon_authority_rank: null,
         most_recent_inbound_conversation_id: conversationId,
+        account_label_scope: null,
         status: "active",
       });
       await ctx.storage.insertQuery({
@@ -328,6 +329,7 @@ describe("AGE-56 durable inbound delivery", () => {
         lease_owner_daemon_bin: null,
         lease_owner_daemon_authority_rank: null,
         most_recent_inbound_conversation_id: null,
+        account_label_scope: null,
         status: "active",
       });
 
@@ -381,6 +383,7 @@ describe("AGE-56 durable inbound delivery", () => {
         lease_owner_daemon_bin: null,
         lease_owner_daemon_authority_rank: null,
         most_recent_inbound_conversation_id: null,
+        account_label_scope: null,
         status: "active",
       });
 

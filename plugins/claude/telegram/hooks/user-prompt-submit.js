@@ -3699,7 +3699,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.33";
+var DAEMON_VERSION = "0.2.34";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4891,6 +4891,46 @@ async function entryEnsures(options) {
 // ../hosts/common/hook-degraded.js
 var AGENTS_COMM_BUS_DEGRADED_MESSAGE = "\u26A0\uFE0F agents-comm-bus: daemon unreachable \u2014 comm integration degraded this turn";
 
+// ../hosts/common/comm-labels.js
+function parseAgentsCommLabels(raw) {
+  if (raw === void 0 || raw === null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed.length === 0) return null;
+  const map = {};
+  for (const entry of trimmed.split(",")) {
+    const piece = entry.trim();
+    if (piece.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
+    }
+    const colon = piece.indexOf(":");
+    if (colon <= 0 || colon === piece.length - 1) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    const comm = piece.slice(0, colon).trim();
+    const label = piece.slice(colon + 1).trim();
+    if (comm.length === 0 || label.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    if (map[comm] !== void 0) {
+      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function serializeAccountLabelScope(scope) {
+  if (!scope || Object.keys(scope).length === 0) return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function accountLabelScopeFromEnv(env = process.env) {
+  return serializeAccountLabelScope(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
+}
+
 // ../hosts/claude/hooks/wake-support.js
 import { execSync } from "node:child_process";
 import fs from "node:fs";
@@ -5261,7 +5301,8 @@ async function main() {
       hook: "UserPromptSubmit",
       claude: hookInput,
       owner_process_pid: claudePid,
-      owner_process_label: "claude"
+      owner_process_label: "claude",
+      account_label_scope: accountLabelScopeFromEnv()
     });
     const result = await ipc.request("claude_drain_inbound", {
       agent: "claude",
