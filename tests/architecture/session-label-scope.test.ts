@@ -12,6 +12,7 @@ import { ensureCommsForSession } from "../../core-daemon/daemon.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import {
   parseAgentsCommLabels,
+  registrationMatchesConversationScope,
   serializeAccountLabelScope,
 } from "../../core-daemon/session-label-scope.js";
 import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
@@ -160,6 +161,16 @@ describe("AGE-72 AGENTS_COMM_LABELS parser", () => {
     assert.throws(() => parseAgentsCommLabels("telegram"), /malformed/);
     assert.throws(() => parseAgentsCommLabels("telegram:"), /malformed/);
     assert.throws(() => parseAgentsCommLabels("telegram:main,telegram:sub"), /more than once/);
+  });
+
+  it("does not treat unlisted comms as catch-all for a labeled session", () => {
+    assert.equal(
+      registrationMatchesConversationScope(scopeMain(), {
+        comm: DISCORD,
+        account_label: "subagent",
+      }),
+      false,
+    );
   });
 });
 
