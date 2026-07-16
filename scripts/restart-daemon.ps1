@@ -20,7 +20,12 @@
   Matching is scoped to this repo's serve.js absolute path, so daemons for other
   projects/checkouts are never touched. The daemon is per-user and bootstraps
   lazily, so by default this does NOT respawn -- the next hook/MCP call spawns a
-  fresh single daemon. Pass -Respawn to start one immediately.
+  fresh single daemon. Pass -Respawn to start one immediately. -Respawn requires a valid
+  .agents-comm-bus-dev.json in the repo root (resolved via the canonical
+  dev-config resolver) and injects AGENTS_COMM_BUS_BIN plus optional
+  AGENTS_COMM_BUS_DISCOVERY_ROOT / AGENTS_COMM_BUS_ROOT /
+  AGENTS_COMM_BUS_ADAPTERS_DIR into the respawned process. Missing or
+  rejected dev markers fail loud; there is no production fallback.
 
   SAFETY: default is a DRY RUN. Pass -Exec to actually kill + clear.
 
@@ -82,7 +87,57 @@ $result = [ordered]@{
     killed           = @()
     clearedDiscovery = $false
     respawnedPid     = $null
+    respawnEnv       = $null
     dryRun           = (-not $Exec)
+}
+
+function Get-NodeExecutable {
+    return (Get-Command node -ErrorAction Stop).Source
+}
+
+function Get-DevDaemonRespawnPlan {
+    param([string]$ProjectRoot)
+
+    $helperPath = Join-Path $PSScriptRoot "resolve-dev-daemon-env.mjs"
+    $nodeExe = Get-NodeExecutable
+    $resolveLines = & $nodeExe $helperPath $ProjectRoot 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "-Respawn dev-config resolution failed (exit $LASTEXITCODE): $resolveLines"
+    }
+
+    $parsed = ($resolveLines | Out-String).Trim() | ConvertFrom-Json
+    if ($parsed.status -ne "applied") {
+        $reasons = @($parsed.reasons) -join "; "
+        throw "-Respawn requires applied dev config (status=$($parsed.status)): $reasons"
+    }
+    if (-not $parsed.env.AGENTS_COMM_BUS_BIN) {
+        throw "-Respawn dev-config resolution missing AGENTS_COMM_BUS_BIN"
+    }
+
+    return $parsed
+}
+
+function Start-DevDaemonRespawn {
+    param(
+        [string]$DaemonBin,
+        [hashtable]$RespawnEnv
+    )
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Get-NodeExecutable
+    $psi.Arguments = "`"$DaemonBin`" serve"
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+
+    foreach ($key in [System.Environment]::GetEnvironmentVariables("Process").Keys) {
+        $psi.EnvironmentVariables[$key] = [System.Environment]::GetEnvironmentVariable($key, "Process")
+    }
+    foreach ($entry in $RespawnEnv.GetEnumerator()) {
+        $psi.EnvironmentVariables[$entry.Key] = $entry.Value
+    }
+
+    return [System.Diagnostics.Process]::Start($psi)
 }
 
 if (-not $Exec) {
@@ -124,7 +179,14 @@ Remove-Item $portFile -ErrorAction SilentlyContinue
 $result.clearedDiscovery = $true
 
 if ($Respawn) {
-    $proc = Start-Process -FilePath "node" -ArgumentList @($servePath, "serve") -PassThru -WindowStyle Hidden
+    $devPlan = Get-DevDaemonRespawnPlan -ProjectRoot $RepoDir
+    $respawnEnv = @{}
+    foreach ($prop in $devPlan.env.PSObject.Properties) {
+        $respawnEnv[$prop.Name] = [string]$prop.Value
+    }
+    $result.respawnEnv = $respawnEnv
+
+    $proc = Start-DevDaemonRespawn -DaemonBin $respawnEnv.AGENTS_COMM_BUS_BIN -RespawnEnv $respawnEnv
     $result.respawnedPid = $proc.Id
 }
 
@@ -135,7 +197,8 @@ else {
     Write-Output ("Reaped {0} daemon(s): {1}" -f $killed.Count, ($(if ($killed.Count) { $killed -join ', ' } else { 'none' })))
     Write-Output "Cleared daemon.pid + port."
     if ($Respawn) {
-        Write-Output "Respawned fresh daemon PID $($result.respawnedPid)"
+        $envKeys = @($result.respawnEnv.Keys | Sort-Object) -join ", "
+        Write-Output "Respawned fresh daemon PID $($result.respawnedPid) (env: $envKeys)"
     }
     else {
         Write-Output "No respawn -- the daemon will bootstrap lazily on the next hook/MCP call."
