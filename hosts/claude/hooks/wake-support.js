@@ -98,24 +98,54 @@ function resolveMainWindowHandle(pid) {
   }
 }
 
-export function findCmdAncestor(log = () => {}) {
-  if (os.platform() !== 'win32') return null;
+function defaultSyncSleep(ms) {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function walkCmdClaudeChain(chain, log) {
+  log(`process chain: ${chain.map((c) => `${c.name || '?'}#${c.pid}`).join(' <- ')}`);
+
+  for (let i = 1; i < chain.length; i += 1) {
+    if (chain[i].name === 'cmd.exe' && chain[i - 1].name === 'claude.exe') {
+      const cmdPid = chain[i].pid;
+      const claudePid = chain[i - 1].pid;
+      return {
+        pid: cmdPid,
+        hwnd: resolveMainWindowHandle(cmdPid),
+        claudePid,
+      };
+    }
+  }
+
+  return null;
+}
+
+export function findCmdAncestor(log = () => {}, deps = {}) {
+  // deps.platform: cross-platform test seam (defaults to os.platform()).
+  const platform = deps.platform ?? os.platform();
+  if (platform !== 'win32') return null;
+
+  const backoffMs = deps.backoffMs ?? [0, 500, 1000];
+  const sleep = deps.sleep ?? defaultSyncSleep;
+  const readChain =
+    deps.readChain ??
+    ((chainLog) => {
+      const chain = readProcessChainViaCim(process.pid, chainLog);
+      return walkCmdClaudeChain(chain, chainLog);
+    });
 
   try {
-    const chain = readProcessChainViaCim(process.pid, log);
+    for (let attempt = 0; attempt < backoffMs.length; attempt += 1) {
+      const delayMs = backoffMs[attempt];
+      if (delayMs > 0) sleep(delayMs);
 
-    log(`process chain: ${chain.map((c) => `${c.name || '?'}#${c.pid}`).join(' <- ')}`);
-
-    for (let i = 1; i < chain.length; i += 1) {
-      if (chain[i].name === 'cmd.exe' && chain[i - 1].name === 'claude.exe') {
-        const cmdPid = chain[i].pid;
-        const claudePid = chain[i - 1].pid;
-        return {
-          pid: cmdPid,
-          hwnd: resolveMainWindowHandle(cmdPid),
-          claudePid,
-        };
+      const result = readChain(log);
+      if (result) {
+        log(`findCmdAncestor attempt ${attempt + 1}/${backoffMs.length}: resolved`);
+        return result;
       }
+      log(`findCmdAncestor attempt ${attempt + 1}/${backoffMs.length}: no cmd->claude match`);
     }
 
     log('no persistent cmd.exe ancestor found (parent of claude.exe)');

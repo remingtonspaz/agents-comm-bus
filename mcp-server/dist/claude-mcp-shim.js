@@ -24821,7 +24821,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.35";
+var DAEMON_VERSION = "0.2.36";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -26504,22 +26504,45 @@ function resolveMainWindowHandle(pid) {
     return null;
   }
 }
+function defaultSyncSleep(ms) {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function walkCmdClaudeChain(chain, log2) {
+  log2(`process chain: ${chain.map((c) => `${c.name || "?"}#${c.pid}`).join(" <- ")}`);
+  for (let i = 1; i < chain.length; i += 1) {
+    if (chain[i].name === "cmd.exe" && chain[i - 1].name === "claude.exe") {
+      const cmdPid = chain[i].pid;
+      const claudePid = chain[i - 1].pid;
+      return {
+        pid: cmdPid,
+        hwnd: resolveMainWindowHandle(cmdPid),
+        claudePid
+      };
+    }
+  }
+  return null;
+}
 function findCmdAncestor(log2 = () => {
-}) {
-  if (os3.platform() !== "win32") return null;
+}, deps = {}) {
+  const platform = deps.platform ?? os3.platform();
+  if (platform !== "win32") return null;
+  const backoffMs = deps.backoffMs ?? [0, 500, 1e3];
+  const sleep2 = deps.sleep ?? defaultSyncSleep;
+  const readChain = deps.readChain ?? ((chainLog) => {
+    const chain = readProcessChainViaCim(process.pid, chainLog);
+    return walkCmdClaudeChain(chain, chainLog);
+  });
   try {
-    const chain = readProcessChainViaCim(process.pid, log2);
-    log2(`process chain: ${chain.map((c) => `${c.name || "?"}#${c.pid}`).join(" <- ")}`);
-    for (let i = 1; i < chain.length; i += 1) {
-      if (chain[i].name === "cmd.exe" && chain[i - 1].name === "claude.exe") {
-        const cmdPid = chain[i].pid;
-        const claudePid = chain[i - 1].pid;
-        return {
-          pid: cmdPid,
-          hwnd: resolveMainWindowHandle(cmdPid),
-          claudePid
-        };
+    for (let attempt = 0; attempt < backoffMs.length; attempt += 1) {
+      const delayMs = backoffMs[attempt];
+      if (delayMs > 0) sleep2(delayMs);
+      const result = readChain(log2);
+      if (result) {
+        log2(`findCmdAncestor attempt ${attempt + 1}/${backoffMs.length}: resolved`);
+        return result;
       }
+      log2(`findCmdAncestor attempt ${attempt + 1}/${backoffMs.length}: no cmd->claude match`);
     }
     log2("no persistent cmd.exe ancestor found (parent of claude.exe)");
     return null;
