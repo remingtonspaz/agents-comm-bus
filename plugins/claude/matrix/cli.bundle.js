@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.34";
+var DAEMON_VERSION = "0.2.35";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -6097,6 +6097,56 @@ async function accountAdd(options) {
   }
 }
 
+// ../core-daemon/cli/redact.ts
+function redact(row) {
+  return { ...row, credentials_ref: row.credentials_ref ? "[redacted]" : row.credentials_ref };
+}
+
+// ../core-daemon/cli/account-lookup.ts
+async function accountLookup(options) {
+  const botToken = options.botToken;
+  if (!botToken) {
+    throw new Error("--bot-token is required");
+  }
+  const comm = options.comm ?? "telegram";
+  const identity = await (options.probeIdentity ?? ((creds, accountId) => probeIdentityViaDaemon({
+    comm,
+    credentials: creds,
+    accountId,
+    stateRoot: options.stateRoot
+  })))({ botToken }, options.accountId);
+  const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
+  try {
+    const row = await storage.getAccountByBot(comm, identity.bot_user_id);
+    return {
+      registered: Boolean(row),
+      bot_user_id: identity.bot_user_id,
+      bot_username: identity.bot_username ?? null,
+      registration: row ? redact(row) : null
+    };
+  } finally {
+    await storage.close();
+  }
+}
+function formatAccountLookup(result) {
+  const lines = [
+    "agents-comm-bus account-lookup",
+    "",
+    `registered: ${result.registered ? "yes" : "no"}`,
+    `bot_user_id: ${result.bot_user_id}`,
+    `bot_username: ${result.bot_username ?? "(none)"}`
+  ];
+  if (result.registration) {
+    lines.push(
+      `project: ${result.registration.project}`,
+      `agent: ${result.registration.agent}`,
+      `comm: ${result.registration.comm}`,
+      `account_label: ${result.registration.account_label}`
+    );
+  }
+  return lines.join("\n");
+}
+
 // ../core-daemon/cli/account-list.ts
 async function accountList(options = {}) {
   const storage = await openSqliteStorage(resolveStatePaths().database);
@@ -7355,6 +7405,20 @@ async function main() {
       console.log(JSON.stringify(rows.map(redact), null, 2));
       return;
     }
+    case "account-lookup": {
+      const result = await accountLookup({
+        comm: args.comm,
+        botToken: args.botToken ?? args["bot-token"],
+        accountId: args.accountId ?? args["account-id"],
+        stateRoot: args.stateRoot ?? args["state-root"]
+      });
+      if (args.json !== void 0 || args["json"] !== void 0) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatAccountLookup(result));
+      }
+      return;
+    }
     case "account-remove": {
       await accountRemove({
         project: args.project,
@@ -7519,15 +7583,13 @@ function required(value, label) {
   if (!value) throw new Error(`${label} is required`);
   return value;
 }
-function redact(row) {
-  return { ...row, credentials_ref: row.credentials_ref ? "[redacted]" : row.credentials_ref };
-}
 function printHelp2() {
   console.error(`agents-comm-bus CLI
 
 Account commands:
   agents-comm-bus account-add --project <path> --agent <agent> --account-label <label> (--bot-token <token> | --credentials-file <path.json> | --credentials-json <json>) [--comm <comm>] [--account-id <id>]
   agents-comm-bus account-list [--project <path>] [--agent <agent>] [--comm telegram]
+  agents-comm-bus account-lookup --bot-token <token> [--comm telegram] [--account-id <id>] [--json]
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
   agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) (--bot-token <token> | --credentials-file <path.json> | --credentials-json <json>) [--account-id <id>] [--allow-bot-change]
