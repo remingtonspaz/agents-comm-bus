@@ -32,6 +32,7 @@ import type {
   AgentBridgeFactory,
   DaemonSelfIdentity,
   EnsureCommsForSession,
+  RetirementBlockerSnapshot,
 } from "../../runtime/agent-bridge.js";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -62,6 +63,9 @@ export interface CodexBridgeOptions {
   ensureCommsForSession?: EnsureCommsForSession;
   /** AGE-58: daemon-resolved identity for session ownership stamping. */
   daemonOwner?: DaemonSelfIdentity;
+  /** Injectable timers for deterministic tests (AGE-36 managed cleanup). */
+  setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (handle: unknown) => void;
 }
 
 export interface RegisterCodexSessionResult {
@@ -126,6 +130,9 @@ export class CodexBridge implements AgentBridge {
   private readonly activeLeases = new Map<SessionId, CodexSessionLease>();
   private ownedAccountsCache: Set<string> | null = null;
   private ownerCheckTimer: NodeJS.Timeout | null = null;
+  /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
+  private pendingManagedCleanups = 0;
+  private inFlightManagedCleanups = 0;
 
   constructor(private readonly options: CodexBridgeOptions) {
     this.adapter = new CodexAgentAdapter({
@@ -161,6 +168,19 @@ export class CodexBridge implements AgentBridge {
 
   invalidateRegistrationCaches(): void {
     this.ownedAccountsCache = null;
+  }
+
+  getRetirementBlockers(): RetirementBlockerSnapshot | null {
+    const blockers: Record<string, number> = {};
+    const managedLifecycle = [...this.activeLeases.values()].some(
+      (lease) => !lease.released && lease.manageAppServerLifecycle,
+    );
+    if (this.waiters.size > 0) blockers.open_queries = this.waiters.size;
+    if (managedLifecycle) blockers.managed_lifecycle = 1;
+    if (this.pendingManagedCleanups > 0 || this.inFlightManagedCleanups > 0) {
+      blockers.pending_managed_cleanup = 1;
+    }
+    return Object.keys(blockers).length > 0 ? blockers : null;
   }
 
   async onInboundConversation(conversation: Conversation): Promise<void> {
@@ -459,37 +479,42 @@ export class CodexBridge implements AgentBridge {
       await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
     }
     const resolutionPromise = this.waitForResolution(queryId, query.ttl_seconds);
-    await this.options.bus.openQuery(query);
-    const promptFormat = params.prompt_format ?? queryInput.prompt_format;
-    const promptMessageId = await this.options.bus.send({
-      session,
-      comm: originChat.comm,
-      target: originChat,
-      payload: {
-        text: promptText,
-        format: promptFormat === "html" ? "html" : "plain",
-        inline_keyboard: inlineKeyboardForQuery(queryId),
-      },
-      idempotencyKey: `query:${queryId}`,
-    });
-    // AGE-9: activate reply-to targeting for this prompt (best-effort).
     try {
-      await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
-    } catch (error) {
-      console.error(
-        `agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
-          `${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+      await this.options.bus.openQuery(query);
+      const promptFormat = params.prompt_format ?? queryInput.prompt_format;
+      const promptMessageId = await this.options.bus.send({
+        session,
+        comm: originChat.comm,
+        target: originChat,
+        payload: {
+          text: promptText,
+          format: promptFormat === "html" ? "html" : "plain",
+          inline_keyboard: inlineKeyboardForQuery(queryId),
+        },
+        idempotencyKey: `query:${queryId}`,
+      });
+      // AGE-9: activate reply-to targeting for this prompt (best-effort).
+      try {
+        await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
 
-    const decision = await resolutionPromise;
-    const hookResponse = codexDecisionFromResolution(decision);
-    return {
-      query_id: queryId,
-      hook_response: hookResponse,
-      hookJson: hookResponse,
-      nativeHookJson: hookResponse,
-    };
+      const decision = await resolutionPromise;
+      const hookResponse = codexDecisionFromResolution(decision);
+      return {
+        query_id: queryId,
+        hook_response: hookResponse,
+        hookJson: hookResponse,
+        nativeHookJson: hookResponse,
+      };
+    } catch (error) {
+      this.clearWaiter(queryId);
+      throw error;
+    }
   }
 
   async turnControl(params: Record<string, unknown>): Promise<unknown> {
@@ -569,15 +594,20 @@ export class CodexBridge implements AgentBridge {
     );
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        this.waiters.delete(queryId);
+        this.clearWaiter(queryId);
         resolve(null);
       }, timeoutMs);
+      timer.unref?.();
       this.waiters.set(queryId, (decision) => {
         clearTimeout(timer);
-        this.waiters.delete(queryId);
+        this.clearWaiter(queryId);
         resolve(decision);
       });
     });
+  }
+
+  private clearWaiter(queryId: QueryId): void {
+    this.waiters.delete(queryId);
   }
 
   private async ensureCommsBestEffort(
@@ -717,10 +747,21 @@ export class CodexBridge implements AgentBridge {
 
   private scheduleManagedAppServerCleanup(session: SessionId): void {
     const delay = this.options.appServerCleanupDelayMs ?? DEFAULT_APP_SERVER_CLEANUP_DELAY_MS;
-    const timer = setTimeout(() => {
-      void this.cleanupManagedAppServerIfLeaseIsIdle(session);
+    this.pendingManagedCleanups += 1;
+    const setTimeoutFn =
+      this.options.setTimeoutFn ??
+      ((fn: () => void, ms: number) => {
+        const handle = setTimeout(fn, ms);
+        handle.unref?.();
+        return handle;
+      });
+    setTimeoutFn(() => {
+      this.pendingManagedCleanups -= 1;
+      this.inFlightManagedCleanups += 1;
+      void this.cleanupManagedAppServerIfLeaseIsIdle(session).finally(() => {
+        this.inFlightManagedCleanups -= 1;
+      });
     }, delay);
-    timer.unref?.();
   }
 
   private async cleanupManagedAppServerIfLeaseIsIdle(session: SessionId): Promise<void> {

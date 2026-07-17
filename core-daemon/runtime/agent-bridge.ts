@@ -14,6 +14,9 @@ import type { MessageBus } from "../bus.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 
+/** Daemon-local retirement blockers: stable reason key → count (AGE-36). */
+export type RetirementBlockerSnapshot = Readonly<Record<string, number>>;
+
 export type EnsureCommsForSessionOptions = {
   /** Canonical serialized account_label_scope JSON, or null when unscoped. */
   accountLabelScope?: string | null;
@@ -109,6 +112,12 @@ export interface AgentBridge {
     params: Record<string, unknown>,
     ctx: { socket?: { once(event: "close", handler: () => void): void } },
   ): Promise<unknown>;
+
+  /**
+   * Optional (AGE-36): daemon-local retirement blockers. Absent or null means no
+   * blocker from this bridge. Must not consult the shared DB for global counts.
+   */
+  getRetirementBlockers?(): RetirementBlockerSnapshot | null;
 }
 
 export interface AgentBridgeFactory {

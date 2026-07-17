@@ -15,6 +15,7 @@ import { normalizeProjectPath } from "../../project-path.js";
 import { accountLabelScopeFromParams, filterRegistrationsByScope, } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
+import { ClaudeOpenQueryTracker } from "./open-query-tracker.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const CLAUDE_IPC_METHODS = new Set([
     "claude_register_session",
@@ -29,12 +30,18 @@ export class ClaudeBridge {
     ownedAccountsCache = null;
     /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
     questionSequences = new Map();
+    /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
+    openQueryTracker;
     constructor(options) {
         this.options = options;
         // pendingInboundMax preserved as an option for symmetry but the daemon
         // now caps the shared queue itself; this class only drains it.
         void options.pendingInboundMax;
         this.wake.setStorage(options.storage);
+        this.openQueryTracker = new ClaudeOpenQueryTracker({
+            setTimeoutFn: options.setTimeoutFn,
+            clearTimeoutFn: options.clearTimeoutFn,
+        });
     }
     /**
      * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
@@ -47,6 +54,10 @@ export class ClaudeBridge {
             onResolved: async (query, decision) => {
                 if (query.agent !== this.agentId)
                     return;
+                // Resolution is authoritative for retirement eligibility. Clear the
+                // daemon-local blocker before any wake I/O or sequencer step can fail;
+                // a resolved query must never keep this daemon alive until its TTL.
+                this.openQueryTracker.clearOpenQuery(query.query_id);
                 const payload = wakePayloadFromDecision(decision);
                 if (!payload)
                     return;
@@ -93,6 +104,9 @@ export class ClaudeBridge {
     detachComm(_commId, _accountId) {
         // ClaudeBridge keeps no per-adapter state beyond the onCallback handler,
         // which is owned by the adapter and discarded when the adapter stops.
+    }
+    getRetirementBlockers() {
+        return this.openQueryTracker.getRetirementBlockers();
     }
     invalidateRegistrationCaches() {
         this.ownedAccountsCache = null;
@@ -380,8 +394,10 @@ export class ClaudeBridge {
             // new AskUserQuestion. openNextQuestion passes supersede=false, so a
             // sequence never clears itself mid-flight.
             this.clearQuestionSequencesForSession(input.session);
+            this.openQueryTracker.clearOpenQueriesForSession(input.session);
         }
         await this.options.bus.openQuery(query);
+        this.openQueryTracker.trackOpenQuery(input.session, queryId, input.ttlSeconds);
         if (input.originChat) {
             try {
                 const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
@@ -421,6 +437,7 @@ export class ClaudeBridge {
                     console.error(`agents-comm-bus: failed to cancel unsent query ${queryId}: ` +
                         `${cancelError instanceof Error ? cancelError.message : String(cancelError)}`);
                 }
+                this.openQueryTracker.clearOpenQuery(queryId);
                 throw error;
             }
         }

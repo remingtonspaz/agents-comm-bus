@@ -3,7 +3,7 @@
   "agent": "pi",
   "comm": "matrix",
   "plugin_version": "0.1.0",
-  "daemon_bundle_version": "0.2.36",
+  "daemon_bundle_version": "0.2.37",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
     "matrix": "0.2.6"

@@ -10,7 +10,7 @@
  */
 import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type Message, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
@@ -34,6 +34,9 @@ export interface ClaudeBridgeOptions {
     ensureCommsForSession?: EnsureCommsForSession;
     /** AGE-58: daemon-resolved identity for session ownership stamping. */
     daemonOwner?: DaemonSelfIdentity;
+    /** Injectable timers for deterministic tests (AGE-36 TTL tracking). */
+    setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+    clearTimeoutFn?: (handle: unknown) => void;
 }
 /**
  * Outcome shape returned by claude_register_session.
@@ -60,6 +63,8 @@ export declare class ClaudeBridge implements AgentBridge {
     private ownedAccountsCache;
     /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
     private readonly questionSequences;
+    /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
+    private readonly openQueryTracker;
     constructor(options: ClaudeBridgeOptions);
     /**
      * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
@@ -70,6 +75,7 @@ export declare class ClaudeBridge implements AgentBridge {
     attach(comms: CommAdapter[]): void;
     attachComm(comm: CommAdapter): void;
     detachComm(_commId: CommId, _accountId: AccountId): void;
+    getRetirementBlockers(): RetirementBlockerSnapshot | null;
     invalidateRegistrationCaches(): void;
     onInboundConversation(conversation: Conversation, message?: Message): Promise<void>;
     private auditWakeFailure;

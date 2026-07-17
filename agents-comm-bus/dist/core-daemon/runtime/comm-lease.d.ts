@@ -192,8 +192,17 @@ export declare class CommLeaseArbiter {
      * denial logs again.
      */
     private readonly lastDenyAudit;
+    /** AGE-36: runtime-local inventory of leases this arbiter currently holds. */
+    private readonly heldLeases;
     constructor(options: CommLeaseArbiterOptions);
     get authorityRank(): AuthorityRank;
+    /** Count of `(comm, resource)` leases this arbiter currently owns. */
+    heldLeaseCount(): number;
+    /** Snapshot of held lease keys — for retirement eligibility and tests. */
+    heldLeaseSnapshot(): ReadonlyArray<{
+        comm_id: string;
+        resource_id: string;
+    }>;
     /**
      * Attempt to acquire (or reclaim) the lease for `(commId, resourceId)`. Reads
      * the existing record under a guard lock, applies {@link decideContention},
@@ -207,9 +216,10 @@ export declare class CommLeaseArbiter {
      * stop the inner adapter.
      */
     renew(commId: string, resourceId: string): Promise<RenewResult>;
-    /** Delete the lease file, but only if it is still self's. Best-effort. */
+    /** Delete the lease file when still self's; always drop local held inventory. */
     release(commId: string, resourceId: string): Promise<void>;
     private leasePath;
+    private leaseKey;
     private buildRecord;
     private placeholderHolder;
     private readRecord;

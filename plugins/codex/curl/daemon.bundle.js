@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.36";
+var DAEMON_VERSION = "0.2.37";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3839,6 +3839,8 @@ var CommLeaseArbiter = class {
    * denial logs again.
    */
   lastDenyAudit = /* @__PURE__ */ new Map();
+  /** AGE-36: runtime-local inventory of leases this arbiter currently holds. */
+  heldLeases = /* @__PURE__ */ new Set();
   constructor(options) {
     this.self = options.self;
     this.lastIpcServedAt = options.lastIpcServedAt;
@@ -3851,6 +3853,20 @@ var CommLeaseArbiter = class {
   }
   get authorityRank() {
     return this.self.authorityRank;
+  }
+  /** Count of `(comm, resource)` leases this arbiter currently owns. */
+  heldLeaseCount() {
+    return this.heldLeases.size;
+  }
+  /** Snapshot of held lease keys — for retirement eligibility and tests. */
+  heldLeaseSnapshot() {
+    return [...this.heldLeases].map((key) => {
+      const sep = key.indexOf(":");
+      return {
+        comm_id: key.slice(0, sep),
+        resource_id: key.slice(sep + 1)
+      };
+    });
   }
   /**
    * Attempt to acquire (or reclaim) the lease for `(commId, resourceId)`. Reads
@@ -3912,6 +3928,7 @@ var CommLeaseArbiter = class {
           previous_holder_rank: existing?.authorityRank ?? null
         }
       });
+      this.heldLeases.add(this.leaseKey(commId, resourceId));
       return { ok: true, record };
     } finally {
       await this.releaseGuard(leasePath, guard);
@@ -3931,11 +3948,13 @@ var CommLeaseArbiter = class {
       if (holder && holder.pid === this.self.pid) {
         return { ok: true, record: holder };
       }
+      this.heldLeases.delete(this.leaseKey(commId, resourceId));
       return { ok: false, reason: "lost", holder };
     }
     try {
       const existing = await this.readRecord(leasePath);
       if (!existing || existing.pid !== this.self.pid) {
+        this.heldLeases.delete(this.leaseKey(commId, resourceId));
         this.audit({
           kind: "comm_lease_lost",
           comm_id: commId,
@@ -3959,9 +3978,10 @@ var CommLeaseArbiter = class {
       await this.releaseGuard(leasePath, guard);
     }
   }
-  /** Delete the lease file, but only if it is still self's. Best-effort. */
+  /** Delete the lease file when still self's; always drop local held inventory. */
   async release(commId, resourceId) {
     const leasePath = this.leasePath(commId, resourceId);
+    const key = this.leaseKey(commId, resourceId);
     const guard = await this.acquireGuard(leasePath);
     try {
       const existing = await this.readRecord(leasePath);
@@ -3975,11 +3995,15 @@ var CommLeaseArbiter = class {
         });
       }
     } finally {
+      this.heldLeases.delete(key);
       if (guard) await this.releaseGuard(leasePath, guard);
     }
   }
   leasePath(commId, resourceId) {
     return commLeasePath(commId, resourceId, this.homeDir);
+  }
+  leaseKey(commId, resourceId) {
+    return `${commId}:${resourceId}`;
   }
   buildRecord(commId, resourceId, existing) {
     const now = this.now();
@@ -4362,7 +4386,12 @@ async function startIpcServer(options = {}) {
   const daemonVersion = options.daemonVersion ?? DAEMON_VERSION;
   const metadata = options.metadata ?? {};
   const server = new import_websocket_server.default({ host, port });
+  let liveConnectionCount = 0;
   server.on("connection", (socket) => {
+    liveConnectionCount += 1;
+    socket.once("close", () => {
+      liveConnectionCount -= 1;
+    });
     handleHandshake(socket, { protocolVersion, daemonVersion, metadata, onRequest: options.onRequest });
   });
   await new Promise((resolve, reject) => {
@@ -4380,6 +4409,7 @@ async function startIpcServer(options = {}) {
     host,
     url: `ws://${host}:${boundPort}`,
     hello,
+    getLiveConnectionCount: () => liveConnectionCount,
     close: () => new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     })
@@ -4789,8 +4819,118 @@ async function runBootScopeRestore(input) {
   }
 }
 
+// ../core-daemon/bootstrap/daemon-retirement.ts
+import { readFile as readFile3, rm as rm3 } from "node:fs/promises";
+var IDLE_NO_OWNED_RESOURCES_REASON = "idle_no_owned_resources";
+function discoveryFilesMatchSelf(input) {
+  return input.onDiskPid === input.selfPid && input.onDiskPort === input.selfPort;
+}
+async function removeDiscoveryFilesIfOwned(input) {
+  const paths = resolveDiscoveryPaths({
+    stateRoot: input.stateRoot,
+    discoveryRoot: input.discoveryRoot
+  });
+  const readPid = input.readPidFile ?? readDiscoveryPidFile;
+  const readPort = input.readPortFile ?? readDiscoveryPortFile;
+  const onDiskPid = await readPid(paths.pidFile);
+  const onDiskPort = await readPort(paths.portFile);
+  if (!discoveryFilesMatchSelf({
+    selfPid: input.selfPid,
+    selfPort: input.selfPort,
+    onDiskPid,
+    onDiskPort
+  })) {
+    return false;
+  }
+  await rm3(paths.pidFile, { force: true });
+  await rm3(paths.portFile, { force: true });
+  return true;
+}
+var globalRetiring = false;
+async function retireDaemon(options) {
+  if (globalRetiring) return false;
+  globalRetiring = true;
+  const selfPid = options.selfPid ?? process.pid;
+  const log = options.log ?? ((message) => console.error(message));
+  const exit = options.exitProcess ?? ((code) => process.exit(code));
+  try {
+    bestEffortSync(options.stopTimers, "stop daemon retirement timers");
+    await appendRetirementAudit(options.audit, options.reason, selfPid, options.port);
+    log(
+      `agents-comm-bus: retiring daemon pid=${selfPid} port=${options.port} reason=${options.reason}`
+    );
+    await bestEffort(options.stopBus, "stop comm adapters during daemon retirement");
+    await bestEffort(options.closeIpc, "close IPC server during daemon retirement");
+    await bestEffort(options.closeStorage, "close storage during daemon retirement");
+    const removeDiscovery = options.removeDiscoveryFiles ?? removeDiscoveryFilesIfOwned;
+    await bestEffort(
+      () => removeDiscovery({
+        stateRoot: options.stateRoot,
+        discoveryRoot: options.discoveryRoot,
+        selfPid,
+        selfPort: options.port
+      }).then(() => void 0),
+      "remove discovery files during daemon retirement"
+    );
+  } catch (error) {
+    log(
+      `agents-comm-bus: daemon retirement failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    exit(0);
+  }
+  return true;
+}
+async function appendRetirementAudit(audit, reason, selfPid, port) {
+  if (!audit) return;
+  await audit.append({
+    timestamp: Date.now(),
+    kind: "daemon_retired",
+    detail: { reason, self_pid: selfPid, port }
+  }).catch(() => {
+  });
+}
+async function bestEffort(action, label) {
+  if (!action) return;
+  try {
+    await action();
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: failed to ${label}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+function bestEffortSync(action, label) {
+  if (!action) return;
+  try {
+    action();
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: failed to ${label}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+async function readDiscoveryPidFile(pidFile) {
+  try {
+    const raw = (await readFile3(pidFile, "utf8")).trim();
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+async function readDiscoveryPortFile(portFile) {
+  try {
+    const raw = (await readFile3(portFile, "utf8")).trim();
+    const port = Number(raw);
+    return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
 // ../core-daemon/bootstrap/pid-watchdog.ts
-import { readFile as readFile3 } from "node:fs/promises";
+import { readFile as readFile4 } from "node:fs/promises";
 function startDaemonPidWatchdog(options) {
   const intervalMs = options.intervalMs ?? 3e4;
   const initialDelayMs = options.initialDelayMs ?? 5e3;
@@ -4939,7 +5079,7 @@ async function checkDaemonPidOwnership(options) {
 }
 async function readPidFile(pidFile) {
   try {
-    const raw = (await readFile3(pidFile, "utf8")).trim();
+    const raw = (await readFile4(pidFile, "utf8")).trim();
     const pid = Number(raw);
     if (Number.isInteger(pid) && pid > 0) return { status: "pid", pid };
     return { status: "invalid", raw };
@@ -5778,7 +5918,7 @@ function adapterKey(commId, accountId) {
 import { createRequire } from "node:module";
 
 // ../core-daemon/storage/schema/runner.ts
-import { readFile as readFile4 } from "node:fs/promises";
+import { readFile as readFile5 } from "node:fs/promises";
 import { dirname as dirname2, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
 var SqliteMigrationRunner = class {
@@ -5807,7 +5947,7 @@ var initialMigration = {
   version: 1,
   description: "initial storage schema",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "001_initial.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "001_initial.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5815,7 +5955,7 @@ var conversationAgentIdentityMigration = {
   version: 2,
   description: "include agent in conversation identity",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "002_conversation_agent_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5823,7 +5963,7 @@ var allowlistMigration = {
   version: 3,
   description: "add allowlist_global and allowlist_per_bot tables",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "003_allowlist.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "003_allowlist.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5831,7 +5971,7 @@ var sessionOwnerProcessMigration = {
   version: 4,
   description: "track owning agent process for session leases",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "004_session_owner_process.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "004_session_owner_process.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5839,7 +5979,7 @@ var conversationBotIdentityMigration = {
   version: 5,
   description: "store receiving bot identity on conversations",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "005_conversation_bot_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5847,7 +5987,7 @@ var registrationIdentityMigration = {
   version: 6,
   description: "add immutable registration_id surrogate to registrations + conversations",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "006_registration_identity.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "006_registration_identity.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5855,7 +5995,7 @@ var registrationPkMigration = {
   version: 7,
   description: "make registration_id the canonical primary key of account_registrations",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "007_registration_pk.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "007_registration_pk.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5863,7 +6003,7 @@ var conversationRegistrationKeyMigration = {
   version: 8,
   description: "re-key conversations on (registration_id, chat, thread) + drop account_label",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "008_conversation_registration_key.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "008_conversation_registration_key.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5871,7 +6011,7 @@ var multiOpenQueriesMigration = {
   version: 9,
   description: "AGE-9: drop the one-open-query-per-session unique index (policy moves to callers)",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "009_multi_open_queries.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "009_multi_open_queries.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5879,7 +6019,7 @@ var durablePendingInboundMigration = {
   version: 10,
   description: "AGE-56: durable pending inbound delivery rows",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "010_durable_pending_inbound.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "010_durable_pending_inbound.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5887,7 +6027,7 @@ var sessionDaemonOwnerMigration = {
   version: 11,
   description: "AGE-58: stamp daemon-instance identity on session leases",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "011_session_daemon_owner.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "011_session_daemon_owner.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -5895,7 +6035,7 @@ var sessionLabelScopeMigration = {
   version: 12,
   description: "AGE-72: per-session comm account-label scoping",
   async up(ctx) {
-    const sql = await readFile4(join3(schemaDir, "012_session_label_scope.sql"), "utf8");
+    const sql = await readFile5(join3(schemaDir, "012_session_label_scope.sql"), "utf8");
     await ctx.exec(sql);
   }
 };
@@ -6900,6 +7040,116 @@ function createCommFactoryRegistry(input) {
   };
 }
 
+// ../core-daemon/runtime/daemon-idle-reaper.ts
+var DEFAULT_IDLE_REAPER_GRACE_MS = 9e4;
+var DEFAULT_IDLE_REAPER_INTERVAL_MS = 5e3;
+function sampleStructuralEligibility(input) {
+  const heldLeases = input.heldLeaseCount();
+  const liveIpcConnections = input.liveIpcConnectionCount();
+  const pendingInbound = input.pendingInboundLength();
+  const inFlightAdapters = input.inFlightAdapterCount();
+  const rawBridgeBlockers = input.bridgeBlockers();
+  const bridgeBlockers = {};
+  for (const [agentId, snapshot] of Object.entries(rawBridgeBlockers)) {
+    if (snapshot) bridgeBlockers[agentId] = snapshot;
+  }
+  const ipcQuietForGrace = input.now - input.lastIpcServedAt >= input.graceMs;
+  const reasons = [];
+  if (heldLeases > 0) reasons.push("held_leases");
+  if (liveIpcConnections > 0) reasons.push("live_ipc_connections");
+  if (pendingInbound > 0) reasons.push("pending_inbound");
+  if (inFlightAdapters > 0) reasons.push("in_flight_adapters");
+  if (Object.keys(bridgeBlockers).length > 0) reasons.push("bridge_blockers");
+  return {
+    structurallyEligible: reasons.length === 0,
+    blockers: {
+      held_leases: heldLeases,
+      live_ipc_connections: liveIpcConnections,
+      pending_inbound: pendingInbound,
+      in_flight_adapters: inFlightAdapters,
+      bridge_blockers: bridgeBlockers,
+      ipc_quiet_for_grace: ipcQuietForGrace
+    },
+    reasons
+  };
+}
+function shouldIdleReaperRetire(input) {
+  if (!input.structurallyEligible || input.structuralEligibleSince === null) return false;
+  return input.now - input.structuralEligibleSince >= input.graceMs && input.now - input.lastIpcServedAt >= input.graceMs;
+}
+function startIdleReaper(options) {
+  const graceMs = options.graceMs ?? DEFAULT_IDLE_REAPER_GRACE_MS;
+  const intervalMs = options.intervalMs ?? DEFAULT_IDLE_REAPER_INTERVAL_MS;
+  const nowFn = options.now ?? Date.now;
+  const setIntervalFn = options.setIntervalFn ?? ((fn, ms) => {
+    const handle = setInterval(fn, ms);
+    handle.unref?.();
+    return handle;
+  });
+  const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
+  const setTimeoutFn = options.setTimeoutFn ?? ((fn, ms) => {
+    const handle = setTimeout(fn, ms);
+    handle.unref?.();
+    return handle;
+  });
+  const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
+  const log = options.log ?? (() => {
+  });
+  let structuralEligibleSince = null;
+  let retired = false;
+  let interval = null;
+  const tick = () => {
+    if (retired) return;
+    const now = nowFn();
+    const structural = sampleStructuralEligibility({
+      now,
+      lastIpcServedAt: options.lastIpcServedAt(),
+      graceMs,
+      heldLeaseCount: options.heldLeaseCount,
+      liveIpcConnectionCount: options.liveIpcConnectionCount,
+      pendingInboundLength: options.pendingInboundLength,
+      inFlightAdapterCount: options.inFlightAdapterCount,
+      bridgeBlockers: options.bridgeBlockers
+    });
+    if (!structural.structurallyEligible) {
+      structuralEligibleSince = null;
+      return;
+    }
+    if (structuralEligibleSince === null) {
+      structuralEligibleSince = now;
+    }
+    if (shouldIdleReaperRetire({
+      now,
+      graceMs,
+      structuralEligibleSince,
+      lastIpcServedAt: options.lastIpcServedAt(),
+      structurallyEligible: true
+    })) {
+      retired = true;
+      log(
+        `agents-comm-bus: idle reaper retiring daemon after ${graceMs}ms with no owned resources (structural blockers cleared at ${new Date(structuralEligibleSince).toISOString()})`
+      );
+      void Promise.resolve(options.retire()).catch((error) => {
+        console.error(
+          `agents-comm-bus: idle reaper retire failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    }
+  };
+  const initialDelayMs = options.initialDelayMs ?? intervalMs;
+  const initial = setTimeoutFn(() => {
+    tick();
+    interval = setIntervalFn(tick, intervalMs);
+  }, initialDelayMs);
+  return {
+    stop() {
+      clearTimeoutFn(initial);
+      if (interval != null) clearIntervalFn(interval);
+      interval = null;
+    }
+  };
+}
+
 // ../core-daemon/runtime/durable-inbound.ts
 function durableInboundKey(entry) {
   return deliveryKey(
@@ -7311,24 +7561,60 @@ async function runDaemon(options) {
     throw error;
   }
   await bus.start();
-  startDaemonPidWatchdog({
+  const collectBridgeBlockers = () => {
+    const blockers = {};
+    for (const bridge of bridges) {
+      blockers[bridge.agentId] = bridge.getRetirementBlockers?.() ?? null;
+    }
+    return blockers;
+  };
+  let pidWatchdogHandle = null;
+  let idleReaperHandle = null;
+  const runDaemonRetirement = async (reason, recordAudit) => {
+    await retireDaemon({
+      reason,
+      port: server.port,
+      stateRoot: paths.root,
+      discoveryRoot: discoveryPaths.root,
+      audit: recordAudit ? audit : void 0,
+      stopTimers: () => {
+        pidWatchdogHandle?.stop();
+        idleReaperHandle?.stop();
+      },
+      stopBus: () => bestEffortWithTimeout(
+        () => bus.stop(),
+        5e3,
+        "stop comm adapters during daemon retirement"
+      ),
+      closeIpc: () => bestEffortWithTimeout(
+        () => server.close(),
+        1e3,
+        "close IPC server during daemon retirement"
+      ),
+      closeStorage: () => storage.close()
+    });
+  };
+  pidWatchdogHandle = startDaemonPidWatchdog({
     stateRoot: paths.root,
     discoveryRoot: discoveryPaths.root,
     pidFile: discoveryPaths.pidFile,
     port: server.port,
     audit,
     stopDaemon: async () => {
-      await bestEffortWithTimeout(
-        () => bus.stop(),
-        5e3,
-        "stop comm adapters during daemon retirement"
-      );
-      await bestEffortWithTimeout(
-        () => server.close(),
-        1e3,
-        "close IPC server during daemon retirement"
-      );
+      await runDaemonRetirement("daemon_superseded", false);
     }
+  });
+  idleReaperHandle = startIdleReaper({
+    lastIpcServedAt: () => ipcActivity.value,
+    heldLeaseCount: () => leaseArbiter.heldLeaseCount(),
+    liveIpcConnectionCount: () => server.getLiveConnectionCount(),
+    pendingInboundLength: () => pendingInbound.length,
+    inFlightAdapterCount: () => inFlightAdapters.size,
+    bridgeBlockers: collectBridgeBlockers,
+    retire: async () => {
+      await runDaemonRetirement(IDLE_NO_OWNED_RESOURCES_REASON, true);
+    },
+    log: (message) => console.error(message)
   });
   void runBootScopeRestore({
     stateRoot: paths.root,
@@ -8162,6 +8448,67 @@ var ClaudeWakeRegistry = class {
   }
 };
 
+// ../core-daemon/bridges/claude/open-query-tracker.ts
+var ClaudeOpenQueryTracker = class {
+  openQueriesBySession = /* @__PURE__ */ new Map();
+  querySessions = /* @__PURE__ */ new Map();
+  queryTtlTimers = /* @__PURE__ */ new Map();
+  setTimeoutFn;
+  clearTimeoutFn;
+  constructor(options = {}) {
+    this.setTimeoutFn = options.setTimeoutFn ?? ((fn, ms) => {
+      const handle = setTimeout(fn, ms);
+      handle.unref?.();
+      return handle;
+    });
+    this.clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
+  }
+  openQueryCount() {
+    let count = 0;
+    for (const set of this.openQueriesBySession.values()) count += set.size;
+    return count;
+  }
+  getRetirementBlockers() {
+    const count = this.openQueryCount();
+    return count > 0 ? { open_queries: count } : null;
+  }
+  trackOpenQuery(session, queryId, ttlSeconds) {
+    let set = this.openQueriesBySession.get(session);
+    if (!set) {
+      set = /* @__PURE__ */ new Set();
+      this.openQueriesBySession.set(session, set);
+    }
+    set.add(queryId);
+    this.querySessions.set(queryId, session);
+    const ttlMs = Math.max(1, Math.round(ttlSeconds * 1e3));
+    const timer = this.setTimeoutFn(() => {
+      this.clearOpenQuery(queryId);
+    }, ttlMs);
+    this.queryTtlTimers.set(queryId, timer);
+  }
+  clearOpenQuery(queryId) {
+    const timer = this.queryTtlTimers.get(queryId);
+    if (timer != null) {
+      this.clearTimeoutFn(timer);
+      this.queryTtlTimers.delete(queryId);
+    }
+    const session = this.querySessions.get(queryId);
+    this.querySessions.delete(queryId);
+    if (!session) return;
+    const set = this.openQueriesBySession.get(session);
+    if (!set) return;
+    set.delete(queryId);
+    if (set.size === 0) this.openQueriesBySession.delete(session);
+  }
+  clearOpenQueriesForSession(session) {
+    const set = this.openQueriesBySession.get(session);
+    if (!set) return;
+    for (const queryId of [...set]) {
+      this.clearOpenQuery(queryId);
+    }
+  }
+};
+
 // ../core-daemon/bridges/claude/bridge.ts
 var DEFAULT_TTL_SECONDS = 3600;
 var CLAUDE_IPC_METHODS = /* @__PURE__ */ new Set([
@@ -8174,6 +8521,10 @@ var ClaudeBridge = class {
     this.options = options;
     void options.pendingInboundMax;
     this.wake.setStorage(options.storage);
+    this.openQueryTracker = new ClaudeOpenQueryTracker({
+      setTimeoutFn: options.setTimeoutFn,
+      clearTimeoutFn: options.clearTimeoutFn
+    });
   }
   options;
   agentId = "claude";
@@ -8182,6 +8533,8 @@ var ClaudeBridge = class {
   ownedAccountsCache = null;
   /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
   questionSequences = /* @__PURE__ */ new Map();
+  /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
+  openQueryTracker;
   /**
    * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
    * shared dispatch sink (pendingInbound + onInboundConversation fan-out)
@@ -8192,6 +8545,7 @@ var ClaudeBridge = class {
     this.options.bus.setResolveSink({
       onResolved: async (query, decision) => {
         if (query.agent !== this.agentId) return;
+        this.openQueryTracker.clearOpenQuery(query.query_id);
         const payload = wakePayloadFromDecision(decision);
         if (!payload) return;
         try {
@@ -8233,6 +8587,9 @@ var ClaudeBridge = class {
     }
   }
   detachComm(_commId, _accountId) {
+  }
+  getRetirementBlockers() {
+    return this.openQueryTracker.getRetirementBlockers();
   }
   invalidateRegistrationCaches() {
     this.ownedAccountsCache = null;
@@ -8506,8 +8863,10 @@ var ClaudeBridge = class {
     if (input.supersede) {
       await this.options.storage.supersedeOpenQueriesForSession(input.session, Date.now());
       this.clearQuestionSequencesForSession(input.session);
+      this.openQueryTracker.clearOpenQueriesForSession(input.session);
     }
     await this.options.bus.openQuery(query);
+    this.openQueryTracker.trackOpenQuery(input.session, queryId, input.ttlSeconds);
     if (input.originChat) {
       try {
         const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
@@ -8537,6 +8896,7 @@ var ClaudeBridge = class {
             `agents-comm-bus: failed to cancel unsent query ${queryId}: ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
           );
         }
+        this.openQueryTracker.clearOpenQuery(queryId);
         throw error;
       }
     }
@@ -9376,7 +9736,7 @@ function recordOrEmpty2(value) {
 
 // ../core-daemon/bridges/codex/app-server-lifecycle.ts
 import { execFileSync } from "node:child_process";
-import { readFile as readFile5, writeFile as writeFile3 } from "node:fs/promises";
+import { readFile as readFile6, writeFile as writeFile3 } from "node:fs/promises";
 import os5 from "node:os";
 import path5 from "node:path";
 var DEFAULT_STOPPED_BY = "codex-bridge-lease-release";
@@ -9418,7 +9778,7 @@ function managedCodexAppServerStatePath(session, stateRoot2 = path5.join(os5.hom
 }
 async function readManagedAppServerState(statePath) {
   try {
-    return JSON.parse(await readFile5(statePath, "utf8"));
+    return JSON.parse(await readFile6(statePath, "utf8"));
   } catch {
     return null;
   }
@@ -9537,6 +9897,9 @@ var CodexBridge = class {
   activeLeases = /* @__PURE__ */ new Map();
   ownedAccountsCache = null;
   ownerCheckTimer = null;
+  /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
+  pendingManagedCleanups = 0;
+  inFlightManagedCleanups = 0;
   attach(comms) {
     this.options.bus.setResolveSink({
       onResolved: async (query, decision) => {
@@ -9559,6 +9922,18 @@ var CodexBridge = class {
   }
   invalidateRegistrationCaches() {
     this.ownedAccountsCache = null;
+  }
+  getRetirementBlockers() {
+    const blockers = {};
+    const managedLifecycle = [...this.activeLeases.values()].some(
+      (lease) => !lease.released && lease.manageAppServerLifecycle
+    );
+    if (this.waiters.size > 0) blockers.open_queries = this.waiters.size;
+    if (managedLifecycle) blockers.managed_lifecycle = 1;
+    if (this.pendingManagedCleanups > 0 || this.inFlightManagedCleanups > 0) {
+      blockers.pending_managed_cleanup = 1;
+    }
+    return Object.keys(blockers).length > 0 ? blockers : null;
   }
   async onInboundConversation(conversation) {
     if (conversation.agent !== this.agentId) return;
@@ -9781,15 +10156,15 @@ var CodexBridge = class {
     const conversation = sessionRecord?.most_recent_inbound_conversation_id ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id) : null;
     const originChat = conversation ? await this.chatRefForConversation(conversation) : void 0;
     if (!originChat) {
-      const hookResponse2 = codexHookDecision(
+      const hookResponse = codexHookDecision(
         "deny",
         `No recent inbound comm conversation is associated with Codex session ${session}.`
       );
       return {
         query_id: queryId,
-        hook_response: hookResponse2,
-        hookJson: hookResponse2,
-        nativeHookJson: hookResponse2
+        hook_response: hookResponse,
+        hookJson: hookResponse,
+        nativeHookJson: hookResponse
       };
     }
     const query = {
@@ -9808,34 +10183,39 @@ var CodexBridge = class {
       await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
     }
     const resolutionPromise = this.waitForResolution(queryId, query.ttl_seconds);
-    await this.options.bus.openQuery(query);
-    const promptFormat = params.prompt_format ?? queryInput.prompt_format;
-    const promptMessageId = await this.options.bus.send({
-      session,
-      comm: originChat.comm,
-      target: originChat,
-      payload: {
-        text: promptText,
-        format: promptFormat === "html" ? "html" : "plain",
-        inline_keyboard: inlineKeyboardForQuery2(queryId)
-      },
-      idempotencyKey: `query:${queryId}`
-    });
     try {
-      await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+      await this.options.bus.openQuery(query);
+      const promptFormat = params.prompt_format ?? queryInput.prompt_format;
+      const promptMessageId = await this.options.bus.send({
+        session,
+        comm: originChat.comm,
+        target: originChat,
+        payload: {
+          text: promptText,
+          format: promptFormat === "html" ? "html" : "plain",
+          inline_keyboard: inlineKeyboardForQuery2(queryId)
+        },
+        idempotencyKey: `query:${queryId}`
+      });
+      try {
+        await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+      } catch (error) {
+        console.error(
+          `agents-comm-bus: failed to record prompt message id for ${queryId}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      const decision = await resolutionPromise;
+      const hookResponse = codexDecisionFromResolution(decision);
+      return {
+        query_id: queryId,
+        hook_response: hookResponse,
+        hookJson: hookResponse,
+        nativeHookJson: hookResponse
+      };
     } catch (error) {
-      console.error(
-        `agents-comm-bus: failed to record prompt message id for ${queryId}: ${error instanceof Error ? error.message : String(error)}`
-      );
+      this.clearWaiter(queryId);
+      throw error;
     }
-    const decision = await resolutionPromise;
-    const hookResponse = codexDecisionFromResolution(decision);
-    return {
-      query_id: queryId,
-      hook_response: hookResponse,
-      hookJson: hookResponse,
-      nativeHookJson: hookResponse
-    };
   }
   async turnControl(params) {
     const session = requiredString2(params.session, "session");
@@ -9904,15 +10284,19 @@ var CodexBridge = class {
     );
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
-        this.waiters.delete(queryId);
+        this.clearWaiter(queryId);
         resolve(null);
       }, timeoutMs);
+      timer.unref?.();
       this.waiters.set(queryId, (decision) => {
         clearTimeout(timer);
-        this.waiters.delete(queryId);
+        this.clearWaiter(queryId);
         resolve(decision);
       });
     });
+  }
+  clearWaiter(queryId) {
+    this.waiters.delete(queryId);
   }
   async ensureCommsBestEffort(project, accountLabelScope) {
     try {
@@ -10027,10 +10411,19 @@ var CodexBridge = class {
   }
   scheduleManagedAppServerCleanup(session) {
     const delay = this.options.appServerCleanupDelayMs ?? DEFAULT_APP_SERVER_CLEANUP_DELAY_MS;
-    const timer = setTimeout(() => {
-      void this.cleanupManagedAppServerIfLeaseIsIdle(session);
+    this.pendingManagedCleanups += 1;
+    const setTimeoutFn = this.options.setTimeoutFn ?? ((fn, ms) => {
+      const handle = setTimeout(fn, ms);
+      handle.unref?.();
+      return handle;
+    });
+    setTimeoutFn(() => {
+      this.pendingManagedCleanups -= 1;
+      this.inFlightManagedCleanups += 1;
+      void this.cleanupManagedAppServerIfLeaseIsIdle(session).finally(() => {
+        this.inFlightManagedCleanups -= 1;
+      });
     }, delay);
-    timer.unref?.();
   }
   async cleanupManagedAppServerIfLeaseIsIdle(session) {
     try {

@@ -13,6 +13,8 @@ export interface RunningIpcServer {
     host: string;
     url: string;
     hello: DaemonHello;
+    /** AGE-36: live WebSocket clients (handshaking + established). */
+    getLiveConnectionCount(): number;
     close(): Promise<void>;
 }
 export declare function startIpcServer(options?: IpcServerOptions): Promise<RunningIpcServer>;

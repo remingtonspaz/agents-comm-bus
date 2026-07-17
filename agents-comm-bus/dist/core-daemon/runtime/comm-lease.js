@@ -194,6 +194,8 @@ export class CommLeaseArbiter {
      * denial logs again.
      */
     lastDenyAudit = new Map();
+    /** AGE-36: runtime-local inventory of leases this arbiter currently holds. */
+    heldLeases = new Set();
     constructor(options) {
         this.self = options.self;
         this.lastIpcServedAt = options.lastIpcServedAt;
@@ -206,6 +208,20 @@ export class CommLeaseArbiter {
     }
     get authorityRank() {
         return this.self.authorityRank;
+    }
+    /** Count of `(comm, resource)` leases this arbiter currently owns. */
+    heldLeaseCount() {
+        return this.heldLeases.size;
+    }
+    /** Snapshot of held lease keys — for retirement eligibility and tests. */
+    heldLeaseSnapshot() {
+        return [...this.heldLeases].map((key) => {
+            const sep = key.indexOf(":");
+            return {
+                comm_id: key.slice(0, sep),
+                resource_id: key.slice(sep + 1),
+            };
+        });
     }
     /**
      * Attempt to acquire (or reclaim) the lease for `(commId, resourceId)`. Reads
@@ -273,6 +289,7 @@ export class CommLeaseArbiter {
                     previous_holder_rank: existing?.authorityRank ?? null,
                 },
             });
+            this.heldLeases.add(this.leaseKey(commId, resourceId));
             return { ok: true, record };
         }
         finally {
@@ -295,11 +312,13 @@ export class CommLeaseArbiter {
             if (holder && holder.pid === this.self.pid) {
                 return { ok: true, record: holder };
             }
+            this.heldLeases.delete(this.leaseKey(commId, resourceId));
             return { ok: false, reason: "lost", holder };
         }
         try {
             const existing = await this.readRecord(leasePath);
             if (!existing || existing.pid !== this.self.pid) {
+                this.heldLeases.delete(this.leaseKey(commId, resourceId));
                 this.audit({
                     kind: "comm_lease_lost",
                     comm_id: commId,
@@ -324,9 +343,10 @@ export class CommLeaseArbiter {
             await this.releaseGuard(leasePath, guard);
         }
     }
-    /** Delete the lease file, but only if it is still self's. Best-effort. */
+    /** Delete the lease file when still self's; always drop local held inventory. */
     async release(commId, resourceId) {
         const leasePath = this.leasePath(commId, resourceId);
+        const key = this.leaseKey(commId, resourceId);
         const guard = await this.acquireGuard(leasePath);
         try {
             const existing = await this.readRecord(leasePath);
@@ -341,12 +361,16 @@ export class CommLeaseArbiter {
             }
         }
         finally {
+            this.heldLeases.delete(key);
             if (guard)
                 await this.releaseGuard(leasePath, guard);
         }
     }
     leasePath(commId, resourceId) {
         return commLeasePath(commId, resourceId, this.homeDir);
+    }
+    leaseKey(commId, resourceId) {
+        return `${commId}:${resourceId}`;
     }
     buildRecord(commId, resourceId, existing) {
         const now = this.now();

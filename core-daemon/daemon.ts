@@ -23,6 +23,10 @@ import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
 import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
+import {
+  IDLE_NO_OWNED_RESOURCES_REASON,
+  retireDaemon,
+} from "./bootstrap/daemon-retirement.js";
 import { startDaemonPidWatchdog } from "./bootstrap/pid-watchdog.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
@@ -40,6 +44,8 @@ import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
+import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
+import type { RetirementBlockerSnapshot } from "./runtime/agent-bridge.js";
 import {
   deliveryRowFromEntry,
   drainAndAcknowledgePendingInbound,
@@ -450,24 +456,67 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     throw error;
   }
   await bus.start();
-  startDaemonPidWatchdog({
+
+  const collectBridgeBlockers = (): Record<string, RetirementBlockerSnapshot | null> => {
+    const blockers: Record<string, RetirementBlockerSnapshot | null> = {};
+    for (const bridge of bridges) {
+      blockers[bridge.agentId] = bridge.getRetirementBlockers?.() ?? null;
+    }
+    return blockers;
+  };
+
+  let pidWatchdogHandle: ReturnType<typeof startDaemonPidWatchdog> | null = null;
+  let idleReaperHandle: ReturnType<typeof startIdleReaper> | null = null;
+
+  const runDaemonRetirement = async (reason: string, recordAudit: boolean): Promise<void> => {
+    await retireDaemon({
+      reason,
+      port: server.port,
+      stateRoot: paths.root,
+      discoveryRoot: discoveryPaths.root,
+      audit: recordAudit ? audit : undefined,
+      stopTimers: () => {
+        pidWatchdogHandle?.stop();
+        idleReaperHandle?.stop();
+      },
+      stopBus: () =>
+        bestEffortWithTimeout(
+          () => bus.stop(),
+          5_000,
+          "stop comm adapters during daemon retirement",
+        ),
+      closeIpc: () =>
+        bestEffortWithTimeout(
+          () => server.close(),
+          1_000,
+          "close IPC server during daemon retirement",
+        ),
+      closeStorage: () => storage.close(),
+    });
+  };
+
+  pidWatchdogHandle = startDaemonPidWatchdog({
     stateRoot: paths.root,
     discoveryRoot: discoveryPaths.root,
     pidFile: discoveryPaths.pidFile,
     port: server.port,
     audit,
     stopDaemon: async () => {
-      await bestEffortWithTimeout(
-        () => bus.stop(),
-        5_000,
-        "stop comm adapters during daemon retirement",
-      );
-      await bestEffortWithTimeout(
-        () => server.close(),
-        1_000,
-        "close IPC server during daemon retirement",
-      );
+      await runDaemonRetirement("daemon_superseded", false);
     },
+  });
+
+  idleReaperHandle = startIdleReaper({
+    lastIpcServedAt: () => ipcActivity.value,
+    heldLeaseCount: () => leaseArbiter.heldLeaseCount(),
+    liveIpcConnectionCount: () => server.getLiveConnectionCount(),
+    pendingInboundLength: () => pendingInbound.length,
+    inFlightAdapterCount: () => inFlightAdapters.size,
+    bridgeBlockers: collectBridgeBlockers,
+    retire: async () => {
+      await runDaemonRetirement(IDLE_NO_OWNED_RESOURCES_REASON, true);
+    },
+    log: (message) => console.error(message),
   });
 
   // AGE-55: async boot restore — never block daemon readiness on comm bring-up.

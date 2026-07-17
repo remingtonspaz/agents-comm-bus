@@ -1,6 +1,6 @@
 import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 export interface CodexBridgeOptions {
@@ -22,6 +22,9 @@ export interface CodexBridgeOptions {
     ensureCommsForSession?: EnsureCommsForSession;
     /** AGE-58: daemon-resolved identity for session ownership stamping. */
     daemonOwner?: DaemonSelfIdentity;
+    /** Injectable timers for deterministic tests (AGE-36 managed cleanup). */
+    setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+    clearTimeoutFn?: (handle: unknown) => void;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;
@@ -52,11 +55,15 @@ export declare class CodexBridge implements AgentBridge {
     private readonly activeLeases;
     private ownedAccountsCache;
     private ownerCheckTimer;
+    /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
+    private pendingManagedCleanups;
+    private inFlightManagedCleanups;
     constructor(options: CodexBridgeOptions);
     attach(comms: CommAdapter[]): void;
     attachComm(comm: CommAdapter): void;
     detachComm(_commId: CommId, _accountId: AccountId): void;
     invalidateRegistrationCaches(): void;
+    getRetirementBlockers(): RetirementBlockerSnapshot | null;
     onInboundConversation(conversation: Conversation): Promise<void>;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {
@@ -72,6 +79,7 @@ export declare class CodexBridge implements AgentBridge {
     turnControl(params: Record<string, unknown>): Promise<unknown>;
     private handleCommCallback;
     private waitForResolution;
+    private clearWaiter;
     private ensureCommsBestEffort;
     private trackSession;
     private untrackSession;

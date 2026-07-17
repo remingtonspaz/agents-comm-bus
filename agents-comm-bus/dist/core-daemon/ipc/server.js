@@ -8,7 +8,12 @@ export async function startIpcServer(options = {}) {
     const daemonVersion = options.daemonVersion ?? DAEMON_VERSION;
     const metadata = options.metadata ?? {};
     const server = new WebSocketServer({ host, port });
+    let liveConnectionCount = 0;
     server.on("connection", (socket) => {
+        liveConnectionCount += 1;
+        socket.once("close", () => {
+            liveConnectionCount -= 1;
+        });
         handleHandshake(socket, { protocolVersion, daemonVersion, metadata, onRequest: options.onRequest });
     });
     await new Promise((resolve, reject) => {
@@ -26,6 +31,7 @@ export async function startIpcServer(options = {}) {
         host,
         url: `ws://${host}:${boundPort}`,
         hello,
+        getLiveConnectionCount: () => liveConnectionCount,
         close: () => new Promise((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
         }),

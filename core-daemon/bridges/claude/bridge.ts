@@ -39,6 +39,7 @@ import type {
   AgentBridgeFactory,
   DaemonSelfIdentity,
   EnsureCommsForSession,
+  RetirementBlockerSnapshot,
 } from "../../runtime/agent-bridge.js";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -50,6 +51,7 @@ import {
 } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
+import { ClaudeOpenQueryTracker } from "./open-query-tracker.js";
 
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 
@@ -74,6 +76,9 @@ export interface ClaudeBridgeOptions {
   ensureCommsForSession?: EnsureCommsForSession;
   /** AGE-58: daemon-resolved identity for session ownership stamping. */
   daemonOwner?: DaemonSelfIdentity;
+  /** Injectable timers for deterministic tests (AGE-36 TTL tracking). */
+  setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (handle: unknown) => void;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
@@ -138,12 +143,18 @@ export class ClaudeBridge implements AgentBridge {
   private ownedAccountsCache: Set<string> | null = null;
   /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
   private readonly questionSequences = new Map<QueryId, QuestionSequence>();
+  /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
+  private readonly openQueryTracker: ClaudeOpenQueryTracker;
 
   constructor(private readonly options: ClaudeBridgeOptions) {
     // pendingInboundMax preserved as an option for symmetry but the daemon
     // now caps the shared queue itself; this class only drains it.
     void options.pendingInboundMax;
     this.wake.setStorage(options.storage);
+    this.openQueryTracker = new ClaudeOpenQueryTracker({
+      setTimeoutFn: options.setTimeoutFn,
+      clearTimeoutFn: options.clearTimeoutFn,
+    });
   }
 
   /**
@@ -156,6 +167,10 @@ export class ClaudeBridge implements AgentBridge {
     this.options.bus.setResolveSink({
       onResolved: async (query, decision) => {
         if (query.agent !== this.agentId) return;
+        // Resolution is authoritative for retirement eligibility. Clear the
+        // daemon-local blocker before any wake I/O or sequencer step can fail;
+        // a resolved query must never keep this daemon alive until its TTL.
+        this.openQueryTracker.clearOpenQuery(query.query_id as QueryId);
         const payload = wakePayloadFromDecision(decision);
         if (!payload) return;
         try {
@@ -204,6 +219,10 @@ export class ClaudeBridge implements AgentBridge {
   detachComm(_commId: CommId, _accountId: AccountId): void {
     // ClaudeBridge keeps no per-adapter state beyond the onCallback handler,
     // which is owned by the adapter and discarded when the adapter stops.
+  }
+
+  getRetirementBlockers(): RetirementBlockerSnapshot | null {
+    return this.openQueryTracker.getRetirementBlockers();
   }
 
   invalidateRegistrationCaches(): void {
@@ -552,8 +571,10 @@ export class ClaudeBridge implements AgentBridge {
       // new AskUserQuestion. openNextQuestion passes supersede=false, so a
       // sequence never clears itself mid-flight.
       this.clearQuestionSequencesForSession(input.session);
+      this.openQueryTracker.clearOpenQueriesForSession(input.session);
     }
     await this.options.bus.openQuery(query);
+    this.openQueryTracker.trackOpenQuery(input.session, queryId, input.ttlSeconds);
     if (input.originChat) {
       try {
         const inlineKeyboard = inlineKeyboardForQuery(queryId, input.kind, input.options);
@@ -594,6 +615,7 @@ export class ClaudeBridge implements AgentBridge {
               `${cancelError instanceof Error ? cancelError.message : String(cancelError)}`,
           );
         }
+        this.openQueryTracker.clearOpenQuery(queryId);
         throw error;
       }
     }

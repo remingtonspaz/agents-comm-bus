@@ -27,6 +27,9 @@ export class CodexBridge {
     activeLeases = new Map();
     ownedAccountsCache = null;
     ownerCheckTimer = null;
+    /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
+    pendingManagedCleanups = 0;
+    inFlightManagedCleanups = 0;
     constructor(options) {
         this.options = options;
         this.adapter = new CodexAgentAdapter({
@@ -58,6 +61,18 @@ export class CodexBridge {
     }
     invalidateRegistrationCaches() {
         this.ownedAccountsCache = null;
+    }
+    getRetirementBlockers() {
+        const blockers = {};
+        const managedLifecycle = [...this.activeLeases.values()].some((lease) => !lease.released && lease.manageAppServerLifecycle);
+        if (this.waiters.size > 0)
+            blockers.open_queries = this.waiters.size;
+        if (managedLifecycle)
+            blockers.managed_lifecycle = 1;
+        if (this.pendingManagedCleanups > 0 || this.inFlightManagedCleanups > 0) {
+            blockers.pending_managed_cleanup = 1;
+        }
+        return Object.keys(blockers).length > 0 ? blockers : null;
     }
     async onInboundConversation(conversation) {
         if (conversation.agent !== this.agentId)
@@ -295,35 +310,41 @@ export class CodexBridge {
             await this.options.storage.supersedeOpenQueriesForSession(session, Date.now());
         }
         const resolutionPromise = this.waitForResolution(queryId, query.ttl_seconds);
-        await this.options.bus.openQuery(query);
-        const promptFormat = params.prompt_format ?? queryInput.prompt_format;
-        const promptMessageId = await this.options.bus.send({
-            session,
-            comm: originChat.comm,
-            target: originChat,
-            payload: {
-                text: promptText,
-                format: promptFormat === "html" ? "html" : "plain",
-                inline_keyboard: inlineKeyboardForQuery(queryId),
-            },
-            idempotencyKey: `query:${queryId}`,
-        });
-        // AGE-9: activate reply-to targeting for this prompt (best-effort).
         try {
-            await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+            await this.options.bus.openQuery(query);
+            const promptFormat = params.prompt_format ?? queryInput.prompt_format;
+            const promptMessageId = await this.options.bus.send({
+                session,
+                comm: originChat.comm,
+                target: originChat,
+                payload: {
+                    text: promptText,
+                    format: promptFormat === "html" ? "html" : "plain",
+                    inline_keyboard: inlineKeyboardForQuery(queryId),
+                },
+                idempotencyKey: `query:${queryId}`,
+            });
+            // AGE-9: activate reply-to targeting for this prompt (best-effort).
+            try {
+                await this.options.storage.setQuerySourceMessage(queryId, promptMessageId);
+            }
+            catch (error) {
+                console.error(`agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
+                    `${error instanceof Error ? error.message : String(error)}`);
+            }
+            const decision = await resolutionPromise;
+            const hookResponse = codexDecisionFromResolution(decision);
+            return {
+                query_id: queryId,
+                hook_response: hookResponse,
+                hookJson: hookResponse,
+                nativeHookJson: hookResponse,
+            };
         }
         catch (error) {
-            console.error(`agents-comm-bus: failed to record prompt message id for ${queryId}: ` +
-                `${error instanceof Error ? error.message : String(error)}`);
+            this.clearWaiter(queryId);
+            throw error;
         }
-        const decision = await resolutionPromise;
-        const hookResponse = codexDecisionFromResolution(decision);
-        return {
-            query_id: queryId,
-            hook_response: hookResponse,
-            hookJson: hookResponse,
-            nativeHookJson: hookResponse,
-        };
     }
     async turnControl(params) {
         const session = requiredString(params.session, "session");
@@ -389,15 +410,19 @@ export class CodexBridge {
         const timeoutMs = Math.min(this.options.queryPollTimeoutMs ?? DEFAULT_QUERY_POLL_TIMEOUT_MS, Math.max(1, ttlSeconds) * 1000);
         return new Promise((resolve) => {
             const timer = setTimeout(() => {
-                this.waiters.delete(queryId);
+                this.clearWaiter(queryId);
                 resolve(null);
             }, timeoutMs);
+            timer.unref?.();
             this.waiters.set(queryId, (decision) => {
                 clearTimeout(timer);
-                this.waiters.delete(queryId);
+                this.clearWaiter(queryId);
                 resolve(decision);
             });
         });
+    }
+    clearWaiter(queryId) {
+        this.waiters.delete(queryId);
     }
     async ensureCommsBestEffort(project, accountLabelScope) {
         try {
@@ -520,10 +545,20 @@ export class CodexBridge {
     }
     scheduleManagedAppServerCleanup(session) {
         const delay = this.options.appServerCleanupDelayMs ?? DEFAULT_APP_SERVER_CLEANUP_DELAY_MS;
-        const timer = setTimeout(() => {
-            void this.cleanupManagedAppServerIfLeaseIsIdle(session);
+        this.pendingManagedCleanups += 1;
+        const setTimeoutFn = this.options.setTimeoutFn ??
+            ((fn, ms) => {
+                const handle = setTimeout(fn, ms);
+                handle.unref?.();
+                return handle;
+            });
+        setTimeoutFn(() => {
+            this.pendingManagedCleanups -= 1;
+            this.inFlightManagedCleanups += 1;
+            void this.cleanupManagedAppServerIfLeaseIsIdle(session).finally(() => {
+                this.inFlightManagedCleanups -= 1;
+            });
         }, delay);
-        timer.unref?.();
     }
     async cleanupManagedAppServerIfLeaseIsIdle(session) {
         try {
