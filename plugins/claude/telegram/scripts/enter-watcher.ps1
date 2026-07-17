@@ -153,6 +153,13 @@ function Resolve-WindowHandle {
         }
     }
 
+    if ($ClaudePid -gt 0) {
+        $proc = Get-Process -Id $ClaudePid -ErrorAction SilentlyContinue
+        if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
+            return $proc.MainWindowHandle
+        }
+    }
+
     if ($MatchTitle -ne "") {
         $proc = Get-Process -Name cmd -ErrorAction SilentlyContinue | Where-Object {
             $_.MainWindowTitle -like "*$MatchTitle*"
@@ -167,18 +174,14 @@ function Resolve-WindowHandle {
         }
     }
 
-    # Search mode fallback
-    $proc = Get-Process -Name cmd -ErrorAction SilentlyContinue | Where-Object {
-        $title = $_.MainWindowTitle
-        ($title -match '^[^a-zA-Z]' -or $title -match 'claude') -and
-        $title -notmatch 'npm' -and
-        $title -notmatch 'powershell'
-    } | Select-Object -First 1
-    if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
-        return $proc.MainWindowHandle
-    }
-
     return [IntPtr]::Zero
+}
+
+# AGE-70: fail closed when invoked without a precise selector (no fuzzy title search).
+$hasPreciseSelector = ($WindowHandle -gt 0) -or ($TargetPid -gt 0) -or ($ClaudePid -gt 0)
+if (-not $hasPreciseSelector) {
+    Log "ERROR: No precise window selector (-WindowHandle, -TargetPid, or -ClaudePid); exiting"
+    exit 1
 }
 
 # Startup logging
@@ -189,7 +192,7 @@ if ($hwnd -ne [IntPtr]::Zero) {
     $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
     Log "Watcher started: WindowHandle=$hwnd ProcessName=$($proc.ProcessName) PID=$procId"
 } else {
-    Log "Watcher started: No valid window handle yet (will resolve on trigger)"
+    Log "Watcher started: No valid window handle yet (will re-resolve via precise selector on trigger)"
 }
 Log "  ClaudeWakeDir=$sessionPath"
 Log "  TriggerFile=$triggerFile"

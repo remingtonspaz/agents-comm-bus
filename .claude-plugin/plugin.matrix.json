@@ -1,6 +1,6 @@
 {
   "name": "matrix",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Matrix messaging for Claude Code through the agents-comm-bus daemon",
   "author": {
     "name": "Satrio"

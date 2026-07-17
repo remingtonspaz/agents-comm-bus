@@ -4982,6 +4982,17 @@ function readWatcherPid(wakeDir) {
     return null;
   }
 }
+function isPersistedTargetlessWatcher(wakeDir) {
+  try {
+    const debugLog = fs.readFileSync(path12.join(wakeDir, "debug.log"), "utf8");
+    return /ClaudePid=0\b/.test(debugLog);
+  } catch {
+    return false;
+  }
+}
+function hasPreciseWatcherSelector(cmdInfo) {
+  return Boolean(cmdInfo?.hwnd || cmdInfo?.pid);
+}
 function readProcessChainViaCim(startPid, log = () => {
 }) {
   const psScript = `$ProgressPreference='SilentlyContinue';$cur=${Number.parseInt(startPid, 10)};for($i=0;$i -lt 15;$i++){$p=Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction SilentlyContinue;if(-not $p){break};Write-Output ("{0}:{1}" -f $p.ProcessId,$p.Name);if(-not $p.ParentProcessId -or $p.ParentProcessId -le 0){break};$cur=$p.ParentProcessId}`;
@@ -5129,7 +5140,7 @@ function ensureClaudeWakeWatcher(options = {}) {
   const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
   fs.mkdirSync(wakeDir, { recursive: true });
   const existingPid = readWatcherPid(wakeDir);
-  if (existingPid && isPidAlive(existingPid)) {
+  if (existingPid && isPidAlive(existingPid) && !isPersistedTargetlessWatcher(wakeDir)) {
     return { started: false, pid: existingPid, wakeDir, reason: "already_running" };
   }
   const watcherScript = resolveEnterWatcherScript(__dirname);
@@ -5143,35 +5154,44 @@ function ensureClaudeWakeWatcher(options = {}) {
   }
   try {
     const racedPid = readWatcherPid(wakeDir);
-    if (racedPid && racedPid !== existingPid && isPidAlive(racedPid)) {
+    if (racedPid && racedPid !== existingPid && isPidAlive(racedPid) && !isPersistedTargetlessWatcher(wakeDir)) {
       return { started: false, pid: racedPid, wakeDir, reason: "raced_already_running" };
     }
-    const cmdInfo = options.cmdInfo ?? findCmdAncestor(log);
+    const cmdInfo = options.cmdInfo !== void 0 ? options.cmdInfo : findCmdAncestor(log);
+    if (!hasPreciseWatcherSelector(cmdInfo)) {
+      log(
+        "no cmd ancestor resolved; skipping watcher spawn (relying on next-hook retry + AGE-69 backoff)"
+      );
+      return { started: false, reason: "no_cmd_ancestor", wakeDir };
+    }
     const watcherArgs = ["-SessionDir", wakeDir];
-    if (cmdInfo?.hwnd) {
+    if (cmdInfo.hwnd) {
       watcherArgs.push("-WindowHandle", String(cmdInfo.hwnd));
-    } else if (cmdInfo?.pid) {
+    } else if (cmdInfo.pid) {
       watcherArgs.push("-TargetPid", String(cmdInfo.pid));
     }
-    if (cmdInfo?.claudePid) {
+    if (cmdInfo.claudePid) {
       watcherArgs.push("-ClaudePid", String(cmdInfo.claudePid));
     }
     const command = buildStartProcessCommand(watcherScript, watcherArgs);
     log(`Spawning watcher via Start-Process: ${command}`);
-    const stdout = execSync(`powershell -NoProfile -Command "${command}"`, {
-      encoding: "utf-8",
-      windowsHide: true,
-      timeout: 1e4
+    const spawnWatcher = options.spawnWatcher ?? ((spawnCommand) => {
+      const stdout = execSync(`powershell -NoProfile -Command "${spawnCommand}"`, {
+        encoding: "utf-8",
+        windowsHide: true,
+        timeout: 1e4
+      });
+      return Number.parseInt(stdout.trim(), 10);
     });
-    const watcherPid = Number.parseInt(stdout.trim(), 10);
+    const watcherPid = spawnWatcher(command);
     if (!Number.isInteger(watcherPid) || watcherPid <= 0) {
-      log(`Watcher spawn returned invalid pid: ${stdout.trim()}`);
+      log(`Watcher spawn returned invalid pid: ${String(watcherPid)}`);
       return { started: false, wakeDir, reason: "invalid_pid" };
     }
     fs.writeFileSync(path12.join(wakeDir, "watcher.pid"), `${watcherPid}
 `, "utf8");
     log(
-      `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, target=${cmdInfo?.hwnd ? `hwnd:${cmdInfo.hwnd}` : cmdInfo?.pid ? `pid:${cmdInfo.pid}` : "search"})`
+      `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, target=${cmdInfo.hwnd ? `hwnd:${cmdInfo.hwnd}` : `pid:${cmdInfo.pid}`})`
     );
     return { started: true, pid: watcherPid, wakeDir, cmdInfo };
   } catch (error) {

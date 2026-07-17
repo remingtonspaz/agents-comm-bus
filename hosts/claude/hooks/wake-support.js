@@ -38,6 +38,20 @@ export function readWatcherPid(wakeDir) {
   }
 }
 
+// AGE-70 belt: legacy targetless watchers logged ClaudePid=0 and could pin dedup.
+function isPersistedTargetlessWatcher(wakeDir) {
+  try {
+    const debugLog = fs.readFileSync(path.join(wakeDir, 'debug.log'), 'utf8');
+    return /ClaudePid=0\b/.test(debugLog);
+  } catch {
+    return false;
+  }
+}
+
+function hasPreciseWatcherSelector(cmdInfo) {
+  return Boolean(cmdInfo?.hwnd || cmdInfo?.pid);
+}
+
 // Walk the full process ancestry from `startPid` in ONE PowerShell invocation
 // using an in-process Get-CimInstance loop. This replaces a previous per-pid
 // `wmic.exe` loop (one exe spawn per process, up to 15 per walk) that
@@ -231,7 +245,7 @@ export function ensureClaudeWakeWatcher(options = {}) {
   fs.mkdirSync(wakeDir, { recursive: true });
 
   const existingPid = readWatcherPid(wakeDir);
-  if (existingPid && isPidAlive(existingPid)) {
+  if (existingPid && isPidAlive(existingPid) && !isPersistedTargetlessWatcher(wakeDir)) {
     return { started: false, pid: existingPid, wakeDir, reason: 'already_running' };
   }
 
@@ -250,39 +264,55 @@ export function ensureClaudeWakeWatcher(options = {}) {
     // Re-check after acquiring lock — another hook may have spawned a watcher
     // between our isPidAlive check and our lock acquisition.
     const racedPid = readWatcherPid(wakeDir);
-    if (racedPid && racedPid !== existingPid && isPidAlive(racedPid)) {
+    if (
+      racedPid &&
+      racedPid !== existingPid &&
+      isPidAlive(racedPid) &&
+      !isPersistedTargetlessWatcher(wakeDir)
+    ) {
       return { started: false, pid: racedPid, wakeDir, reason: 'raced_already_running' };
     }
 
-    const cmdInfo = options.cmdInfo ?? findCmdAncestor(log);
+    const cmdInfo = options.cmdInfo !== undefined ? options.cmdInfo : findCmdAncestor(log);
+    if (!hasPreciseWatcherSelector(cmdInfo)) {
+      log(
+        'no cmd ancestor resolved; skipping watcher spawn (relying on next-hook retry + AGE-69 backoff)',
+      );
+      return { started: false, reason: 'no_cmd_ancestor', wakeDir };
+    }
 
     const watcherArgs = ['-SessionDir', wakeDir];
-    if (cmdInfo?.hwnd) {
+    if (cmdInfo.hwnd) {
       watcherArgs.push('-WindowHandle', String(cmdInfo.hwnd));
-    } else if (cmdInfo?.pid) {
+    } else if (cmdInfo.pid) {
       watcherArgs.push('-TargetPid', String(cmdInfo.pid));
     }
-    if (cmdInfo?.claudePid) {
+    if (cmdInfo.claudePid) {
       watcherArgs.push('-ClaudePid', String(cmdInfo.claudePid));
     }
 
     const command = buildStartProcessCommand(watcherScript, watcherArgs);
     log(`Spawning watcher via Start-Process: ${command}`);
-    const stdout = execSync(`powershell -NoProfile -Command "${command}"`, {
-      encoding: 'utf-8',
-      windowsHide: true,
-      timeout: 10_000,
-    });
-    const watcherPid = Number.parseInt(stdout.trim(), 10);
+    const spawnWatcher =
+      options.spawnWatcher ??
+      ((spawnCommand) => {
+        const stdout = execSync(`powershell -NoProfile -Command "${spawnCommand}"`, {
+          encoding: 'utf-8',
+          windowsHide: true,
+          timeout: 10_000,
+        });
+        return Number.parseInt(stdout.trim(), 10);
+      });
+    const watcherPid = spawnWatcher(command);
     if (!Number.isInteger(watcherPid) || watcherPid <= 0) {
-      log(`Watcher spawn returned invalid pid: ${stdout.trim()}`);
+      log(`Watcher spawn returned invalid pid: ${String(watcherPid)}`);
       return { started: false, wakeDir, reason: 'invalid_pid' };
     }
 
     fs.writeFileSync(path.join(wakeDir, 'watcher.pid'), `${watcherPid}\n`, 'utf8');
     log(
       `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, ` +
-        `target=${cmdInfo?.hwnd ? `hwnd:${cmdInfo.hwnd}` : cmdInfo?.pid ? `pid:${cmdInfo.pid}` : 'search'})`,
+        `target=${cmdInfo.hwnd ? `hwnd:${cmdInfo.hwnd}` : `pid:${cmdInfo.pid}`})`,
     );
     return { started: true, pid: watcherPid, wakeDir, cmdInfo };
   } catch (error) {
