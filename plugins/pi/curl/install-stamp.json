@@ -2,8 +2,8 @@
   "schema_version": 1,
   "agent": "pi",
   "comm": "curl",
-  "plugin_version": "0.1.0",
-  "daemon_bundle_version": "0.2.37",
+  "plugin_version": "0.1.1",
+  "daemon_bundle_version": "0.2.38",
   "adapter_bundle_version": "0.1.2",
   "adapter_bundle_versions": {
     "curl": "0.1.2"

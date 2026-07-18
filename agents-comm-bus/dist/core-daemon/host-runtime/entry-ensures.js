@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { ensureDaemon as defaultEnsureDaemon } from "../bootstrap/ensure-daemon.js";
 import { resolveStatePaths as defaultResolveStatePaths } from "../paths.js";
-import { ensureCentralInstall as defaultEnsureCentralInstall } from "./ensure-central-install.js";
+import { ensureCentralInstall as defaultEnsureCentralInstall, resolveInstallMode, } from "./ensure-central-install.js";
 import { applyDevConfig, DEV_MARKER_NAME } from "./dev-config-resolver.js";
 import { INSTALL_STAMP_NAME } from "./ensure-central-install.js";
 export function resolveEntryContext(fromDir, deps = {}) {
@@ -24,7 +24,7 @@ function findAncestorContaining(dir, name, exists) {
     }
 }
 export async function entryEnsures(options) {
-    const { agent, comm, stateRoot, discoveryRoot, fromDir, projectRoot, pluginInstallDir, env = process.env, ensureDaemonOptions = {}, daemonRunning = false, readOnlyCentralInstall = false, deps = {}, } = options ?? {};
+    const { agent, comm, skipCentralInstall = false, stateRoot, discoveryRoot, fromDir, projectRoot, pluginInstallDir, env = process.env, ensureDaemonOptions = {}, daemonRunning = false, readOnlyCentralInstall = false, deps = {}, } = options ?? {};
     const ensureDaemonFn = deps.ensureDaemon ?? defaultEnsureDaemon;
     const ensureCentralInstallFn = deps.ensureCentralInstall ?? defaultEnsureCentralInstall;
     let resolvedProjectRoot = projectRoot;
@@ -45,16 +45,22 @@ export async function entryEnsures(options) {
         discoveryRoot ??
         resolvedEnv.AGENTS_COMM_BUS_DISCOVERY_ROOT ??
         canonicalStateRoot;
-    const centralInstall = await ensureCentralInstallFn({
-        stateRoot: canonicalStateRoot,
-        agent,
-        comm,
-        pluginInstallDir: resolvedPluginInstallDir,
-        env: resolvedEnv,
-        daemonRunning,
-        readOnlyIfCentralInstalled: readOnlyCentralInstall,
-        deps: deps.centralInstallDeps,
-    });
+    // AGE-63: daemon-resolution-only mode skips central-install entirely (Pi core;
+    // per-comm extensions own their own comm's central-install). Without the flag,
+    // behavior is unchanged — a missing `comm` still reaches ensureCentralInstall,
+    // which infers it from the install stamp (the Claude/Codex host callers).
+    const centralInstall = skipCentralInstall
+        ? { mode: resolveInstallMode(resolvedEnv), skipped: true }
+        : await ensureCentralInstallFn({
+            stateRoot: canonicalStateRoot,
+            agent,
+            comm,
+            pluginInstallDir: resolvedPluginInstallDir,
+            env: resolvedEnv,
+            daemonRunning,
+            readOnlyIfCentralInstalled: readOnlyCentralInstall,
+            deps: deps.centralInstallDeps,
+        });
     const daemon = await ensureDaemonFn({
         ...ensureDaemonOptions,
         stateRoot: canonicalStateRoot,

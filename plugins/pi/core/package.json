@@ -1,6 +1,6 @@
 {
   "name": "@agents-comm-bus/pi-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bundled core for agents-comm-bus Pi per-comm packages (comm-generic tools + lifecycle).",
   "type": "module",
   "private": false,

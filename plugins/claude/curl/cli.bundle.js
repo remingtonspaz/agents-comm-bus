@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.37";
+var DAEMON_VERSION = "0.2.38";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -5897,6 +5897,7 @@ async function entryEnsures(options) {
   const {
     agent,
     comm,
+    skipCentralInstall = false,
     stateRoot: stateRoot2,
     discoveryRoot: discoveryRoot2,
     fromDir,
@@ -5921,7 +5922,7 @@ async function entryEnsures(options) {
   const resolveStatePathsFn = deps.resolveStatePaths ?? resolveStatePaths;
   const canonicalStateRoot = stateRoot2 ?? resolvedEnv.AGENTS_COMM_BUS_ROOT ?? resolveStatePathsFn({ stateRoot: resolvedEnv.AGENTS_COMM_BUS_STATE_ROOT }).root;
   const canonicalDiscoveryRoot = ensureDaemonOptions.discoveryRoot ?? discoveryRoot2 ?? resolvedEnv.AGENTS_COMM_BUS_DISCOVERY_ROOT ?? canonicalStateRoot;
-  const centralInstall = await ensureCentralInstallFn({
+  const centralInstall = skipCentralInstall ? { mode: resolveInstallMode(resolvedEnv), skipped: true } : await ensureCentralInstallFn({
     stateRoot: canonicalStateRoot,
     agent,
     comm,

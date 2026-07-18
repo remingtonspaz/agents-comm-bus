@@ -16,7 +16,15 @@ export interface EntryEnsuresDeps {
 }
 export interface EntryEnsuresOptions {
     agent: string;
-    comm: string;
+    comm?: string;
+    /**
+     * AGE-63: daemon-resolution-only mode. When true, `ensureCentralInstall` is
+     * NOT invoked — the caller guarantees a per-comm extension owns central-install
+     * for its own comm (Pi core). Omitting `comm` alone changes nothing: without
+     * this flag, a missing `comm` still flows into `ensureCentralInstall`, which
+     * infers it from the install stamp (preserving the Claude/Codex host callers).
+     */
+    skipCentralInstall?: boolean;
     stateRoot?: string;
     discoveryRoot?: string;
     /** Caller's own dir; the resolver walks up from here to the dev marker. */

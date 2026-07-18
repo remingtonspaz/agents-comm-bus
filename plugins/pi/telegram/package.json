@@ -1,6 +1,6 @@
 {
   "name": "@agents-comm-bus/pi-telegram",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi host extension for agents-comm-bus — Telegram comm (bundles the shared pi-core).",
   "type": "module",
   "keywords": ["pi-package"],
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "agents-comm-bus": "*",
-    "@agents-comm-bus/pi-core": "0.1.0",
+    "@agents-comm-bus/pi-core": "0.1.1",
     "node-telegram-bot-api": "^0.66.0"
   },
   "bundledDependencies": ["@agents-comm-bus/pi-core"],

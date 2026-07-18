@@ -3,7 +3,10 @@ import path from "node:path";
 
 import { ensureDaemon as defaultEnsureDaemon } from "../bootstrap/ensure-daemon.js";
 import { resolveStatePaths as defaultResolveStatePaths } from "../paths.js";
-import { ensureCentralInstall as defaultEnsureCentralInstall } from "./ensure-central-install.js";
+import {
+  ensureCentralInstall as defaultEnsureCentralInstall,
+  resolveInstallMode,
+} from "./ensure-central-install.js";
 import { applyDevConfig, DEV_MARKER_NAME } from "./dev-config-resolver.js";
 import { INSTALL_STAMP_NAME } from "./ensure-central-install.js";
 import type { EnsureCentralInstallDeps, EnsureCentralInstallResult } from "./ensure-central-install.js";
@@ -25,7 +28,15 @@ export interface EntryEnsuresDeps {
 
 export interface EntryEnsuresOptions {
   agent: string;
-  comm: string;
+  comm?: string;
+  /**
+   * AGE-63: daemon-resolution-only mode. When true, `ensureCentralInstall` is
+   * NOT invoked — the caller guarantees a per-comm extension owns central-install
+   * for its own comm (Pi core). Omitting `comm` alone changes nothing: without
+   * this flag, a missing `comm` still flows into `ensureCentralInstall`, which
+   * infers it from the install stamp (preserving the Claude/Codex host callers).
+   */
+  skipCentralInstall?: boolean;
   stateRoot?: string;
   discoveryRoot?: string;
   /** Caller's own dir; the resolver walks up from here to the dev marker. */
@@ -71,6 +82,7 @@ export async function entryEnsures(options: EntryEnsuresOptions): Promise<EntryE
   const {
     agent,
     comm,
+    skipCentralInstall = false,
     stateRoot,
     discoveryRoot,
     fromDir,
@@ -109,16 +121,22 @@ export async function entryEnsures(options: EntryEnsuresOptions): Promise<EntryE
     resolvedEnv.AGENTS_COMM_BUS_DISCOVERY_ROOT ??
     canonicalStateRoot;
 
-  const centralInstall = await ensureCentralInstallFn({
-    stateRoot: canonicalStateRoot,
-    agent,
-    comm,
-    pluginInstallDir: resolvedPluginInstallDir,
-    env: resolvedEnv,
-    daemonRunning,
-    readOnlyIfCentralInstalled: readOnlyCentralInstall,
-    deps: deps.centralInstallDeps,
-  });
+  // AGE-63: daemon-resolution-only mode skips central-install entirely (Pi core;
+  // per-comm extensions own their own comm's central-install). Without the flag,
+  // behavior is unchanged — a missing `comm` still reaches ensureCentralInstall,
+  // which infers it from the install stamp (the Claude/Codex host callers).
+  const centralInstall: EnsureCentralInstallResult = skipCentralInstall
+    ? { mode: resolveInstallMode(resolvedEnv), skipped: true }
+    : await ensureCentralInstallFn({
+        stateRoot: canonicalStateRoot,
+        agent,
+        comm,
+        pluginInstallDir: resolvedPluginInstallDir,
+        env: resolvedEnv,
+        daemonRunning,
+        readOnlyIfCentralInstalled: readOnlyCentralInstall,
+        deps: deps.centralInstallDeps,
+      });
 
   const daemon = await ensureDaemonFn({
     ...ensureDaemonOptions,

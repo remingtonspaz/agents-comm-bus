@@ -18,9 +18,6 @@ import type { PendingInboundEntry } from "./inbound-format.js";
 
 const CLIENT_VERSION = "pi-extension-1";
 
-/** MVP comm set — extend here when adding Discord/Matrix/curl support. */
-export const SUPPORTED_COMMS = ["telegram"] as const;
-
 export interface PiRegisterSessionParams {
   agent: "pi";
   session: string;
@@ -107,27 +104,25 @@ export class PiDaemonClient {
   async start(): Promise<void> {
     let lastEnsured: Awaited<ReturnType<typeof entryEnsures>> | null = null;
 
-    // TODO(age-XX): Follow-up — core should stop calling entryEnsures; per-comm
-    // extensions own it. Requires comm-less entryEnsures mode (core daemon-resolution
-    // only) OR core-side comm discovery. Multi-comm prod correctness depends on this.
-    // See docs/research/pi/README.md § Distribution.
-    for (const comm of SUPPORTED_COMMS) {
-      try {
-        lastEnsured = await entryEnsures({
-          agent: "pi",
-          comm,
-          fromDir: import.meta.dirname,
-          // readOnlyCentralInstall defaults to false — let the supersede fire
-          // when the stamp's daemon_bundle_version > installed version.
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log(`entryEnsures failed for comm=${comm}: ${message}`);
-      }
+    // AGE-63: the core resolves the daemon + dev-marker only; it does NOT
+    // central-install any comm. Each per-comm Pi extension owns central-install
+    // for its own comm (they call entryEnsures with their comm at extension load,
+    // before the core's session_start start()). `skipCentralInstall` avoids the
+    // old telegram-hardcoded loop that broke multi-comm prod (e.g. a pi-discord
+    // install has no telegram stamp).
+    try {
+      lastEnsured = await entryEnsures({
+        agent: "pi",
+        skipCentralInstall: true,
+        fromDir: import.meta.dirname,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`entryEnsures failed: ${message}`);
     }
 
     if (!lastEnsured) {
-      throw new Error("agents-comm-bus bootstrap failed for all supported comms");
+      throw new Error("agents-comm-bus bootstrap failed");
     }
 
     this.ensureDaemonOptions = {
