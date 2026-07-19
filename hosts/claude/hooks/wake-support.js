@@ -38,13 +38,154 @@ export function readWatcherPid(wakeDir) {
   }
 }
 
-// AGE-70 belt: legacy targetless watchers logged ClaudePid=0 and could pin dedup.
-function isPersistedTargetlessWatcher(wakeDir) {
+// AGE-79: dedup off the CURRENT watcher's structured metadata, NEVER the
+// append-only debug.log. The old AGE-70 belt grepped the entire debug.log for
+// `ClaudePid=0`; a single stale line anywhere in that history (e.g. one
+// pre-AGE-70 targetless watcher from months ago) made the check return true
+// forever, so dedup NEVER short-circuited and every hook fire leaked a new
+// watcher. `watcher.json` records the live watcher's identity so we can tell a
+// real targeted watcher from a targetless zombie without touching history.
+const WATCHER_META_FILE = 'watcher.json';
+
+function readWatcherMeta(wakeDir) {
   try {
-    const debugLog = fs.readFileSync(path.join(wakeDir, 'debug.log'), 'utf8');
-    return /ClaudePid=0\b/.test(debugLog);
+    return JSON.parse(fs.readFileSync(path.join(wakeDir, WATCHER_META_FILE), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// AGE-79 (split-brain fix): watcher.json is the SINGLE AUTHORITATIVE record.
+// Dedup reads the pid from it first, falling back to the legacy watcher.pid only
+// for pre-fix/migration watchers (which have no watcher.json yet). This makes
+// watcher.pid a best-effort mirror whose write failure cannot split-brain the
+// dedup — once watcher.json commits, the new watcher is always discoverable.
+function readAuthoritativeWatcherPid(wakeDir) {
+  const meta = readWatcherMeta(wakeDir);
+  if (meta && Number.isInteger(meta.pid) && meta.pid > 0) return meta.pid;
+  return readWatcherPid(wakeDir);
+}
+
+// Best-effort legacy mirror of the authoritative pid; injectable for tests.
+function defaultWriteWatcherPid(wakeDir, pid) {
+  fs.writeFileSync(path.join(wakeDir, 'watcher.pid'), `${pid}\n`, 'utf8');
+}
+
+// AGE-79 (B3): watcher.json is load-bearing for dedup, so write it ATOMICALLY
+// (temp + rename) and let failures THROW. A silently-missing record would make
+// the new watcher permanently non-reusable and re-leak a watcher every hook.
+function writeWatcherMeta(wakeDir, meta) {
+  const finalPath = path.join(wakeDir, WATCHER_META_FILE);
+  const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(meta)}\n`, 'utf8');
+  fs.renameSync(tmpPath, finalPath);
+}
+
+// AGE-79 (B1): read a pid's command line so we can PROVE identity before we
+// reuse or KILL it — guards against PID reuse (a stale watcher.pid whose number
+// now belongs to an unrelated process). Injectable for tests.
+function defaultReadProcessCommandLine(pid) {
+  try {
+    const out = execSync(
+      `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`,
+      { encoding: 'utf-8', windowsHide: true, timeout: 5_000 },
+    );
+    return String(out).trim();
+  } catch {
+    return '';
+  }
+}
+
+// AGE-79 (B1 hardening): parse the `-SessionDir` arg (quoted or bare) so identity
+// uses an EXACT path match. `includes(wakeDir)` would let `…88c6be72-other`
+// satisfy `…88c6be72` (prefix collision) and reuse/kill the wrong session.
+function parseSessionDirArg(cmd) {
+  const m = /-SessionDir\s+(?:"([^"]+)"|(\S+))/i.exec(cmd);
+  return m ? (m[1] ?? m[2]) : null;
+}
+
+function samePath(a, b) {
+  try {
+    return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
   } catch {
     return false;
+  }
+}
+
+// Parse a numeric watcher arg (e.g. `-ClaudePid 5360`) from a command line.
+function parseIntArg(cmd, name) {
+  const m = new RegExp(`-${name}\\s+(\\d+)`, 'i').exec(cmd);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+
+// AGE-79 (B1 fail-closed): inspect a live pid. `state` is fail-closed 3-way:
+//   'ours'         — pid IS our enter-watcher.ps1 for THIS exact wake dir; the
+//                    parsed claudePid/hwnd ride along so we can adopt metadata.
+//   'foreign'      — a different/unrelated process (PID reuse).
+//   'unverifiable' — command line couldn't be read (transient CIM failure); the
+//                    caller MUST fail closed (don't spawn a dup, don't kill),
+//                    because AGE-69 documents transient CIM failures under churn.
+function inspectWatcher(pid, wakeDir, readProcessCommandLine) {
+  if (!pid) return { state: 'foreign' };
+  const cmd = readProcessCommandLine(pid);
+  if (!cmd) return { state: 'unverifiable' };
+  if (!/enter-watcher/i.test(cmd)) return { state: 'foreign' };
+  const sessionDir = parseSessionDirArg(cmd);
+  if (!sessionDir || !samePath(sessionDir, wakeDir)) return { state: 'foreign' };
+  return { state: 'ours', claudePid: parseIntArg(cmd, 'ClaudePid') ?? 0, hwnd: parseIntArg(cmd, 'WindowHandle') };
+}
+
+// The structured record points at this pid with a real target (claudePid > 0).
+function watcherMetaMatches(wakeDir, pid) {
+  const meta = readWatcherMeta(wakeDir);
+  return Boolean(meta && meta.pid === pid && Number.isInteger(meta.claudePid) && meta.claudePid > 0);
+}
+
+// If a live recorded pid should short-circuit the spawn, return the
+// {started:false,...} result; else null (caller proceeds to spawn). Identity is
+// evaluated FIRST for ANY alive recorded pid — NOT gated on metadata — so a
+// pre-fix watcher (live watcher.pid, no watcher.json) that is temporarily
+// unverifiable still fails CLOSED instead of spawning a migration duplicate.
+function dedupeLiveWatcher(pid, wakeDir, alreadyRunningReason, deps) {
+  const { pidAlive, readProcessCommandLine, writeMeta, log } = deps;
+  if (!pid || !pidAlive(pid)) return null;
+  const info = inspectWatcher(pid, wakeDir, readProcessCommandLine);
+  if (info.state === 'unverifiable') {
+    log(`watcher ${pid} identity temporarily unverifiable; not spawning, will retry next hook`);
+    return { started: false, pid, wakeDir, reason: 'identity_unverifiable' };
+  }
+  if (info.state === 'foreign') return null; // recorded pid was reused; spawn.
+  // 'ours': a targetless watcher (no live claude target) is a zombie — replace it.
+  if (!(Number.isInteger(info.claudePid) && info.claudePid > 0)) return null;
+  // Verified our watcher for this session, with a real target — reuse it. Adopt
+  // metadata (best-effort) if missing/stale so the next hook can dedup without a
+  // CIM lookup. Makes the AGE-79 migration seamless (no spawn, no kill).
+  if (!watcherMetaMatches(wakeDir, pid)) {
+    try {
+      writeMeta(wakeDir, { pid, claudePid: info.claudePid, hwnd: info.hwnd ?? null });
+      log(`Adopted existing watcher ${pid} into watcher.json`);
+    } catch {
+      // best-effort; reuse regardless — next hook re-verifies via CIM.
+    }
+  }
+  return { started: false, pid, wakeDir, reason: alreadyRunningReason };
+}
+
+// Retire a superseded watcher — kill ONLY when identity is verified 'ours'. A
+// 'foreign' pid is never killed (PID reuse); an 'unverifiable' pid is left alone
+// (fail closed — the next hook retires it once identity is readable).
+function retireWatcher(pid, wakeDir, killWatcher, readProcessCommandLine, log) {
+  if (!pid) return;
+  const { state } = inspectWatcher(pid, wakeDir, readProcessCommandLine);
+  if (state !== 'ours') {
+    log(`Not retiring PID ${pid}: identity=${state} (fail-closed; only 'ours' is killed)`);
+    return;
+  }
+  try {
+    killWatcher(pid);
+    log(`Retired superseded watcher PID ${pid}`);
+  } catch {
+    // best-effort
   }
 }
 
@@ -235,6 +376,11 @@ function tryAcquireWatcherLock(wakeDir, log) {
 
 export function ensureClaudeWakeWatcher(options = {}) {
   const log = options.log || (() => {});
+  const pidAlive = options.isPidAlive || isPidAlive;
+  const killWatcher = options.killWatcher || ((pid) => process.kill(pid));
+  const readProcessCommandLine = options.readProcessCommandLine || defaultReadProcessCommandLine;
+  const writeMeta = options.writeWatcherMeta || writeWatcherMeta;
+  const writeWatcherPid = options.writeWatcherPid || defaultWriteWatcherPid;
   if (os.platform() !== 'win32') {
     log('Auto-watcher only supported on Windows');
     return { started: false, reason: 'unsupported_platform' };
@@ -244,10 +390,10 @@ export function ensureClaudeWakeWatcher(options = {}) {
   const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
   fs.mkdirSync(wakeDir, { recursive: true });
 
-  const existingPid = readWatcherPid(wakeDir);
-  if (existingPid && isPidAlive(existingPid) && !isPersistedTargetlessWatcher(wakeDir)) {
-    return { started: false, pid: existingPid, wakeDir, reason: 'already_running' };
-  }
+  const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log };
+  const existingPid = readAuthoritativeWatcherPid(wakeDir);
+  const existingDedupe = dedupeLiveWatcher(existingPid, wakeDir, 'already_running', identityDeps);
+  if (existingDedupe) return existingDedupe;
 
   const watcherScript = resolveEnterWatcherScript(__dirname);
   if (!watcherScript) {
@@ -263,14 +409,10 @@ export function ensureClaudeWakeWatcher(options = {}) {
   try {
     // Re-check after acquiring lock — another hook may have spawned a watcher
     // between our isPidAlive check and our lock acquisition.
-    const racedPid = readWatcherPid(wakeDir);
-    if (
-      racedPid &&
-      racedPid !== existingPid &&
-      isPidAlive(racedPid) &&
-      !isPersistedTargetlessWatcher(wakeDir)
-    ) {
-      return { started: false, pid: racedPid, wakeDir, reason: 'raced_already_running' };
+    const racedPid = readAuthoritativeWatcherPid(wakeDir);
+    if (racedPid !== existingPid) {
+      const racedDedupe = dedupeLiveWatcher(racedPid, wakeDir, 'raced_already_running', identityDeps);
+      if (racedDedupe) return racedDedupe;
     }
 
     const cmdInfo = options.cmdInfo !== undefined ? options.cmdInfo : findCmdAncestor(log);
@@ -309,7 +451,78 @@ export function ensureClaudeWakeWatcher(options = {}) {
       return { started: false, wakeDir, reason: 'invalid_pid' };
     }
 
-    fs.writeFileSync(path.join(wakeDir, 'watcher.pid'), `${watcherPid}\n`, 'utf8');
+    // AGE-79: watcher.json is the SINGLE AUTHORITATIVE record — commit it
+    // atomically FIRST. watcher.pid is only a best-effort legacy mirror, so the
+    // mirror write (below) failing can't split-brain: dedup reads the
+    // authoritative pid from watcher.json.
+    try {
+      writeMeta(wakeDir, {
+        pid: watcherPid,
+        claudePid: cmdInfo.claudePid ?? 0,
+        hwnd: cmdInfo.hwnd ?? null,
+      });
+    } catch (metaError) {
+      // The just-spawned watcherPid is OWNED — kill it directly. If it
+      // terminates, the prior authoritative record is untouched (nothing
+      // untracked survives). If the kill FAILS, mirror the new pid to
+      // watcher.pid so the live watcher stays discoverable (watcher.json wasn't
+      // committed, so dedup falls back to the mirror).
+      let terminated = false;
+      try {
+        killWatcher(watcherPid);
+        terminated = true;
+      } catch {
+        terminated = false;
+      }
+      if (terminated) {
+        log(
+          `Watcher metadata write failed (${metaError.message}); killed owned new watcher ` +
+            `${watcherPid}; prior record preserved`,
+        );
+      } else {
+        // Kill failed → the new watcher is live and MUST stay discoverable.
+        // Mirror its pid; then drop the now-stale prior watcher.json so the
+        // authoritative reader (which prefers watcher.json) falls back to the
+        // mirror instead of resurrecting the dead/foreign/targetless old pid.
+        let mirrored = false;
+        try {
+          writeWatcherPid(wakeDir, watcherPid);
+          mirrored = true;
+        } catch {
+          mirrored = false;
+        }
+        if (mirrored) {
+          try {
+            fs.rmSync(path.join(wakeDir, WATCHER_META_FILE), { force: true });
+          } catch {
+            // best-effort; keep the old JSON if we can't remove it.
+          }
+        }
+        log(
+          `Watcher metadata write failed (${metaError.message}) AND could not kill new watcher ` +
+            `${watcherPid}; mirrored its pid${mirrored ? ' and dropped stale metadata' : ''} for discovery`,
+        );
+      }
+      return { started: false, wakeDir, reason: 'meta_write_failed' };
+    }
+    // Authoritative record committed. Mirror to watcher.pid best-effort — a
+    // failure here is non-fatal (dedup reads watcher.json first) and CANNOT
+    // orphan the new watcher, so swallow it rather than let the outer catch turn
+    // a committed spawn into spawn_error.
+    try {
+      writeWatcherPid(wakeDir, watcherPid);
+    } catch (pidError) {
+      log(`watcher.pid mirror write failed (${pidError.message}); watcher.json is authoritative for ${watcherPid}`);
+    }
+    // AGE-79: retire the watcher(s) we just replaced so duplicates can't pile up.
+    // existingPid and racedPid are often the same watcher — dedup so we retire once.
+    const retired = new Set();
+    for (const priorPid of [existingPid, racedPid]) {
+      if (priorPid && priorPid !== watcherPid && !retired.has(priorPid) && pidAlive(priorPid)) {
+        retired.add(priorPid);
+        retireWatcher(priorPid, wakeDir, killWatcher, readProcessCommandLine, log);
+      }
+    }
     log(
       `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, ` +
         `target=${cmdInfo.hwnd ? `hwnd:${cmdInfo.hwnd}` : `pid:${cmdInfo.pid}`})`,

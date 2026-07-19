@@ -2,7 +2,7 @@
   "schema_version": 1,
   "agent": "claude",
   "comm": "curl",
-  "plugin_version": "0.1.5",
+  "plugin_version": "0.1.6",
   "daemon_bundle_version": "0.2.39",
   "adapter_bundle_version": "0.1.2",
   "adapter_bundle_versions": {

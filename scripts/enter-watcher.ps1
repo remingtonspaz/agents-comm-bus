@@ -222,9 +222,21 @@ while ($true) {
         $hwnd = [IntPtr]::Zero
     }
 
+    # AGE-79 (B2): atomic single-consumer claim. Overlapping watchers can both
+    # SEE the trigger; an atomic rename lets exactly ONE claim it (a file can be
+    # moved only once), so one trigger yields exactly one send — no double-typing.
+    $claimFile = "$triggerFile.$PID.claim"
+    $claimedTrigger = $false
     if (Test-Path $triggerFile) {
-        # Remove trigger file first
-        Remove-Item $triggerFile -Force
+        try {
+            Move-Item -LiteralPath $triggerFile -Destination $claimFile -Force -ErrorAction Stop
+            $claimedTrigger = $true
+        } catch {
+            $claimedTrigger = $false
+        }
+    }
+    if ($claimedTrigger) {
+        Remove-Item $claimFile -Force -ErrorAction SilentlyContinue
 
         # Determine what to send. Query wake suppression and normal turn wake
         # policy are daemon/adapter decisions; this watcher only types the

@@ -73,12 +73,99 @@ function readWatcherPid(wakeDir) {
     return null;
   }
 }
-function isPersistedTargetlessWatcher(wakeDir) {
+var WATCHER_META_FILE = "watcher.json";
+function readWatcherMeta(wakeDir) {
   try {
-    const debugLog = fs.readFileSync(path3.join(wakeDir, "debug.log"), "utf8");
-    return /ClaudePid=0\b/.test(debugLog);
+    return JSON.parse(fs.readFileSync(path3.join(wakeDir, WATCHER_META_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+function readAuthoritativeWatcherPid(wakeDir) {
+  const meta = readWatcherMeta(wakeDir);
+  if (meta && Number.isInteger(meta.pid) && meta.pid > 0) return meta.pid;
+  return readWatcherPid(wakeDir);
+}
+function defaultWriteWatcherPid(wakeDir, pid) {
+  fs.writeFileSync(path3.join(wakeDir, "watcher.pid"), `${pid}
+`, "utf8");
+}
+function writeWatcherMeta(wakeDir, meta) {
+  const finalPath = path3.join(wakeDir, WATCHER_META_FILE);
+  const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(meta)}
+`, "utf8");
+  fs.renameSync(tmpPath, finalPath);
+}
+function defaultReadProcessCommandLine(pid) {
+  try {
+    const out = execSync(
+      `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`,
+      { encoding: "utf-8", windowsHide: true, timeout: 5e3 }
+    );
+    return String(out).trim();
+  } catch {
+    return "";
+  }
+}
+function parseSessionDirArg(cmd) {
+  const m = /-SessionDir\s+(?:"([^"]+)"|(\S+))/i.exec(cmd);
+  return m ? m[1] ?? m[2] : null;
+}
+function samePath(a, b) {
+  try {
+    return path3.resolve(a).toLowerCase() === path3.resolve(b).toLowerCase();
   } catch {
     return false;
+  }
+}
+function parseIntArg(cmd, name) {
+  const m = new RegExp(`-${name}\\s+(\\d+)`, "i").exec(cmd);
+  return m ? Number.parseInt(m[1], 10) : null;
+}
+function inspectWatcher(pid, wakeDir, readProcessCommandLine) {
+  if (!pid) return { state: "foreign" };
+  const cmd = readProcessCommandLine(pid);
+  if (!cmd) return { state: "unverifiable" };
+  if (!/enter-watcher/i.test(cmd)) return { state: "foreign" };
+  const sessionDir = parseSessionDirArg(cmd);
+  if (!sessionDir || !samePath(sessionDir, wakeDir)) return { state: "foreign" };
+  return { state: "ours", claudePid: parseIntArg(cmd, "ClaudePid") ?? 0, hwnd: parseIntArg(cmd, "WindowHandle") };
+}
+function watcherMetaMatches(wakeDir, pid) {
+  const meta = readWatcherMeta(wakeDir);
+  return Boolean(meta && meta.pid === pid && Number.isInteger(meta.claudePid) && meta.claudePid > 0);
+}
+function dedupeLiveWatcher(pid, wakeDir, alreadyRunningReason, deps) {
+  const { pidAlive, readProcessCommandLine, writeMeta, log: log2 } = deps;
+  if (!pid || !pidAlive(pid)) return null;
+  const info = inspectWatcher(pid, wakeDir, readProcessCommandLine);
+  if (info.state === "unverifiable") {
+    log2(`watcher ${pid} identity temporarily unverifiable; not spawning, will retry next hook`);
+    return { started: false, pid, wakeDir, reason: "identity_unverifiable" };
+  }
+  if (info.state === "foreign") return null;
+  if (!(Number.isInteger(info.claudePid) && info.claudePid > 0)) return null;
+  if (!watcherMetaMatches(wakeDir, pid)) {
+    try {
+      writeMeta(wakeDir, { pid, claudePid: info.claudePid, hwnd: info.hwnd ?? null });
+      log2(`Adopted existing watcher ${pid} into watcher.json`);
+    } catch {
+    }
+  }
+  return { started: false, pid, wakeDir, reason: alreadyRunningReason };
+}
+function retireWatcher(pid, wakeDir, killWatcher, readProcessCommandLine, log2) {
+  if (!pid) return;
+  const { state } = inspectWatcher(pid, wakeDir, readProcessCommandLine);
+  if (state !== "ours") {
+    log2(`Not retiring PID ${pid}: identity=${state} (fail-closed; only 'ours' is killed)`);
+    return;
+  }
+  try {
+    killWatcher(pid);
+    log2(`Retired superseded watcher PID ${pid}`);
+  } catch {
   }
 }
 function hasPreciseWatcherSelector(cmdInfo) {
@@ -223,6 +310,11 @@ function tryAcquireWatcherLock(wakeDir, log2) {
 function ensureClaudeWakeWatcher(options = {}) {
   const log2 = options.log || (() => {
   });
+  const pidAlive = options.isPidAlive || isPidAlive;
+  const killWatcher = options.killWatcher || ((pid) => process.kill(pid));
+  const readProcessCommandLine = options.readProcessCommandLine || defaultReadProcessCommandLine;
+  const writeMeta = options.writeWatcherMeta || writeWatcherMeta;
+  const writeWatcherPid = options.writeWatcherPid || defaultWriteWatcherPid;
   if (os2.platform() !== "win32") {
     log2("Auto-watcher only supported on Windows");
     return { started: false, reason: "unsupported_platform" };
@@ -230,10 +322,10 @@ function ensureClaudeWakeWatcher(options = {}) {
   const projectPath = options.projectPath || resolveProjectPath();
   const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
   fs.mkdirSync(wakeDir, { recursive: true });
-  const existingPid = readWatcherPid(wakeDir);
-  if (existingPid && isPidAlive(existingPid) && !isPersistedTargetlessWatcher(wakeDir)) {
-    return { started: false, pid: existingPid, wakeDir, reason: "already_running" };
-  }
+  const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log: log2 };
+  const existingPid = readAuthoritativeWatcherPid(wakeDir);
+  const existingDedupe = dedupeLiveWatcher(existingPid, wakeDir, "already_running", identityDeps);
+  if (existingDedupe) return existingDedupe;
   const watcherScript = resolveEnterWatcherScript(__dirname);
   if (!watcherScript) {
     log2("ERROR: Watcher script not found (enter-watcher.ps1) in any known layout");
@@ -244,9 +336,10 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, wakeDir, reason: "lock_held" };
   }
   try {
-    const racedPid = readWatcherPid(wakeDir);
-    if (racedPid && racedPid !== existingPid && isPidAlive(racedPid) && !isPersistedTargetlessWatcher(wakeDir)) {
-      return { started: false, pid: racedPid, wakeDir, reason: "raced_already_running" };
+    const racedPid = readAuthoritativeWatcherPid(wakeDir);
+    if (racedPid !== existingPid) {
+      const racedDedupe = dedupeLiveWatcher(racedPid, wakeDir, "raced_already_running", identityDeps);
+      if (racedDedupe) return racedDedupe;
     }
     const cmdInfo = options.cmdInfo !== void 0 ? options.cmdInfo : findCmdAncestor(log2);
     if (!hasPreciseWatcherSelector(cmdInfo)) {
@@ -279,8 +372,56 @@ function ensureClaudeWakeWatcher(options = {}) {
       log2(`Watcher spawn returned invalid pid: ${String(watcherPid)}`);
       return { started: false, wakeDir, reason: "invalid_pid" };
     }
-    fs.writeFileSync(path3.join(wakeDir, "watcher.pid"), `${watcherPid}
-`, "utf8");
+    try {
+      writeMeta(wakeDir, {
+        pid: watcherPid,
+        claudePid: cmdInfo.claudePid ?? 0,
+        hwnd: cmdInfo.hwnd ?? null
+      });
+    } catch (metaError) {
+      let terminated = false;
+      try {
+        killWatcher(watcherPid);
+        terminated = true;
+      } catch {
+        terminated = false;
+      }
+      if (terminated) {
+        log2(
+          `Watcher metadata write failed (${metaError.message}); killed owned new watcher ${watcherPid}; prior record preserved`
+        );
+      } else {
+        let mirrored = false;
+        try {
+          writeWatcherPid(wakeDir, watcherPid);
+          mirrored = true;
+        } catch {
+          mirrored = false;
+        }
+        if (mirrored) {
+          try {
+            fs.rmSync(path3.join(wakeDir, WATCHER_META_FILE), { force: true });
+          } catch {
+          }
+        }
+        log2(
+          `Watcher metadata write failed (${metaError.message}) AND could not kill new watcher ${watcherPid}; mirrored its pid${mirrored ? " and dropped stale metadata" : ""} for discovery`
+        );
+      }
+      return { started: false, wakeDir, reason: "meta_write_failed" };
+    }
+    try {
+      writeWatcherPid(wakeDir, watcherPid);
+    } catch (pidError) {
+      log2(`watcher.pid mirror write failed (${pidError.message}); watcher.json is authoritative for ${watcherPid}`);
+    }
+    const retired = /* @__PURE__ */ new Set();
+    for (const priorPid of [existingPid, racedPid]) {
+      if (priorPid && priorPid !== watcherPid && !retired.has(priorPid) && pidAlive(priorPid)) {
+        retired.add(priorPid);
+        retireWatcher(priorPid, wakeDir, killWatcher, readProcessCommandLine, log2);
+      }
+    }
     log2(
       `Spawned Claude wake watcher (PID: ${watcherPid}, wakeDir: ${wakeDir}, target=${cmdInfo.hwnd ? `hwnd:${cmdInfo.hwnd}` : `pid:${cmdInfo.pid}`})`
     );
