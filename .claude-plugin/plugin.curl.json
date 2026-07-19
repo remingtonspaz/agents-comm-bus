@@ -1,6 +1,6 @@
 {
   "name": "curl",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local HTTP ingress for Claude Code through the agents-comm-bus daemon: POST context from cron, CI, or scripts straight into the session",
   "author": {
     "name": "Satrio"

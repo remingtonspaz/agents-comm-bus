@@ -1,6 +1,6 @@
 {
   "name": "telegram",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Bidirectional Telegram messaging for Codex through the shared agents-comm-bus daemon.",
   "author": {
     "name": "Satrio"

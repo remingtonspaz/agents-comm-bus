@@ -1344,14 +1344,14 @@ var require_receiver = __commonJS({
        * @return {(Error|RangeError)} The error
        * @private
        */
-      createError(ErrorCtor, message, prefix, statusCode, errorCode) {
+      createError(ErrorCtor, message, prefix, statusCode, errorCode2) {
         this._loop = false;
         this._errored = true;
         const err = new ErrorCtor(
           prefix ? `Invalid WebSocket frame: ${message}` : message
         );
         Error.captureStackTrace(err, this.createError);
-        err.code = errorCode;
+        err.code = errorCode2;
         err[kStatusCode] = statusCode;
         return err;
       }
@@ -3178,7 +3178,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open4() {
+          ws.once("open", function open3() {
             duplex._final(callback);
           });
           return;
@@ -3199,7 +3199,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open4() {
+          ws.once("open", function open3() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -24832,7 +24832,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.38";
+var DAEMON_VERSION = "0.2.39";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -25688,51 +25688,64 @@ function resolveCentralPaths(stateRoot2, comm) {
 
 // ../agents-comm-bus/dist/core-daemon/host-runtime/install-lock.js
 import { constants as constants2 } from "node:fs";
-import { open as open3, readFile as readFile4, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
+import { open as fsOpen, readFile as readFile4, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
 import path6 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
+var TRANSIENT_WIN32_OPEN_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY", "EACCES"]);
 async function acquireInstallLock(lockPath, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULTS.timeoutMs;
   const retryMs = options.retryMs ?? DEFAULTS.retryMs;
   const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? Date.now;
   const sleep2 = options.sleep ?? defaultSleep;
+  const openFn = options.open ?? fsOpen;
+  const platform = options.platform ?? process.platform;
   await mkdir5(path6.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
   for (; ; ) {
+    let handle;
     try {
-      const handle = await open3(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
+      handle = await openFn(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
+    } catch (error2) {
+      if (isAlreadyExistsError2(error2)) {
+        if (await stealIfStale(lockPath, staleMs, now)) {
+          stoleStale = true;
+          continue;
+        }
+      } else if (!isTransientOpenError(error2, platform)) {
+        throw error2;
+      }
+      if (now() - start >= timeoutMs) {
+        throw lockTimeoutError(lockPath, timeoutMs, error2);
+      }
+      await sleep2(retryMs);
+      continue;
+    }
+    try {
       await handle.writeFile(`${token}
 `, "utf8");
       await handle.close();
-      return {
-        path: lockPath,
-        token,
-        stoleStale,
-        release: async () => {
-          try {
-            const current = await readFile4(lockPath, "utf8");
-            if (current.trim() === token) {
-              await rm3(lockPath, { force: true });
-            }
-          } catch {
-          }
-        }
-      };
     } catch (error2) {
-      if (!isAlreadyExistsError2(error2))
-        throw error2;
-      if (await stealIfStale(lockPath, staleMs, now)) {
-        stoleStale = true;
-        continue;
-      }
-      if (now() - start >= timeoutMs) {
-        throw new Error(`central install lock at ${lockPath} is held; timed out after ${timeoutMs}ms`);
-      }
-      await sleep2(retryMs);
+      await handle.close().catch(() => {
+      });
+      throw error2;
     }
+    return {
+      path: lockPath,
+      token,
+      stoleStale,
+      release: async () => {
+        try {
+          const current = await readFile4(lockPath, "utf8");
+          if (current.trim() === token) {
+            await rm3(lockPath, { force: true });
+          }
+        } catch {
+        }
+      }
+    };
   }
 }
 async function stealIfStale(lockPath, staleMs, now) {
@@ -25750,7 +25763,29 @@ function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function isAlreadyExistsError2(error2) {
-  return typeof error2 === "object" && error2 !== null && "code" in error2 && error2.code === "EEXIST";
+  return errorCode(error2) === "EEXIST";
+}
+function isTransientOpenError(error2, platform) {
+  if (platform !== "win32")
+    return false;
+  const code = errorCode(error2);
+  return code !== null && TRANSIENT_WIN32_OPEN_CODES.has(code);
+}
+function errorCode(error2) {
+  if (typeof error2 === "object" && error2 !== null && "code" in error2) {
+    const code = error2.code;
+    return typeof code === "string" ? code : null;
+  }
+  return null;
+}
+function lockTimeoutError(lockPath, timeoutMs, cause) {
+  const code = errorCode(cause);
+  if (code !== null && code !== "EEXIST") {
+    const error2 = new Error(`central install lock at ${lockPath}: transient filesystem error ${code} persisted; timed out after ${timeoutMs}ms`);
+    error2.cause = cause;
+    return error2;
+  }
+  return new Error(`central install lock at ${lockPath} is held; timed out after ${timeoutMs}ms`);
 }
 
 // ../agents-comm-bus/dist/core-daemon/host-runtime/run-central-install.js

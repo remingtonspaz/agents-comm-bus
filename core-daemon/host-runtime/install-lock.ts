@@ -1,8 +1,18 @@
 import { constants } from "node:fs";
-import { open, readFile, rm, mkdir, stat } from "node:fs/promises";
+import { open as fsOpen, readFile, rm, mkdir, stat } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULTS = { timeoutMs: 5_000, retryMs: 50, staleMs: 30_000 };
+
+/**
+ * AGE-48: transient Windows FS errors on the exclusive-create open. On a cold,
+ * freshly-written tree the AV scanner / search indexer briefly holds a handle,
+ * so `open(O_CREAT|O_EXCL|O_WRONLY)` can fail with one of these even though no
+ * lock is actually held — retry it. Retryable ONLY on win32: on POSIX these are
+ * genuine permission failures and must fail fast rather than spin to timeout.
+ */
+const TRANSIENT_WIN32_OPEN_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
 
 export interface InstallLock {
   path: string;
@@ -17,6 +27,10 @@ export interface InstallLockOptions {
   staleMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable exclusive-create open (tests); defaults to node fs/promises open. */
+  open?: (lockPath: string, flags: number) => Promise<FileHandle>;
+  /** Injectable platform gate (tests); defaults to process.platform. */
+  platform?: NodeJS.Platform;
 }
 
 export async function acquireInstallLock(lockPath: string, options: InstallLockOptions = {}): Promise<InstallLock> {
@@ -25,6 +39,8 @@ export async function acquireInstallLock(lockPath: string, options: InstallLockO
   const staleMs = options.staleMs ?? DEFAULTS.staleMs;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
+  const openFn = options.open ?? fsOpen;
+  const platform = options.platform ?? process.platform;
 
   await mkdir(path.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
@@ -32,37 +48,55 @@ export async function acquireInstallLock(lockPath: string, options: InstallLockO
   let stoleStale = false;
 
   for (;;) {
+    // AGE-48: ONLY the exclusive-create open() is inside the retry catch. A
+    // holder collision (EEXIST) waits / steals-if-stale as before; a transient
+    // win32 FS glitch retries with backoff. The write/close below are
+    // deliberately OUTSIDE this catch — retrying after the lock file already
+    // exists would leak the open handle and then self-collide on EEXIST.
+    let handle: FileHandle;
     try {
-      const handle = await open(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
-      await handle.writeFile(`${token}\n`, "utf8");
-      await handle.close();
-      return {
-        path: lockPath,
-        token,
-        stoleStale,
-        release: async () => {
-          try {
-            const current = await readFile(lockPath, "utf8");
-            if (current.trim() === token) {
-              await rm(lockPath, { force: true });
-            }
-          } catch {
-            // Best-effort release.
-          }
-        },
-      };
+      handle = await openFn(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
     } catch (error) {
-      if (!isAlreadyExistsError(error)) throw error;
-
-      if (await stealIfStale(lockPath, staleMs, now)) {
-        stoleStale = true;
-        continue;
+      if (isAlreadyExistsError(error)) {
+        if (await stealIfStale(lockPath, staleMs, now)) {
+          stoleStale = true;
+          continue;
+        }
+      } else if (!isTransientOpenError(error, platform)) {
+        throw error;
       }
+      // EEXIST (holder still live) OR a transient win32 open glitch → bounded retry.
       if (now() - start >= timeoutMs) {
-        throw new Error(`central install lock at ${lockPath} is held; timed out after ${timeoutMs}ms`);
+        throw lockTimeoutError(lockPath, timeoutMs, error);
       }
       await sleep(retryMs);
+      continue;
     }
+
+    // Handle acquired. write/close are fail-fast with best-effort close cleanup.
+    try {
+      await handle.writeFile(`${token}\n`, "utf8");
+      await handle.close();
+    } catch (error) {
+      await handle.close().catch(() => {});
+      throw error;
+    }
+
+    return {
+      path: lockPath,
+      token,
+      stoleStale,
+      release: async () => {
+        try {
+          const current = await readFile(lockPath, "utf8");
+          if (current.trim() === token) {
+            await rm(lockPath, { force: true });
+          }
+        } catch {
+          // Best-effort release.
+        }
+      },
+    };
   }
 }
 
@@ -84,5 +118,39 @@ function defaultSleep(ms: number): Promise<void> {
 }
 
 function isAlreadyExistsError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
+  return errorCode(error) === "EEXIST";
+}
+
+/**
+ * AGE-48: a transient exclusive-create open failure that should be retried.
+ * Only on win32 (AV/indexer handle contention); POSIX EPERM/EACCES are permanent.
+ */
+function isTransientOpenError(error: unknown, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return false;
+  const code = errorCode(error);
+  return code !== null && TRANSIENT_WIN32_OPEN_CODES.has(code);
+}
+
+function errorCode(error: unknown): string | null {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return typeof code === "string" ? code : null;
+  }
+  return null;
+}
+
+/**
+ * Preserve the real failure cause: a persistent transient FS error (e.g. EPERM)
+ * must NOT be mislabeled "lock held" — that message only fits an EEXIST timeout.
+ */
+function lockTimeoutError(lockPath: string, timeoutMs: number, cause: unknown): Error {
+  const code = errorCode(cause);
+  if (code !== null && code !== "EEXIST") {
+    const error = new Error(
+      `central install lock at ${lockPath}: transient filesystem error ${code} persisted; timed out after ${timeoutMs}ms`,
+    );
+    (error as { cause?: unknown }).cause = cause;
+    return error;
+  }
+  return new Error(`central install lock at ${lockPath} is held; timed out after ${timeoutMs}ms`);
 }

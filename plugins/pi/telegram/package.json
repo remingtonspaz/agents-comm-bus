@@ -1,6 +1,6 @@
 {
   "name": "@agents-comm-bus/pi-telegram",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi host extension for agents-comm-bus — Telegram comm (bundles the shared pi-core).",
   "type": "module",
   "keywords": ["pi-package"],
