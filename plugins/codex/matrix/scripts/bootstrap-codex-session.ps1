@@ -5,6 +5,7 @@ param(
     [int]$MaxPort = 4600,
     [int]$KillPid = 0,
     [string]$ThreadId = $env:CODEX_THREAD_ID,
+    [string]$AgentsCommLabels = $env:AGENTS_COMM_LABELS,
     [ValidateSet("powershell", "pwsh", "cmd")]
     [string]$AppServerTerminal = "powershell",
     [ValidateSet("auto", "cmd", "powershell", "pwsh", "bash")]
@@ -31,6 +32,15 @@ function ConvertTo-SingleQuotedPowerShellLiteral {
         return "''"
     }
     return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function Set-AgentsCommLabelsEnvironment {
+    param([string]$Labels)
+    if (-not [string]::IsNullOrWhiteSpace($Labels)) {
+        $env:AGENTS_COMM_LABELS = $Labels
+    } else {
+        Remove-Item Env:AGENTS_COMM_LABELS -ErrorAction SilentlyContinue
+    }
 }
 
 function ConvertTo-DoubleQuotedCmdLiteral {
@@ -309,7 +319,8 @@ function New-AppServerWrapper {
         [string]$Session,
         [string]$Command,
         [string]$PidFile,
-        [string]$Thread
+        [string]$Thread,
+        [string]$Labels
     )
 
     $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("agents-comm-bus-codex-app-server-{0}.ps1" -f ([guid]::NewGuid().ToString("N")))
@@ -319,6 +330,7 @@ function New-AppServerWrapper {
     $commandLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Command
     $pidFileLiteral = ConvertTo-SingleQuotedPowerShellLiteral $PidFile
     $threadLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Thread
+    $labelsLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Labels
 
     $content = @"
 `$ErrorActionPreference = "Stop"
@@ -326,6 +338,11 @@ Set-Location -LiteralPath $projectLiteral
 `$env:CODEX_APP_SERVER_URL = $urlLiteral
 `$env:AGENTS_COMM_BUS_AGENT = "codex"
 `$env:AGENTS_COMM_BUS_SESSION_ID = $sessionLiteral
+if (-not [string]::IsNullOrWhiteSpace($labelsLiteral)) {
+    `$env:AGENTS_COMM_LABELS = $labelsLiteral
+} else {
+    Remove-Item Env:AGENTS_COMM_LABELS -ErrorAction SilentlyContinue
+}
 if (-not [string]::IsNullOrWhiteSpace($threadLiteral)) {
     `$env:CODEX_THREAD_ID = $threadLiteral
 }
@@ -515,6 +532,7 @@ function New-RelayScripts {
         [int]$Min,
         [int]$Max,
         [string]$Thread,
+        [string]$Labels,
         [string]$Terminal,
         [string]$Command,
         [bool]$RunExec,
@@ -531,6 +549,9 @@ function New-RelayScripts {
     $terminalLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Terminal
     $commandLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Command
     $threadLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Thread
+    # Always serialize AgentsCommLabels (even when empty) so the relay passes an explicit
+    # unlabeled instruction instead of letting the downstream bootstrapper re-read ambient env.
+    $labelsLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Labels
 
     $lines = @(
         '$ErrorActionPreference = "Stop"',
@@ -540,7 +561,8 @@ function New-RelayScripts {
         ('$paramsForBootstrapper.MinPort = {0}' -f $Min),
         ('$paramsForBootstrapper.MaxPort = {0}' -f $Max),
         ('$paramsForBootstrapper.AppServerTerminal = {0}' -f $terminalLiteral),
-        ('$paramsForBootstrapper.CodexCommand = {0}' -f $commandLiteral)
+        ('$paramsForBootstrapper.CodexCommand = {0}' -f $commandLiteral),
+        ('$paramsForBootstrapper.AgentsCommLabels = {0}' -f $labelsLiteral)
     )
     if ($ChosenPort -gt 0) {
         $lines += ('$paramsForBootstrapper.Port = {0}' -f $ChosenPort)
@@ -696,6 +718,7 @@ function Start-SameTerminalRestart {
         -Min $MinPort `
         -Max $MaxPort `
         -Thread $ThreadId `
+        -Labels $AgentsCommLabels `
         -Terminal $AppServerTerminal `
         -Command $CodexCommand `
         -RunExec ([bool]$Exec) `
@@ -776,7 +799,7 @@ if ($StopPreviousAppServer -and [string]::IsNullOrWhiteSpace($ThreadId)) {
 }
 
 $pidFile = Join-Path ([System.IO.Path]::GetTempPath()) ("agents-comm-bus-codex-app-server-{0}.pid" -f ([guid]::NewGuid().ToString("N")))
-$wrapper = New-AppServerWrapper -Project $resolvedProject -Url $appServerUrl -Session $sessionId -Command $CodexCommand -PidFile $pidFile -Thread $ThreadId
+$wrapper = New-AppServerWrapper -Project $resolvedProject -Url $appServerUrl -Session $sessionId -Command $CodexCommand -PidFile $pidFile -Thread $ThreadId -Labels $AgentsCommLabels
 $terminalProcess = Start-AppServerTerminal -Terminal $AppServerTerminal -WrapperPath $wrapper
 $appServerPid = Wait-AppServerPid -PidFile $pidFile
 if ($null -eq $appServerPid) {
@@ -835,6 +858,7 @@ if ($Exec) {
     $env:CODEX_APP_SERVER_URL = $appServerUrl
     $env:AGENTS_COMM_BUS_AGENT = "codex"
     $env:AGENTS_COMM_BUS_SESSION_ID = $sessionId
+    Set-AgentsCommLabelsEnvironment -Labels $AgentsCommLabels
     if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
         $env:CODEX_THREAD_ID = $ThreadId
     }
