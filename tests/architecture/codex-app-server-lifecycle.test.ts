@@ -77,6 +77,45 @@ describe("Codex managed app-server lifecycle", () => {
     assert.equal(result.terminalStopped, undefined);
     assert.deepEqual(processes.killed, []);
   });
+
+  it("cleanup of one labeled session leaves a same-project sibling untouched", async () => {
+    const stateRoot = await mkdtemp(path.join(os.tmpdir(), "codex-app-server-lifecycle-"));
+    const mainSession = "codex_main" as SessionId;
+    const consultantSession = "codex_consultant" as SessionId;
+    const mainPath = managedCodexAppServerStatePath(mainSession, stateRoot);
+    const consultantPath = managedCodexAppServerStatePath(consultantSession, stateRoot);
+    await mkdir(path.dirname(mainPath), { recursive: true });
+    await writeFile(mainPath, JSON.stringify({
+      sessionId: mainSession,
+      appServerUrl: "ws://127.0.0.1:4501",
+      appServerPid: 111,
+      appServerTerminalPid: 211,
+      wrapperPath: "D:\\tmp\\codex-main.ps1",
+    }), "utf8");
+    await writeFile(consultantPath, JSON.stringify({
+      sessionId: consultantSession,
+      appServerUrl: "ws://127.0.0.1:4502",
+      appServerPid: 122,
+      appServerTerminalPid: 222,
+      wrapperPath: "D:\\tmp\\codex-consultant.ps1",
+    }), "utf8");
+    const processes = new FakeProcessManager(new Map([
+      [111, "codex.exe app-server --listen ws://127.0.0.1:4501"],
+      [211, "powershell.exe -NoExit -File D:\\tmp\\codex-main.ps1"],
+      [122, "codex.exe app-server --listen ws://127.0.0.1:4502"],
+      [222, "powershell.exe -NoExit -File D:\\tmp\\codex-consultant.ps1"],
+    ]));
+    const siblingBefore = await readFile(consultantPath, "utf8");
+
+    const result = await cleanupManagedCodexAppServer(mainSession, {
+      stateRoot,
+      processManager: processes,
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(processes.killed, [111, 211]);
+    assert.equal(await readFile(consultantPath, "utf8"), siblingBefore);
+  });
 });
 
 class FakeProcessManager implements ProcessManager {

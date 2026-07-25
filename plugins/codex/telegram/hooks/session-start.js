@@ -3705,7 +3705,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.39";
+var DAEMON_VERSION = "0.2.40";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4929,6 +4929,57 @@ async function entryEnsures(options) {
   };
 }
 
+// ../hosts/common/comm-labels.js
+function parseAgentsCommLabels(raw) {
+  if (raw === void 0 || raw === null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed.length === 0) return null;
+  const map = {};
+  for (const entry of trimmed.split(",")) {
+    const piece = entry.trim();
+    if (piece.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
+    }
+    const colon = piece.indexOf(":");
+    if (colon <= 0 || colon === piece.length - 1) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    const comm = piece.slice(0, colon).trim();
+    const label = piece.slice(colon + 1).trim();
+    if (comm.length === 0 || label.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    if (map[comm] !== void 0) {
+      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function serializeAccountLabelScope(scope) {
+  if (!scope || Object.keys(scope).length === 0) return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function accountLabelScopeFromEnv(env = process.env) {
+  return serializeAccountLabelScope(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
+}
+function accountLabelScopeFromEnvSafe(env = process.env, log = (message) => console.error(message)) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log(
+      `ERROR: malformed AGENTS_COMM_LABELS=${JSON.stringify(raw)}: ${error instanceof Error ? error.message : String(error)}. This session is scope-inert: it will not consume any comm registration until AGENTS_COMM_LABELS is corrected and the session is restarted.`
+    );
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
+}
+
 // ../hosts/codex/hooks/session-start.js
 var CLIENT_VERSION = "codex-session-start-bootstrap";
 var RESTART_GUARD_MS = 6e4;
@@ -5114,6 +5165,7 @@ async function main() {
       app_server_url: process.env.CODEX_APP_SERVER_URL,
       app_server_reachable: appServerReachable,
       managed_session_id: process.env.AGENTS_COMM_BUS_SESSION_ID,
+      account_label_scope: accountLabelScopeFromEnvSafe(),
       hook: "SessionStart",
       codex: hookInput
     }), "codex_bootstrap_status");

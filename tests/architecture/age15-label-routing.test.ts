@@ -277,4 +277,17 @@ class FakeStorage implements Partial<Storage> {
   async getSession(session: SessionId): Promise<Session | null> {
     return this.sessions.get(session) ?? null;
   }
+
+  async listSessions(filter?: {
+    project?: string;
+    agent?: AgentId;
+    status?: Session["status"];
+  }): Promise<Session[]> {
+    return [...this.sessions.values()].filter(
+      (session) =>
+        (filter?.project === undefined || session.project === filter.project) &&
+        (filter?.agent === undefined || session.agent === filter.agent) &&
+        (filter?.status === undefined || session.status === filter.status),
+    );
+  }
 }

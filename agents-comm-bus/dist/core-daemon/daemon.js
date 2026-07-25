@@ -17,6 +17,7 @@ import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
+import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import { deliveryRowFromEntry, drainAndAcknowledgePendingInbound, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, selectPendingInboundForDrain, } from "./runtime/durable-inbound.js";
 import { filterRegistrationsByScope, } from "./session-label-scope.js";
 /**
@@ -55,6 +56,7 @@ export async function runDaemon(options) {
     const audit = new JsonlAuditStore(paths.root);
     const blobs = new ContentAddressedBlobStore(paths.root);
     const pendingInbound = [];
+    const sessionOwnerIsLive = createSessionOwnerLiveness();
     // AGE-35: cross-checkout single-consumer ownership lease. A stray daemon from
     // another git checkout/worktree must not be able to poll the same Telegram bot
     // as the canonical daemon (two getUpdates consumers → 409 outage). Build ONE
@@ -112,6 +114,7 @@ export async function runDaemon(options) {
         audit,
         blobs,
         comms,
+        sessionOwnerIsLive,
     });
     // AGE-38: `bridges` is filled AFTER `ensureCommsForSession` is built because
     // the closure captures the array by reference. This is safe — the only thing
@@ -191,6 +194,7 @@ export async function runDaemon(options) {
             daemonBin,
             authorityRank,
         },
+        sessionOwnerIsLive,
     })));
     const pendingInboundMax = 100;
     bus.setDispatchSink({

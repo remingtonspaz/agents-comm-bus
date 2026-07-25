@@ -45,6 +45,7 @@ import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
+import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { RetirementBlockerSnapshot } from "./runtime/agent-bridge.js";
 import {
   deliveryRowFromEntry,
@@ -142,6 +143,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   const audit = new JsonlAuditStore(paths.root);
   const blobs = new ContentAddressedBlobStore(paths.root);
   const pendingInbound: PendingInboundEntry[] = [];
+  const sessionOwnerIsLive = createSessionOwnerLiveness();
 
   // AGE-35: cross-checkout single-consumer ownership lease. A stray daemon from
   // another git checkout/worktree must not be able to poll the same Telegram bot
@@ -205,6 +207,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     audit,
     blobs,
     comms,
+    sessionOwnerIsLive,
   });
 
   // AGE-38: `bridges` is filled AFTER `ensureCommsForSession` is built because
@@ -288,6 +291,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
           daemonBin,
           authorityRank,
         },
+        sessionOwnerIsLive,
       }),
     ),
   );

@@ -46,12 +46,16 @@ import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { normalizeProjectPath } from "../../project-path.js";
 import {
   accountLabelScopeFromParams,
-  filterRegistrationsByScope,
+  filterRegistrationsForSession,
   resolveSessionForConversation,
 } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 import { ClaudeOpenQueryTracker } from "./open-query-tracker.js";
+import {
+  createSessionOwnerLiveness,
+  type SessionOwnerLiveness,
+} from "../../runtime/session-owner-liveness.js";
 
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 
@@ -79,6 +83,8 @@ export interface ClaudeBridgeOptions {
   /** Injectable timers for deterministic tests (AGE-36 TTL tracking). */
   setTimeoutFn?: (fn: () => void, ms: number) => unknown;
   clearTimeoutFn?: (handle: unknown) => void;
+  /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
+  sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
@@ -139,17 +145,24 @@ export class ClaudeBridge implements AgentBridge {
   readonly agentId = "claude" as AgentId;
   readonly ipcMethods: ReadonlySet<string> = CLAUDE_IPC_METHODS;
 
-  private readonly wake = new ClaudeWakeRegistry();
+  private readonly wake: ClaudeWakeRegistry;
   private ownedAccountsCache: Set<string> | null = null;
   /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
   private readonly questionSequences = new Map<QueryId, QuestionSequence>();
   /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
   private readonly openQueryTracker: ClaudeOpenQueryTracker;
+  private readonly sessionOwnerIsLive: SessionOwnerLiveness;
 
   constructor(private readonly options: ClaudeBridgeOptions) {
     // pendingInboundMax preserved as an option for symmetry but the daemon
     // now caps the shared queue itself; this class only drains it.
     void options.pendingInboundMax;
+    this.sessionOwnerIsLive =
+      options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
+    this.wake = new ClaudeWakeRegistry(
+      Date.now,
+      this.sessionOwnerIsLive,
+    );
     this.wake.setStorage(options.storage);
     this.openQueryTracker = new ClaudeOpenQueryTracker({
       setTimeoutFn: options.setTimeoutFn,
@@ -355,12 +368,22 @@ export class ClaudeBridge implements AgentBridge {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return new Set<string>();
-      const scoped = filterRegistrationsByScope(
-        await this.options.storage.listAccountRegistrations({
+      const [registrations, sessions] = await Promise.all([
+        this.options.storage.listAccountRegistrations({
           project: sess.project,
           agent: this.agentId,
         }),
-        sess.account_label_scope,
+        this.options.storage.listSessions({
+          project: sess.project,
+          agent: this.agentId,
+          status: "active",
+        }),
+      ]);
+      const scoped = filterRegistrationsForSession(
+        registrations,
+        sess,
+        sessions,
+        this.sessionOwnerIsLive,
       );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
@@ -1026,6 +1049,7 @@ export class ClaudeBridgeFactory implements AgentBridgeFactory {
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive,
     });
   }
 }

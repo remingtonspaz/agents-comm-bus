@@ -78,7 +78,9 @@ export function accountLabelScopeFromParams(params) {
     return null;
 }
 export function filterRegistrationsByScope(registrations, scopeStored) {
-    const scope = parseAccountLabelScope(scopeStored ?? null);
+    const scope = parseRoutingScope(scopeStored);
+    if (scope === undefined)
+        return [];
     if (!scope)
         return [...registrations];
     return registrations.filter((reg) => {
@@ -86,8 +88,46 @@ export function filterRegistrationsByScope(registrations, scopeStored) {
         return expected !== undefined && reg.account_label === expected;
     });
 }
+function liveSessionScopeCandidates(target, sessions, isSessionLive) {
+    const liveSiblings = sessions.filter((session) => session.session_id !== target.session_id &&
+        session.project === target.project &&
+        session.agent === target.agent &&
+        session.status === "active" &&
+        isSessionLive(session));
+    return [target, ...liveSiblings];
+}
+/**
+ * Resolve the registrations a concrete session may consume.
+ *
+ * A labeled session owns only its exact scope. An unlabeled session preserves
+ * the legacy catch-all behavior except for registrations claimed by a live
+ * labeled sibling in the same (project, agent).
+ */
+export function filterRegistrationsForSession(registrations, target, sessions, isSessionLive = hasLiveConnectionLease) {
+    if (target.account_label_scope != null) {
+        return filterRegistrationsByScope(registrations, target.account_label_scope);
+    }
+    const labeledSiblings = liveSessionScopeCandidates(target, sessions, isSessionLive).filter((session) => session.session_id !== target.session_id &&
+        session.account_label_scope != null);
+    if (labeledSiblings.length === 0)
+        return [...registrations];
+    return registrations.filter((registration) => !labeledSiblings.some((session) => registrationMatchesConversationScope(session.account_label_scope, registration)));
+}
+/**
+ * Whether a session owns a conversation after live labeled-session precedence.
+ */
+export function sessionOwnsConversation(target, sessions, conversation, isSessionLive = hasLiveConnectionLease) {
+    if (conversation.project !== target.project ||
+        conversation.agent !== target.agent) {
+        return false;
+    }
+    const resolved = resolveSessionForConversation(liveSessionScopeCandidates(target, sessions, isSessionLive), conversation, (session) => session.session_id);
+    return resolved?.session_id === target.session_id;
+}
 export function registrationMatchesConversationScope(scopeStored, conversation) {
-    const scope = parseAccountLabelScope(scopeStored ?? null);
+    const scope = parseRoutingScope(scopeStored);
+    if (scope === undefined)
+        return false;
     if (!scope)
         return true;
     const expected = scope[conversation.comm];
@@ -111,5 +151,24 @@ export function resolveSessionForConversation(sessions, conversation, pickSessio
         return undefined;
     }
     return undefined;
+}
+function hasLiveConnectionLease(session) {
+    return session.lease_holder_connection_id != null;
+}
+/**
+ * Corrupt persisted scopes fail inert for routing: they neither consume nor
+ * reserve registrations. The strict public parser still throws for validation
+ * callers; only runtime routing is hardened against a damaged row.
+ */
+function parseRoutingScope(stored) {
+    try {
+        return parseAccountLabelScope(stored ?? null);
+    }
+    catch (error) {
+        console.error("agents-comm-bus: invalid persisted account_label_scope; " +
+            "treating session as scope-inert: " +
+            `${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+    }
 }
 //# sourceMappingURL=session-label-scope.js.map

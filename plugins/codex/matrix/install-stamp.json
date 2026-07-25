@@ -2,8 +2,8 @@
   "schema_version": 1,
   "agent": "codex",
   "comm": "matrix",
-  "plugin_version": "0.1.8",
-  "daemon_bundle_version": "0.2.39",
+  "plugin_version": "0.1.9",
+  "daemon_bundle_version": "0.2.40",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
     "matrix": "0.2.6"

@@ -21,7 +21,7 @@ import {
 import { normalizeProjectPath } from "../../project-path.js";
 import {
   accountLabelScopeFromParams,
-  filterRegistrationsByScope,
+  filterRegistrationsForSession,
   resolveSessionForConversation,
 } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
@@ -43,6 +43,10 @@ import {
   codexHookDecision,
 } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
+import {
+  createSessionOwnerLiveness,
+  type SessionOwnerLiveness,
+} from "../../runtime/session-owner-liveness.js";
 
 export interface CodexBridgeOptions {
   storage: Storage;
@@ -66,6 +70,8 @@ export interface CodexBridgeOptions {
   /** Injectable timers for deterministic tests (AGE-36 managed cleanup). */
   setTimeoutFn?: (fn: () => void, ms: number) => unknown;
   clearTimeoutFn?: (handle: unknown) => void;
+  /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
+  sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 
 export interface RegisterCodexSessionResult {
@@ -133,8 +139,11 @@ export class CodexBridge implements AgentBridge {
   /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
   private pendingManagedCleanups = 0;
   private inFlightManagedCleanups = 0;
+  private readonly sessionOwnerIsLive: SessionOwnerLiveness;
 
   constructor(private readonly options: CodexBridgeOptions) {
+    this.sessionOwnerIsLive =
+      options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
     this.adapter = new CodexAgentAdapter({
       defaultAppServerUrl: options.defaultAppServerUrl ?? process.env.CODEX_APP_SERVER_URL,
       appServerClientFactory: options.appServerClientFactory,
@@ -221,7 +230,7 @@ export class CodexBridge implements AgentBridge {
           pending_count: pendingForSession.length,
           removed_pending_count: pendingForSession.length,
         });
-        await this.removePendingInbound(pendingForSession);
+        await this.removePendingInbound(session, pendingForSession);
       }
     } catch (error) {
       await this.auditWake("agent_wake_failed", conversation, session, {
@@ -259,10 +268,36 @@ export class CodexBridge implements AgentBridge {
 
   async bootstrapStatus(params: Record<string, unknown>): Promise<CodexBootstrapStatusResult> {
     const project = normalizeProjectPath(requiredString(params.project, "project"));
-    const registrations = await this.options.storage.listAccountRegistrations({
-      project,
-      agent: this.agentId,
-    });
+    const accountLabelScope = accountLabelScopeFromParams(params);
+    const [registrations, sessions] = await Promise.all([
+      this.options.storage.listAccountRegistrations({
+        project,
+        agent: this.agentId,
+      }),
+      this.options.storage.listSessions({
+        project,
+        agent: this.agentId,
+        status: "active",
+      }),
+    ]);
+    const scopedRegistrations = filterRegistrationsForSession(
+      registrations,
+      {
+        // SessionStart runs before registration and may not have a managed
+        // session id yet. Use a non-persisted identity so every live session
+        // remains a sibling candidate for precedence.
+        session_id: "__codex_bootstrap_status__" as SessionId,
+        project,
+        agent: this.agentId,
+        account_label_scope: accountLabelScope,
+        status: "active",
+        lease_holder_connection_id: null,
+        lease_owner_process_pid: null,
+        lease_owner_process_registered_at: null,
+      },
+      sessions,
+      this.sessionOwnerIsLive,
+    );
     const hasAppServerUrl =
       typeof params.app_server_url === "string" &&
       params.app_server_url.trim().length > 0;
@@ -273,13 +308,13 @@ export class CodexBridge implements AgentBridge {
       hasAppServerUrl &&
       hasManagedSession &&
       params.app_server_reachable === true;
-    const hasAccountRegistration = registrations.length > 0;
+    const hasAccountRegistration = scopedRegistrations.length > 0;
     const bootstrapRequired = hasAccountRegistration && !managedAppServerPresent;
 
     return {
       ok: true,
       has_account_registration: hasAccountRegistration,
-      registration_count: registrations.length,
+      registration_count: scopedRegistrations.length,
       managed_app_server_present: managedAppServerPresent,
       bootstrap_required: bootstrapRequired,
       reason: !hasAccountRegistration
@@ -861,12 +896,22 @@ export class CodexBridge implements AgentBridge {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return new Set<string>();
-      const scoped = filterRegistrationsByScope(
-        await this.options.storage.listAccountRegistrations({
+      const [registrations, sessions] = await Promise.all([
+        this.options.storage.listAccountRegistrations({
           project: sess.project,
           agent: this.agentId,
         }),
-        sess.account_label_scope,
+        this.options.storage.listSessions({
+          project: sess.project,
+          agent: this.agentId,
+          status: "active",
+        }),
+      ]);
+      const scoped = filterRegistrationsForSession(
+        registrations,
+        sess,
+        sessions,
+        this.sessionOwnerIsLive,
       );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
@@ -880,13 +925,16 @@ export class CodexBridge implements AgentBridge {
     return this.ownedAccountsCache;
   }
 
-  private async removePendingInbound(entries: PendingInboundEntry[]): Promise<void> {
+  private async removePendingInbound(
+    session: SessionId,
+    entries: PendingInboundEntry[],
+  ): Promise<void> {
     if (entries.length === 0) return;
     // Scope removal by durable delivery key (message_id + comm + account) so
     // we only remove Codex-owned entries. The same Telegram message can
     // appear in pendingInbound twice when multiple bots in the same chat each
     // receive the update.
-    const owned = await this.ownedAccountKeys();
+    const owned = await this.ownedAccountKeys(session);
     const scoped = entries.filter((entry) => owned.has(accountKey(entry)));
     await removePendingInboundEntries(
       this.options.storage,
@@ -1080,6 +1128,7 @@ export class CodexBridgeFactory implements AgentBridgeFactory {
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive,
     });
   }
 }

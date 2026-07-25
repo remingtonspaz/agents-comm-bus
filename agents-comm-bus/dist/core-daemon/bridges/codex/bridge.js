@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsByScope, resolveSessionForConversation, } from "../../session-label-scope.js";
+import { accountLabelScopeFromParams, filterRegistrationsForSession, resolveSessionForConversation, } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { CodexAgentAdapter, codexDecisionFromResolution, codexHookDecision, } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
+import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_QUERY_POLL_TIMEOUT_MS = 9 * 60 * 1000;
 const DEFAULT_APP_SERVER_CLEANUP_DELAY_MS = 3_000;
@@ -30,8 +31,11 @@ export class CodexBridge {
     /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
     pendingManagedCleanups = 0;
     inFlightManagedCleanups = 0;
+    sessionOwnerIsLive;
     constructor(options) {
         this.options = options;
+        this.sessionOwnerIsLive =
+            options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
         this.adapter = new CodexAgentAdapter({
             defaultAppServerUrl: options.defaultAppServerUrl ?? process.env.CODEX_APP_SERVER_URL,
             appServerClientFactory: options.appServerClientFactory,
@@ -106,7 +110,7 @@ export class CodexBridge {
                     pending_count: pendingForSession.length,
                     removed_pending_count: pendingForSession.length,
                 });
-                await this.removePendingInbound(pendingForSession);
+                await this.removePendingInbound(session, pendingForSession);
             }
         }
         catch (error) {
@@ -137,10 +141,31 @@ export class CodexBridge {
     }
     async bootstrapStatus(params) {
         const project = normalizeProjectPath(requiredString(params.project, "project"));
-        const registrations = await this.options.storage.listAccountRegistrations({
+        const accountLabelScope = accountLabelScopeFromParams(params);
+        const [registrations, sessions] = await Promise.all([
+            this.options.storage.listAccountRegistrations({
+                project,
+                agent: this.agentId,
+            }),
+            this.options.storage.listSessions({
+                project,
+                agent: this.agentId,
+                status: "active",
+            }),
+        ]);
+        const scopedRegistrations = filterRegistrationsForSession(registrations, {
+            // SessionStart runs before registration and may not have a managed
+            // session id yet. Use a non-persisted identity so every live session
+            // remains a sibling candidate for precedence.
+            session_id: "__codex_bootstrap_status__",
             project,
             agent: this.agentId,
-        });
+            account_label_scope: accountLabelScope,
+            status: "active",
+            lease_holder_connection_id: null,
+            lease_owner_process_pid: null,
+            lease_owner_process_registered_at: null,
+        }, sessions, this.sessionOwnerIsLive);
         const hasAppServerUrl = typeof params.app_server_url === "string" &&
             params.app_server_url.trim().length > 0;
         const hasManagedSession = typeof params.managed_session_id === "string" &&
@@ -148,12 +173,12 @@ export class CodexBridge {
         const managedAppServerPresent = hasAppServerUrl &&
             hasManagedSession &&
             params.app_server_reachable === true;
-        const hasAccountRegistration = registrations.length > 0;
+        const hasAccountRegistration = scopedRegistrations.length > 0;
         const bootstrapRequired = hasAccountRegistration && !managedAppServerPresent;
         return {
             ok: true,
             has_account_registration: hasAccountRegistration,
-            registration_count: registrations.length,
+            registration_count: scopedRegistrations.length,
             managed_app_server_present: managedAppServerPresent,
             bootstrap_required: bootstrapRequired,
             reason: !hasAccountRegistration
@@ -641,10 +666,18 @@ export class CodexBridge {
             const sess = await this.options.storage.getSession(session);
             if (!sess)
                 return new Set();
-            const scoped = filterRegistrationsByScope(await this.options.storage.listAccountRegistrations({
-                project: sess.project,
-                agent: this.agentId,
-            }), sess.account_label_scope);
+            const [registrations, sessions] = await Promise.all([
+                this.options.storage.listAccountRegistrations({
+                    project: sess.project,
+                    agent: this.agentId,
+                }),
+                this.options.storage.listSessions({
+                    project: sess.project,
+                    agent: this.agentId,
+                    status: "active",
+                }),
+            ]);
+            const scoped = filterRegistrationsForSession(registrations, sess, sessions, this.sessionOwnerIsLive);
             return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
         }
         if (this.ownedAccountsCache)
@@ -655,14 +688,14 @@ export class CodexBridge {
         this.ownedAccountsCache = new Set(registrations.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
         return this.ownedAccountsCache;
     }
-    async removePendingInbound(entries) {
+    async removePendingInbound(session, entries) {
         if (entries.length === 0)
             return;
         // Scope removal by durable delivery key (message_id + comm + account) so
         // we only remove Codex-owned entries. The same Telegram message can
         // appear in pendingInbound twice when multiple bots in the same chat each
         // receive the update.
-        const owned = await this.ownedAccountKeys();
+        const owned = await this.ownedAccountKeys(session);
         const scoped = entries.filter((entry) => owned.has(accountKey(entry)));
         await removePendingInboundEntries(this.options.storage, this.options.pendingInbound, scoped);
     }
@@ -831,6 +864,7 @@ export class CodexBridgeFactory {
             pendingInbound: context.pendingInbound,
             ensureCommsForSession: context.ensureCommsForSession,
             daemonOwner: context.daemonOwner,
+            sessionOwnerIsLive: context.sessionOwnerIsLive,
         });
     }
 }

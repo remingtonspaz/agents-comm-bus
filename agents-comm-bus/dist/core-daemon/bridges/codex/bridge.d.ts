@@ -3,6 +3,7 @@ import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
+import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
 export interface CodexBridgeOptions {
     storage: Storage;
     bus: MessageBus;
@@ -25,6 +26,8 @@ export interface CodexBridgeOptions {
     /** Injectable timers for deterministic tests (AGE-36 managed cleanup). */
     setTimeoutFn?: (fn: () => void, ms: number) => unknown;
     clearTimeoutFn?: (handle: unknown) => void;
+    /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
+    sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;
@@ -58,6 +61,7 @@ export declare class CodexBridge implements AgentBridge {
     /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
     private pendingManagedCleanups;
     private inFlightManagedCleanups;
+    private readonly sessionOwnerIsLive;
     constructor(options: CodexBridgeOptions);
     attach(comms: CommAdapter[]): void;
     attachComm(comm: CommAdapter): void;

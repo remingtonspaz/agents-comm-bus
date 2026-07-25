@@ -3649,7 +3649,7 @@ var require_websocket_server = __commonJS({
 });
 
 // ../hosts/claude/hooks/permission-request.js
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 
 // dist/core-daemon/host-runtime/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
@@ -3699,7 +3699,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.39";
+var DAEMON_VERSION = "0.2.40";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -4965,6 +4965,17 @@ function serializeAccountLabelScope(scope) {
 function accountLabelScopeFromEnv(env = process.env) {
   return serializeAccountLabelScope(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
 }
+function accountLabelScopeFromEnvSafe(env = process.env, log = (message) => console.error(message)) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log(
+      `ERROR: malformed AGENTS_COMM_LABELS=${JSON.stringify(raw)}: ${error instanceof Error ? error.message : String(error)}. This session is scope-inert: it will not consume any comm registration until AGENTS_COMM_LABELS is corrected and the session is restarted.`
+    );
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
+}
 
 // ../hosts/claude/hooks/wake-support.js
 import { execSync } from "node:child_process";
@@ -4974,8 +4985,50 @@ import path12 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // dist/core-daemon/bridges/claude/wake.js
+import crypto from "node:crypto";
 import os2 from "node:os";
 import path11 from "node:path";
+
+// dist/core-daemon/session-label-scope.js
+function serializeAccountLabelScope2(scope) {
+  if (!scope || Object.keys(scope).length === 0)
+    return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function parseAccountLabelScope(stored) {
+  if (stored === void 0 || stored === null)
+    return null;
+  const trimmed = stored.trim();
+  if (trimmed.length === 0)
+    return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`account_label_scope is not valid JSON: ${stored}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`account_label_scope must be a JSON object: ${stored}`);
+  }
+  const map = {};
+  for (const [comm, label] of Object.entries(parsed)) {
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`account_label_scope value for "${comm}" must be a non-empty string`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+
+// dist/core-daemon/runtime/session-owner-liveness.js
+var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
+
+// dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
   for (let i = 0; i < projectPath.length; i += 1) {
@@ -4984,10 +5037,18 @@ function hashProjectKey(projectPath) {
   }
   return hash.toString(16).padStart(8, "0");
 }
-function claudeWakeDirForProject(projectPath, homeDir = os2.homedir()) {
+function claudeWakeDirForProject(projectPath, homeDir = os2.homedir(), accountLabelScope = null) {
   const canonical = normalizeProjectPath(projectPath);
   const basename = path11.basename(canonical) || "project";
-  return path11.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
+  const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
+  let canonicalScope;
+  try {
+    canonicalScope = serializeAccountLabelScope2(parseAccountLabelScope(accountLabelScope));
+  } catch (error) {
+    console.error(`agents-comm-bus: invalid persisted Claude account_label_scope; using a scope-inert wake directory: ${error instanceof Error ? error.message : String(error)}`);
+    canonicalScope = `__invalid__:${accountLabelScope}`;
+  }
+  return path11.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", canonicalScope ? `${legacyDir}-${crypto.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}` : legacyDir);
 }
 
 // ../hosts/claude/hooks/wake-support.js
@@ -4996,8 +5057,12 @@ var __dirname = path12.dirname(__filename);
 function resolveProjectPath() {
   return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
-function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
-  return claudeWakeDirForProject(projectPath);
+function resolveClaudeWakeDir(projectPath = resolveProjectPath(), env = process.env) {
+  return claudeWakeDirForProject(
+    projectPath,
+    void 0,
+    accountLabelScopeFromEnvSafe(env)
+  );
 }
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -5264,7 +5329,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, reason: "unsupported_platform" };
   }
   const projectPath = options.projectPath || resolveProjectPath();
-  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
+  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath, options.env || process.env);
   fs.mkdirSync(wakeDir, { recursive: true });
   const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log };
   const existingPid = readAuthoritativeWatcherPid(wakeDir);
@@ -5394,7 +5459,7 @@ var CLIENT_VERSION = "claude-hook-phase2";
 var DEFAULT_TTL_SECONDS = 60 * 60;
 function stableSessionId(hookInput) {
   const raw = hookInput?.session_id || hookInput?.sessionId || process.env.CLAUDE_SESSION_ID || `${process.cwd()}:${process.env.CLAUDE_PROJECT_DIR || ""}`;
-  return `claude_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
+  return `claude_${crypto2.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
 }
 async function readStdinJson() {
   let input = "";
@@ -5618,7 +5683,7 @@ async function main() {
       claude: hookInput,
       owner_process_pid: claudePid,
       owner_process_label: "claude",
-      account_label_scope: accountLabelScopeFromEnv()
+      account_label_scope: accountLabelScopeFromEnvSafe()
     });
     const queryPayload = {
       kind: queryKind(toolName),

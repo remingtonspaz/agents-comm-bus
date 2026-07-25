@@ -2,6 +2,7 @@ import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation,
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
+import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
 /** Daemon-local retirement blockers: stable reason key → count (AGE-36). */
 export type RetirementBlockerSnapshot = Readonly<Record<string, number>>;
 export type EnsureCommsForSessionOptions = {
@@ -33,6 +34,8 @@ export interface AgentBridgeContext {
     ensureCommsForSession: EnsureCommsForSession;
     /** AGE-58: daemon-resolved identity for session ownership stamping. */
     daemonOwner: DaemonSelfIdentity;
+    /** AGE-81: live connection or recent, still-running durable owner process. */
+    sessionOwnerIsLive: SessionOwnerLiveness;
 }
 export interface AgentBridge {
     /** Agent id this bridge handles (e.g. `"claude"`). */

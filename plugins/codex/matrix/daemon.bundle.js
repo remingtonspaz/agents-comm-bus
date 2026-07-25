@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.39";
+var DAEMON_VERSION = "0.2.40";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4693,7 +4693,9 @@ async function writeDaemonDiscoveryFiles(input) {
 // ../core-daemon/bootstrap/boot-scope-restore.ts
 import { access } from "node:fs/promises";
 import { join as join2 } from "node:path";
-var DEFAULT_BOOT_RESTORE_RECENCY_MS = 24 * 60 * 60 * 1e3;
+
+// ../core-daemon/runtime/session-owner-liveness.ts
+var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
 function defaultIsPidAlive2(pid) {
   try {
     process.kill(pid, 0);
@@ -4702,6 +4704,22 @@ function defaultIsPidAlive2(pid) {
     return false;
   }
 }
+function classifySessionOwnerProcess(session, options = {}) {
+  const pid = session.lease_owner_process_pid;
+  const registeredAt = session.lease_owner_process_registered_at;
+  if (pid == null || registeredAt == null) return "no_owner";
+  const now = options.now ?? Date.now;
+  const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
+  if (now() - registeredAt > recencyMs) return "stale";
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
+  return isPidAlive2(pid) ? "live" : "dead";
+}
+function createSessionOwnerLiveness(options = {}) {
+  return (session) => session.lease_holder_connection_id != null || classifySessionOwnerProcess(session, options) === "live";
+}
+
+// ../core-daemon/bootstrap/boot-scope-restore.ts
+var DEFAULT_BOOT_RESTORE_RECENCY_MS = DEFAULT_SESSION_OWNER_RECENCY_MS;
 async function defaultPathExists(path8) {
   try {
     await access(path8);
@@ -4760,19 +4778,23 @@ async function runBootScopeRestore(input) {
     summary.candidates = sessions.length;
     const scopesToRestore = /* @__PURE__ */ new Map();
     for (const session of sessions) {
-      const pid = session.lease_owner_process_pid;
-      const registeredAt = session.lease_owner_process_registered_at;
-      if (pid == null || registeredAt == null) {
-        summary.skipped_no_owner += 1;
-        continue;
-      }
-      if (now() - registeredAt > recencyMs) {
-        summary.skipped_stale += 1;
-        continue;
-      }
-      if (!isPidAlive2(pid)) {
-        summary.skipped_dead += 1;
-        continue;
+      const ownerState = classifySessionOwnerProcess(session, {
+        now,
+        isPidAlive: isPidAlive2,
+        recencyMs
+      });
+      switch (ownerState) {
+        case "no_owner":
+          summary.skipped_no_owner += 1;
+          continue;
+        case "stale":
+          summary.skipped_stale += 1;
+          continue;
+        case "dead":
+          summary.skipped_dead += 1;
+          continue;
+        case "live":
+          break;
       }
       const ownerClass = classifySessionDaemonOwner(session, input.discoveryRoot);
       if (ownerClass === "missing") {
@@ -5183,15 +5205,58 @@ function accountLabelScopeFromParams(params) {
   return null;
 }
 function filterRegistrationsByScope(registrations, scopeStored) {
-  const scope = parseAccountLabelScope(scopeStored ?? null);
+  const scope = parseRoutingScope(scopeStored);
+  if (scope === void 0) return [];
   if (!scope) return [...registrations];
   return registrations.filter((reg) => {
     const expected = scope[reg.comm];
     return expected !== void 0 && reg.account_label === expected;
   });
 }
+function liveSessionScopeCandidates(target, sessions, isSessionLive) {
+  const liveSiblings = sessions.filter(
+    (session) => session.session_id !== target.session_id && session.project === target.project && session.agent === target.agent && session.status === "active" && isSessionLive(session)
+  );
+  return [target, ...liveSiblings];
+}
+function filterRegistrationsForSession(registrations, target, sessions, isSessionLive = hasLiveConnectionLease) {
+  if (target.account_label_scope != null) {
+    return filterRegistrationsByScope(
+      registrations,
+      target.account_label_scope
+    );
+  }
+  const labeledSiblings = liveSessionScopeCandidates(
+    target,
+    sessions,
+    isSessionLive
+  ).filter(
+    (session) => session.session_id !== target.session_id && session.account_label_scope != null
+  );
+  if (labeledSiblings.length === 0) return [...registrations];
+  return registrations.filter(
+    (registration) => !labeledSiblings.some(
+      (session) => registrationMatchesConversationScope(
+        session.account_label_scope,
+        registration
+      )
+    )
+  );
+}
+function sessionOwnsConversation(target, sessions, conversation, isSessionLive = hasLiveConnectionLease) {
+  if (conversation.project !== target.project || conversation.agent !== target.agent) {
+    return false;
+  }
+  const resolved = resolveSessionForConversation(
+    liveSessionScopeCandidates(target, sessions, isSessionLive),
+    conversation,
+    (session) => session.session_id
+  );
+  return resolved?.session_id === target.session_id;
+}
 function registrationMatchesConversationScope(scopeStored, conversation) {
-  const scope = parseAccountLabelScope(scopeStored ?? null);
+  const scope = parseRoutingScope(scopeStored);
+  if (scope === void 0) return false;
   if (!scope) return true;
   const expected = scope[conversation.comm];
   return expected !== void 0 && expected === conversation.account_label;
@@ -5211,6 +5276,19 @@ function resolveSessionForConversation(sessions, conversation, pickSessionId) {
     return void 0;
   }
   return void 0;
+}
+function hasLiveConnectionLease(session) {
+  return session.lease_holder_connection_id != null;
+}
+function parseRoutingScope(stored) {
+  try {
+    return parseAccountLabelScope(stored ?? null);
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: invalid persisted account_label_scope; treating session as scope-inert: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return void 0;
+  }
 }
 
 // ../packages/core-contracts/dist/types.js
@@ -5283,6 +5361,7 @@ var MessageBus = class {
   constructor(options) {
     this.options = options;
     this.now = options.now ?? Date.now;
+    this.sessionOwnerIsLive = options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
     for (const comm of options.comms ?? []) {
       this.registerComm(comm);
     }
@@ -5297,6 +5376,7 @@ var MessageBus = class {
   comms = /* @__PURE__ */ new Map();
   seen = new RecentSeenCache();
   now;
+  sessionOwnerIsLive;
   dispatchSink = null;
   resolveSinks = [];
   registerComm(comm) {
@@ -5753,9 +5833,19 @@ var MessageBus = class {
     }
     const conversation = await this.options.storage.getConversation(conversationId);
     if (!conversation) throw new Error(`conversation not found: ${conversationId}`);
-    if (record && !registrationMatchesConversationScope(record.account_label_scope, conversation)) {
+    const sessions = record ? await this.options.storage.listSessions({
+      project: record.project,
+      agent: record.agent,
+      status: "active"
+    }) : [];
+    if (record && !sessionOwnsConversation(
+      record,
+      sessions,
+      conversation,
+      this.sessionOwnerIsLive
+    )) {
       throw new Error(
-        `session ${session} account_label_scope does not match most-recent inbound conversation ${conversationId} (${conversation.comm}:${conversation.account_label})`
+        `session ${session} does not own most-recent inbound conversation ${conversationId} (${conversation.comm}:${conversation.account_label})`
       );
     }
     const botUserId = await this.botUserIdForConversation(conversation);
@@ -7302,6 +7392,7 @@ async function runDaemon(options) {
   const audit = new JsonlAuditStore(paths.root);
   const blobs = new ContentAddressedBlobStore(paths.root);
   const pendingInbound = [];
+  const sessionOwnerIsLive = createSessionOwnerLiveness();
   const daemonBin = env.AGENTS_COMM_BUS_BIN ?? process.argv[1] ?? null;
   const { authorityRank, checkoutRoot } = inferAuthorityRank({
     env,
@@ -7338,7 +7429,8 @@ async function runDaemon(options) {
     transcripts,
     audit,
     blobs,
-    comms
+    comms,
+    sessionOwnerIsLive
   });
   const bridges = [];
   const inFlightAdapters = /* @__PURE__ */ new Set();
@@ -7407,7 +7499,8 @@ async function runDaemon(options) {
           stateRoot: paths.root,
           daemonBin,
           authorityRank
-        }
+        },
+        sessionOwnerIsLive
       })
     )
   );
@@ -8244,7 +8337,7 @@ function parseReloadOptions(params) {
 }
 
 // ../core-daemon/bridges/claude/bridge.ts
-import crypto2 from "node:crypto";
+import crypto3 from "node:crypto";
 
 // ../core-daemon/runtime/agent-bridge.ts
 function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
@@ -8262,6 +8355,7 @@ function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
 }
 
 // ../core-daemon/bridges/claude/wake.ts
+import crypto2 from "node:crypto";
 import { mkdir as mkdir7, writeFile as writeFile2 } from "node:fs/promises";
 import os4 from "node:os";
 import path4 from "node:path";
@@ -8273,15 +8367,27 @@ function hashProjectKey(projectPath) {
   }
   return hash.toString(16).padStart(8, "0");
 }
-function claudeWakeDirForProject(projectPath, homeDir = os4.homedir()) {
+function claudeWakeDirForProject(projectPath, homeDir = os4.homedir(), accountLabelScope = null) {
   const canonical = normalizeProjectPath(projectPath);
   const basename = path4.basename(canonical) || "project";
+  const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
+  let canonicalScope;
+  try {
+    canonicalScope = serializeAccountLabelScope(
+      parseAccountLabelScope(accountLabelScope)
+    );
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: invalid persisted Claude account_label_scope; using a scope-inert wake directory: ${error instanceof Error ? error.message : String(error)}`
+    );
+    canonicalScope = `__invalid__:${accountLabelScope}`;
+  }
   return path4.join(
     homeDir,
     ".agents-comm-bus",
     "claude-wake",
     "sessions",
-    `${basename}-${hashProjectKey(canonical)}`
+    canonicalScope ? `${legacyDir}-${crypto2.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}` : legacyDir
   );
 }
 async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
@@ -8315,10 +8421,12 @@ async function writeClaudeWakeResponse(wakeDir, payload) {
   );
 }
 var ClaudeWakeRegistry = class {
-  constructor(now = Date.now) {
+  constructor(now = Date.now, sessionOwnerIsLive = createSessionOwnerLiveness()) {
     this.now = now;
+    this.sessionOwnerIsLive = sessionOwnerIsLive;
   }
   now;
+  sessionOwnerIsLive;
   registrations = /* @__PURE__ */ new Map();
   storage = null;
   /**
@@ -8338,7 +8446,11 @@ var ClaudeWakeRegistry = class {
     const registration = {
       session: input.session,
       project,
-      wakeDir: input.wakeDir ?? claudeWakeDirForProject(project),
+      wakeDir: input.wakeDir ?? claudeWakeDirForProject(
+        project,
+        os4.homedir(),
+        input.account_label_scope ?? null
+      ),
       registeredAt: this.now(),
       account_label_scope: input.account_label_scope ?? null
     };
@@ -8408,8 +8520,8 @@ var ClaudeWakeRegistry = class {
   /**
    * On a miss in `wakeConversation`, look up the most recent Claude session
    * for this project from storage and seed the in-memory map. The wake_dir
-   * is deterministic from project, so reconstruction is lossless even
-   * across daemon restarts.
+   * is deterministic from persisted project + label scope, so reconstruction
+   * is lossless even across daemon restarts.
    */
   async hydrateLatestForProject(project, conversation) {
     if (!this.storage) return void 0;
@@ -8420,10 +8532,16 @@ var ClaudeWakeRegistry = class {
       status: "active"
     });
     if (sessions.length === 0) return void 0;
-    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+    const live = sessions.filter(this.sessionOwnerIsLive);
     const pool = live.length > 0 ? live : sessions;
-    const match = conversation ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id) : pool[0];
-    const latest = match ?? pool[0];
+    let match = conversation ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id) : pool[0];
+    if (conversation && !match) {
+      match = pool.find(
+        (session) => session.account_label_scope == null
+      );
+      if (!match) return void 0;
+    }
+    const latest = match;
     if (!latest) return void 0;
     return this.register({
       session: latest.session_id,
@@ -8520,6 +8638,11 @@ var ClaudeBridge = class {
   constructor(options) {
     this.options = options;
     void options.pendingInboundMax;
+    this.sessionOwnerIsLive = options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
+    this.wake = new ClaudeWakeRegistry(
+      Date.now,
+      this.sessionOwnerIsLive
+    );
     this.wake.setStorage(options.storage);
     this.openQueryTracker = new ClaudeOpenQueryTracker({
       setTimeoutFn: options.setTimeoutFn,
@@ -8529,12 +8652,13 @@ var ClaudeBridge = class {
   options;
   agentId = "claude";
   ipcMethods = CLAUDE_IPC_METHODS;
-  wake = new ClaudeWakeRegistry();
+  wake;
   ownedAccountsCache = null;
   /** AGE-37: sequential AskUserQuestion prompts keyed by the active query id. */
   questionSequences = /* @__PURE__ */ new Map();
   /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
   openQueryTracker;
+  sessionOwnerIsLive;
   /**
    * Wire Claude-specific behaviors into the bus + per-comm callbacks. The
    * shared dispatch sink (pendingInbound + onInboundConversation fan-out)
@@ -8691,12 +8815,22 @@ var ClaudeBridge = class {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return /* @__PURE__ */ new Set();
-      const scoped = filterRegistrationsByScope(
-        await this.options.storage.listAccountRegistrations({
+      const [registrations2, sessions] = await Promise.all([
+        this.options.storage.listAccountRegistrations({
           project: sess.project,
           agent: this.agentId
         }),
-        sess.account_label_scope
+        this.options.storage.listSessions({
+          project: sess.project,
+          agent: this.agentId,
+          status: "active"
+        })
+      ]);
+      const scoped = filterRegistrationsForSession(
+        registrations2,
+        sess,
+        sessions,
+        this.sessionOwnerIsLive
       );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
@@ -8712,7 +8846,7 @@ var ClaudeBridge = class {
   async registerSession(params, socket) {
     const session = requiredString(params.session, "session");
     const project = normalizeProjectPath(requiredString(params.project, "project"));
-    const connectionId = typeof params.connection_id === "string" ? params.connection_id : `claude:${session}:${crypto2.randomUUID()}`;
+    const connectionId = typeof params.connection_id === "string" ? params.connection_id : `claude:${session}:${crypto3.randomUUID()}`;
     const now = Date.now();
     const wakeDir = typeof params.wake_dir === "string" ? params.wake_dir : typeof params.wakeDir === "string" ? params.wakeDir : void 0;
     const accountLabelScope = accountLabelScopeFromParams(params);
@@ -8847,7 +8981,7 @@ var ClaudeBridge = class {
    * setQuerySourceMessage. Used by the IPC handler and the AGE-37 sequencer.
    */
   async openQueryCore(input) {
-    const queryId = `q_${crypto2.randomUUID()}`;
+    const queryId = `q_${crypto3.randomUUID()}`;
     const query = {
       schema_version: 1,
       query_id: queryId,
@@ -9243,16 +9377,17 @@ var ClaudeBridgeFactory = class {
       audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
-      daemonOwner: context.daemonOwner
+      daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive
     });
   }
 };
 
 // ../core-daemon/bridges/codex/bridge.ts
-import crypto4 from "node:crypto";
+import crypto5 from "node:crypto";
 
 // ../core-daemon/bridges/codex/adapter.ts
-import crypto3 from "node:crypto";
+import crypto4 from "node:crypto";
 
 // ../core-daemon/bridges/codex/app-server.ts
 var DEFAULT_CODEX_APP_SERVER_URL = "ws://127.0.0.1:4500";
@@ -9511,7 +9646,7 @@ var CodexAgentAdapter = class {
     this.defaultTtlSeconds = options.defaultTtlSeconds ?? 300;
     this.defaultAppServerUrl = options.defaultAppServerUrl ?? DEFAULT_CODEX_APP_SERVER_URL;
     this.wakePlaceholder = options.wakePlaceholder ?? ".";
-    this.queryIdFactory = options.queryIdFactory ?? (() => `codex:${crypto3.randomUUID()}`);
+    this.queryIdFactory = options.queryIdFactory ?? (() => `codex:${crypto4.randomUUID()}`);
     this.appServerClientFactory = options.appServerClientFactory ?? ((url) => new WebSocketCodexAppServerClient(url));
   }
   options;
@@ -9671,7 +9806,7 @@ function mapCodexHookPayloadToQuery(session, payload, options = {}) {
   const toolName = payload.tool_name ?? "PermissionRequest";
   const query = {
     schema_version: SCHEMA_VERSION_QUERY,
-    query_id: options.queryId ?? `codex:${crypto3.randomUUID()}`,
+    query_id: options.queryId ?? `codex:${crypto4.randomUUID()}`,
     agent,
     session,
     kind: "approval",
@@ -9883,6 +10018,7 @@ var CODEX_IPC_METHODS = /* @__PURE__ */ new Set([
 var CodexBridge = class {
   constructor(options) {
     this.options = options;
+    this.sessionOwnerIsLive = options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
     this.adapter = new CodexAgentAdapter({
       defaultAppServerUrl: options.defaultAppServerUrl ?? process.env.CODEX_APP_SERVER_URL,
       appServerClientFactory: options.appServerClientFactory
@@ -9900,6 +10036,7 @@ var CodexBridge = class {
   /** AGE-36: scheduled / in-flight managed app-server cleanup counters. */
   pendingManagedCleanups = 0;
   inFlightManagedCleanups = 0;
+  sessionOwnerIsLive;
   attach(comms) {
     this.options.bus.setResolveSink({
       onResolved: async (query, decision) => {
@@ -9972,7 +10109,7 @@ var CodexBridge = class {
           pending_count: pendingForSession.length,
           removed_pending_count: pendingForSession.length
         });
-        await this.removePendingInbound(pendingForSession);
+        await this.removePendingInbound(session, pendingForSession);
       }
     } catch (error) {
       await this.auditWake("agent_wake_failed", conversation, session, {
@@ -10003,19 +10140,45 @@ var CodexBridge = class {
   }
   async bootstrapStatus(params) {
     const project = normalizeProjectPath(requiredString2(params.project, "project"));
-    const registrations = await this.options.storage.listAccountRegistrations({
-      project,
-      agent: this.agentId
-    });
+    const accountLabelScope = accountLabelScopeFromParams(params);
+    const [registrations, sessions] = await Promise.all([
+      this.options.storage.listAccountRegistrations({
+        project,
+        agent: this.agentId
+      }),
+      this.options.storage.listSessions({
+        project,
+        agent: this.agentId,
+        status: "active"
+      })
+    ]);
+    const scopedRegistrations = filterRegistrationsForSession(
+      registrations,
+      {
+        // SessionStart runs before registration and may not have a managed
+        // session id yet. Use a non-persisted identity so every live session
+        // remains a sibling candidate for precedence.
+        session_id: "__codex_bootstrap_status__",
+        project,
+        agent: this.agentId,
+        account_label_scope: accountLabelScope,
+        status: "active",
+        lease_holder_connection_id: null,
+        lease_owner_process_pid: null,
+        lease_owner_process_registered_at: null
+      },
+      sessions,
+      this.sessionOwnerIsLive
+    );
     const hasAppServerUrl = typeof params.app_server_url === "string" && params.app_server_url.trim().length > 0;
     const hasManagedSession = typeof params.managed_session_id === "string" && params.managed_session_id.trim().length > 0;
     const managedAppServerPresent = hasAppServerUrl && hasManagedSession && params.app_server_reachable === true;
-    const hasAccountRegistration = registrations.length > 0;
+    const hasAccountRegistration = scopedRegistrations.length > 0;
     const bootstrapRequired = hasAccountRegistration && !managedAppServerPresent;
     return {
       ok: true,
       has_account_registration: hasAccountRegistration,
-      registration_count: registrations.length,
+      registration_count: scopedRegistrations.length,
       managed_app_server_present: managedAppServerPresent,
       bootstrap_required: bootstrapRequired,
       reason: !hasAccountRegistration ? "no codex comm account registration for project" : managedAppServerPresent ? "codex session already has a reachable managed app-server url" : "codex comm account registration exists but no managed app-server url is present"
@@ -10024,7 +10187,7 @@ var CodexBridge = class {
   async registerSession(params, socket) {
     const session = requiredString2(params.session, "session");
     const project = normalizeProjectPath(requiredString2(params.project, "project"));
-    const connectionId = typeof params.connection_id === "string" ? params.connection_id : `codex:${session}:${crypto4.randomUUID()}`;
+    const connectionId = typeof params.connection_id === "string" ? params.connection_id : `codex:${session}:${crypto5.randomUUID()}`;
     const now = Date.now();
     const accountLabelScope = accountLabelScopeFromParams(params);
     await this.options.storage.upsertSession({
@@ -10151,7 +10314,7 @@ var CodexBridge = class {
       params.prompt_text ?? queryInput.prompt_text,
       "prompt_text"
     );
-    const queryId = `q_${crypto4.randomUUID()}`;
+    const queryId = `q_${crypto5.randomUUID()}`;
     const sessionRecord = await this.options.storage.getSession(session);
     const conversation = sessionRecord?.most_recent_inbound_conversation_id ? await this.options.storage.getConversation(sessionRecord.most_recent_inbound_conversation_id) : null;
     const originChat = conversation ? await this.chatRefForConversation(conversation) : void 0;
@@ -10498,12 +10661,22 @@ var CodexBridge = class {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return /* @__PURE__ */ new Set();
-      const scoped = filterRegistrationsByScope(
-        await this.options.storage.listAccountRegistrations({
+      const [registrations2, sessions] = await Promise.all([
+        this.options.storage.listAccountRegistrations({
           project: sess.project,
           agent: this.agentId
         }),
-        sess.account_label_scope
+        this.options.storage.listSessions({
+          project: sess.project,
+          agent: this.agentId,
+          status: "active"
+        })
+      ]);
+      const scoped = filterRegistrationsForSession(
+        registrations2,
+        sess,
+        sessions,
+        this.sessionOwnerIsLive
       );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
@@ -10516,9 +10689,9 @@ var CodexBridge = class {
     );
     return this.ownedAccountsCache;
   }
-  async removePendingInbound(entries) {
+  async removePendingInbound(session, entries) {
     if (entries.length === 0) return;
-    const owned = await this.ownedAccountKeys();
+    const owned = await this.ownedAccountKeys(session);
     const scoped = entries.filter((entry) => owned.has(accountKey2(entry)));
     await removePendingInboundEntries(
       this.options.storage,
@@ -10679,7 +10852,8 @@ var CodexBridgeFactory = class {
       audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
-      daemonOwner: context.daemonOwner
+      daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive
     });
   }
 };
@@ -10693,10 +10867,12 @@ var PI_IPC_METHODS = /* @__PURE__ */ new Set([
 var PiBridge = class {
   constructor(options) {
     this.options = options;
+    this.sessionOwnerIsLive = options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
   }
   options;
   agentId = "pi";
   ipcMethods = PI_IPC_METHODS;
+  sessionOwnerIsLive;
   attach(_comms) {
   }
   async handleIpcMethod(method, params, ctx) {
@@ -10726,12 +10902,22 @@ var PiBridge = class {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return /* @__PURE__ */ new Set();
-      const scoped = filterRegistrationsByScope(
-        await this.options.storage.listAccountRegistrations({
+      const [registrations2, sessions] = await Promise.all([
+        this.options.storage.listAccountRegistrations({
           project: sess.project,
           agent: this.agentId
         }),
-        sess.account_label_scope
+        this.options.storage.listSessions({
+          project: sess.project,
+          agent: this.agentId,
+          status: "active"
+        })
+      ]);
+      const scoped = filterRegistrationsForSession(
+        registrations2,
+        sess,
+        sessions,
+        this.sessionOwnerIsLive
       );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
@@ -10869,7 +11055,8 @@ var PiBridgeFactory = class {
       audit: context.audit,
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
-      daemonOwner: context.daemonOwner
+      daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive
     });
   }
 };

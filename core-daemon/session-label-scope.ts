@@ -1,4 +1,12 @@
-import type { AccountRegistration, CommId } from "agents-comm-bus-core";
+import type {
+  AccountRegistration,
+  CommId,
+  Session,
+} from "agents-comm-bus-core";
+import type {
+  SessionOwnerLiveness,
+  SessionOwnerRecord,
+} from "./runtime/session-owner-liveness.js";
 
 /** Parsed `AGENTS_COMM_LABELS` map: comm id → account label. */
 export type AccountLabelScopeMap = Readonly<Record<string, string>>;
@@ -94,7 +102,8 @@ export function filterRegistrationsByScope(
   registrations: readonly AccountRegistration[],
   scopeStored: string | null | undefined,
 ): AccountRegistration[] {
-  const scope = parseAccountLabelScope(scopeStored ?? null);
+  const scope = parseRoutingScope(scopeStored);
+  if (scope === undefined) return [];
   if (!scope) return [...registrations];
   return registrations.filter((reg) => {
     const expected = scope[reg.comm];
@@ -102,11 +111,108 @@ export function filterRegistrationsByScope(
   });
 }
 
+export type SessionScopeRecord = Pick<
+  Session,
+  | "session_id"
+  | "project"
+  | "agent"
+  | "account_label_scope"
+  | "status"
+  | "lease_holder_connection_id"
+  | "lease_owner_process_pid"
+  | "lease_owner_process_registered_at"
+>;
+
+function liveSessionScopeCandidates(
+  target: SessionScopeRecord,
+  sessions: readonly SessionScopeRecord[],
+  isSessionLive: SessionOwnerLiveness,
+): SessionScopeRecord[] {
+  const liveSiblings = sessions.filter(
+    (session) =>
+      session.session_id !== target.session_id &&
+      session.project === target.project &&
+      session.agent === target.agent &&
+      session.status === "active" &&
+      isSessionLive(session),
+  );
+  return [target, ...liveSiblings];
+}
+
+/**
+ * Resolve the registrations a concrete session may consume.
+ *
+ * A labeled session owns only its exact scope. An unlabeled session preserves
+ * the legacy catch-all behavior except for registrations claimed by a live
+ * labeled sibling in the same (project, agent).
+ */
+export function filterRegistrationsForSession(
+  registrations: readonly AccountRegistration[],
+  target: SessionScopeRecord,
+  sessions: readonly SessionScopeRecord[],
+  isSessionLive: SessionOwnerLiveness = hasLiveConnectionLease,
+): AccountRegistration[] {
+  if (target.account_label_scope != null) {
+    return filterRegistrationsByScope(
+      registrations,
+      target.account_label_scope,
+    );
+  }
+  const labeledSiblings = liveSessionScopeCandidates(
+    target,
+    sessions,
+    isSessionLive,
+  ).filter(
+    (session) =>
+      session.session_id !== target.session_id &&
+      session.account_label_scope != null,
+  );
+  if (labeledSiblings.length === 0) return [...registrations];
+  return registrations.filter(
+    (registration) =>
+      !labeledSiblings.some((session) =>
+        registrationMatchesConversationScope(
+          session.account_label_scope,
+          registration,
+        ),
+      ),
+  );
+}
+
+/**
+ * Whether a session owns a conversation after live labeled-session precedence.
+ */
+export function sessionOwnsConversation(
+  target: SessionScopeRecord,
+  sessions: readonly SessionScopeRecord[],
+  conversation: {
+    project: string;
+    agent: string;
+    comm: CommId | string;
+    account_label: string;
+  },
+  isSessionLive: SessionOwnerLiveness = hasLiveConnectionLease,
+): boolean {
+  if (
+    conversation.project !== target.project ||
+    conversation.agent !== target.agent
+  ) {
+    return false;
+  }
+  const resolved = resolveSessionForConversation(
+    liveSessionScopeCandidates(target, sessions, isSessionLive),
+    conversation,
+    (session) => session.session_id,
+  );
+  return resolved?.session_id === target.session_id;
+}
+
 export function registrationMatchesConversationScope(
   scopeStored: string | null | undefined,
   conversation: { comm: CommId | string; account_label: string },
 ): boolean {
-  const scope = parseAccountLabelScope(scopeStored ?? null);
+  const scope = parseRoutingScope(scopeStored);
+  if (scope === undefined) return false;
   if (!scope) return true;
   const expected = scope[conversation.comm];
   return expected !== undefined && expected === conversation.account_label;
@@ -143,4 +249,28 @@ export function resolveSessionForConversation<T extends SessionScopeIdentity & {
     return undefined;
   }
   return undefined;
+}
+
+function hasLiveConnectionLease(session: SessionOwnerRecord): boolean {
+  return session.lease_holder_connection_id != null;
+}
+
+/**
+ * Corrupt persisted scopes fail inert for routing: they neither consume nor
+ * reserve registrations. The strict public parser still throws for validation
+ * callers; only runtime routing is hardened against a damaged row.
+ */
+function parseRoutingScope(
+  stored: string | null | undefined,
+): AccountLabelScopeMap | null | undefined {
+  try {
+    return parseAccountLabelScope(stored ?? null);
+  } catch (error) {
+    console.error(
+      "agents-comm-bus: invalid persisted account_label_scope; " +
+        "treating session as scope-inert: " +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
 }

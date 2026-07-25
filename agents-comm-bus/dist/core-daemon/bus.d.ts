@@ -1,3 +1,4 @@
+import { type SessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { AccountId, AuditStore, BlobStore, ChatRef, CommAdapter, CommId, Conversation, ConversationId, Message, MessageId, OutboundPayload, Query, QueryId, QueryRecord, ResolvedDecision, SessionId, Storage, TranscriptStore } from "agents-comm-bus-core";
 export interface MessageBusOptions {
     project: string;
@@ -7,6 +8,7 @@ export interface MessageBusOptions {
     blobs?: BlobStore;
     comms?: CommAdapter[];
     now?: () => number;
+    sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 export interface DispatchSink {
     enqueueInbound(message: Message, conversation: Conversation): Promise<void>;
@@ -54,6 +56,7 @@ export declare class MessageBus {
     private readonly comms;
     private readonly seen;
     private readonly now;
+    private readonly sessionOwnerIsLive;
     private dispatchSink;
     private readonly resolveSinks;
     constructor(options: MessageBusOptions);

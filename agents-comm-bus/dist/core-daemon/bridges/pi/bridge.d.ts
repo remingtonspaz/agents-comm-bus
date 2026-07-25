@@ -9,6 +9,7 @@ import { type AgentId, type AuditStore, type CommAdapter, type SessionId, type S
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
+import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
 export interface PiBridgeOptions {
     storage: Storage;
     bus: MessageBus;
@@ -17,6 +18,8 @@ export interface PiBridgeOptions {
     ensureCommsForSession?: EnsureCommsForSession;
     /** AGE-58: daemon-resolved identity for session ownership stamping. */
     daemonOwner?: DaemonSelfIdentity;
+    /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
+    sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 export interface RegisterPiSessionResult {
     ok: boolean;
@@ -29,6 +32,7 @@ export declare class PiBridge implements AgentBridge {
     private readonly options;
     readonly agentId: AgentId;
     readonly ipcMethods: ReadonlySet<string>;
+    private readonly sessionOwnerIsLive;
     constructor(options: PiBridgeOptions);
     attach(_comms: CommAdapter[]): void;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {

@@ -3693,6 +3693,17 @@ function serializeAccountLabelScope(scope) {
 function accountLabelScopeFromEnv(env = process.env) {
   return serializeAccountLabelScope(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
 }
+function accountLabelScopeFromEnvSafe(env = process.env, log = (message) => console.error(message)) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log(
+      `ERROR: malformed AGENTS_COMM_LABELS=${JSON.stringify(raw)}: ${error instanceof Error ? error.message : String(error)}. This session is scope-inert: it will not consume any comm registration until AGENTS_COMM_LABELS is corrected and the session is restarted.`
+    );
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
+}
 
 // dist/core-daemon/host-runtime/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
@@ -3742,7 +3753,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.39";
+var DAEMON_VERSION = "0.2.40";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -5073,7 +5084,7 @@ async function main() {
       app_server_url: process.env.CODEX_APP_SERVER_URL,
       hook: "UserPromptSubmit",
       codex: hookInput,
-      account_label_scope: accountLabelScopeFromEnv()
+      account_label_scope: accountLabelScopeFromEnvSafe()
     });
     if (!registered?.ok) {
       throw new Error(registered?.reason || "codex session registration failed");

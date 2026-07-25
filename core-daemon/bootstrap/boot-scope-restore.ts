@@ -6,9 +6,15 @@ import type { AgentId, AuditStore, Storage } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../project-path.js";
 import { normalizeDaemonRootPath } from "../paths.js";
 import type { EnsureCommsForSession } from "../runtime/agent-bridge.js";
+import {
+  classifySessionOwnerProcess,
+  DEFAULT_SESSION_OWNER_RECENCY_MS,
+  defaultIsPidAlive,
+} from "../runtime/session-owner-liveness.js";
 
 /** Default recency window for boot-time scope restore (24 hours). */
-export const DEFAULT_BOOT_RESTORE_RECENCY_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_BOOT_RESTORE_RECENCY_MS =
+  DEFAULT_SESSION_OWNER_RECENCY_MS;
 
 export interface BootScopeRestoreSummary {
   status: "skipped_paused" | "completed";
@@ -31,15 +37,6 @@ export interface BootScopeRestoreInput {
   isPidAlive?: (pid: number) => boolean;
   recencyMs?: number;
   pathExists?: (path: string) => Promise<boolean>;
-}
-
-function defaultIsPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function defaultPathExists(path: string): Promise<boolean> {
@@ -133,22 +130,23 @@ export async function runBootScopeRestore(
     >();
 
     for (const session of sessions) {
-      const pid = session.lease_owner_process_pid;
-      const registeredAt = session.lease_owner_process_registered_at;
-
-      if (pid == null || registeredAt == null) {
-        summary.skipped_no_owner += 1;
-        continue;
-      }
-
-      if (now() - registeredAt > recencyMs) {
-        summary.skipped_stale += 1;
-        continue;
-      }
-
-      if (!isPidAlive(pid)) {
-        summary.skipped_dead += 1;
-        continue;
+      const ownerState = classifySessionOwnerProcess(session, {
+        now,
+        isPidAlive,
+        recencyMs,
+      });
+      switch (ownerState) {
+        case "no_owner":
+          summary.skipped_no_owner += 1;
+          continue;
+        case "stale":
+          summary.skipped_stale += 1;
+          continue;
+        case "dead":
+          summary.skipped_dead += 1;
+          continue;
+        case "live":
+          break;
       }
 
       const ownerClass = classifySessionDaemonOwner(session, input.discoveryRoot);

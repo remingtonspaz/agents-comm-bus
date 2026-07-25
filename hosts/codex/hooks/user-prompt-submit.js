@@ -10,7 +10,7 @@
 
 import crypto from 'node:crypto';
 import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
-import { accountLabelScopeFromEnv } from '../../common/comm-labels.js';
+import { accountLabelScopeFromEnvSafe } from '../../common/comm-labels.js';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
@@ -138,7 +138,7 @@ async function main() {
       app_server_url: process.env.CODEX_APP_SERVER_URL,
       hook: 'UserPromptSubmit',
       codex: hookInput,
-      account_label_scope: accountLabelScopeFromEnv(),
+      account_label_scope: accountLabelScopeFromEnvSafe(),
     });
     if (!registered?.ok) {
       throw new Error(registered?.reason || 'codex session registration failed');

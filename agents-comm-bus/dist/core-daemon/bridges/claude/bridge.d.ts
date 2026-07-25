@@ -12,6 +12,7 @@ import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type C
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
+import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
     storage: Storage;
@@ -37,6 +38,8 @@ export interface ClaudeBridgeOptions {
     /** Injectable timers for deterministic tests (AGE-36 TTL tracking). */
     setTimeoutFn?: (fn: () => void, ms: number) => unknown;
     clearTimeoutFn?: (handle: unknown) => void;
+    /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
+    sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 /**
  * Outcome shape returned by claude_register_session.
@@ -65,6 +68,7 @@ export declare class ClaudeBridge implements AgentBridge {
     private readonly questionSequences;
     /** AGE-36: daemon-local open-query tracking for retirement eligibility. */
     private readonly openQueryTracker;
+    private readonly sessionOwnerIsLive;
     constructor(options: ClaudeBridgeOptions);
     /**
      * Wire Claude-specific behaviors into the bus + per-comm callbacks. The

@@ -8,8 +8,9 @@
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsByScope } from "../../session-label-scope.js";
+import { accountLabelScopeFromParams, filterRegistrationsForSession, } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
+import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
 const PI_IPC_METHODS = new Set([
     "pi_register_session",
     "pi_drain_inbound",
@@ -19,8 +20,11 @@ export class PiBridge {
     options;
     agentId = "pi";
     ipcMethods = PI_IPC_METHODS;
+    sessionOwnerIsLive;
     constructor(options) {
         this.options = options;
+        this.sessionOwnerIsLive =
+            options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
     }
     attach(_comms) {
         // Pi wires no resolve-sink and no onCallback yet (Phase 1).
@@ -53,10 +57,18 @@ export class PiBridge {
             const sess = await this.options.storage.getSession(session);
             if (!sess)
                 return new Set();
-            const scoped = filterRegistrationsByScope(await this.options.storage.listAccountRegistrations({
-                project: sess.project,
-                agent: this.agentId,
-            }), sess.account_label_scope);
+            const [registrations, sessions] = await Promise.all([
+                this.options.storage.listAccountRegistrations({
+                    project: sess.project,
+                    agent: this.agentId,
+                }),
+                this.options.storage.listSessions({
+                    project: sess.project,
+                    agent: this.agentId,
+                    status: "active",
+                }),
+            ]);
+            const scoped = filterRegistrationsForSession(registrations, sess, sessions, this.sessionOwnerIsLive);
             return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
         }
         const registrations = await this.options.storage.listAccountRegistrations({
@@ -194,6 +206,7 @@ export class PiBridgeFactory {
             pendingInbound: context.pendingInbound,
             ensureCommsForSession: context.ensureCommsForSession,
             daemonOwner: context.daemonOwner,
+            sessionOwnerIsLive: context.sessionOwnerIsLive,
         });
     }
 }

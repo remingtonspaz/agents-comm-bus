@@ -66,6 +66,7 @@ test("Claude staged wake support uses daemon wake directory and watcher pid mark
   const hook = await readArtifactFile("hooks/session-start.js");
 
   assert.match(hook, /claudeWakeDirForProject/);
+  assert.match(hook, /accountLabelScopeFromEnv/);
   assert.match(hook, /watcher\.pid/);
   assert.match(hook, /enter-watcher\.ps1/);
   // Bundled output uses double quotes and resolves via a candidate list; match quote-agnostically

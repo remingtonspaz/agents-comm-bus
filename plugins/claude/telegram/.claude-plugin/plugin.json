@@ -1,6 +1,6 @@
 {
   "name": "telegram",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Telegram messaging for Claude Code through the agents-comm-bus daemon",
   "author": {
     "name": "Satrio"

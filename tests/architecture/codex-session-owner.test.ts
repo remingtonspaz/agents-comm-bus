@@ -365,6 +365,10 @@ class RecordingStorage implements Partial<Storage> {
     return this.sessions.get(session) ?? null;
   }
 
+  async listSessions(): Promise<Session[]> {
+    return [...this.sessions.values()];
+  }
+
   async close(): Promise<void> {}
 }
 

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { claudeWakeDirForProject } from '../../../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js';
 import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
+import { accountLabelScopeFromEnvSafe } from '../../common/comm-labels.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,8 +15,15 @@ export function resolveProjectPath() {
   return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
 
-export function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
-  return claudeWakeDirForProject(projectPath);
+export function resolveClaudeWakeDir(
+  projectPath = resolveProjectPath(),
+  env = process.env,
+) {
+  return claudeWakeDirForProject(
+    projectPath,
+    undefined,
+    accountLabelScopeFromEnvSafe(env),
+  );
 }
 
 export function isPidAlive(pid) {
@@ -387,7 +395,9 @@ export function ensureClaudeWakeWatcher(options = {}) {
   }
 
   const projectPath = options.projectPath || resolveProjectPath();
-  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
+  const wakeDir =
+    options.wakeDir ||
+    resolveClaudeWakeDir(projectPath, options.env || process.env);
   fs.mkdirSync(wakeDir, { recursive: true });
 
   const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log };

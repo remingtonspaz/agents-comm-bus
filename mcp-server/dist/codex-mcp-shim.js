@@ -24832,7 +24832,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.39";
+var DAEMON_VERSION = "0.2.40";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -26560,6 +26560,17 @@ function serializeAccountLabelScope(scope) {
 function accountLabelScopeFromEnv(env = process.env) {
   return serializeAccountLabelScope(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
 }
+function accountLabelScopeFromEnvSafe(env = process.env, log2 = (message) => console.error(message)) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error2) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log2(
+      `ERROR: malformed AGENTS_COMM_LABELS=${JSON.stringify(raw)}: ${error2 instanceof Error ? error2.message : String(error2)}. This session is scope-inert: it will not consume any comm registration until AGENTS_COMM_LABELS is corrected and the session is restarted.`
+    );
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
+}
 
 // codex/codex-mcp-shim.js
 var persistentRegistration = null;
@@ -26782,7 +26793,7 @@ async function startPersistentCodexRegistration() {
     replace_existing_lease: true,
     persist_after_disconnect: true,
     manage_app_server_lifecycle: true,
-    account_label_scope: accountLabelScopeFromEnv()
+    account_label_scope: accountLabelScopeFromEnvSafe()
   };
   const runtime = await ensureMcpRuntime({
     agentInUse: () => "codex",

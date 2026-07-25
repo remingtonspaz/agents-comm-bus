@@ -1,6 +1,6 @@
 {
   "name": "@agents-comm-bus/pi-discord",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Pi host extension for agents-comm-bus — discord comm (bundles the shared pi-core).",
   "type": "module",
   "keywords": ["pi-package"],

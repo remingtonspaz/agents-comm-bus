@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 
 import { normalizeProjectPath } from "./project-path.js";
-import { registrationMatchesConversationScope } from "./session-label-scope.js";
+import { sessionOwnsConversation } from "./session-label-scope.js";
+import {
+  createSessionOwnerLiveness,
+  type SessionOwnerLiveness,
+} from "./runtime/session-owner-liveness.js";
 
 import type {
   AccountId,
@@ -44,6 +48,7 @@ export interface MessageBusOptions {
   blobs?: BlobStore;
   comms?: CommAdapter[];
   now?: () => number;
+  sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 
 export interface DispatchSink {
@@ -85,11 +90,14 @@ export class MessageBus {
   private readonly comms = new Map<string, CommAdapter>();
   private readonly seen = new RecentSeenCache();
   private readonly now: () => number;
+  private readonly sessionOwnerIsLive: SessionOwnerLiveness;
   private dispatchSink: DispatchSink | null = null;
   private readonly resolveSinks: ResolveSink[] = [];
 
   constructor(private readonly options: MessageBusOptions) {
     this.now = options.now ?? Date.now;
+    this.sessionOwnerIsLive =
+      options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
     for (const comm of options.comms ?? []) {
       this.registerComm(comm);
     }
@@ -640,12 +648,24 @@ export class MessageBus {
     }
     const conversation = await this.options.storage.getConversation(conversationId);
     if (!conversation) throw new Error(`conversation not found: ${conversationId}`);
+    const sessions = record
+      ? await this.options.storage.listSessions({
+          project: record.project,
+          agent: record.agent,
+          status: "active",
+        })
+      : [];
     if (
       record &&
-      !registrationMatchesConversationScope(record.account_label_scope, conversation)
+      !sessionOwnsConversation(
+        record,
+        sessions,
+        conversation,
+        this.sessionOwnerIsLive,
+      )
     ) {
       throw new Error(
-        `session ${session} account_label_scope does not match most-recent inbound ` +
+        `session ${session} does not own most-recent inbound ` +
           `conversation ${conversationId} (${conversation.comm}:${conversation.account_label})`,
       );
     }

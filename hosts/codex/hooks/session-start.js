@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { entryEnsures } from '../../common/install/entry-ensures.js';
+import { accountLabelScopeFromEnvSafe } from '../../common/comm-labels.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
 
@@ -247,6 +248,7 @@ async function main() {
       app_server_url: process.env.CODEX_APP_SERVER_URL,
       app_server_reachable: appServerReachable,
       managed_session_id: process.env.AGENTS_COMM_BUS_SESSION_ID,
+      account_label_scope: accountLabelScopeFromEnvSafe(),
       hook: 'SessionStart',
       codex: hookInput,
     }), 'codex_bootstrap_status');

@@ -43,6 +43,8 @@ test("Codex staged SessionStart schedules bootstrap restart through daemon statu
 
   assert.match(hook, /ensureDaemon/);
   assert.match(hook, /codex_bootstrap_status/);
+  assert.match(hook, /accountLabelScopeFromEnv/);
+  assert.match(hook, /account_label_scope/);
   assert.match(hook, /AGENTS_COMM_BUS_SESSION_ID/);
   assert.match(hook, /app_server_reachable/);
   assert.match(hook, /canReachAppServer/);

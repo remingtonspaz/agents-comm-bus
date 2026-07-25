@@ -43,3 +43,27 @@ export function serializeAccountLabelScope(scope) {
 export function accountLabelScopeFromEnv(env = process.env) {
   return serializeAccountLabelScope(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
 }
+
+/**
+ * Host runtime boundary for malformed environment input. Keep the host alive
+ * and fail inert rather than silently becoming unscoped/catch-all.
+ */
+export function accountLabelScopeFromEnvSafe(
+  env = process.env,
+  log = (message) => console.error(message),
+) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log(
+      'ERROR: malformed AGENTS_COMM_LABELS=' +
+        `${JSON.stringify(raw)}: ${error instanceof Error ? error.message : String(error)}. ` +
+        'This session is scope-inert: it will not consume any comm registration ' +
+        'until AGENTS_COMM_LABELS is corrected and the session is restarted.',
+    );
+    // A non-null scope with an impossible reserved comm keeps routing fail-
+    // closed while giving every hook the same deterministic wake directory.
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
+}

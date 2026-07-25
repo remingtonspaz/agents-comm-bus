@@ -26,8 +26,15 @@ import type {
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsByScope } from "../../session-label-scope.js";
+import {
+  accountLabelScopeFromParams,
+  filterRegistrationsForSession,
+} from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
+import {
+  createSessionOwnerLiveness,
+  type SessionOwnerLiveness,
+} from "../../runtime/session-owner-liveness.js";
 
 export interface PiBridgeOptions {
   storage: Storage;
@@ -37,6 +44,8 @@ export interface PiBridgeOptions {
   ensureCommsForSession?: EnsureCommsForSession;
   /** AGE-58: daemon-resolved identity for session ownership stamping. */
   daemonOwner?: DaemonSelfIdentity;
+  /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
+  sessionOwnerIsLive?: SessionOwnerLiveness;
 }
 
 export interface RegisterPiSessionResult {
@@ -56,8 +65,12 @@ const PI_IPC_METHODS = new Set<string>([
 export class PiBridge implements AgentBridge {
   readonly agentId = "pi" as AgentId;
   readonly ipcMethods: ReadonlySet<string> = PI_IPC_METHODS;
+  private readonly sessionOwnerIsLive: SessionOwnerLiveness;
 
-  constructor(private readonly options: PiBridgeOptions) {}
+  constructor(private readonly options: PiBridgeOptions) {
+    this.sessionOwnerIsLive =
+      options.sessionOwnerIsLive ?? createSessionOwnerLiveness();
+  }
 
   attach(_comms: CommAdapter[]): void {
     // Pi wires no resolve-sink and no onCallback yet (Phase 1).
@@ -100,12 +113,22 @@ export class PiBridge implements AgentBridge {
     if (session) {
       const sess = await this.options.storage.getSession(session);
       if (!sess) return new Set<string>();
-      const scoped = filterRegistrationsByScope(
-        await this.options.storage.listAccountRegistrations({
+      const [registrations, sessions] = await Promise.all([
+        this.options.storage.listAccountRegistrations({
           project: sess.project,
           agent: this.agentId,
         }),
-        sess.account_label_scope,
+        this.options.storage.listSessions({
+          project: sess.project,
+          agent: this.agentId,
+          status: "active",
+        }),
+      ]);
+      const scoped = filterRegistrationsForSession(
+        registrations,
+        sess,
+        sessions,
+        this.sessionOwnerIsLive,
       );
       return new Set(scoped.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
     }
@@ -283,6 +306,7 @@ export class PiBridgeFactory implements AgentBridgeFactory {
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive,
     });
   }
 }

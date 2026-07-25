@@ -24821,7 +24821,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.39";
+var DAEMON_VERSION = "0.2.40";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
@@ -26460,8 +26460,50 @@ import path12 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js
+import crypto from "node:crypto";
 import os2 from "node:os";
 import path11 from "node:path";
+
+// ../agents-comm-bus/dist/core-daemon/session-label-scope.js
+function serializeAccountLabelScope(scope) {
+  if (!scope || Object.keys(scope).length === 0)
+    return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function parseAccountLabelScope(stored) {
+  if (stored === void 0 || stored === null)
+    return null;
+  const trimmed = stored.trim();
+  if (trimmed.length === 0)
+    return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`account_label_scope is not valid JSON: ${stored}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`account_label_scope must be a JSON object: ${stored}`);
+  }
+  const map = {};
+  for (const [comm, label] of Object.entries(parsed)) {
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`account_label_scope value for "${comm}" must be a non-empty string`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+
+// ../agents-comm-bus/dist/core-daemon/runtime/session-owner-liveness.js
+var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
+
+// ../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
   for (let i = 0; i < projectPath.length; i += 1) {
@@ -26470,10 +26512,69 @@ function hashProjectKey(projectPath) {
   }
   return hash.toString(16).padStart(8, "0");
 }
-function claudeWakeDirForProject(projectPath, homeDir = os2.homedir()) {
+function claudeWakeDirForProject(projectPath, homeDir = os2.homedir(), accountLabelScope = null) {
   const canonical = normalizeProjectPath(projectPath);
   const basename = path11.basename(canonical) || "project";
-  return path11.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
+  const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
+  let canonicalScope;
+  try {
+    canonicalScope = serializeAccountLabelScope(parseAccountLabelScope(accountLabelScope));
+  } catch (error2) {
+    console.error(`agents-comm-bus: invalid persisted Claude account_label_scope; using a scope-inert wake directory: ${error2 instanceof Error ? error2.message : String(error2)}`);
+    canonicalScope = `__invalid__:${accountLabelScope}`;
+  }
+  return path11.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", canonicalScope ? `${legacyDir}-${crypto.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}` : legacyDir);
+}
+
+// common/comm-labels.js
+function parseAgentsCommLabels(raw) {
+  if (raw === void 0 || raw === null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed.length === 0) return null;
+  const map = {};
+  for (const entry of trimmed.split(",")) {
+    const piece = entry.trim();
+    if (piece.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
+    }
+    const colon = piece.indexOf(":");
+    if (colon <= 0 || colon === piece.length - 1) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    const comm = piece.slice(0, colon).trim();
+    const label = piece.slice(colon + 1).trim();
+    if (comm.length === 0 || label.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    if (map[comm] !== void 0) {
+      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function serializeAccountLabelScope2(scope) {
+  if (!scope || Object.keys(scope).length === 0) return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function accountLabelScopeFromEnv(env = process.env) {
+  return serializeAccountLabelScope2(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
+}
+function accountLabelScopeFromEnvSafe(env = process.env, log2 = (message) => console.error(message)) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error2) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log2(
+      `ERROR: malformed AGENTS_COMM_LABELS=${JSON.stringify(raw)}: ${error2 instanceof Error ? error2.message : String(error2)}. This session is scope-inert: it will not consume any comm registration until AGENTS_COMM_LABELS is corrected and the session is restarted.`
+    );
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
 }
 
 // claude/hooks/wake-support.js
@@ -26482,8 +26583,12 @@ var __dirname = path12.dirname(__filename);
 function resolveProjectPath() {
   return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
-function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
-  return claudeWakeDirForProject(projectPath);
+function resolveClaudeWakeDir(projectPath = resolveProjectPath(), env = process.env) {
+  return claudeWakeDirForProject(
+    projectPath,
+    void 0,
+    accountLabelScopeFromEnvSafe(env)
+  );
 }
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -26750,7 +26855,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, reason: "unsupported_platform" };
   }
   const projectPath = options.projectPath || resolveProjectPath();
-  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
+  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath, options.env || process.env);
   fs.mkdirSync(wakeDir, { recursive: true });
   const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log: log2 };
   const existingPid = readAuthoritativeWatcherPid(wakeDir);

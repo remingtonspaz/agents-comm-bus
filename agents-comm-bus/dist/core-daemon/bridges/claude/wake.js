@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeProjectPath } from "../../project-path.js";
-import { resolveSessionForConversation, } from "../../session-label-scope.js";
+import { parseAccountLabelScope, resolveSessionForConversation, serializeAccountLabelScope, } from "../../session-label-scope.js";
+import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
 export function hashProjectKey(projectPath) {
     let hash = 0x811c9dc5;
     for (let i = 0; i < projectPath.length; i += 1) {
@@ -11,10 +13,24 @@ export function hashProjectKey(projectPath) {
     }
     return hash.toString(16).padStart(8, "0");
 }
-export function claudeWakeDirForProject(projectPath, homeDir = os.homedir()) {
+export function claudeWakeDirForProject(projectPath, homeDir = os.homedir(), accountLabelScope = null) {
     const canonical = normalizeProjectPath(projectPath);
     const basename = path.basename(canonical) || "project";
-    return path.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
+    const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
+    let canonicalScope;
+    try {
+        canonicalScope = serializeAccountLabelScope(parseAccountLabelScope(accountLabelScope));
+    }
+    catch (error) {
+        console.error("agents-comm-bus: invalid persisted Claude account_label_scope; " +
+            "using a scope-inert wake directory: " +
+            `${error instanceof Error ? error.message : String(error)}`);
+        // Never collapse a corrupt non-null scope onto the legacy catch-all dir.
+        canonicalScope = `__invalid__:${accountLabelScope}`;
+    }
+    return path.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", canonicalScope
+        ? `${legacyDir}-${crypto.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}`
+        : legacyDir);
 }
 export async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
     await mkdir(wakeDir, { recursive: true });
@@ -62,10 +78,12 @@ export async function writeClaudeWakeResponse(wakeDir, payload) {
 }
 export class ClaudeWakeRegistry {
     now;
+    sessionOwnerIsLive;
     registrations = new Map();
     storage = null;
-    constructor(now = Date.now) {
+    constructor(now = Date.now, sessionOwnerIsLive = createSessionOwnerLiveness()) {
         this.now = now;
+        this.sessionOwnerIsLive = sessionOwnerIsLive;
     }
     /**
      * Inject the daemon's storage so wake lookups can fall back to the
@@ -84,7 +102,8 @@ export class ClaudeWakeRegistry {
         const registration = {
             session: input.session,
             project,
-            wakeDir: input.wakeDir ?? claudeWakeDirForProject(project),
+            wakeDir: input.wakeDir ??
+                claudeWakeDirForProject(project, os.homedir(), input.account_label_scope ?? null),
             registeredAt: this.now(),
             account_label_scope: input.account_label_scope ?? null,
         };
@@ -160,8 +179,8 @@ export class ClaudeWakeRegistry {
     /**
      * On a miss in `wakeConversation`, look up the most recent Claude session
      * for this project from storage and seed the in-memory map. The wake_dir
-     * is deterministic from project, so reconstruction is lossless even
-     * across daemon restarts.
+     * is deterministic from persisted project + label scope, so reconstruction
+     * is lossless even across daemon restarts.
      */
     async hydrateLatestForProject(project, conversation) {
         if (!this.storage)
@@ -174,12 +193,21 @@ export class ClaudeWakeRegistry {
         });
         if (sessions.length === 0)
             return undefined;
-        const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+        const live = sessions.filter(this.sessionOwnerIsLive);
         const pool = live.length > 0 ? live : sessions;
-        const match = conversation
+        let match = conversation
             ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id)
             : pool[0];
-        const latest = match ?? pool[0];
+        if (conversation && !match) {
+            // Multiple legacy/unscoped rows are ambiguous by session id but share
+            // the exact same project-only wake directory. Reaching this branch also
+            // proves no labeled scope matched, so unrelated labeled rows must not
+            // veto the legacy fallback.
+            match = pool.find((session) => session.account_label_scope == null);
+            if (!match)
+                return undefined;
+        }
+        const latest = match;
         if (!latest)
             return undefined;
         return this.register({

@@ -9,6 +9,7 @@ import path3 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // dist/core-daemon/bridges/claude/wake.js
+import crypto from "node:crypto";
 import os from "node:os";
 import path2 from "node:path";
 
@@ -31,6 +32,45 @@ function normalizeProjectPath(project) {
   return resolved;
 }
 
+// dist/core-daemon/session-label-scope.js
+function serializeAccountLabelScope(scope) {
+  if (!scope || Object.keys(scope).length === 0)
+    return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function parseAccountLabelScope(stored) {
+  if (stored === void 0 || stored === null)
+    return null;
+  const trimmed = stored.trim();
+  if (trimmed.length === 0)
+    return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`account_label_scope is not valid JSON: ${stored}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`account_label_scope must be a JSON object: ${stored}`);
+  }
+  const map = {};
+  for (const [comm, label] of Object.entries(parsed)) {
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`account_label_scope value for "${comm}" must be a non-empty string`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+
+// dist/core-daemon/runtime/session-owner-liveness.js
+var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
+
 // dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
@@ -40,10 +80,69 @@ function hashProjectKey(projectPath) {
   }
   return hash.toString(16).padStart(8, "0");
 }
-function claudeWakeDirForProject(projectPath, homeDir = os.homedir()) {
+function claudeWakeDirForProject(projectPath, homeDir = os.homedir(), accountLabelScope = null) {
   const canonical = normalizeProjectPath(projectPath);
   const basename = path2.basename(canonical) || "project";
-  return path2.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", `${basename}-${hashProjectKey(canonical)}`);
+  const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
+  let canonicalScope;
+  try {
+    canonicalScope = serializeAccountLabelScope(parseAccountLabelScope(accountLabelScope));
+  } catch (error) {
+    console.error(`agents-comm-bus: invalid persisted Claude account_label_scope; using a scope-inert wake directory: ${error instanceof Error ? error.message : String(error)}`);
+    canonicalScope = `__invalid__:${accountLabelScope}`;
+  }
+  return path2.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", canonicalScope ? `${legacyDir}-${crypto.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}` : legacyDir);
+}
+
+// ../hosts/common/comm-labels.js
+function parseAgentsCommLabels(raw) {
+  if (raw === void 0 || raw === null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed.length === 0) return null;
+  const map = {};
+  for (const entry of trimmed.split(",")) {
+    const piece = entry.trim();
+    if (piece.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
+    }
+    const colon = piece.indexOf(":");
+    if (colon <= 0 || colon === piece.length - 1) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    const comm = piece.slice(0, colon).trim();
+    const label = piece.slice(colon + 1).trim();
+    if (comm.length === 0 || label.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`);
+    }
+    if (map[comm] !== void 0) {
+      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function serializeAccountLabelScope2(scope) {
+  if (!scope || Object.keys(scope).length === 0) return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function accountLabelScopeFromEnv(env = process.env) {
+  return serializeAccountLabelScope2(parseAgentsCommLabels(env.AGENTS_COMM_LABELS));
+}
+function accountLabelScopeFromEnvSafe(env = process.env, log2 = (message) => console.error(message)) {
+  try {
+    return accountLabelScopeFromEnv(env);
+  } catch (error) {
+    const raw = env.AGENTS_COMM_LABELS;
+    log2(
+      `ERROR: malformed AGENTS_COMM_LABELS=${JSON.stringify(raw)}: ${error instanceof Error ? error.message : String(error)}. This session is scope-inert: it will not consume any comm registration until AGENTS_COMM_LABELS is corrected and the session is restarted.`
+    );
+    return '{"__agents_comm_invalid__":"invalid"}';
+  }
 }
 
 // ../hosts/claude/hooks/wake-support.js
@@ -52,8 +151,12 @@ var __dirname = path3.dirname(__filename);
 function resolveProjectPath() {
   return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
-function resolveClaudeWakeDir(projectPath = resolveProjectPath()) {
-  return claudeWakeDirForProject(projectPath);
+function resolveClaudeWakeDir(projectPath = resolveProjectPath(), env = process.env) {
+  return claudeWakeDirForProject(
+    projectPath,
+    void 0,
+    accountLabelScopeFromEnvSafe(env)
+  );
 }
 function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -320,7 +423,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, reason: "unsupported_platform" };
   }
   const projectPath = options.projectPath || resolveProjectPath();
-  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath);
+  const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath, options.env || process.env);
   fs.mkdirSync(wakeDir, { recursive: true });
   const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log: log2 };
   const existingPid = readAuthoritativeWatcherPid(wakeDir);
