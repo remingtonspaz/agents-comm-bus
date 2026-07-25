@@ -699,7 +699,7 @@ describe("AGE-59 Pi bridge drain", () => {
 });
 
 describe("AGE-59 Pi bridge unregister", () => {
-  it("releases lease with the same stable connection_id used at register", async () => {
+  it("ends the session with the same stable connection_id used at register", async () => {
     await withStorage(async ({ storage }) => {
       const session = "pi_unreg_1" as SessionId;
       const connectionId = "pi:runtime-unreg";
@@ -715,10 +715,11 @@ describe("AGE-59 Pi bridge unregister", () => {
 
       await bridge.unregisterSession({ session, connection_id: connectionId });
       const after = await storage.getSession(session);
+      assert.equal(after?.status, "ended");
       assert.equal(after?.lease_holder_connection_id, null);
       assert.notEqual(after?.lease_released_at, null);
-      assert.equal(after?.lease_owner_process_pid, null);
-      assert.equal(after?.lease_owner_daemon_discovery_root, null);
+      assert.equal(after?.lease_owner_process_pid, process.pid);
+      assert.equal(after?.lease_owner_process_label, "pi");
     });
   });
 
@@ -801,7 +802,7 @@ describe("AGE-59 Pi bridge unregister", () => {
     });
   });
 
-  it("after unregister boot-scope-restore does not restore released scope", async () => {
+  it("after unregister boot-scope-restore does not restore ended scope", async () => {
     await withStorage(async ({ storage, dir }) => {
       const session = "pi_unreg_5" as SessionId;
       const connectionId = "pi:runtime-boot";
@@ -840,8 +841,9 @@ describe("AGE-59 Pi bridge unregister", () => {
       });
 
       assert.equal(summary.restored, 0);
-      assert.equal(summary.skipped_no_owner, 1);
+      assert.equal(summary.candidates, 0);
       assert.equal(calls.length, 0);
+      assert.equal((await storage.getSession(session))?.status, "ended");
     });
   });
 });

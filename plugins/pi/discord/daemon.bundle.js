@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.40";
+var DAEMON_VERSION = "0.2.41";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4708,11 +4708,12 @@ function classifySessionOwnerProcess(session, options = {}) {
   const pid = session.lease_owner_process_pid;
   const registeredAt = session.lease_owner_process_registered_at;
   if (pid == null || registeredAt == null) return "no_owner";
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
+  if (!isPidAlive2(pid)) return "dead";
   const now = options.now ?? Date.now;
   const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
   if (now() - registeredAt > recencyMs) return "stale";
-  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
-  return isPidAlive2(pid) ? "live" : "dead";
+  return "live";
 }
 function createSessionOwnerLiveness(options = {}) {
   return (session) => session.lease_holder_connection_id != null || classifySessionOwnerProcess(session, options) === "live";
@@ -6659,6 +6660,12 @@ var SqliteStorage = class _SqliteStorage {
           SET lease_holder_connection_id = ?,
               lease_acquired_at = ?,
               lease_released_at = NULL,
+              -- AGE-82: acquiring a lease revives the row. Registration is
+              -- upsert(active) + acquire, and the sweep can end the row in
+              -- between; without this a live lease would sit on an ended
+              -- row, invisible to every status='active' filter and outside
+              -- the partial live-lease indexes.
+              status = 'active',
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
               lease_owner_process_registered_at = ?,
@@ -6712,6 +6719,39 @@ var SqliteStorage = class _SqliteStorage {
             lease_released_at = ?
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `).run(at, session, connection_id);
+  }
+  async endSessionIfUnchanged(session, observed, at) {
+    const result = this.db.prepare(`
+        UPDATE sessions
+        SET status = 'ended',
+            lease_holder_connection_id = NULL,
+            lease_released_at = ?
+        WHERE session_id = ?
+          AND status = ?
+          AND (
+            (lease_holder_connection_id IS NULL AND ? IS NULL)
+            OR lease_holder_connection_id = ?
+          )
+          AND (
+            (lease_owner_process_pid IS NULL AND ? IS NULL)
+            OR lease_owner_process_pid = ?
+          )
+          AND (
+            (lease_owner_process_registered_at IS NULL AND ? IS NULL)
+            OR lease_owner_process_registered_at = ?
+          )
+      `).run(
+      at,
+      session,
+      observed.status,
+      observed.lease_holder_connection_id,
+      observed.lease_holder_connection_id,
+      observed.lease_owner_process_pid,
+      observed.lease_owner_process_pid,
+      observed.lease_owner_process_registered_at,
+      observed.lease_owner_process_registered_at
+    );
+    return Number(result.changes ?? 0) > 0;
   }
   async getSession(session) {
     const row = this.db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(session);
@@ -7240,6 +7280,113 @@ function startIdleReaper(options) {
   };
 }
 
+// ../core-daemon/runtime/session-end-sweep.ts
+var DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1e3;
+function sessionEndObservation(session) {
+  return {
+    status: session.status,
+    lease_holder_connection_id: session.lease_holder_connection_id,
+    lease_owner_process_pid: session.lease_owner_process_pid,
+    lease_owner_process_registered_at: session.lease_owner_process_registered_at
+  };
+}
+function shouldSweepEndSession(session, options = {}) {
+  const ownerState = classifySessionOwnerProcess(session, options);
+  if (ownerState === "live" || ownerState === "stale") return false;
+  if (ownerState === "no_owner") {
+    return session.lease_holder_connection_id == null;
+  }
+  return true;
+}
+async function runSessionEndSweep(input) {
+  const counts = {
+    ended: 0,
+    kept_live: 0,
+    kept_stale: 0,
+    kept_no_owner_leased: 0,
+    cas_lost: 0
+  };
+  const livenessOptions = {
+    now: input.now,
+    isPidAlive: input.isPidAlive,
+    recencyMs: input.recencyMs
+  };
+  const at = (input.now ?? Date.now)();
+  const sessions = await input.storage.listSessions({ status: "active" });
+  for (const session of sessions) {
+    const ownerState = classifySessionOwnerProcess(session, livenessOptions);
+    if (!shouldSweepEndSession(session, livenessOptions)) {
+      if (ownerState === "live") counts.kept_live += 1;
+      else if (ownerState === "stale") counts.kept_stale += 1;
+      else if (ownerState === "no_owner" && session.lease_holder_connection_id != null) {
+        counts.kept_no_owner_leased += 1;
+      }
+      continue;
+    }
+    const ended = await input.storage.endSessionIfUnchanged(
+      session.session_id,
+      sessionEndObservation(session),
+      at
+    );
+    if (ended) counts.ended += 1;
+    else counts.cas_lost += 1;
+  }
+  const log = input.log ?? (() => {
+  });
+  log(
+    `agents-comm-bus: session end sweep: ended=${counts.ended} kept_live=${counts.kept_live} kept_stale=${counts.kept_stale} kept_no_owner_leased=${counts.kept_no_owner_leased} cas_lost=${counts.cas_lost}`
+  );
+  return counts;
+}
+function startSessionEndSweep(options) {
+  const intervalMs = options.intervalMs ?? DEFAULT_SESSION_END_SWEEP_INTERVAL_MS;
+  const setIntervalFn = options.setIntervalFn ?? ((fn, ms) => {
+    const handle = setInterval(fn, ms);
+    handle.unref?.();
+    return handle;
+  });
+  const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
+  const setTimeoutFn = options.setTimeoutFn ?? ((fn, ms) => {
+    const handle = setTimeout(fn, ms);
+    handle.unref?.();
+    return handle;
+  });
+  const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
+  let sweepInFlight = false;
+  let interval = null;
+  const tick = () => {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    void runSessionEndSweep({
+      storage: options.storage,
+      now: options.now,
+      isPidAlive: options.isPidAlive,
+      recencyMs: options.recencyMs,
+      log: options.log
+    }).catch((error) => {
+      const log = options.log ?? console.error;
+      log(
+        `agents-comm-bus: session end sweep failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }).finally(() => {
+      sweepInFlight = false;
+    });
+  };
+  if (options.runOnStart !== false) {
+    tick();
+  }
+  const initial = setTimeoutFn(() => {
+    interval = setIntervalFn(tick, intervalMs);
+  }, intervalMs);
+  return {
+    stop() {
+      clearTimeoutFn(initial);
+      if (interval != null) clearIntervalFn(interval);
+      interval = null;
+    }
+  };
+}
+
 // ../core-daemon/runtime/durable-inbound.ts
 function durableInboundKey(entry) {
   return deliveryKey(
@@ -7663,6 +7810,7 @@ async function runDaemon(options) {
   };
   let pidWatchdogHandle = null;
   let idleReaperHandle = null;
+  let sessionEndSweepHandle = null;
   const runDaemonRetirement = async (reason, recordAudit) => {
     await retireDaemon({
       reason,
@@ -7673,6 +7821,7 @@ async function runDaemon(options) {
       stopTimers: () => {
         pidWatchdogHandle?.stop();
         idleReaperHandle?.stop();
+        sessionEndSweepHandle?.stop();
       },
       stopBus: () => bestEffortWithTimeout(
         () => bus.stop(),
@@ -7707,6 +7856,10 @@ async function runDaemon(options) {
     retire: async () => {
       await runDaemonRetirement(IDLE_NO_OWNED_RESOURCES_REASON, true);
     },
+    log: (message) => console.error(message)
+  });
+  sessionEndSweepHandle = startSessionEndSweep({
+    storage,
     log: (message) => console.error(message)
   });
   void runBootScopeRestore({
@@ -10519,7 +10672,15 @@ var CodexBridge = class {
         this.activeLeases.delete(input.session);
       }
       await this.adapter.disconnect(input.session);
-      await this.options.storage.releaseSessionLease(input.session, input.connectionId, Date.now());
+      if (input.manageAppServerLifecycle) {
+        await this.options.storage.releaseSessionConnectionLeasePreservingOwner(
+          input.session,
+          input.connectionId,
+          Date.now()
+        );
+      } else {
+        await this.options.storage.releaseSessionLease(input.session, input.connectionId, Date.now());
+      }
       input.control.close();
       if (input.manageAppServerLifecycle) {
         this.scheduleManagedAppServerCleanup(input.session);
@@ -10592,7 +10753,17 @@ var CodexBridge = class {
     try {
       const record = await this.options.storage.getSession(session);
       if (record?.lease_holder_connection_id) return;
-      await cleanupManagedCodexAppServer(session);
+      const result = await cleanupManagedCodexAppServer(session);
+      if (!result.ok) return;
+      const latest = await this.options.storage.getSession(session);
+      if (!latest || latest.status !== "active" || latest.lease_holder_connection_id) {
+        return;
+      }
+      await this.options.storage.endSessionIfUnchanged(
+        session,
+        sessionEndObservation(latest),
+        Date.now()
+      );
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to cleanup Codex app-server for ${session}: ${error instanceof Error ? error.message : String(error)}`
@@ -11017,7 +11188,14 @@ var PiBridge = class {
     const sess = await this.options.storage.getSession(session);
     if (!sess) return { ok: true };
     this.assertCallerProjectMatchesStored(session, sess.project, params);
-    await this.options.storage.releaseSessionLease(session, connectionId, Date.now());
+    if (sess.lease_holder_connection_id != null && sess.lease_holder_connection_id !== connectionId) {
+      return { ok: true };
+    }
+    await this.options.storage.endSessionIfUnchanged(
+      session,
+      sessionEndObservation(sess),
+      Date.now()
+    );
     return { ok: true };
   }
 };

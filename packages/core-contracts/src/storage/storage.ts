@@ -49,6 +49,14 @@ export interface SessionLeaseOwner {
   daemon?: SessionDaemonOwner;
 }
 
+/** Observed session row snapshot for AGE-82 endSessionIfUnchanged CAS. */
+export interface SessionEndObservation {
+  status: Session["status"];
+  lease_holder_connection_id: string | null;
+  lease_owner_process_pid: number | null;
+  lease_owner_process_registered_at: number | null;
+}
+
 export interface AccountTokenUpdateInput {
   comm: CommId;
   current_bot_user_id: string;
@@ -223,6 +231,16 @@ export interface Storage {
     connection_id: string,
     at: number,
   ): Promise<void>;
+  /**
+   * AGE-82: atomically mark a session `ended` when the row still matches the
+   * observed status / lease / owner stamp. Preserves durable owner + daemon
+   * metadata for forensics; clears only the connection lease.
+   */
+  endSessionIfUnchanged(
+    session: SessionId,
+    observed: SessionEndObservation,
+    at: number,
+  ): Promise<boolean>;
   setSessionMostRecentInbound(
     session: SessionId,
     conversation_id: ConversationId,

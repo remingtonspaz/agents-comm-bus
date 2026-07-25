@@ -43,6 +43,7 @@ import {
   codexHookDecision,
 } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
+import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import {
   createSessionOwnerLiveness,
   type SessionOwnerLiveness,
@@ -720,7 +721,19 @@ export class CodexBridge implements AgentBridge {
         this.activeLeases.delete(input.session);
       }
       await this.adapter.disconnect(input.session);
-      await this.options.storage.releaseSessionLease(input.session, input.connectionId, Date.now());
+      if (input.manageAppServerLifecycle) {
+        // AGE-82: a managed release schedules cleanup, which ends the row.
+        // `releaseSessionLease` NULLs every owner/daemon stamp, so ending a
+        // row released that way would scrub exactly the forensics the sweep is
+        // required to preserve. Keep the stamps until the row is truly ended.
+        await this.options.storage.releaseSessionConnectionLeasePreservingOwner(
+          input.session,
+          input.connectionId,
+          Date.now(),
+        );
+      } else {
+        await this.options.storage.releaseSessionLease(input.session, input.connectionId, Date.now());
+      }
       input.control.close();
       if (input.manageAppServerLifecycle) {
         this.scheduleManagedAppServerCleanup(input.session);
@@ -803,7 +816,17 @@ export class CodexBridge implements AgentBridge {
     try {
       const record = await this.options.storage.getSession(session);
       if (record?.lease_holder_connection_id) return;
-      await cleanupManagedCodexAppServer(session);
+      const result = await cleanupManagedCodexAppServer(session);
+      if (!result.ok) return;
+      const latest = await this.options.storage.getSession(session);
+      if (!latest || latest.status !== "active" || latest.lease_holder_connection_id) {
+        return;
+      }
+      await this.options.storage.endSessionIfUnchanged(
+        session,
+        sessionEndObservation(latest),
+        Date.now(),
+      );
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to cleanup Codex app-server for ${session}: ` +

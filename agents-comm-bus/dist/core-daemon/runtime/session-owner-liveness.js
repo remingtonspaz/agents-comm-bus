@@ -19,14 +19,16 @@ export function classifySessionOwnerProcess(session, options = {}) {
     const registeredAt = session.lease_owner_process_registered_at;
     if (pid == null || registeredAt == null)
         return "no_owner";
+    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    // TODO(AGE-55): process-start-time verification would close PID reuse inside
+    // the recency window; Node has no clean cross-platform built-in for it.
+    if (!isPidAlive(pid))
+        return "dead";
     const now = options.now ?? Date.now;
     const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
     if (now() - registeredAt > recencyMs)
         return "stale";
-    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
-    // TODO(AGE-55): process-start-time verification would close PID reuse inside
-    // the recency window; Node has no clean cross-platform built-in for it.
-    return isPidAlive(pid) ? "live" : "dead";
+    return "live";
 }
 /**
  * A session is live for label-scope precedence while it has a live connection

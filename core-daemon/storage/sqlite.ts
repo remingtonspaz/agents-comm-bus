@@ -16,6 +16,7 @@ import type {
   AccountTokenUpdateResult,
   PendingInboundDeliveryKey,
   PendingInboundDeliveryRow,
+  SessionEndObservation,
   SessionLeaseOwner,
   Storage,
 } from "agents-comm-bus-core/storage/storage";
@@ -747,6 +748,12 @@ export class SqliteStorage implements Storage {
           SET lease_holder_connection_id = ?,
               lease_acquired_at = ?,
               lease_released_at = NULL,
+              -- AGE-82: acquiring a lease revives the row. Registration is
+              -- upsert(active) + acquire, and the sweep can end the row in
+              -- between; without this a live lease would sit on an ended
+              -- row, invisible to every status='active' filter and outside
+              -- the partial live-lease indexes.
+              status = 'active',
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
               lease_owner_process_registered_at = ?,
@@ -815,6 +822,46 @@ export class SqliteStorage implements Storage {
         WHERE session_id = ? AND lease_holder_connection_id = ?
       `)
       .run(at, session, connection_id);
+  }
+
+  async endSessionIfUnchanged(
+    session: SessionId,
+    observed: SessionEndObservation,
+    at: number,
+  ): Promise<boolean> {
+    const result = this.db
+      .prepare(`
+        UPDATE sessions
+        SET status = 'ended',
+            lease_holder_connection_id = NULL,
+            lease_released_at = ?
+        WHERE session_id = ?
+          AND status = ?
+          AND (
+            (lease_holder_connection_id IS NULL AND ? IS NULL)
+            OR lease_holder_connection_id = ?
+          )
+          AND (
+            (lease_owner_process_pid IS NULL AND ? IS NULL)
+            OR lease_owner_process_pid = ?
+          )
+          AND (
+            (lease_owner_process_registered_at IS NULL AND ? IS NULL)
+            OR lease_owner_process_registered_at = ?
+          )
+      `)
+      .run(
+        at,
+        session,
+        observed.status,
+        observed.lease_holder_connection_id,
+        observed.lease_holder_connection_id,
+        observed.lease_owner_process_pid,
+        observed.lease_owner_process_pid,
+        observed.lease_owner_process_registered_at,
+        observed.lease_owner_process_registered_at,
+      ) as { changes?: number };
+    return Number(result.changes ?? 0) > 0;
   }
 
   async getSession(session: SessionId): Promise<Session | null> {

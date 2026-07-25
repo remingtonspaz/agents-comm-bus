@@ -31,6 +31,7 @@ import {
   filterRegistrationsForSession,
 } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
+import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import {
   createSessionOwnerLiveness,
   type SessionOwnerLiveness,
@@ -251,7 +252,18 @@ export class PiBridge implements AgentBridge {
     const sess = await this.options.storage.getSession(session);
     if (!sess) return { ok: true };
     this.assertCallerProjectMatchesStored(session, sess.project, params);
-    await this.options.storage.releaseSessionLease(session, connectionId, Date.now());
+    if (
+      sess.lease_holder_connection_id != null &&
+      sess.lease_holder_connection_id !== connectionId
+    ) {
+      return { ok: true };
+    }
+    // Terminal Pi unregister — CAS end preserves owner stamps for forensics.
+    await this.options.storage.endSessionIfUnchanged(
+      session,
+      sessionEndObservation(sess),
+      Date.now(),
+    );
     return { ok: true };
   }
 }

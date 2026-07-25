@@ -17,6 +17,7 @@ import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
+import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import { deliveryRowFromEntry, drainAndAcknowledgePendingInbound, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, selectPendingInboundForDrain, } from "./runtime/durable-inbound.js";
 import { filterRegistrationsByScope, } from "./session-label-scope.js";
@@ -362,6 +363,7 @@ export async function runDaemon(options) {
     };
     let pidWatchdogHandle = null;
     let idleReaperHandle = null;
+    let sessionEndSweepHandle = null;
     const runDaemonRetirement = async (reason, recordAudit) => {
         await retireDaemon({
             reason,
@@ -372,6 +374,7 @@ export async function runDaemon(options) {
             stopTimers: () => {
                 pidWatchdogHandle?.stop();
                 idleReaperHandle?.stop();
+                sessionEndSweepHandle?.stop();
             },
             stopBus: () => bestEffortWithTimeout(() => bus.stop(), 5_000, "stop comm adapters during daemon retirement"),
             closeIpc: () => bestEffortWithTimeout(() => server.close(), 1_000, "close IPC server during daemon retirement"),
@@ -398,6 +401,10 @@ export async function runDaemon(options) {
         retire: async () => {
             await runDaemonRetirement(IDLE_NO_OWNED_RESOURCES_REASON, true);
         },
+        log: (message) => console.error(message),
+    });
+    sessionEndSweepHandle = startSessionEndSweep({
+        storage,
         log: (message) => console.error(message),
     });
     // AGE-55: async boot restore — never block daemon readiness on comm bring-up.

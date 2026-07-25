@@ -381,6 +381,10 @@ class MemoryStorage implements Storage {
 
   async releaseSessionConnectionLeasePreservingOwner(): Promise<void> {}
 
+  async endSessionIfUnchanged(): Promise<boolean> {
+    return false;
+  }
+
   async setSessionMostRecentInbound(
     session: SessionId,
     conversation_id: ConversationId,

@@ -45,6 +45,7 @@ import type { IpcMethodHandler } from "./runtime/ipc-method.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
+import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { RetirementBlockerSnapshot } from "./runtime/agent-bridge.js";
 import {
@@ -471,6 +472,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
 
   let pidWatchdogHandle: ReturnType<typeof startDaemonPidWatchdog> | null = null;
   let idleReaperHandle: ReturnType<typeof startIdleReaper> | null = null;
+  let sessionEndSweepHandle: ReturnType<typeof startSessionEndSweep> | null = null;
 
   const runDaemonRetirement = async (reason: string, recordAudit: boolean): Promise<void> => {
     await retireDaemon({
@@ -482,6 +484,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       stopTimers: () => {
         pidWatchdogHandle?.stop();
         idleReaperHandle?.stop();
+        sessionEndSweepHandle?.stop();
       },
       stopBus: () =>
         bestEffortWithTimeout(
@@ -520,6 +523,11 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     retire: async () => {
       await runDaemonRetirement(IDLE_NO_OWNED_RESOURCES_REASON, true);
     },
+    log: (message) => console.error(message),
+  });
+
+  sessionEndSweepHandle = startSessionEndSweep({
+    storage,
     log: (message) => console.error(message),
   });
 

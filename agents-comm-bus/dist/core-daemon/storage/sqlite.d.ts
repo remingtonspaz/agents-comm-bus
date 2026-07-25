@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "agents-comm-bus-core";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
-import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionEndObservation, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -63,6 +63,7 @@ export declare class SqliteStorage implements Storage {
     acquireSessionLease(session: SessionId, connection_id: string, at: number, owner?: SessionLeaseOwner): Promise<boolean>;
     releaseSessionLease(session: SessionId, connection_id: string, at: number): Promise<void>;
     releaseSessionConnectionLeasePreservingOwner(session: SessionId, connection_id: string, at: number): Promise<void>;
+    endSessionIfUnchanged(session: SessionId, observed: SessionEndObservation, at: number): Promise<boolean>;
     getSession(session: SessionId): Promise<Session | null>;
     listSessions(filter?: {
         project?: string;

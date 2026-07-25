@@ -1,5 +1,5 @@
 export const DAEMON_NAME = "agents-comm-bus";
-export const DAEMON_VERSION = "0.2.40";
+export const DAEMON_VERSION = "0.2.41";
 export const IPC_PROTOCOL_VERSION = "1.2.0";
 export const IPC_HOST = "127.0.0.1";
 
