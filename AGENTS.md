@@ -290,6 +290,31 @@ In the shared multi-agent room, before acting on an imperative that wasn't
 addressed to you, draw an owner with the `figure-out-who-does-what` skill so
 eager agents don't collide on the same task.
 
+### Draw input contract: native message body only
+
+**Seed `--task` with the adapter-native message body and nothing else** — not
+the `[Daemon Inbound Messages]` envelope, the `<comm> message from <sender>:`
+relay line, the metadata, a paraphrase, or an imperative you extracted from a
+longer message. Each agent gets the same body inside a *different* host
+envelope, so the body is the only substring all agents can agree on. There is
+no extractor; identify the body yourself.
+
+The owner is a pure function of `(normalized text, roster, declines)`
+(`sha256` → first 8 hex → `(seed + declines) % N`), so one differing character
+reroutes the draw. On 2026-07-25 three draws diverged in one session because
+one agent seeded the body and the other its whole wrapper: `"execute AGE-81"`
+→ `bdb7791d` → `codex`, wrapped → `f0f8ddc6` → `claude`, same roster. The
+normalizer absorbs case/whitespace noise, never a different quotation.
+(Seeding on the platform message id was considered and rejected: quotation-proof
+but not portable off platform-backed rooms.)
+
+Publish an audit line with every draw — roster path + hash, task digest,
+declines, owner — so a digest mismatch is actionable immediately. If the body
+or roster can't be established, **fail closed**: stand down to the first claim
+rather than inventing an owner. The `CLAIM` → re-read → yield backstop is
+unchanged and remains the real guarantee; it caught all three divergences with
+zero duplicated work.
+
 ## Running the daemon
 
 The daemon is per-user, not per-project. It bootstraps lazily; any hook or
