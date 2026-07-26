@@ -6,6 +6,7 @@ param(
     [int]$KillPid = 0,
     [string]$ThreadId = $env:CODEX_THREAD_ID,
     [string]$AgentsCommLabels = $env:AGENTS_COMM_LABELS,
+    [string]$DevDaemonEnvSnapshotJson = "",
     [ValidateSet("powershell", "pwsh", "cmd")]
     [string]$AppServerTerminal = "powershell",
     [ValidateSet("auto", "cmd", "powershell", "pwsh", "bash")]
@@ -40,6 +41,176 @@ function Set-AgentsCommLabelsEnvironment {
         $env:AGENTS_COMM_LABELS = $Labels
     } else {
         Remove-Item Env:AGENTS_COMM_LABELS -ErrorAction SilentlyContinue
+    }
+}
+
+$script:DevDaemonEnvKeys = @(
+    "AGENTS_COMM_BUS_BIN",
+    "AGENTS_COMM_BUS_DISCOVERY_ROOT",
+    "AGENTS_COMM_BUS_ADAPTERS_DIR",
+    "AGENTS_COMM_BUS_ROOT"
+)
+
+# Must match EFFECTIVE_SNAPSHOT_SCHEMA in scripts/resolve-dev-daemon-env.mjs.
+$script:DevDaemonEnvSnapshotSchema = "agents-comm-bus/dev-daemon-env-effective@1"
+
+function Test-DevMarkerPresent {
+    param([string]$ProjectRoot)
+    return Test-Path -LiteralPath (Join-Path $ProjectRoot ".agents-comm-bus-dev.json")
+}
+
+function Get-DevDaemonEnvHelperPath {
+    param([string]$ProjectRoot)
+    $helperPath = Join-Path $ProjectRoot "scripts\resolve-dev-daemon-env.mjs"
+    if (Test-Path -LiteralPath $helperPath) {
+        return $helperPath
+    }
+    return $null
+}
+
+function Resolve-DevDaemonEnvSnapshot {
+    param([string]$ProjectRoot)
+
+    $markerPresent = Test-DevMarkerPresent -ProjectRoot $ProjectRoot
+    $helperPath = Get-DevDaemonEnvHelperPath -ProjectRoot $ProjectRoot
+
+    if ($markerPresent -and -not $helperPath) {
+        throw (
+            "Dev marker present at $(Join-Path $ProjectRoot '.agents-comm-bus-dev.json') " +
+            "but resolve-dev-daemon-env.mjs is missing under $(Join-Path $ProjectRoot 'scripts'). " +
+            "Refusing to continue with an ambiguous daemon selection."
+        )
+    }
+    if (-not $helperPath) {
+        return $null
+    }
+
+    $nodeExe = (Get-Command node -ErrorAction Stop).Source
+    $resolveLines = & $nodeExe $helperPath $ProjectRoot --effective 2>&1
+    $output = ($resolveLines | Out-String).Trim()
+    $parsed = $null
+    if (-not [string]::IsNullOrWhiteSpace($output)) {
+        try {
+            $parsed = $output | ConvertFrom-Json
+        } catch {
+            $parsed = $null
+        }
+    }
+    if ($null -ne $parsed -and $parsed.status -eq "rejected") {
+        $reasons = @($parsed.reasons) -join "; "
+        throw "Dev-config marker rejected: $reasons"
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Dev-config effective resolution failed (exit $LASTEXITCODE): $resolveLines"
+    }
+    if ($null -eq $parsed) {
+        throw "Dev-config effective resolution returned no JSON output"
+    }
+
+    Assert-DevDaemonEnvSnapshotShape -Snapshot $parsed -Source "resolve-dev-daemon-env.mjs in $ProjectRoot"
+    return $parsed
+}
+
+<#
+AGE-84: the helper is resolved from the PROJECT while this bootstrapper may be a
+newer INSTALLED plugin, so the two can skew. A pre-AGE-84 helper ignores
+--effective and returns marker-only string entries; reading `.present` off that
+yields null, every key looks absent, and the snapshot silently applies nothing —
+the exact silent split this issue removes. Validate the shape and fail loud.
+#>
+function Assert-DevDaemonEnvSnapshotShape {
+    param(
+        [AllowNull()]$Snapshot,
+        [string]$Source
+    )
+
+    if ($null -eq $Snapshot) {
+        throw "Dev-config effective snapshot missing (from $Source)."
+    }
+    if ($Snapshot.schema -ne $script:DevDaemonEnvSnapshotSchema) {
+        throw (
+            "Dev-config effective snapshot schema mismatch from ${Source}: " +
+            "expected '$($script:DevDaemonEnvSnapshotSchema)', got '$($Snapshot.schema)'. " +
+            "The project's resolve-dev-daemon-env.mjs is likely older than this bootstrapper. " +
+            "Refusing to continue with an ambiguous daemon selection."
+        )
+    }
+    foreach ($key in $script:DevDaemonEnvKeys) {
+        $entry = $Snapshot.env.$key
+        if ($null -eq $entry) {
+            throw "Dev-config effective snapshot from ${Source} is missing key ${key}."
+        }
+        if ($entry.present -isnot [bool]) {
+            throw "Dev-config effective snapshot from ${Source} has non-boolean 'present' for ${key}."
+        }
+        if ($entry.present) {
+            # [string]$entry.value would COERCE a number or object into a string,
+            # so a malformed cross-version payload would pass this trust boundary
+            # and install coerced garbage into the daemon-selection env. The
+            # declared contract is a non-empty string; enforce the type first.
+            if ($entry.value -isnot [string]) {
+                throw (
+                    "Dev-config effective snapshot from ${Source} has a non-string value for ${key} " +
+                    "(got $($entry.value.GetType().Name))."
+                )
+            }
+            if ([string]::IsNullOrWhiteSpace($entry.value)) {
+                throw "Dev-config effective snapshot from ${Source} marks ${key} present with an empty value."
+            }
+        }
+    }
+}
+
+function Get-DevDaemonEnvSnapshotScriptLines {
+    param(
+        [AllowNull()]$Snapshot,
+        [string]$Indent = ""
+    )
+
+    $lines = @()
+    if ($null -eq $Snapshot) {
+        return $lines
+    }
+
+    foreach ($key in $script:DevDaemonEnvKeys) {
+        $entry = $Snapshot.env.$key
+        # AGE-84: the snapshot is AUTHORITATIVE, not additive. `present:false`
+        # means the key was genuinely absent when the bootstrapper captured it,
+        # so it must be REMOVED downstream — otherwise a value the relay or
+        # wrapper process happens to inherit later (e.g. another project's
+        # discovery root) silently wins. Legitimate operator pins are unaffected:
+        # `--effective` captures them as present:true at capture time.
+        if ($null -eq $entry -or -not $entry.present) {
+            $lines += "${Indent}Remove-Item -Path ""Env:$key"" -ErrorAction SilentlyContinue"
+            continue
+        }
+        $literal = ConvertTo-SingleQuotedPowerShellLiteral ([string]$entry.value)
+        $lines += "${Indent}`$env:$key = $literal"
+        if ($Snapshot.status -eq "none") {
+            $lines += "${Indent}Write-Host ""Preserving inherited ${key}: $literal"""
+        }
+    }
+    return $lines
+}
+
+function Apply-DevDaemonEnvSnapshot {
+    param([AllowNull()]$Snapshot)
+
+    if ($null -eq $Snapshot) {
+        return
+    }
+
+    foreach ($key in $script:DevDaemonEnvKeys) {
+        $entry = $Snapshot.env.$key
+        # AGE-84: authoritative, not additive — see Get-DevDaemonEnvSnapshotScriptLines.
+        if ($null -eq $entry -or -not $entry.present) {
+            Remove-Item -Path "Env:$key" -ErrorAction SilentlyContinue
+            continue
+        }
+        Set-Item -Path "Env:$key" -Value ([string]$entry.value)
+        if ($Snapshot.status -eq "none") {
+            Write-Host "Preserving inherited ${key}: $([string]$entry.value)"
+        }
     }
 }
 
@@ -320,7 +491,8 @@ function New-AppServerWrapper {
         [string]$Command,
         [string]$PidFile,
         [string]$Thread,
-        [string]$Labels
+        [string]$Labels,
+        [AllowNull()]$DevDaemonEnvSnapshot = $null
     )
 
     $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("agents-comm-bus-codex-app-server-{0}.ps1" -f ([guid]::NewGuid().ToString("N")))
@@ -331,6 +503,12 @@ function New-AppServerWrapper {
     $pidFileLiteral = ConvertTo-SingleQuotedPowerShellLiteral $PidFile
     $threadLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Thread
     $labelsLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Labels
+    $devDaemonEnvLines = Get-DevDaemonEnvSnapshotScriptLines -Snapshot $DevDaemonEnvSnapshot
+    $devDaemonEnvBlock = if ($devDaemonEnvLines.Count -gt 0) {
+        ($devDaemonEnvLines -join [Environment]::NewLine) + [Environment]::NewLine
+    } else {
+        ""
+    }
 
     $content = @"
 `$ErrorActionPreference = "Stop"
@@ -343,6 +521,7 @@ if (-not [string]::IsNullOrWhiteSpace($labelsLiteral)) {
 } else {
     Remove-Item Env:AGENTS_COMM_LABELS -ErrorAction SilentlyContinue
 }
+$devDaemonEnvBlock
 if (-not [string]::IsNullOrWhiteSpace($threadLiteral)) {
     `$env:CODEX_THREAD_ID = $threadLiteral
 }
@@ -537,7 +716,8 @@ function New-RelayScripts {
         [string]$Command,
         [bool]$RunExec,
         [bool]$RunJson,
-        [bool]$StopPrevious
+        [bool]$StopPrevious,
+        [AllowNull()]$DevDaemonEnvSnapshot = $null
     )
 
     $id = [guid]::NewGuid().ToString("N")
@@ -552,10 +732,20 @@ function New-RelayScripts {
     # Always serialize AgentsCommLabels (even when empty) so the relay passes an explicit
     # unlabeled instruction instead of letting the downstream bootstrapper re-read ambient env.
     $labelsLiteral = ConvertTo-SingleQuotedPowerShellLiteral $Labels
+    $devDaemonEnvLines = Get-DevDaemonEnvSnapshotScriptLines -Snapshot $DevDaemonEnvSnapshot
+    $snapshotJsonLiteral = ""
+    if ($null -ne $DevDaemonEnvSnapshot) {
+        $snapshotJsonLiteral = ConvertTo-SingleQuotedPowerShellLiteral ($DevDaemonEnvSnapshot | ConvertTo-Json -Compress -Depth 6)
+    }
 
     $lines = @(
         '$ErrorActionPreference = "Stop"',
-        "Set-Location -LiteralPath $projectLiteral",
+        "Set-Location -LiteralPath $projectLiteral"
+    )
+    if ($devDaemonEnvLines.Count -gt 0) {
+        $lines += $devDaemonEnvLines
+    }
+    $lines += @(
         '$paramsForBootstrapper = @{}',
         ('$paramsForBootstrapper.ProjectDir = {0}' -f $projectLiteral),
         ('$paramsForBootstrapper.MinPort = {0}' -f $Min),
@@ -564,6 +754,9 @@ function New-RelayScripts {
         ('$paramsForBootstrapper.CodexCommand = {0}' -f $commandLiteral),
         ('$paramsForBootstrapper.AgentsCommLabels = {0}' -f $labelsLiteral)
     )
+    if (-not [string]::IsNullOrWhiteSpace($snapshotJsonLiteral)) {
+        $lines += ('$paramsForBootstrapper.DevDaemonEnvSnapshotJson = {0}' -f $snapshotJsonLiteral)
+    }
     if ($ChosenPort -gt 0) {
         $lines += ('$paramsForBootstrapper.Port = {0}' -f $ChosenPort)
     }
@@ -723,7 +916,8 @@ function Start-SameTerminalRestart {
         -Command $CodexCommand `
         -RunExec ([bool]$Exec) `
         -RunJson ([bool]$Json) `
-        -StopPrevious $true
+        -StopPrevious $true `
+        -DevDaemonEnvSnapshot $script:devDaemonEnvSnapshot
 
     $commandPath = if ($resolvedShell -eq "cmd") { $relays.cmd } else { $relays.ps1 }
     $batonPath = $null
@@ -778,6 +972,22 @@ if ($RestartBaton) {
 
 $resolvedProject = (Resolve-Path -LiteralPath $ProjectDir).Path
 
+if (-not [string]::IsNullOrWhiteSpace($DevDaemonEnvSnapshotJson)) {
+    $relayedSnapshot = $null
+    try {
+        $relayedSnapshot = ($DevDaemonEnvSnapshotJson | ConvertFrom-Json)
+    } catch {
+        throw "Relayed dev-config snapshot is not valid JSON: $($_.Exception.Message)"
+    }
+    # AGE-84: validate the relayed payload too — a relay written by an older
+    # bootstrapper carries the pre-schema shape, and silently applying nothing
+    # is exactly the failure this issue removes.
+    Assert-DevDaemonEnvSnapshotShape -Snapshot $relayedSnapshot -Source "relayed -DevDaemonEnvSnapshotJson"
+    $script:devDaemonEnvSnapshot = $relayedSnapshot
+} else {
+    $script:devDaemonEnvSnapshot = Resolve-DevDaemonEnvSnapshot -ProjectRoot $resolvedProject
+}
+
 if ($RestartCurrent -and $SameTerminal) {
     Start-SameTerminalRestart -ResolvedProject $resolvedProject
     exit 0
@@ -799,7 +1009,7 @@ if ($StopPreviousAppServer -and [string]::IsNullOrWhiteSpace($ThreadId)) {
 }
 
 $pidFile = Join-Path ([System.IO.Path]::GetTempPath()) ("agents-comm-bus-codex-app-server-{0}.pid" -f ([guid]::NewGuid().ToString("N")))
-$wrapper = New-AppServerWrapper -Project $resolvedProject -Url $appServerUrl -Session $sessionId -Command $CodexCommand -PidFile $pidFile -Thread $ThreadId -Labels $AgentsCommLabels
+$wrapper = New-AppServerWrapper -Project $resolvedProject -Url $appServerUrl -Session $sessionId -Command $CodexCommand -PidFile $pidFile -Thread $ThreadId -Labels $AgentsCommLabels -DevDaemonEnvSnapshot $script:devDaemonEnvSnapshot
 $terminalProcess = Start-AppServerTerminal -Terminal $AppServerTerminal -WrapperPath $wrapper
 $appServerPid = Wait-AppServerPid -PidFile $pidFile
 if ($null -eq $appServerPid) {
@@ -859,6 +1069,7 @@ if ($Exec) {
     $env:AGENTS_COMM_BUS_AGENT = "codex"
     $env:AGENTS_COMM_BUS_SESSION_ID = $sessionId
     Set-AgentsCommLabelsEnvironment -Labels $AgentsCommLabels
+    Apply-DevDaemonEnvSnapshot -Snapshot $script:devDaemonEnvSnapshot
     if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
         $env:CODEX_THREAD_ID = $ThreadId
     }
