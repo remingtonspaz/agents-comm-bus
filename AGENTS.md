@@ -275,8 +275,9 @@ run through: **file → delegate (cursor-agent in an isolated worktree) →
 cross-review (Claude↔Codex) → `--ff-only` merge → Linear/chat trail**. Full
 runbook: the `age-issue-pipeline` skill. Load-bearing invariants:
 
-- **File new issues to Backlog, never Todo** — promoting Backlog → Todo is a
-  human gate and must not be bypassed.
+- **Ask before filing an issue, and file to Backlog, never Todo** — filing is
+  the human's call, and promoting Backlog → Todo is a gate that must not be
+  bypassed.
 - **One isolated worktree per issue** (`D:\tmp\acb-ageNN`), never the shared
   checkout. Editing the shared checkout while a worktree is active is a recurring
   bug — restore and redo in the worktree.
