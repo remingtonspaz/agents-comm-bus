@@ -4,6 +4,18 @@
     "args": [
       "-e",
       "const fs=require('node:fs'); const os=require('node:os'); const path=require('node:path'); const {pathToFileURL}=require('node:url'); const home=process.env.CODEX_HOME||path.join(os.homedir(),'.codex'); const root=path.join(home,'plugins','cache','agents-comm-bus-codex','discord'); const versions=fs.existsSync(root)?fs.readdirSync(root,{withFileTypes:true}).filter((entry)=>entry.isDirectory()).map((entry)=>entry.name).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})):[]; const dir=versions.reverse().map((version)=>path.join(root,version)).find((candidate)=>fs.existsSync(path.join(candidate,'codex-mcp-shim.js'))); if(!dir){console.error('[acb-mcp] unable to locate installed discord plugin shim under '+root);process.exit(1);} import(pathToFileURL(path.join(dir,'codex-mcp-shim.js')).href).catch((error)=>{console.error(error);process.exit(1);});"
+    ],
+    "env_vars": [
+      "AGENTS_COMM_BUS_AGENT",
+      "AGENTS_COMM_BUS_SESSION_ID",
+      "AGENTS_COMM_LABELS",
+      "AGENTS_COMM_BUS_BIN",
+      "AGENTS_COMM_BUS_DISCOVERY_ROOT",
+      "AGENTS_COMM_BUS_ADAPTERS_DIR",
+      "AGENTS_COMM_BUS_ROOT",
+      "CODEX_APP_SERVER_URL",
+      "CODEX_THREAD_ID",
+      "CODEX_SESSION_ID"
     ]
   }
 }

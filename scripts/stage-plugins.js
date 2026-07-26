@@ -25,6 +25,7 @@ import { pathToFileURL } from "node:url";
 import { pipeline } from "node:stream/promises";
 
 import { buildInstallStamp } from "../hosts/common/install/install-stamp.js";
+import { CODEX_MCP_ENV_VAR_NAMES } from "../hosts/codex/mcp-env-vars.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const DEFAULT_OUTPUT_DIR = resolve(REPO_ROOT, "plugins");
@@ -592,6 +593,7 @@ async function stagePair(agent, comm) {
             shimName: bundledShimName,
           }),
         ],
+        env_vars: [...CODEX_MCP_ENV_VAR_NAMES],
       },
     };
     await writeJson(mcpJsonDst, mcp);

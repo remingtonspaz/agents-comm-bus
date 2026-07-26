@@ -11,6 +11,15 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
+import { formatTomlEnvVars } from './hosts/codex/mcp-env-vars.js';
+import {
+  assertCanonicalProjectEnvVars,
+  findTableRange,
+  hasProjectMcpDeclaration,
+  spliceLines,
+  syncProjectMcpEnvVars,
+} from './hosts/codex/install-codex-config.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -51,6 +60,7 @@ function formatBlock({ command, args }) {
     '[mcp_servers.telegram]',
     `command = ${JSON.stringify(command)}`,
     `args = [${argsToml}]`,
+    formatTomlEnvVars(),
   ].join('\n');
 }
 
@@ -103,36 +113,6 @@ function readConfig() {
 function readFileIfExists(filePath) {
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf-8');
-}
-
-function findTableRange(lines, header) {
-  const headerRe = new RegExp(`^\\s*\\[${header.replace(/\./g, '\\.')}\\]\\s*$`);
-  const anyHeaderRe = /^\s*\[[^\]]+\]\s*$/;
-  let start = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (headerRe.test(lines[i])) {
-      start = i;
-      break;
-    }
-  }
-  if (start === -1) return null;
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (anyHeaderRe.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  while (end > start + 1 && lines[end - 1].trim() === '') end -= 1;
-  return { start, end };
-}
-
-function spliceLines(lines, range, replacement) {
-  return [
-    ...lines.slice(0, range.start),
-    ...replacement.split('\n'),
-    ...lines.slice(range.end),
-  ];
 }
 
 function appendBlock(content, block) {
@@ -202,13 +182,29 @@ function installProjectHooks() {
   const existing = readFileIfExists(projectConfigPath);
   const withoutOldBlock = removeMarkedBlock(existing);
   const withFeatures = ensureHooksFeature(withoutOldBlock);
-  const next = appendBlock(withFeatures, hooksBlock());
+  const withHooks = appendBlock(withFeatures, hooksBlock());
+  const synced = syncProjectMcpEnvVars(withHooks);
+  const next = synced.content;
+  if (hasProjectMcpDeclaration(existing)) {
+    try {
+      assertCanonicalProjectEnvVars(next);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Cannot install Codex hooks without canonical MCP env_vars: ${detail} ` +
+        `Use a [mcp_servers.telegram] table instead of an inline declaration.`,
+      );
+    }
+  }
   if (normalizeConfig(existing) === normalizeConfig(next)) {
     console.log(`Codex hooks in ${projectConfigPath} are already up to date.`);
     return false;
   }
   writeFileEnsured(projectConfigPath, next);
   console.log(`installed Codex hooks in ${projectConfigPath}`);
+  if (synced.changed) {
+    console.log(`  synced canonical env_vars on existing [mcp_servers.telegram] override`);
+  }
   console.log(`  SessionStart = ${sessionStartHookPath}`);
   console.log(`  UserPromptSubmit = ${userPromptHookPath}`);
   console.log(`  PermissionRequest = ${permissionHookPath}`);
