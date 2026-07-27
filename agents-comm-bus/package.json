@@ -70,6 +70,10 @@
     "./host-entry": {
       "import": "./dist/core-daemon/host-entry.js",
       "types": "./dist/core-daemon/host-entry.d.ts"
+    },
+    "./session-label-scope": {
+      "import": "./dist/core-daemon/session-label-scope.js",
+      "types": "./dist/core-daemon/session-label-scope.d.ts"
     }
   },
   "scripts": {

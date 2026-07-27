@@ -18,7 +18,7 @@ import { registerCommTools } from "./tools.js";
 import {
   parseAgentsCommLabels,
   serializeAccountLabelScope,
-} from "../../../../../core-daemon/session-label-scope.js";
+} from "agents-comm-bus/session-label-scope";
 
 const POLL_INTERVAL_MS = 2_000;
 
