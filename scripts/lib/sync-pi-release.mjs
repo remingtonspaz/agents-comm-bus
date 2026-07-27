@@ -274,6 +274,25 @@ function digestContent(content) {
   return createHash("sha256").update(buf).digest("hex");
 }
 
+function canonicalTextBuffer(content) {
+  if (content.includes(0)) return null;
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(content);
+  } catch {
+    return null;
+  }
+  if (/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/u.test(text)) return null;
+  return Buffer.from(text.replace(/\r\n/g, "\n"), "utf8");
+}
+
+function releaseContentsEqual(expected, actual) {
+  if (actual.equals(expected)) return true;
+  const expectedText = canonicalTextBuffer(expected);
+  const actualText = canonicalTextBuffer(actual);
+  return expectedText !== null && actualText !== null && actualText.equals(expectedText);
+}
+
 /** List every non-.git file under destRoot (for no-git temp fixtures). */
 export async function listFilesystemFiles(destRoot) {
   const files = [];
@@ -348,7 +367,7 @@ export async function diffReleaseTree(expectedTree, destRoot, { enumeration = "a
     }
     const actual = await readFile(dest);
     const expectedBuf = Buffer.isBuffer(expected) ? expected : Buffer.from(expected);
-    if (!actual.equals(expectedBuf)) {
+    if (!releaseContentsEqual(expectedBuf, actual)) {
       mismatches.push({
         kind: "content",
         path: rel,

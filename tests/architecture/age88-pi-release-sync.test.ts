@@ -583,6 +583,34 @@ describe("AGE-88 Pi release sync guard", () => {
     assert.deepEqual(verify.mismatches, []);
   });
 
+  it("verify ignores checkout EOL conversion for text but keeps binary byte-exact", async () => {
+    const dest = await tempDir("acb-age88-eol-");
+    const expected = new Map<string, Buffer>([
+      ["text.txt", Buffer.from("first\nsecond\n", "utf8")],
+      ["binary.bin", Buffer.from([0x00, 0x0d, 0x0a, 0xff])],
+    ]);
+    await writeFile(path.join(dest, "text.txt"), "first\r\nsecond\r\n");
+    await writeFile(path.join(dest, "binary.bin"), expected.get("binary.bin")!);
+
+    let mismatches = await diffReleaseTree(expected, dest, { enumeration: "filesystem" });
+    assert.deepEqual(mismatches, [], "CRLF checkout text must equal canonical LF source");
+
+    await writeFile(path.join(dest, "text.txt"), "first\r\nchanged\r\n");
+    mismatches = await diffReleaseTree(expected, dest, { enumeration: "filesystem" });
+    assert.ok(
+      mismatches.some((m) => m.kind === "content" && m.path === "text.txt"),
+      "semantic text drift must remain visible after EOL normalization",
+    );
+
+    await writeFile(path.join(dest, "text.txt"), "first\r\nsecond\r\n");
+    await writeFile(path.join(dest, "binary.bin"), Buffer.from([0x00, 0x0a, 0xff]));
+    mismatches = await diffReleaseTree(expected, dest, { enumeration: "filesystem" });
+    assert.ok(
+      mismatches.some((m) => m.kind === "content" && m.path === "binary.bin"),
+      "binary CRLF-like bytes must not be normalized",
+    );
+  });
+
   it("verify fails visibly when a synced file is mutated or stale extras remain", async () => {
     const releaseDir = await tempDir("acb-age88-drift-");
     await syncAllReleases({
