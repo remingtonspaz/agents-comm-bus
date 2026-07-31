@@ -43,6 +43,7 @@ npm-debug.log*
 *.swo
 .env
 .env.*
+!.env.example
 
 tests/automated_e2e/
 
