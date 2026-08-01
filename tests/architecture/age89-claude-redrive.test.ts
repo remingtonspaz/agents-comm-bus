@@ -554,4 +554,71 @@ describe("AGE-89 Claude deliverability-edge redrive", () => {
       await storage.close();
     }
   });
+
+  it("redrives when a daemon restart leaves a live owner but no local wake route", async () => {
+    // Route-edge coverage (Codex review B2): the hasDaemonLocalWakeRoute half of
+    // isSessionLocallyDeliverable must be load-bearing. A restarted daemon has an
+    // empty in-memory wake registry; the preserved owner PID is still live. The
+    // false->true edge must come from route CREATION on re-registration, and a
+    // predicate without the route conjunct must turn this test red.
+    const dir = await makeTempDir("acb-age89-route-edge-");
+    const storage = await openSqliteStorage(join(dir, "storage.db"));
+    const wakeDir = join(dir, "wake-route");
+    const pendingInbound: PendingInboundEntry[] = [];
+    const livePid = 202;
+    const sessionOwnerIsLive: SessionOwnerLiveness = createSessionOwnerLiveness({
+      now: () => RECENT,
+      isPidAlive: () => true,
+    });
+    const triggerPath = join(wakeDir, "trigger-enter");
+    const makeBridge = () =>
+      new ClaudeBridge({
+        storage,
+        bus: {} as never,
+        pendingInbound,
+        ensureCommsForSession: async () => ({ rehydrated: true }),
+        sessionOwnerIsLive,
+      });
+
+    try {
+      // Pre-restart: session registers (empty queue, so no wake), then its hook
+      // socket closes — owner PID stamps are preserved, connection lease is not.
+      const socket = new FakeSocket();
+      await makeBridge().registerSession(
+        {
+          session: "claude-s1" as SessionId,
+          project: PROJECT,
+          connection_id: "claude:conn-1",
+          wake_dir: wakeDir,
+          owner_process_pid: livePid,
+        },
+        socket,
+      );
+      socket.close();
+      assert.equal(await triggerExists(triggerPath), false);
+
+      // Work arrives while the "daemon is down".
+      pendingInbound.push(
+        pendingEntry(TELEGRAM, String(BOT_TG), "conv-tg" as ConversationId, 4000),
+      );
+      await storage.putAccountRegistration(registration(TELEGRAM, String(BOT_TG)));
+      await storage.upsertConversation(pendingInbound[0].conversation);
+
+      // Post-restart: a fresh bridge has NO wake route for the session even
+      // though the owner PID is live. Re-registration must create the route,
+      // producing the deliverability edge that redrives the queued row.
+      await makeBridge().registerSession({
+        session: "claude-s1" as SessionId,
+        project: PROJECT,
+        connection_id: "claude:conn-2",
+        wake_dir: wakeDir,
+        owner_process_pid: livePid,
+      });
+
+      assert.equal(await triggerExists(triggerPath), true);
+      assert.equal(pendingInbound.length, 1); // redrive never drains
+    } finally {
+      await storage.close();
+    }
+  });
 });
