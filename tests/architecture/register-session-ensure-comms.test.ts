@@ -25,6 +25,7 @@ function recordingEnsureWithReadiness(
   const calls: EnsureCall[] = [];
   const fn: EnsureCommsForSession = async (project, agent) => {
     calls.push({ project, agent, bridgeReady: bridgeReady() });
+    return { rehydrated: true };
   };
   return { fn, calls };
 }

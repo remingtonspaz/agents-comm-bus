@@ -3,7 +3,7 @@
   "agent": "codex",
   "comm": "curl",
   "plugin_version": "0.1.10",
-  "daemon_bundle_version": "0.2.41",
+  "daemon_bundle_version": "0.2.42",
   "adapter_bundle_version": "0.1.2",
   "adapter_bundle_versions": {
     "curl": "0.1.2"

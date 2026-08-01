@@ -12,8 +12,9 @@ import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsForSession, } from "../../session-label-scope.js";
+import { accountLabelScopeFromParams, filterRegistrationsForSession, sessionOwnsConversation, } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
+import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 import { ClaudeOpenQueryTracker } from "./open-query-tracker.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
@@ -196,15 +197,62 @@ export class ClaudeBridge {
      * as a follow-up.
      */
     async ensureCommsBestEffort(project, accountLabelScope) {
+        const hook = this.options.ensureCommsForSession;
+        if (!hook)
+            return false;
         try {
-            await this.options.ensureCommsForSession?.(project, this.agentId, {
+            const result = await hook(project, this.agentId, {
                 accountLabelScope: accountLabelScope ?? null,
             });
+            return result.rehydrated;
         }
         catch (error) {
             console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
                 `${error instanceof Error ? error.message : String(error)}`);
+            return false;
         }
+    }
+    sessionHasWakeRoute(session) {
+        return this.wake.getForSession(session) !== undefined;
+    }
+    isLocallyDeliverable(session) {
+        return isSessionLocallyDeliverable(session, this.sessionHasWakeRoute(session.session_id), this.sessionOwnerIsLive);
+    }
+    /**
+     * AGE-89: after a deliverability edge with confirmed rehydration, wake once
+     * for the newest in-scope pending row. The agent drain consumes the queue;
+     * the daemon must never remove pendingInbound here (AGE-64).
+     */
+    async redrivePendingInboundCoalesced(sessionId) {
+        const sess = await this.options.storage.getSession(sessionId);
+        if (!sess)
+            return;
+        const [registrations, sessions] = await Promise.all([
+            this.options.storage.listAccountRegistrations({
+                project: sess.project,
+                agent: this.agentId,
+            }),
+            this.options.storage.listSessions({
+                project: sess.project,
+                agent: this.agentId,
+                status: "active",
+            }),
+        ]);
+        const scopedRegs = filterRegistrationsForSession(registrations, sess, sessions, this.sessionOwnerIsLive);
+        const ownedKeys = new Set(scopedRegs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+        const inScope = this.options.pendingInbound.filter((entry) => {
+            if (entry.conversation.project !== sess.project)
+                return false;
+            if (entry.conversation.agent !== this.agentId)
+                return false;
+            if (!ownedKeys.has(accountKey(entry)))
+                return false;
+            return sessionOwnsConversation(sess, sessions, entry.conversation, this.sessionOwnerIsLive);
+        });
+        if (inScope.length === 0)
+            return;
+        const seed = inScope.reduce((latest, entry) => entry.message.received_at > latest.message.received_at ? entry : latest);
+        await this.onInboundConversation(seed.conversation, seed.message);
     }
     async ownedAccountKeys(session) {
         // AGE-38: scope to the calling session's (project, agent), not agent-wide.
@@ -273,6 +321,10 @@ export class ClaudeBridge {
             account_label_scope: accountLabelScope,
             status: "active",
         });
+        const baselineSession = await this.options.storage.getSession(session);
+        const deliverabilityBaseline = baselineSession
+            ? this.isLocallyDeliverable(baselineSession)
+            : false;
         const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, this.options.daemonOwner
             ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
             : sessionLeaseOwnerFromParams(params));
@@ -290,7 +342,14 @@ export class ClaudeBridge {
             void this.options.storage.releaseSessionConnectionLeasePreservingOwner(session, connectionId, Date.now());
         });
         // AGE-38/AGE-45: after wake registration + close handler so inbound cannot race ahead.
-        await this.ensureCommsBestEffort(project, accountLabelScope);
+        const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+        const afterSession = await this.options.storage.getSession(session);
+        const deliverabilityAfter = afterSession
+            ? this.isLocallyDeliverable(afterSession)
+            : false;
+        if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+            await this.redrivePendingInboundCoalesced(session);
+        }
         return { ok: true, wake_dir: registration.wakeDir };
     }
     async drainInbound(params) {

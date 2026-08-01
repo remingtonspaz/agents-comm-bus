@@ -70,6 +70,7 @@ function recordingEnsure(
       agent,
       leaseHeld: sess?.lease_holder_connection_id === connectionId,
     });
+    return { rehydrated: true };
   };
   return { fn, calls };
 }
@@ -914,6 +915,7 @@ describe("AGE-59 Pi bridge connection-id replay", () => {
         storage,
         ensureCommsForSession: async (project, agent) => {
           calls.push({ project, agent });
+          return { rehydrated: true };
         },
         now: () => RECENT + DEFAULT_BOOT_RESTORE_RECENCY_MS / 2,
         isPidAlive: (pid) => pid === process.pid,

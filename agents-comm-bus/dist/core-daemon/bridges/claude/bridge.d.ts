@@ -107,6 +107,14 @@ export declare class ClaudeBridge implements AgentBridge {
      * as a follow-up.
      */
     private ensureCommsBestEffort;
+    private sessionHasWakeRoute;
+    private isLocallyDeliverable;
+    /**
+     * AGE-89: after a deliverability edge with confirmed rehydration, wake once
+     * for the newest in-scope pending row. The agent drain consumes the queue;
+     * the daemon must never remove pendingInbound here (AGE-64).
+     */
+    private redrivePendingInboundCoalesced;
     private ownedAccountKeys;
     registerSession(params: Record<string, unknown>, socket?: {
         once(event: "close", handler: () => void): void;

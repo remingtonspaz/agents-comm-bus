@@ -276,6 +276,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       project: canonicalProject,
       agent,
     });
+    return { rehydrated: true };
   };
   bridges.push(
     ...options.agentBridgeFactories.map((factory) =>

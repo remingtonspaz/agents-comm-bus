@@ -23,6 +23,12 @@ export type EnsureCommsForSessionOptions = {
   accountLabelScope?: string | null;
 };
 
+/** Outcome of the daemon ensure-comms path (AGE-89 rehydration signal). */
+export type EnsureCommsForSessionResult = {
+  /** True when durable pending-inbound rehydration completed for this scope. */
+  rehydrated: boolean;
+};
+
 /**
  * Lazily bring up the comm adapters a `(project, agent)` session needs, on
  * session entry. AGE-38: the daemon no longer eager-loads every registered bot
@@ -34,7 +40,7 @@ export type EnsureCommsForSession = (
   project: string,
   agent: AgentId,
   options?: EnsureCommsForSessionOptions,
-) => Promise<void>;
+) => Promise<EnsureCommsForSessionResult>;
 
 /** Resolved daemon self-identity; stamped onto sessions at lease acquire (AGE-58). */
 export interface DaemonSelfIdentity {

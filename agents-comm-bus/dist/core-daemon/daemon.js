@@ -181,6 +181,7 @@ export async function runDaemon(options) {
             project: canonicalProject,
             agent,
         });
+        return { rehydrated: true };
     };
     bridges.push(...options.agentBridgeFactories.map((factory) => factory.create({
         storage,

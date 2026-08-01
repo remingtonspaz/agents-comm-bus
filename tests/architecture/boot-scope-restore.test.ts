@@ -87,6 +87,7 @@ function recordingEnsure(): {
     calls,
     fn: async (project, agent) => {
       calls.push({ project, agent });
+      return { rehydrated: true };
     },
   };
 }

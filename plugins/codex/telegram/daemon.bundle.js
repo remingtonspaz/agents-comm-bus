@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.41";
+var DAEMON_VERSION = "0.2.42";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -7631,6 +7631,7 @@ async function runDaemon(options) {
       project: canonicalProject,
       agent
     });
+    return { rehydrated: true };
   };
   bridges.push(
     ...options.agentBridgeFactories.map(
@@ -8507,6 +8508,11 @@ function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
   };
 }
 
+// ../core-daemon/runtime/session-deliverability.ts
+function isSessionLocallyDeliverable(session, hasDaemonLocalWakeRoute, sessionOwnerIsLive) {
+  return hasDaemonLocalWakeRoute && sessionOwnerIsLive(session);
+}
+
 // ../core-daemon/bridges/claude/wake.ts
 import crypto2 from "node:crypto";
 import { mkdir as mkdir7, writeFile as writeFile2 } from "node:fs/promises";
@@ -8954,15 +8960,74 @@ var ClaudeBridge = class {
    * as a follow-up.
    */
   async ensureCommsBestEffort(project, accountLabelScope) {
+    const hook = this.options.ensureCommsForSession;
+    if (!hook) return false;
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId, {
+      const result = await hook(project, this.agentId, {
         accountLabelScope: accountLabelScope ?? null
       });
+      return result.rehydrated;
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
       );
+      return false;
     }
+  }
+  sessionHasWakeRoute(session) {
+    return this.wake.getForSession(session) !== void 0;
+  }
+  isLocallyDeliverable(session) {
+    return isSessionLocallyDeliverable(
+      session,
+      this.sessionHasWakeRoute(session.session_id),
+      this.sessionOwnerIsLive
+    );
+  }
+  /**
+   * AGE-89: after a deliverability edge with confirmed rehydration, wake once
+   * for the newest in-scope pending row. The agent drain consumes the queue;
+   * the daemon must never remove pendingInbound here (AGE-64).
+   */
+  async redrivePendingInboundCoalesced(sessionId) {
+    const sess = await this.options.storage.getSession(sessionId);
+    if (!sess) return;
+    const [registrations, sessions] = await Promise.all([
+      this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId
+      }),
+      this.options.storage.listSessions({
+        project: sess.project,
+        agent: this.agentId,
+        status: "active"
+      })
+    ]);
+    const scopedRegs = filterRegistrationsForSession(
+      registrations,
+      sess,
+      sessions,
+      this.sessionOwnerIsLive
+    );
+    const ownedKeys = new Set(
+      scopedRegs.map((reg) => `${reg.comm}:${reg.bot_user_id}`)
+    );
+    const inScope = this.options.pendingInbound.filter((entry) => {
+      if (entry.conversation.project !== sess.project) return false;
+      if (entry.conversation.agent !== this.agentId) return false;
+      if (!ownedKeys.has(accountKey(entry))) return false;
+      return sessionOwnsConversation(
+        sess,
+        sessions,
+        entry.conversation,
+        this.sessionOwnerIsLive
+      );
+    });
+    if (inScope.length === 0) return;
+    const seed = inScope.reduce(
+      (latest, entry) => entry.message.received_at > latest.message.received_at ? entry : latest
+    );
+    await this.onInboundConversation(seed.conversation, seed.message);
   }
   async ownedAccountKeys(session) {
     if (session) {
@@ -9024,6 +9089,8 @@ var ClaudeBridge = class {
       account_label_scope: accountLabelScope,
       status: "active"
     });
+    const baselineSession = await this.options.storage.getSession(session);
+    const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
     const acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
@@ -9047,7 +9114,12 @@ var ClaudeBridge = class {
         Date.now()
       );
     });
-    await this.ensureCommsBestEffort(project, accountLabelScope);
+    const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+    const afterSession = await this.options.storage.getSession(session);
+    const deliverabilityAfter = afterSession ? this.isLocallyDeliverable(afterSession) : false;
+    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+      await this.redrivePendingInboundCoalesced(session);
+    }
     return { ok: true, wake_dir: registration.wakeDir };
   }
   async drainInbound(params) {
