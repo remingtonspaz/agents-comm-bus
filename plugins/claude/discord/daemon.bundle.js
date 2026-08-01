@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.42";
+var DAEMON_VERSION = "0.2.43";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -10436,6 +10436,8 @@ var CodexBridge = class {
       account_label_scope: accountLabelScope,
       status: "active"
     });
+    const baselineSession = await this.options.storage.getSession(session);
+    const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
     const leaseOwner = this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams2(params, "codex"), this.options.daemonOwner) : sessionLeaseOwnerFromParams2(params, "codex");
     let acquired = await this.options.storage.acquireSessionLease(
@@ -10491,7 +10493,12 @@ var CodexBridge = class {
       this.adapter.setAppServerUrl(session, params.app_server_url);
     }
     this.trackSession(project, session, accountLabelScope);
-    await this.ensureCommsBestEffort(project, accountLabelScope);
+    const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+    const afterSession = await this.options.storage.getSession(session);
+    const deliverabilityAfter = afterSession ? this.isLocallyDeliverable(afterSession) : false;
+    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+      await this.redrivePendingInbound(session);
+    }
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle = params.manage_app_server_lifecycle === true || params.source === "mcp-server";
     const lease = {
@@ -10687,15 +10694,74 @@ var CodexBridge = class {
     this.waiters.delete(queryId);
   }
   async ensureCommsBestEffort(project, accountLabelScope) {
+    const hook = this.options.ensureCommsForSession;
+    if (!hook) return false;
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId, {
+      const result = await hook(project, this.agentId, {
         accountLabelScope: accountLabelScope ?? null
       });
+      return result.rehydrated;
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ${error instanceof Error ? error.message : String(error)}`
       );
+      return false;
     }
+  }
+  sessionHasRoute(sessionId) {
+    return this.sessionRoutes.has(sessionId);
+  }
+  isLocallyDeliverable(session) {
+    return isSessionLocallyDeliverable(
+      session,
+      this.sessionHasRoute(session.session_id),
+      this.sessionOwnerIsLive
+    );
+  }
+  /**
+   * AGE-90: after a deliverability edge with confirmed rehydration, wake once
+   * via the newest in-scope pending row. `pendingInboundForConversation`
+   * aggregates every owned-account entry in the project for one steer attempt.
+   */
+  async redrivePendingInbound(sessionId) {
+    const sess = await this.options.storage.getSession(sessionId);
+    if (!sess) return;
+    const [registrations, sessions] = await Promise.all([
+      this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId
+      }),
+      this.options.storage.listSessions({
+        project: sess.project,
+        agent: this.agentId,
+        status: "active"
+      })
+    ]);
+    const scopedRegs = filterRegistrationsForSession(
+      registrations,
+      sess,
+      sessions,
+      this.sessionOwnerIsLive
+    );
+    const ownedKeys = new Set(
+      scopedRegs.map((reg) => `${reg.comm}:${reg.bot_user_id}`)
+    );
+    const inScope = this.options.pendingInbound.filter((entry) => {
+      if (entry.conversation.project !== sess.project) return false;
+      if (entry.conversation.agent !== this.agentId) return false;
+      if (!ownedKeys.has(accountKey2(entry))) return false;
+      return sessionOwnsConversation(
+        sess,
+        sessions,
+        entry.conversation,
+        this.sessionOwnerIsLive
+      );
+    });
+    if (inScope.length === 0) return;
+    const seed = inScope.reduce(
+      (latest, entry) => entry.message.received_at > latest.message.received_at ? entry : latest
+    );
+    await this.onInboundConversation(seed.conversation);
   }
   trackSession(project, session, accountLabelScope) {
     this.sessionRoutes.set(session, {

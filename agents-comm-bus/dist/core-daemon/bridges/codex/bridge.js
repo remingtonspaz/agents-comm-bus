@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsForSession, resolveSessionForConversation, } from "../../session-label-scope.js";
+import { accountLabelScopeFromParams, filterRegistrationsForSession, resolveSessionForConversation, sessionOwnsConversation, } from "../../session-label-scope.js";
+import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { CodexAgentAdapter, codexDecisionFromResolution, codexHookDecision, } from "./adapter.js";
@@ -218,6 +219,10 @@ export class CodexBridge {
             account_label_scope: accountLabelScope,
             status: "active",
         });
+        const baselineSession = await this.options.storage.getSession(session);
+        const deliverabilityBaseline = baselineSession
+            ? this.isLocallyDeliverable(baselineSession)
+            : false;
         const replaceExistingLease = params.replace_existing_lease === true ||
             params.persist_after_disconnect === true;
         const leaseOwner = this.options.daemonOwner
@@ -260,7 +265,14 @@ export class CodexBridge {
         }
         this.trackSession(project, session, accountLabelScope);
         // AGE-38/AGE-45: after connect + trackSession so inbound cannot race ahead of setup.
-        await this.ensureCommsBestEffort(project, accountLabelScope);
+        const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+        const afterSession = await this.options.storage.getSession(session);
+        const deliverabilityAfter = afterSession
+            ? this.isLocallyDeliverable(afterSession)
+            : false;
+        if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+            await this.redrivePendingInbound(session);
+        }
         const persistAfterDisconnect = params.persist_after_disconnect === true;
         const manageAppServerLifecycle = params.manage_app_server_lifecycle === true ||
             params.source === "mcp-server";
@@ -451,15 +463,62 @@ export class CodexBridge {
         this.waiters.delete(queryId);
     }
     async ensureCommsBestEffort(project, accountLabelScope) {
+        const hook = this.options.ensureCommsForSession;
+        if (!hook)
+            return false;
         try {
-            await this.options.ensureCommsForSession?.(project, this.agentId, {
+            const result = await hook(project, this.agentId, {
                 accountLabelScope: accountLabelScope ?? null,
             });
+            return result.rehydrated;
         }
         catch (error) {
             console.error(`agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
                 `${error instanceof Error ? error.message : String(error)}`);
+            return false;
         }
+    }
+    sessionHasRoute(sessionId) {
+        return this.sessionRoutes.has(sessionId);
+    }
+    isLocallyDeliverable(session) {
+        return isSessionLocallyDeliverable(session, this.sessionHasRoute(session.session_id), this.sessionOwnerIsLive);
+    }
+    /**
+     * AGE-90: after a deliverability edge with confirmed rehydration, wake once
+     * via the newest in-scope pending row. `pendingInboundForConversation`
+     * aggregates every owned-account entry in the project for one steer attempt.
+     */
+    async redrivePendingInbound(sessionId) {
+        const sess = await this.options.storage.getSession(sessionId);
+        if (!sess)
+            return;
+        const [registrations, sessions] = await Promise.all([
+            this.options.storage.listAccountRegistrations({
+                project: sess.project,
+                agent: this.agentId,
+            }),
+            this.options.storage.listSessions({
+                project: sess.project,
+                agent: this.agentId,
+                status: "active",
+            }),
+        ]);
+        const scopedRegs = filterRegistrationsForSession(registrations, sess, sessions, this.sessionOwnerIsLive);
+        const ownedKeys = new Set(scopedRegs.map((reg) => `${reg.comm}:${reg.bot_user_id}`));
+        const inScope = this.options.pendingInbound.filter((entry) => {
+            if (entry.conversation.project !== sess.project)
+                return false;
+            if (entry.conversation.agent !== this.agentId)
+                return false;
+            if (!ownedKeys.has(accountKey(entry)))
+                return false;
+            return sessionOwnsConversation(sess, sessions, entry.conversation, this.sessionOwnerIsLive);
+        });
+        if (inScope.length === 0)
+            return;
+        const seed = inScope.reduce((latest, entry) => entry.message.received_at > latest.message.received_at ? entry : latest);
+        await this.onInboundConversation(seed.conversation);
     }
     trackSession(project, session, accountLabelScope) {
         this.sessionRoutes.set(session, {

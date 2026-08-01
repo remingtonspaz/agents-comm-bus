@@ -85,6 +85,14 @@ export declare class CodexBridge implements AgentBridge {
     private waitForResolution;
     private clearWaiter;
     private ensureCommsBestEffort;
+    private sessionHasRoute;
+    private isLocallyDeliverable;
+    /**
+     * AGE-90: after a deliverability edge with confirmed rehydration, wake once
+     * via the newest in-scope pending row. `pendingInboundForConversation`
+     * aggregates every owned-account entry in the project for one steer attempt.
+     */
+    private redrivePendingInbound;
     private trackSession;
     private untrackSession;
     private resolveSessionForConversation;

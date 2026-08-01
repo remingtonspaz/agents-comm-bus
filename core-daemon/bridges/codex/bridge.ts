@@ -23,7 +23,9 @@ import {
   accountLabelScopeFromParams,
   filterRegistrationsForSession,
   resolveSessionForConversation,
+  sessionOwnsConversation,
 } from "../../session-label-scope.js";
+import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import type { MessageBus } from "../../bus.js";
 import type {
@@ -358,6 +360,10 @@ export class CodexBridge implements AgentBridge {
       account_label_scope: accountLabelScope,
       status: "active",
     });
+    const baselineSession = await this.options.storage.getSession(session);
+    const deliverabilityBaseline = baselineSession
+      ? this.isLocallyDeliverable(baselineSession)
+      : false;
     const replaceExistingLease =
       params.replace_existing_lease === true ||
       params.persist_after_disconnect === true;
@@ -419,7 +425,14 @@ export class CodexBridge implements AgentBridge {
     }
     this.trackSession(project, session, accountLabelScope);
     // AGE-38/AGE-45: after connect + trackSession so inbound cannot race ahead of setup.
-    await this.ensureCommsBestEffort(project, accountLabelScope);
+    const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+    const afterSession = await this.options.storage.getSession(session);
+    const deliverabilityAfter = afterSession
+      ? this.isLocallyDeliverable(afterSession)
+      : false;
+    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+      await this.redrivePendingInbound(session);
+    }
 
     const persistAfterDisconnect = params.persist_after_disconnect === true;
     const manageAppServerLifecycle =
@@ -649,17 +662,84 @@ export class CodexBridge implements AgentBridge {
   private async ensureCommsBestEffort(
     project: string,
     accountLabelScope?: string | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const hook = this.options.ensureCommsForSession;
+    if (!hook) return false;
     try {
-      await this.options.ensureCommsForSession?.(project, this.agentId, {
+      const result = await hook(project, this.agentId, {
         accountLabelScope: accountLabelScope ?? null,
       });
+      return result.rehydrated;
     } catch (error) {
       console.error(
         `agents-comm-bus: ensureCommsForSession failed for ${project}/${this.agentId}: ` +
           `${error instanceof Error ? error.message : String(error)}`,
       );
+      return false;
     }
+  }
+
+  private sessionHasRoute(sessionId: SessionId): boolean {
+    return this.sessionRoutes.has(sessionId);
+  }
+
+  private isLocallyDeliverable(
+    session: Parameters<SessionOwnerLiveness>[0] & { session_id: SessionId },
+  ): boolean {
+    return isSessionLocallyDeliverable(
+      session,
+      this.sessionHasRoute(session.session_id),
+      this.sessionOwnerIsLive,
+    );
+  }
+
+  /**
+   * AGE-90: after a deliverability edge with confirmed rehydration, wake once
+   * via the newest in-scope pending row. `pendingInboundForConversation`
+   * aggregates every owned-account entry in the project for one steer attempt.
+   */
+  private async redrivePendingInbound(sessionId: SessionId): Promise<void> {
+    const sess = await this.options.storage.getSession(sessionId);
+    if (!sess) return;
+
+    const [registrations, sessions] = await Promise.all([
+      this.options.storage.listAccountRegistrations({
+        project: sess.project,
+        agent: this.agentId,
+      }),
+      this.options.storage.listSessions({
+        project: sess.project,
+        agent: this.agentId,
+        status: "active",
+      }),
+    ]);
+    const scopedRegs = filterRegistrationsForSession(
+      registrations,
+      sess,
+      sessions,
+      this.sessionOwnerIsLive,
+    );
+    const ownedKeys = new Set(
+      scopedRegs.map((reg) => `${reg.comm}:${reg.bot_user_id}`),
+    );
+
+    const inScope = this.options.pendingInbound.filter((entry) => {
+      if (entry.conversation.project !== sess.project) return false;
+      if (entry.conversation.agent !== this.agentId) return false;
+      if (!ownedKeys.has(accountKey(entry))) return false;
+      return sessionOwnsConversation(
+        sess,
+        sessions,
+        entry.conversation,
+        this.sessionOwnerIsLive,
+      );
+    });
+    if (inScope.length === 0) return;
+
+    const seed = inScope.reduce((latest, entry) =>
+      entry.message.received_at > latest.message.received_at ? entry : latest,
+    );
+    await this.onInboundConversation(seed.conversation);
   }
 
   private trackSession(
