@@ -35,6 +35,12 @@ run("npm --workspace packages/core-contracts run build");
 run("npm --workspace agents-comm-bus run build:all"); // tsc + copy-assets + bundles
 run("npm --workspace hosts run build"); // esbuilds the MCP shims into mcp-server/dist/
 run("node scripts/stage-plugins.js");
+// AGE-92: stage the Pi packages too. The status check below already watches all
+// of plugins/, but Pi files were never regenerated before it looked — so stale
+// Pi bundles were invisible to this gate (found the hard way in AGE-89 review).
+// Ordering is safe: build:all above produces dist-bundle/, and stage-pi-plugins
+// exits 1 (loud, not a silent no-op) if that input is ever missing.
+run("node scripts/stage-pi-plugins.js");
 
 const status = execSync(`git status --porcelain -- ${ARTIFACT_PATHS.join(" ")}`, {
   cwd: repoRoot,
@@ -47,8 +53,9 @@ if (status.trim()) {
       "These regenerated differently from what is committed — a source change landed\n" +
       "without rebuilding its bundle/staged output:\n\n" +
       status +
-      "\nFix: run the build + `node scripts/stage-plugins.js` and commit the regenerated\n" +
-      "artifacts (this is the 'rebundle mcp-server after touching the install path' rule).\n",
+      "\nFix: run the build + `node scripts/stage-plugins.js` +\n" +
+      "`node scripts/stage-pi-plugins.js` and commit the regenerated artifacts\n" +
+      "(this is the 'rebundle mcp-server after touching the install path' rule).\n",
   );
   process.exit(1);
 }
