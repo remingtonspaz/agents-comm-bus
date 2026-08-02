@@ -103,6 +103,9 @@ describe("Codex session owner liveness", () => {
           bus: {} as never,
           pendingInbound: [],
           isProcessAlive: () => false,
+          // This test exercises registration-time reclamation, not the periodic
+          // owner sweep. Keep the test-lifetime timer from outliving storage.
+          sessionOwnerCheckIntervalMs: 2_147_483_647,
         });
 
         const result = await bridge.registerSession({
