@@ -47,6 +47,18 @@ const CODEX = "codex" as AgentId;
 const PROJECT = normalizeProjectPath("/repo");
 const BOT = "12345" as AccountId;
 const CODEX_BOT = "67890" as AccountId;
+/** Node setInterval cap — these tests do not exercise owner sweeping. */
+const DISABLED_OWNER_CHECK_INTERVAL_MS = 2_147_483_647;
+
+function makeCodexBridge(
+  options: ConstructorParameters<typeof CodexBridge>[0],
+): CodexBridge {
+  return new CodexBridge({
+    ...options,
+    // Avoid teardown-racing background owner checks against closed storage.
+    sessionOwnerCheckIntervalMs: DISABLED_OWNER_CHECK_INTERVAL_MS,
+  });
+}
 
 async function withFixture<T>(
   test: (ctx: FixtureContext) => Promise<T>,
@@ -359,7 +371,7 @@ describe("AGE-56 durable inbound delivery", () => {
       await ctx.storage.recordPendingInboundDelivery(deliveryRowFromEntry(entry, 1000));
 
       const pendingInbound = [entry];
-      const bridge = new CodexBridge({
+      const bridge = makeCodexBridge({
         storage: ctx.storage,
         bus: {} as never,
         audit: ctx.audit,
@@ -407,7 +419,7 @@ describe("AGE-56 durable inbound delivery", () => {
         deliveryRowFromEntry(pendingInbound[0], 1000),
       );
 
-      const bridge = new CodexBridge({
+      const bridge = makeCodexBridge({
         storage: ctx.storage,
         bus: {} as never,
         audit: ctx.audit,

@@ -1,8 +1,8 @@
 export declare const DAEMON_NAME = "agents-comm-bus";
-export declare const DAEMON_VERSION = "0.2.43";
+export declare const DAEMON_VERSION = "0.2.44";
 export declare const IPC_PROTOCOL_VERSION = "1.2.0";
 export declare const IPC_HOST = "127.0.0.1";
-export declare const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5000;
+export declare const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 20000;
 export declare const DEFAULT_BOOTSTRAP_RETRY_MS = 50;
 /** Grace beyond a caller bootstrap timeout before a spawn lock is treated as stale. */
 export declare const DEFAULT_SPAWN_LOCK_STALE_GRACE_MS = 2000;

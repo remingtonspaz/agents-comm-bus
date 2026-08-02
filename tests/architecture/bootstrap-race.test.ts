@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { ensureDaemon, writeDaemonDiscoveryFiles } from "../../core-daemon/bootstrap/ensure-daemon.js";
+import { ensureDaemon, daemonStderrLogPath, writeDaemonDiscoveryFiles } from "../../core-daemon/bootstrap/ensure-daemon.js";
 import {
   defaultSpawnLockStaleTimeoutMs,
   isSpawnLockStale,
@@ -14,7 +14,7 @@ import {
   removeStaleSpawnLock,
   tryAcquireSpawnLock,
 } from "../../core-daemon/bootstrap/spawn-lock.js";
-import { DEFAULT_SPAWN_LOCK_STALE_GRACE_MS } from "../../core-daemon/config.js";
+import { DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_SPAWN_LOCK_STALE_GRACE_MS } from "../../core-daemon/config.js";
 import { DAEMON_VERSION, IPC_PROTOCOL_VERSION } from "../../core-daemon/config.js";
 import {
   resolveConversationPaths,
@@ -35,6 +35,10 @@ function daemonHello(): DaemonHello {
 
 async function tempStateRoot(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "agents-comm-bus-test-"));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 describe("agents-comm-bus path layout", () => {
@@ -88,6 +92,88 @@ describe("agents-comm-bus path layout", () => {
 });
 
 describe("ensureDaemon", () => {
+  it("default bootstrap timeout allows realistic cold-start budget", () => {
+    assert.ok(DEFAULT_BOOTSTRAP_TIMEOUT_MS >= 20_000);
+  });
+
+  it("timeout error includes daemon stderr log path and bounded tail", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    const oldPrefix = "UNIQUE-START-MARKER-ONLY-AT-FILE-START\n" + "filler-line\n".repeat(600);
+    const recentLine = "RECENT-DAEMON-ERROR-LINE";
+    await writeFile(daemonStderrLogPath(stateRoot), `${oldPrefix}${recentLine}\n`, "utf8");
+
+    await assert.rejects(
+      ensureDaemon({
+        stateRoot,
+        probeDaemon: async () => {
+          throw new Error("daemon not ready");
+        },
+        spawnDaemon: async () => {},
+        timeoutMs: 50,
+        retryMs: 5,
+      }),
+      (err: Error) => {
+        assert.match(err.message, /Timed out starting agents-comm-bus daemon/);
+        assert.match(err.message, new RegExp(escapeRegExp(daemonStderrLogPath(stateRoot))));
+        assert.match(err.message, /RECENT-DAEMON-ERROR-LINE/);
+        assert.doesNotMatch(err.message, /UNIQUE-START-MARKER-ONLY-AT-FILE-START/);
+        return true;
+      },
+    );
+  });
+
+  it("timeout error survives missing stderr log", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+
+    await assert.rejects(
+      ensureDaemon({
+        stateRoot,
+        probeDaemon: async () => {
+          throw new Error("daemon not ready");
+        },
+        spawnDaemon: async () => {},
+        timeoutMs: 50,
+        retryMs: 5,
+      }),
+      (err: Error) => {
+        assert.match(err.message, /Timed out starting agents-comm-bus daemon/);
+        assert.match(err.message, new RegExp(escapeRegExp(daemonStderrLogPath(stateRoot))));
+        assert.match(err.message, /log unavailable/);
+        return true;
+      },
+    );
+  });
+
+  it("timeout error reports empty stderr log", async () => {
+    const stateRoot = await tempStateRoot();
+    const paths = resolveStatePaths({ stateRoot });
+    await mkdir(paths.root, { recursive: true });
+    await writeFile(daemonStderrLogPath(stateRoot), "", "utf8");
+
+    await assert.rejects(
+      ensureDaemon({
+        stateRoot,
+        probeDaemon: async () => {
+          throw new Error("daemon not ready");
+        },
+        spawnDaemon: async () => {},
+        timeoutMs: 50,
+        retryMs: 5,
+      }),
+      (err: Error) => {
+        assert.match(err.message, /Timed out starting agents-comm-bus daemon/);
+        assert.match(err.message, new RegExp(escapeRegExp(daemonStderrLogPath(stateRoot))));
+        assert.match(err.message, /log empty/);
+        assert.doesNotMatch(err.message, /--- recent stderr/);
+        return true;
+      },
+    );
+  });
+
   it("converges concurrent callers on one spawned daemon", async () => {
     const stateRoot = await tempStateRoot();
     let spawnCount = 0;

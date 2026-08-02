@@ -33,6 +33,8 @@ function recordingEnsureWithReadiness(
 registerTempDirCleanup();
 
 const PROJECT_A = normalizeProjectPath("project-a");
+/** Node setInterval cap — these tests do not exercise owner sweeping. */
+const DISABLED_OWNER_CHECK_INTERVAL_MS = 2_147_483_647;
 
 describe("AGE-45 register-session ensureCommsForSession refresh", () => {
   it("Codex acquired lease calls ensure after connect/trackSession and preserves response shape", async () => {
@@ -51,6 +53,8 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       bus: {} as never,
       pendingInbound: [],
       ensureCommsForSession,
+      // Avoid teardown-racing background owner checks against closed storage.
+      sessionOwnerCheckIntervalMs: DISABLED_OWNER_CHECK_INTERVAL_MS,
     });
     try {
       const result = await bridge.registerSession({
@@ -84,6 +88,8 @@ describe("AGE-45 register-session ensureCommsForSession refresh", () => {
       bus: {} as never,
       pendingInbound: [],
       ensureCommsForSession,
+      // Avoid teardown-racing background owner checks against closed storage.
+      sessionOwnerCheckIntervalMs: DISABLED_OWNER_CHECK_INTERVAL_MS,
     });
     try {
       const first = await bridge.registerSession({

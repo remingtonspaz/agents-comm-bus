@@ -3174,7 +3174,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open4() {
+          ws.once("open", function open5() {
             duplex._final(callback);
           });
           return;
@@ -3195,7 +3195,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open4() {
+          ws.once("open", function open5() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.43";
+var DAEMON_VERSION = "0.2.44";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4479,7 +4479,7 @@ async function handleRequest(socket, data, onRequest) {
 }
 
 // ../core-daemon/bootstrap/ensure-daemon.ts
-import { mkdir as mkdir3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
+import { mkdir as mkdir3, open as open3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 
 // ../core-daemon/storage/audit.ts
 import { mkdir as mkdir2 } from "node:fs/promises";
@@ -5628,20 +5628,20 @@ var MessageBus = class {
   }
   async tryResolveOpenQuery(conversation, message) {
     if (!message.text) return false;
-    const open4 = await this.options.storage.listOpenQueriesByConversation(
+    const open5 = await this.options.storage.listOpenQueriesByConversation(
       conversation.conversation_id
     );
-    if (open4.length === 0) return false;
+    if (open5.length === 0) return false;
     const chat = chatRefFromConversation(conversation);
     if (message.reply_to) {
-      const target = open4.find((q) => q.source_message_id === message.reply_to);
+      const target = open5.find((q) => q.source_message_id === message.reply_to);
       if (target) {
         const decision = decisionFromMessage(target, message, chat, this.now());
         if (!decision) return false;
         return this.resolveQuery(target.query_id, decision);
       }
     }
-    const candidates = open4.map((q) => ({
+    const candidates = open5.map((q) => ({
       query: q,
       decision: decisionFromMessage(q, message, chat, this.now())
     })).filter((entry) => entry.decision !== null);
@@ -5736,17 +5736,17 @@ var MessageBus = class {
     return resolved;
   }
   async resolveQueryFromCallback(input) {
-    const open4 = await this.options.storage.getOpenQueryById(input.queryId);
-    if (!open4) {
+    const open5 = await this.options.storage.getOpenQueryById(input.queryId);
+    if (!open5) {
       const existing = await this.options.storage.getQuery(input.queryId);
       return { kind: existing ? "already_resolved" : "unknown_query" };
     }
     if (input.value === "other") {
       const ok = await this.options.storage.updateQueryKind(input.queryId, "freetext");
       if (!ok) return { kind: "already_resolved" };
-      return { kind: "awaiting_freetext", query: open4 };
+      return { kind: "awaiting_freetext", query: open5 };
     }
-    const decision = decisionFromCallbackValue(open4, input.value, input.fromId, input.chat, this.now());
+    const decision = decisionFromCallbackValue(open5, input.value, input.fromId, input.chat, this.now());
     if (!decision) return { kind: "invalid_value", value: input.value };
     const stored = await this.options.storage.resolveQuery(
       input.queryId,
@@ -5761,12 +5761,12 @@ var MessageBus = class {
     await this.options.audit.append({
       timestamp: this.now(),
       kind: "query_resolved",
-      agent: open4.agent,
-      session: open4.session,
+      agent: open5.agent,
+      session: open5.session,
       detail: { query_id: input.queryId, decision: decision.decision, via: "callback" }
     });
-    await this.notifyResolveSinks(open4, decision, input.queryId);
-    return { kind: "resolved", decision, query: open4 };
+    await this.notifyResolveSinks(open5, decision, input.queryId);
+    return { kind: "resolved", decision, query: open5 };
   }
   async listConversations(filter) {
     return this.options.storage.listConversations({
@@ -7056,7 +7056,7 @@ var JsonlTranscriptStore = class {
 // ../core-daemon/storage/blobs.ts
 import { createHash } from "node:crypto";
 import { createReadStream as createReadStream2 } from "node:fs";
-import { mkdir as mkdir5, open as open3, stat as stat3 } from "node:fs/promises";
+import { mkdir as mkdir5, open as open4, stat as stat3 } from "node:fs/promises";
 import { join as join5 } from "node:path";
 import { Readable } from "node:stream";
 var ContentAddressedBlobStore = class {
@@ -7071,7 +7071,7 @@ var ContentAddressedBlobStore = class {
     await mkdir5(join5(this.root, "blobs", hash.slice(0, 2)), { recursive: true });
     let handle;
     try {
-      handle = await open3(path8, "wx");
+      handle = await open4(path8, "wx");
       await handle.writeFile(content);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;

@@ -3174,7 +3174,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open3() {
+          ws.once("open", function open4() {
             duplex._final(callback);
           });
           return;
@@ -3195,7 +3195,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open3() {
+          ws.once("open", function open4() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -3658,7 +3658,7 @@ import path10 from "node:path";
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { mkdir as mkdir3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
+import { mkdir as mkdir3, open as open3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 import path4 from "node:path";
 
 // dist/core-daemon/storage/audit.js
@@ -3699,10 +3699,10 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.43";
+var DAEMON_VERSION = "0.2.44";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
-var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 5e3;
+var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
 var DEFAULT_SPAWN_LOCK_STALE_GRACE_MS = 2e3;
 function protocolMajor(version) {
@@ -4167,7 +4167,46 @@ async function ensureDaemon(options = {}) {
     });
     await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
   }
-  throw new Error(`Timed out starting agents-comm-bus daemon under ${discoveryPaths.root}.`);
+  return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root);
+}
+var DAEMON_STDERR_LOG_TAIL_MAX_BYTES = 4096;
+async function readBoundedDaemonStderrTail(stateRoot2) {
+  const logPath = daemonStderrLogPath(stateRoot2);
+  let handle;
+  try {
+    handle = await open3(logPath, "r");
+    const fileStat = await handle.stat();
+    if (fileStat.size === 0)
+      return "";
+    const readStart = Math.max(0, fileStat.size - DAEMON_STDERR_LOG_TAIL_MAX_BYTES);
+    const readLength = fileStat.size - readStart;
+    const buffer = Buffer.alloc(readLength);
+    const { bytesRead } = await handle.read(buffer, 0, readLength, readStart);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {
+    });
+  }
+}
+async function throwDaemonBootstrapTimeoutError(discoveryRoot2, stateRoot2) {
+  const logPath = daemonStderrLogPath(stateRoot2);
+  let message = `Timed out starting agents-comm-bus daemon under ${discoveryRoot2}.`;
+  message += `
+Daemon stderr log: ${logPath}`;
+  const tail = await readBoundedDaemonStderrTail(stateRoot2);
+  if (tail === null) {
+    message += " (log unavailable)";
+  } else if (tail.length === 0) {
+    message += " (log empty)";
+  } else {
+    message += `
+--- recent stderr (last ${DAEMON_STDERR_LOG_TAIL_MAX_BYTES} bytes) ---
+${tail}
+--- end stderr ---`;
+  }
+  throw new Error(message);
 }
 function classifyDaemonReuse(daemonProtocol, clientProtocol) {
   if (isProtocolCompatible(daemonProtocol, clientProtocol))

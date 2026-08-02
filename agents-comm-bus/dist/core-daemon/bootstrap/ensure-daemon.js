@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { JsonlAuditStore } from "../storage/audit.js";
 import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_MS, IPC_PROTOCOL_VERSION, isProtocolCompatible, protocolMajor, } from "../config.js";
@@ -115,7 +115,45 @@ export async function ensureDaemon(options = {}) {
         });
         await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
     }
-    throw new Error(`Timed out starting agents-comm-bus daemon under ${discoveryPaths.root}.`);
+    return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root);
+}
+const DAEMON_STDERR_LOG_TAIL_MAX_BYTES = 4_096;
+async function readBoundedDaemonStderrTail(stateRoot) {
+    const logPath = daemonStderrLogPath(stateRoot);
+    let handle;
+    try {
+        handle = await open(logPath, "r");
+        const fileStat = await handle.stat();
+        if (fileStat.size === 0)
+            return "";
+        const readStart = Math.max(0, fileStat.size - DAEMON_STDERR_LOG_TAIL_MAX_BYTES);
+        const readLength = fileStat.size - readStart;
+        const buffer = Buffer.alloc(readLength);
+        const { bytesRead } = await handle.read(buffer, 0, readLength, readStart);
+        return buffer.subarray(0, bytesRead).toString("utf8");
+    }
+    catch {
+        return null;
+    }
+    finally {
+        await handle?.close().catch(() => { });
+    }
+}
+async function throwDaemonBootstrapTimeoutError(discoveryRoot, stateRoot) {
+    const logPath = daemonStderrLogPath(stateRoot);
+    let message = `Timed out starting agents-comm-bus daemon under ${discoveryRoot}.`;
+    message += `\nDaemon stderr log: ${logPath}`;
+    const tail = await readBoundedDaemonStderrTail(stateRoot);
+    if (tail === null) {
+        message += " (log unavailable)";
+    }
+    else if (tail.length === 0) {
+        message += " (log empty)";
+    }
+    else {
+        message += `\n--- recent stderr (last ${DAEMON_STDERR_LOG_TAIL_MAX_BYTES} bytes) ---\n${tail}\n--- end stderr ---`;
+    }
+    throw new Error(message);
 }
 /**
  * Classify a running daemon's IPC protocol against this client's, for the reuse
