@@ -37,9 +37,9 @@ import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import type {
   AgentBridge,
   AgentBridgeFactory,
+  DaemonSelfIdentity,
   EnsureCommsForSession,
 } from "./runtime/agent-bridge.js";
-import type { DaemonSelfIdentity } from "./runtime/agent-bridge.js";
 import type { SessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import type { CredentialResolution } from "./runtime/credential-resolution.js";
@@ -220,12 +220,12 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // the IPC server doesn't start until further below, by which point `bridges`
   // is fully populated.
   const daemonSelfIdentity: DaemonSelfIdentity = {
-  discoveryRoot: discoveryPaths.root,
-  checkoutRoot,
-  stateRoot: paths.root,
-  daemonBin,
-  authorityRank,
-          };
+    discoveryRoot: discoveryPaths.root,
+    checkoutRoot,
+    stateRoot: paths.root,
+    daemonBin,
+    authorityRank,
+  };
 
   const bridges: AgentBridge[] = [];
   const inFlightAdapters = new Set<string>();

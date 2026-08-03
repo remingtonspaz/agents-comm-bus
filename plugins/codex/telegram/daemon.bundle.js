@@ -4501,28 +4501,22 @@ function resolveSessionForConversationDetailed(sessions, conversation, sessionOw
   return { resolution: "cold", candidates: [] };
 }
 function normalizeDaemonRoot(value) {
-  return (value ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  return value ? normalizeDaemonRootPath(value) : "";
 }
 async function handleInspectInboundTarget(params, deps) {
-  const conversation = await resolveConversation(params, deps.storage);
-  if (!conversation) {
+  const target = await resolveTarget(params, deps.storage);
+  if (!target) {
     return { resolution: "not_found", locally_deliverable: false };
   }
-  const registration = {
-    project: conversation.project,
-    agent: conversation.agent,
-    comm: conversation.comm,
-    account: conversation.bot_user_id,
-    account_label: conversation.account_label
-  };
+  const registration = target;
   const sessions = await deps.storage.listSessions({
-    project: conversation.project,
-    agent: conversation.agent,
+    project: target.project,
+    agent: target.agent,
     status: "active"
   });
   const detailed = resolveSessionForConversationDetailed(
     sessions,
-    { comm: conversation.comm, account_label: conversation.account_label },
+    { comm: target.comm, account_label: target.account_label },
     deps.sessionOwnerIsLive
   );
   if (detailed.resolution !== "resolved" || !detailed.session) {
@@ -4533,14 +4527,18 @@ async function handleInspectInboundTarget(params, deps) {
       locally_deliverable: false,
       // Diagnostic only, and only for `ambiguous`. A caller that branches on
       // these is doing routing, and routing is daemon-owned.
-      candidate_sessions: detailed.candidates.map((c) => ({
-        session_id: c.session_id,
-        account_label_scope: c.account_label_scope
-      }))
+      ...detailed.resolution === "ambiguous" ? {
+        // Diagnostic only, and ONLY for ambiguous. A caller that branches
+        // on candidates is doing routing, and routing is daemon-owned.
+        candidate_sessions: detailed.candidates.map((c) => ({
+          session_id: c.session_id,
+          account_label_scope: c.account_label_scope
+        }))
+      } : {}
     };
   }
   const session = detailed.session;
-  const bridge = deps.bridges.find((b) => b.agentId === conversation.agent);
+  const bridge = deps.bridges.find((b) => b.agentId === target.agent);
   const ownerDaemonMatches = normalizeDaemonRoot(session.lease_owner_daemon_discovery_root) === normalizeDaemonRoot(deps.daemonOwner.discoveryRoot);
   const routeReady = ownerDaemonMatches && bridge?.routeReady !== void 0 ? bridge.routeReady(session.session_id) : false;
   return {
@@ -4562,20 +4560,36 @@ async function handleInspectInboundTarget(params, deps) {
       session,
       routeReady,
       deps.sessionOwnerIsLive
-    ),
-    candidate_sessions: []
+    )
   };
 }
-async function resolveConversation(params, storage) {
+async function resolveTarget(params, storage) {
   const conversationId = params.conversation_id;
   if (typeof conversationId === "string" && conversationId.length > 0) {
-    return await storage.getConversation(conversationId) ?? void 0;
+    const conv = await storage.getConversation(conversationId);
+    if (!conv) return void 0;
+    return {
+      project: conv.project,
+      agent: conv.agent,
+      comm: conv.comm,
+      // Legacy rows may predate bot-id backfill; report the empty string rather
+      // than null so the target shape stays uniform across both lookups.
+      account: conv.bot_user_id ?? "",
+      account_label: conv.account_label
+    };
   }
   const comm = params.comm;
   const account = params.account;
   if (typeof comm !== "string" || typeof account !== "string") return void 0;
-  const all = await storage.listConversations({ comm, limit: 1e3 });
-  return all.find((c) => c.bot_user_id === account);
+  const reg = await storage.getAccountByBot(comm, account);
+  if (!reg) return void 0;
+  return {
+    project: reg.project,
+    agent: reg.agent,
+    comm: reg.comm,
+    account: reg.bot_user_id,
+    account_label: reg.account_label
+  };
 }
 
 // ../node_modules/ws/wrapper.mjs

@@ -16,6 +16,7 @@
  */
 import { classifySessionOwnerProcess } from "./session-owner-liveness.js";
 import { isSessionLocallyDeliverable } from "./session-deliverability.js";
+import { normalizeDaemonRootPath } from "../paths.js";
 import { registrationMatchesConversationScope } from "../session-label-scope.js";
 /**
  * Resolve a conversation to at most one session, preserving ambiguity instead
@@ -47,29 +48,25 @@ export function resolveSessionForConversationDetailed(sessions, conversation, se
     return { resolution: "cold", candidates: [] };
 }
 function normalizeDaemonRoot(value) {
-    return (value ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+    // AGE-58 canonicalization — do NOT hand-roll slash/case trimming here: it
+    // mishandles ".." segments, so an equivalent root reads as foreign.
+    return value ? normalizeDaemonRootPath(value) : "";
 }
 /**
  * Read-only. Performs no writes, no CAS, and no lease mutation.
  */
 export async function handleInspectInboundTarget(params, deps) {
-    const conversation = await resolveConversation(params, deps.storage);
-    if (!conversation) {
+    const target = await resolveTarget(params, deps.storage);
+    if (!target) {
         return { resolution: "not_found", locally_deliverable: false };
     }
-    const registration = {
-        project: conversation.project,
-        agent: conversation.agent,
-        comm: conversation.comm,
-        account: conversation.bot_user_id,
-        account_label: conversation.account_label,
-    };
+    const registration = target;
     const sessions = await deps.storage.listSessions({
-        project: conversation.project,
-        agent: conversation.agent,
+        project: target.project,
+        agent: target.agent,
         status: "active",
     });
-    const detailed = resolveSessionForConversationDetailed(sessions, { comm: conversation.comm, account_label: conversation.account_label }, deps.sessionOwnerIsLive);
+    const detailed = resolveSessionForConversationDetailed(sessions, { comm: target.comm, account_label: target.account_label }, deps.sessionOwnerIsLive);
     if (detailed.resolution !== "resolved" || !detailed.session) {
         return {
             resolution: detailed.resolution,
@@ -78,14 +75,20 @@ export async function handleInspectInboundTarget(params, deps) {
             locally_deliverable: false,
             // Diagnostic only, and only for `ambiguous`. A caller that branches on
             // these is doing routing, and routing is daemon-owned.
-            candidate_sessions: detailed.candidates.map((c) => ({
-                session_id: c.session_id,
-                account_label_scope: c.account_label_scope,
-            })),
+            ...(detailed.resolution === "ambiguous"
+                ? {
+                    // Diagnostic only, and ONLY for ambiguous. A caller that branches
+                    // on candidates is doing routing, and routing is daemon-owned.
+                    candidate_sessions: detailed.candidates.map((c) => ({
+                        session_id: c.session_id,
+                        account_label_scope: c.account_label_scope,
+                    })),
+                }
+                : {}),
         };
     }
     const session = detailed.session;
-    const bridge = deps.bridges.find((b) => b.agentId === conversation.agent);
+    const bridge = deps.bridges.find((b) => b.agentId === target.agent);
     const ownerDaemonMatches = normalizeDaemonRoot(session.lease_owner_daemon_discovery_root) ===
         normalizeDaemonRoot(deps.daemonOwner.discoveryRoot);
     // A bridge with no `routeReady` cannot prove a route; fail closed rather than
@@ -109,21 +112,46 @@ export async function handleInspectInboundTarget(params, deps) {
             route_ready: routeReady,
         },
         locally_deliverable: isSessionLocallyDeliverable(session, routeReady, deps.sessionOwnerIsLive),
-        candidate_sessions: [],
     };
 }
-async function resolveConversation(params, storage) {
+/**
+ * Resolve the inspection target.
+ *
+ * `conversation_id` is primary. The `(comm, account)` alternate resolves via
+ * the **registration** (`getAccountByBot`), NOT by scanning conversation
+ * history: a registration that has never received a message has no
+ * conversation row, and using conversations as the lookup table would report
+ * it `not_found` when the honest answer is `cold`.
+ */
+async function resolveTarget(params, storage) {
     const conversationId = params.conversation_id;
     if (typeof conversationId === "string" && conversationId.length > 0) {
-        return (await storage.getConversation(conversationId)) ?? undefined;
+        const conv = await storage.getConversation(conversationId);
+        if (!conv)
+            return undefined;
+        return {
+            project: conv.project,
+            agent: conv.agent,
+            comm: conv.comm,
+            // Legacy rows may predate bot-id backfill; report the empty string rather
+            // than null so the target shape stays uniform across both lookups.
+            account: conv.bot_user_id ?? "",
+            account_label: conv.account_label,
+        };
     }
-    // Alternate lookup: (comm, account) is unique per registration. It is an
-    // input, never an identity — a slot may span comms.
     const comm = params.comm;
     const account = params.account;
     if (typeof comm !== "string" || typeof account !== "string")
         return undefined;
-    const all = await storage.listConversations({ comm: comm, limit: 1000 });
-    return all.find((c) => c.bot_user_id === account);
+    const reg = await storage.getAccountByBot(comm, account);
+    if (!reg)
+        return undefined;
+    return {
+        project: reg.project,
+        agent: reg.agent,
+        comm: reg.comm,
+        account: reg.bot_user_id,
+        account_label: reg.account_label,
+    };
 }
 //# sourceMappingURL=inspect-inbound-target.js.map

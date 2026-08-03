@@ -32,6 +32,8 @@ import {
   SCHEMA_VERSION_ACCOUNT,
   SCHEMA_VERSION_CONVERSATION,
 } from "../../packages/core-contracts/src/types.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { sessionFixture } from "./_session-fixture.js";
 
 const DISCORD = "discord" as CommId;
@@ -386,4 +388,114 @@ describe("AGE-91 inspect_inbound_target", () => {
       assert.equal(after, before);
     });
   });
+
+  // B1 (Codex): the endpoint wiring was test-invisible — the handler was
+  // exercised directly while daemon dispatch was never touched, so deleting the
+  // branch left the suite green. No test boots runDaemon, so this asserts the
+  // wiring at the source seam (the AGE-92 precedent). It proves the branch
+  // exists and is ordered before the generic fallthrough — not that a live
+  // daemon serves it.
+  describe("daemon dispatch wiring", () => {
+    const daemonSrc = readFileSync(
+      fileURLToPath(new URL("../../core-daemon/daemon.ts", import.meta.url)),
+      "utf8",
+    );
+
+    it("registers an inspect_inbound_target dispatch branch", () => {
+      assert.ok(
+        daemonSrc.includes('request.method === "inspect_inbound_target"'),
+        "daemon.ts has no inspect_inbound_target dispatch branch",
+      );
+      assert.ok(
+        daemonSrc.includes("handleInspectInboundTarget("),
+        "daemon.ts never calls handleInspectInboundTarget",
+      );
+    });
+
+    it("dispatches inspect_inbound_target before the bridge fallthrough", () => {
+      const branch = daemonSrc.indexOf('request.method === "inspect_inbound_target"');
+      const fallthrough = daemonSrc.indexOf("context.bridgesByMethod.get(request.method)");
+      assert.ok(branch > 0, "dispatch branch missing");
+      assert.ok(fallthrough > 0, "bridge fallthrough missing");
+      assert.ok(branch < fallthrough, "inspect_inbound_target must dispatch before the fallthrough");
+    });
+
+    it("passes the four deps the handler needs", () => {
+      const callIdx = daemonSrc.indexOf("handleInspectInboundTarget(params, {");
+      assert.ok(callIdx > 0, "handler is not called with a deps object");
+      const callSite = daemonSrc.slice(callIdx, callIdx + 400);
+      for (const dep of ["storage:", "bridges:", "daemonOwner:", "sessionOwnerIsLive:"]) {
+        assert.ok(callSite.includes(dep), `dispatch does not pass ${dep}`);
+      }
+    });
+  });
+
+  // B2 (Codex): the alternate lookup scanned conversation history, so a valid
+  // registration that had never received a message reported not_found.
+  it("registration with no conversations resolves cold, not not_found", async () => {
+    await withStorage(async (storage) => {
+      await storage.putAccountRegistration(registration());
+      const out = (await handleInspectInboundTarget(
+        { comm: "discord", account: "bot-1" },
+        deps(storage as never, [bridgeWithRoute(true)]),
+      )) as Record<string, never>;
+      assert.equal(out.resolution, "cold");
+      assert.equal(out.locally_deliverable, false);
+    });
+  });
+
+  // B3 (Codex): candidate_sessions is specified as present ONLY for ambiguous.
+  it("omits candidate_sessions unless ambiguous", async () => {
+    await withStorage(async (storage) => {
+      await storage.putAccountRegistration(registration());
+      await storage.upsertConversation(conversation());
+      const cold = (await handleInspectInboundTarget(
+        { conversation_id: "conv-age91" },
+        deps(storage as never, [bridgeWithRoute(true)]),
+      )) as Record<string, never>;
+      assert.ok(!("candidate_sessions" in cold), "cold must omit candidate_sessions");
+
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: "s-one" as SessionId,
+          agent: CLAUDE,
+          project: PROJECT,
+          lease_holder_connection_id: "conn-1",
+          lease_owner_daemon_discovery_root: OUR_ROOT,
+        }),
+      );
+      const resolved = (await handleInspectInboundTarget(
+        { conversation_id: "conv-age91" },
+        deps(storage as never, [bridgeWithRoute(true)]),
+      )) as Record<string, never>;
+      assert.equal(resolved.resolution, "resolved");
+      assert.ok(!("candidate_sessions" in resolved), "resolved must omit candidate_sessions");
+    });
+  });
+
+  // B4 (Codex): the ad-hoc canonicalizer mishandled ".." segments, so an
+  // equivalent discovery root read as foreign.
+  it("treats a '..'-equivalent discovery root as the same daemon", async () => {
+    await withStorage(async (storage) => {
+      await storage.putAccountRegistration(registration());
+      await storage.upsertConversation(conversation());
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: "s-equiv" as SessionId,
+          agent: CLAUDE,
+          project: PROJECT,
+          lease_holder_connection_id: "conn-1",
+          lease_owner_daemon_discovery_root: String.raw`D:\state\x\..\discovery`,
+        }),
+      );
+      const out = (await handleInspectInboundTarget(
+        { conversation_id: "conv-age91" },
+        deps(storage as never, [bridgeWithRoute(true)]),
+      )) as Record<string, never>;
+      const routed = out.routed_session as never as Record<string, never>;
+      assert.equal(routed.owner_daemon_matches, true);
+      assert.equal(out.locally_deliverable, true);
+    });
+  });
+
 });

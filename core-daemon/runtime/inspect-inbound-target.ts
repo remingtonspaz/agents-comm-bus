@@ -21,6 +21,7 @@ import type { AgentBridge, DaemonSelfIdentity } from "./agent-bridge.js";
 import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
 import { classifySessionOwnerProcess } from "./session-owner-liveness.js";
 import { isSessionLocallyDeliverable } from "./session-deliverability.js";
+import { normalizeDaemonRootPath } from "../paths.js";
 import { registrationMatchesConversationScope } from "../session-label-scope.js";
 
 /** Outcome of resolving a conversation to a session. */
@@ -103,7 +104,9 @@ export interface InspectInboundTargetDeps {
 }
 
 function normalizeDaemonRoot(value: string | null | undefined): string {
-  return (value ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+  // AGE-58 canonicalization — do NOT hand-roll slash/case trimming here: it
+  // mishandles ".." segments, so an equivalent root reads as foreign.
+  return value ? normalizeDaemonRootPath(value) : "";
 }
 
 /**
@@ -113,28 +116,22 @@ export async function handleInspectInboundTarget(
   params: Record<string, unknown>,
   deps: InspectInboundTargetDeps,
 ): Promise<unknown> {
-  const conversation = await resolveConversation(params, deps.storage);
-  if (!conversation) {
+  const target = await resolveTarget(params, deps.storage);
+  if (!target) {
     return { resolution: "not_found" satisfies InboundTargetResolution, locally_deliverable: false };
   }
 
-  const registration = {
-    project: conversation.project,
-    agent: conversation.agent,
-    comm: conversation.comm,
-    account: conversation.bot_user_id,
-    account_label: conversation.account_label,
-  };
+  const registration = target;
 
   const sessions = await deps.storage.listSessions({
-    project: conversation.project,
-    agent: conversation.agent as AgentId,
+    project: target.project,
+    agent: target.agent as AgentId,
     status: "active",
   });
 
   const detailed = resolveSessionForConversationDetailed(
     sessions as never,
-    { comm: conversation.comm, account_label: conversation.account_label },
+    { comm: target.comm, account_label: target.account_label },
     deps.sessionOwnerIsLive,
   );
 
@@ -146,15 +143,21 @@ export async function handleInspectInboundTarget(
       locally_deliverable: false,
       // Diagnostic only, and only for `ambiguous`. A caller that branches on
       // these is doing routing, and routing is daemon-owned.
-      candidate_sessions: detailed.candidates.map((c) => ({
-        session_id: c.session_id,
-        account_label_scope: c.account_label_scope,
-      })),
+      ...(detailed.resolution === "ambiguous"
+        ? {
+            // Diagnostic only, and ONLY for ambiguous. A caller that branches
+            // on candidates is doing routing, and routing is daemon-owned.
+            candidate_sessions: detailed.candidates.map((c) => ({
+              session_id: c.session_id,
+              account_label_scope: c.account_label_scope,
+            })),
+          }
+        : {}),
     };
   }
 
   const session = detailed.session as (typeof sessions)[number];
-  const bridge = deps.bridges.find((b) => b.agentId === conversation.agent);
+  const bridge = deps.bridges.find((b) => b.agentId === target.agent);
   const ownerDaemonMatches =
     normalizeDaemonRoot(session.lease_owner_daemon_discovery_root) ===
     normalizeDaemonRoot(deps.daemonOwner.discoveryRoot);
@@ -185,23 +188,54 @@ export async function handleInspectInboundTarget(
       routeReady,
       deps.sessionOwnerIsLive,
     ),
-    candidate_sessions: [],
   };
 }
 
-async function resolveConversation(
+interface InboundTarget {
+  project: string;
+  agent: string;
+  comm: string;
+  account: string;
+  account_label: string;
+}
+
+/**
+ * Resolve the inspection target.
+ *
+ * `conversation_id` is primary. The `(comm, account)` alternate resolves via
+ * the **registration** (`getAccountByBot`), NOT by scanning conversation
+ * history: a registration that has never received a message has no
+ * conversation row, and using conversations as the lookup table would report
+ * it `not_found` when the honest answer is `cold`.
+ */
+async function resolveTarget(
   params: Record<string, unknown>,
   storage: Storage,
-): Promise<Conversation | undefined> {
+): Promise<InboundTarget | undefined> {
   const conversationId = params.conversation_id;
   if (typeof conversationId === "string" && conversationId.length > 0) {
-    return (await storage.getConversation(conversationId as never)) ?? undefined;
+    const conv = await storage.getConversation(conversationId as never);
+    if (!conv) return undefined;
+    return {
+      project: conv.project,
+      agent: conv.agent,
+      comm: conv.comm,
+      // Legacy rows may predate bot-id backfill; report the empty string rather
+      // than null so the target shape stays uniform across both lookups.
+      account: conv.bot_user_id ?? "",
+      account_label: conv.account_label,
+    };
   }
-  // Alternate lookup: (comm, account) is unique per registration. It is an
-  // input, never an identity — a slot may span comms.
   const comm = params.comm;
   const account = params.account;
   if (typeof comm !== "string" || typeof account !== "string") return undefined;
-  const all = await storage.listConversations({ comm: comm as never, limit: 1000 });
-  return all.find((c) => c.bot_user_id === account);
+  const reg = await storage.getAccountByBot(comm as never, account);
+  if (!reg) return undefined;
+  return {
+    project: reg.project,
+    agent: reg.agent,
+    comm: reg.comm,
+    account: reg.bot_user_id,
+    account_label: reg.account_label,
+  };
 }
