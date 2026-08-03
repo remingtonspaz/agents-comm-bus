@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.44";
+var DAEMON_VERSION = "0.2.45";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4290,6 +4290,294 @@ function wrapWithLease(inner, arbiter, options = {}) {
   return proxy;
 }
 
+// ../core-daemon/runtime/session-owner-liveness.ts
+var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
+function defaultIsPidAlive2(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function classifySessionOwnerProcess(session, options = {}) {
+  const pid = session.lease_owner_process_pid;
+  const registeredAt = session.lease_owner_process_registered_at;
+  if (pid == null || registeredAt == null) return "no_owner";
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
+  if (!isPidAlive2(pid)) return "dead";
+  const now = options.now ?? Date.now;
+  const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
+  if (now() - registeredAt > recencyMs) return "stale";
+  return "live";
+}
+function createSessionOwnerLiveness(options = {}) {
+  return (session) => session.lease_holder_connection_id != null || classifySessionOwnerProcess(session, options) === "live";
+}
+
+// ../core-daemon/runtime/session-deliverability.ts
+function isSessionLocallyDeliverable(session, hasDaemonLocalWakeRoute, sessionOwnerIsLive) {
+  return hasDaemonLocalWakeRoute && sessionOwnerIsLive(session);
+}
+
+// ../core-daemon/session-label-scope.ts
+function parseAgentsCommLabels(raw) {
+  if (raw === void 0 || raw === null) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  const map = {};
+  for (const entry of trimmed.split(",")) {
+    const piece = entry.trim();
+    if (piece.length === 0) {
+      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
+    }
+    const colon = piece.indexOf(":");
+    if (colon <= 0 || colon === piece.length - 1) {
+      throw new Error(
+        `AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`
+      );
+    }
+    const comm = piece.slice(0, colon).trim();
+    const label = piece.slice(colon + 1).trim();
+    if (comm.length === 0 || label.length === 0) {
+      throw new Error(
+        `AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`
+      );
+    }
+    if (map[comm] !== void 0) {
+      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function serializeAccountLabelScope(scope) {
+  if (!scope || Object.keys(scope).length === 0) return null;
+  const sorted = Object.keys(scope).sort();
+  const canonical = {};
+  for (const comm of sorted) {
+    canonical[comm] = scope[comm];
+  }
+  return JSON.stringify(canonical);
+}
+function parseAccountLabelScope(stored) {
+  if (stored === void 0 || stored === null) return null;
+  const trimmed = stored.trim();
+  if (trimmed.length === 0) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`account_label_scope is not valid JSON: ${stored}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`account_label_scope must be a JSON object: ${stored}`);
+  }
+  const map = {};
+  for (const [comm, label] of Object.entries(parsed)) {
+    if (typeof label !== "string" || label.length === 0) {
+      throw new Error(`account_label_scope value for "${comm}" must be a non-empty string`);
+    }
+    map[comm] = label;
+  }
+  return map;
+}
+function accountLabelScopeFromParams(params) {
+  if (params.account_label_scope === null) return null;
+  if (typeof params.account_label_scope === "string") {
+    return serializeAccountLabelScope(parseAccountLabelScope(params.account_label_scope));
+  }
+  if (typeof params.comm_labels === "string") {
+    return serializeAccountLabelScope(parseAgentsCommLabels(params.comm_labels));
+  }
+  return null;
+}
+function filterRegistrationsByScope(registrations, scopeStored) {
+  const scope = parseRoutingScope(scopeStored);
+  if (scope === void 0) return [];
+  if (!scope) return [...registrations];
+  return registrations.filter((reg) => {
+    const expected = scope[reg.comm];
+    return expected !== void 0 && reg.account_label === expected;
+  });
+}
+function liveSessionScopeCandidates(target, sessions, isSessionLive) {
+  const liveSiblings = sessions.filter(
+    (session) => session.session_id !== target.session_id && session.project === target.project && session.agent === target.agent && session.status === "active" && isSessionLive(session)
+  );
+  return [target, ...liveSiblings];
+}
+function filterRegistrationsForSession(registrations, target, sessions, isSessionLive = hasLiveConnectionLease) {
+  if (target.account_label_scope != null) {
+    return filterRegistrationsByScope(
+      registrations,
+      target.account_label_scope
+    );
+  }
+  const labeledSiblings = liveSessionScopeCandidates(
+    target,
+    sessions,
+    isSessionLive
+  ).filter(
+    (session) => session.session_id !== target.session_id && session.account_label_scope != null
+  );
+  if (labeledSiblings.length === 0) return [...registrations];
+  return registrations.filter(
+    (registration) => !labeledSiblings.some(
+      (session) => registrationMatchesConversationScope(
+        session.account_label_scope,
+        registration
+      )
+    )
+  );
+}
+function sessionOwnsConversation(target, sessions, conversation, isSessionLive = hasLiveConnectionLease) {
+  if (conversation.project !== target.project || conversation.agent !== target.agent) {
+    return false;
+  }
+  const resolved = resolveSessionForConversation(
+    liveSessionScopeCandidates(target, sessions, isSessionLive),
+    conversation,
+    (session) => session.session_id
+  );
+  return resolved?.session_id === target.session_id;
+}
+function registrationMatchesConversationScope(scopeStored, conversation) {
+  const scope = parseRoutingScope(scopeStored);
+  if (scope === void 0) return false;
+  if (!scope) return true;
+  const expected = scope[conversation.comm];
+  return expected !== void 0 && expected === conversation.account_label;
+}
+function resolveSessionForConversation(sessions, conversation, pickSessionId) {
+  const labeledMatches = sessions.filter(
+    (sess) => sess.account_label_scope != null && registrationMatchesConversationScope(sess.account_label_scope, conversation)
+  );
+  if (labeledMatches.length > 0) {
+    return labeledMatches[0];
+  }
+  const unlabeled = sessions.filter((sess) => sess.account_label_scope == null);
+  if (unlabeled.length === 1) {
+    return unlabeled[0];
+  }
+  if (unlabeled.length > 1) {
+    return void 0;
+  }
+  return void 0;
+}
+function hasLiveConnectionLease(session) {
+  return session.lease_holder_connection_id != null;
+}
+function parseRoutingScope(stored) {
+  try {
+    return parseAccountLabelScope(stored ?? null);
+  } catch (error) {
+    console.error(
+      `agents-comm-bus: invalid persisted account_label_scope; treating session as scope-inert: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return void 0;
+  }
+}
+
+// ../core-daemon/runtime/inspect-inbound-target.ts
+function resolveSessionForConversationDetailed(sessions, conversation, sessionOwnerIsLive) {
+  const live = sessions.filter((sess) => sessionOwnerIsLive(sess));
+  const labeled = live.filter(
+    (sess) => sess.account_label_scope != null && registrationMatchesConversationScope(sess.account_label_scope, conversation)
+  );
+  if (labeled.length === 1) {
+    return { resolution: "resolved", session: labeled[0], candidates: [] };
+  }
+  if (labeled.length > 1) {
+    return { resolution: "ambiguous", candidates: labeled };
+  }
+  const unlabeled = live.filter((sess) => sess.account_label_scope == null);
+  if (unlabeled.length === 1) {
+    return { resolution: "resolved", session: unlabeled[0], candidates: [] };
+  }
+  if (unlabeled.length > 1) {
+    return { resolution: "ambiguous", candidates: unlabeled };
+  }
+  return { resolution: "cold", candidates: [] };
+}
+function normalizeDaemonRoot(value) {
+  return (value ?? "").split("\\").join("/").replace(/\/+$/, "").toLowerCase();
+}
+async function handleInspectInboundTarget(params, deps) {
+  const conversation = await resolveConversation(params, deps.storage);
+  if (!conversation) {
+    return { resolution: "not_found", locally_deliverable: false };
+  }
+  const registration = {
+    project: conversation.project,
+    agent: conversation.agent,
+    comm: conversation.comm,
+    account: conversation.bot_user_id,
+    account_label: conversation.account_label
+  };
+  const sessions = await deps.storage.listSessions({
+    project: conversation.project,
+    agent: conversation.agent,
+    status: "active"
+  });
+  const detailed = resolveSessionForConversationDetailed(
+    sessions,
+    { comm: conversation.comm, account_label: conversation.account_label },
+    deps.sessionOwnerIsLive
+  );
+  if (detailed.resolution !== "resolved" || !detailed.session) {
+    return {
+      resolution: detailed.resolution,
+      registration,
+      routed_session: null,
+      locally_deliverable: false,
+      // Diagnostic only, and only for `ambiguous`. A caller that branches on
+      // these is doing routing, and routing is daemon-owned.
+      candidate_sessions: detailed.candidates.map((c) => ({
+        session_id: c.session_id,
+        account_label_scope: c.account_label_scope
+      }))
+    };
+  }
+  const session = detailed.session;
+  const bridge = deps.bridges.find((b) => b.agentId === conversation.agent);
+  const ownerDaemonMatches = normalizeDaemonRoot(session.lease_owner_daemon_discovery_root) === normalizeDaemonRoot(deps.daemonOwner.discoveryRoot);
+  const routeReady = ownerDaemonMatches && bridge?.routeReady !== void 0 ? bridge.routeReady(session.session_id) : false;
+  return {
+    resolution: "resolved",
+    registration,
+    routed_session: {
+      session_id: session.session_id,
+      account_label_scope: session.account_label_scope,
+      owner_pid: session.lease_owner_process_pid ?? null,
+      owner_registered_at: session.lease_owner_process_registered_at ?? null,
+      // Process-owner classification ONLY — diagnostics. Not the verdict:
+      // the canonical predicate is an OR with the connection lease, so a live
+      // connection with no PID is `no_owner` here and still deliverable.
+      owner_state: classifySessionOwnerProcess(session),
+      owner_daemon_matches: ownerDaemonMatches,
+      route_ready: routeReady
+    },
+    locally_deliverable: isSessionLocallyDeliverable(
+      session,
+      routeReady,
+      deps.sessionOwnerIsLive
+    ),
+    candidate_sessions: []
+  };
+}
+async function resolveConversation(params, storage) {
+  const conversationId = params.conversation_id;
+  if (typeof conversationId === "string" && conversationId.length > 0) {
+    return await storage.getConversation(conversationId) ?? void 0;
+  }
+  const comm = params.comm;
+  const account = params.account;
+  if (typeof comm !== "string" || typeof account !== "string") return void 0;
+  const all = await storage.listConversations({ comm, limit: 1e3 });
+  return all.find((c) => c.bot_user_id === account);
+}
+
 // ../node_modules/ws/wrapper.mjs
 var import_stream = __toESM(require_stream(), 1);
 var import_receiver = __toESM(require_receiver(), 1);
@@ -4693,33 +4981,6 @@ async function writeDaemonDiscoveryFiles(input) {
 // ../core-daemon/bootstrap/boot-scope-restore.ts
 import { access } from "node:fs/promises";
 import { join as join2 } from "node:path";
-
-// ../core-daemon/runtime/session-owner-liveness.ts
-var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
-function defaultIsPidAlive2(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function classifySessionOwnerProcess(session, options = {}) {
-  const pid = session.lease_owner_process_pid;
-  const registeredAt = session.lease_owner_process_registered_at;
-  if (pid == null || registeredAt == null) return "no_owner";
-  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
-  if (!isPidAlive2(pid)) return "dead";
-  const now = options.now ?? Date.now;
-  const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
-  if (now() - registeredAt > recencyMs) return "stale";
-  return "live";
-}
-function createSessionOwnerLiveness(options = {}) {
-  return (session) => session.lease_holder_connection_id != null || classifySessionOwnerProcess(session, options) === "live";
-}
-
-// ../core-daemon/bootstrap/boot-scope-restore.ts
 var DEFAULT_BOOT_RESTORE_RECENCY_MS = DEFAULT_SESSION_OWNER_RECENCY_MS;
 async function defaultPathExists(path8) {
   try {
@@ -5132,165 +5393,6 @@ function errorMessage(error) {
 
 // ../core-daemon/bus.ts
 import crypto from "node:crypto";
-
-// ../core-daemon/session-label-scope.ts
-function parseAgentsCommLabels(raw) {
-  if (raw === void 0 || raw === null) return null;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  const map = {};
-  for (const entry of trimmed.split(",")) {
-    const piece = entry.trim();
-    if (piece.length === 0) {
-      throw new Error(`AGENTS_COMM_LABELS contains an empty entry in "${raw}"`);
-    }
-    const colon = piece.indexOf(":");
-    if (colon <= 0 || colon === piece.length - 1) {
-      throw new Error(
-        `AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`
-      );
-    }
-    const comm = piece.slice(0, colon).trim();
-    const label = piece.slice(colon + 1).trim();
-    if (comm.length === 0 || label.length === 0) {
-      throw new Error(
-        `AGENTS_COMM_LABELS entry "${piece}" is malformed; expected comm:label`
-      );
-    }
-    if (map[comm] !== void 0) {
-      throw new Error(`AGENTS_COMM_LABELS lists comm "${comm}" more than once`);
-    }
-    map[comm] = label;
-  }
-  return map;
-}
-function serializeAccountLabelScope(scope) {
-  if (!scope || Object.keys(scope).length === 0) return null;
-  const sorted = Object.keys(scope).sort();
-  const canonical = {};
-  for (const comm of sorted) {
-    canonical[comm] = scope[comm];
-  }
-  return JSON.stringify(canonical);
-}
-function parseAccountLabelScope(stored) {
-  if (stored === void 0 || stored === null) return null;
-  const trimmed = stored.trim();
-  if (trimmed.length === 0) return null;
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    throw new Error(`account_label_scope is not valid JSON: ${stored}`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`account_label_scope must be a JSON object: ${stored}`);
-  }
-  const map = {};
-  for (const [comm, label] of Object.entries(parsed)) {
-    if (typeof label !== "string" || label.length === 0) {
-      throw new Error(`account_label_scope value for "${comm}" must be a non-empty string`);
-    }
-    map[comm] = label;
-  }
-  return map;
-}
-function accountLabelScopeFromParams(params) {
-  if (params.account_label_scope === null) return null;
-  if (typeof params.account_label_scope === "string") {
-    return serializeAccountLabelScope(parseAccountLabelScope(params.account_label_scope));
-  }
-  if (typeof params.comm_labels === "string") {
-    return serializeAccountLabelScope(parseAgentsCommLabels(params.comm_labels));
-  }
-  return null;
-}
-function filterRegistrationsByScope(registrations, scopeStored) {
-  const scope = parseRoutingScope(scopeStored);
-  if (scope === void 0) return [];
-  if (!scope) return [...registrations];
-  return registrations.filter((reg) => {
-    const expected = scope[reg.comm];
-    return expected !== void 0 && reg.account_label === expected;
-  });
-}
-function liveSessionScopeCandidates(target, sessions, isSessionLive) {
-  const liveSiblings = sessions.filter(
-    (session) => session.session_id !== target.session_id && session.project === target.project && session.agent === target.agent && session.status === "active" && isSessionLive(session)
-  );
-  return [target, ...liveSiblings];
-}
-function filterRegistrationsForSession(registrations, target, sessions, isSessionLive = hasLiveConnectionLease) {
-  if (target.account_label_scope != null) {
-    return filterRegistrationsByScope(
-      registrations,
-      target.account_label_scope
-    );
-  }
-  const labeledSiblings = liveSessionScopeCandidates(
-    target,
-    sessions,
-    isSessionLive
-  ).filter(
-    (session) => session.session_id !== target.session_id && session.account_label_scope != null
-  );
-  if (labeledSiblings.length === 0) return [...registrations];
-  return registrations.filter(
-    (registration) => !labeledSiblings.some(
-      (session) => registrationMatchesConversationScope(
-        session.account_label_scope,
-        registration
-      )
-    )
-  );
-}
-function sessionOwnsConversation(target, sessions, conversation, isSessionLive = hasLiveConnectionLease) {
-  if (conversation.project !== target.project || conversation.agent !== target.agent) {
-    return false;
-  }
-  const resolved = resolveSessionForConversation(
-    liveSessionScopeCandidates(target, sessions, isSessionLive),
-    conversation,
-    (session) => session.session_id
-  );
-  return resolved?.session_id === target.session_id;
-}
-function registrationMatchesConversationScope(scopeStored, conversation) {
-  const scope = parseRoutingScope(scopeStored);
-  if (scope === void 0) return false;
-  if (!scope) return true;
-  const expected = scope[conversation.comm];
-  return expected !== void 0 && expected === conversation.account_label;
-}
-function resolveSessionForConversation(sessions, conversation, pickSessionId) {
-  const labeledMatches = sessions.filter(
-    (sess) => sess.account_label_scope != null && registrationMatchesConversationScope(sess.account_label_scope, conversation)
-  );
-  if (labeledMatches.length > 0) {
-    return labeledMatches[0];
-  }
-  const unlabeled = sessions.filter((sess) => sess.account_label_scope == null);
-  if (unlabeled.length === 1) {
-    return unlabeled[0];
-  }
-  if (unlabeled.length > 1) {
-    return void 0;
-  }
-  return void 0;
-}
-function hasLiveConnectionLease(session) {
-  return session.lease_holder_connection_id != null;
-}
-function parseRoutingScope(stored) {
-  try {
-    return parseAccountLabelScope(stored ?? null);
-  } catch (error) {
-    console.error(
-      `agents-comm-bus: invalid persisted account_label_scope; treating session as scope-inert: ${error instanceof Error ? error.message : String(error)}`
-    );
-    return void 0;
-  }
-}
 
 // ../packages/core-contracts/dist/types.js
 var SCHEMA_VERSION_QUERY = 1;
@@ -7579,6 +7681,13 @@ async function runDaemon(options) {
     comms,
     sessionOwnerIsLive
   });
+  const daemonSelfIdentity = {
+    discoveryRoot: discoveryPaths.root,
+    checkoutRoot,
+    stateRoot: paths.root,
+    daemonBin,
+    authorityRank
+  };
   const bridges = [];
   const inFlightAdapters = /* @__PURE__ */ new Set();
   const activeScopes = /* @__PURE__ */ new Set();
@@ -7641,13 +7750,7 @@ async function runDaemon(options) {
         audit,
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
-        daemonOwner: {
-          discoveryRoot: discoveryPaths.root,
-          checkoutRoot,
-          stateRoot: paths.root,
-          daemonBin,
-          authorityRank
-        },
+        daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive
       })
     )
@@ -7787,7 +7890,11 @@ async function runDaemon(options) {
         reloadRegistrations,
         ensureCommsForSession: ensureCommsForSessionFn,
         pendingInbound,
-        activeScopes
+        activeScopes,
+        storage,
+        bridges,
+        daemonOwner: daemonSelfIdentity,
+        sessionOwnerIsLive
       });
     }
   });
@@ -8422,6 +8529,14 @@ async function dispatchIpc(request, context) {
   if (request.method === "ensure_comms_for_scope") {
     return handleEnsureCommsForScope(params, context.ensureCommsForSession);
   }
+  if (request.method === "inspect_inbound_target") {
+    return handleInspectInboundTarget(params, {
+      storage: context.storage,
+      bridges: context.bridges,
+      daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive
+    });
+  }
   if (request.method === "list_conversations") {
     return context.bus.listConversations({
       comm: params.comm,
@@ -8506,11 +8621,6 @@ function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
       authority_rank: daemonOwner.authorityRank
     }
   };
-}
-
-// ../core-daemon/runtime/session-deliverability.ts
-function isSessionLocallyDeliverable(session, hasDaemonLocalWakeRoute, sessionOwnerIsLive) {
-  return hasDaemonLocalWakeRoute && sessionOwnerIsLive(session);
 }
 
 // ../core-daemon/bridges/claude/wake.ts
@@ -8974,13 +9084,14 @@ var ClaudeBridge = class {
       return false;
     }
   }
-  sessionHasWakeRoute(session) {
+  /** AGE-91: daemon-local route = a registered wake dir for this session. */
+  routeReady(session) {
     return this.wake.getForSession(session) !== void 0;
   }
   isLocallyDeliverable(session) {
     return isSessionLocallyDeliverable(
       session,
-      this.sessionHasWakeRoute(session.session_id),
+      this.routeReady(session.session_id),
       this.sessionOwnerIsLive
     );
   }
@@ -10708,13 +10819,14 @@ var CodexBridge = class {
       return false;
     }
   }
-  sessionHasRoute(sessionId) {
+  /** AGE-91: daemon-local route = a tracked app-server route for this session. */
+  routeReady(sessionId) {
     return this.sessionRoutes.has(sessionId);
   }
   isLocallyDeliverable(session) {
     return isSessionLocallyDeliverable(
       session,
-      this.sessionHasRoute(session.session_id),
+      this.routeReady(session.session_id),
       this.sessionOwnerIsLive
     );
   }
@@ -11291,6 +11403,19 @@ var PiBridge = class {
     });
     await this.ensureCommsBestEffort(project, accountLabelScope);
     return { ok: true, session, project, agent: "pi" };
+  }
+  /**
+   * AGE-91: Pi is route-ready by construction once a session is registered.
+   *
+   * This is NOT a stub. Pi has no wake route and no `onInboundConversation`
+   * because its delivery is **pull-based**: the extension polls
+   * `pi_drain_inbound` with its own session id, so the drain IS the delivery.
+   * There is no daemon-local route object to check, and reporting `false`
+   * would wrongly tell a caller that a live, polling Pi session cannot be
+   * reached. Do not "fix" this by inventing a route check.
+   */
+  routeReady(_session) {
+    return true;
   }
   async drainInbound(params) {
     const session = requiredString3(params.session, "session");

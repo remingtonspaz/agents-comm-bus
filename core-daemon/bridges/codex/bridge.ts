@@ -679,7 +679,8 @@ export class CodexBridge implements AgentBridge {
     }
   }
 
-  private sessionHasRoute(sessionId: SessionId): boolean {
+  /** AGE-91: daemon-local route = a tracked app-server route for this session. */
+  routeReady(sessionId: SessionId): boolean {
     return this.sessionRoutes.has(sessionId);
   }
 
@@ -688,7 +689,7 @@ export class CodexBridge implements AgentBridge {
   ): boolean {
     return isSessionLocallyDeliverable(
       session,
-      this.sessionHasRoute(session.session_id),
+      this.routeReady(session.session_id),
       this.sessionOwnerIsLive,
     );
   }

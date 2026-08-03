@@ -1,4 +1,4 @@
-import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type Storage } from "agents-comm-bus-core";
+import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -85,7 +85,8 @@ export declare class CodexBridge implements AgentBridge {
     private waitForResolution;
     private clearWaiter;
     private ensureCommsBestEffort;
-    private sessionHasRoute;
+    /** AGE-91: daemon-local route = a tracked app-server route for this session. */
+    routeReady(sessionId: SessionId): boolean;
     private isLocallyDeliverable;
     /**
      * AGE-90: after a deliverability edge with confirmed rehydration, wake once

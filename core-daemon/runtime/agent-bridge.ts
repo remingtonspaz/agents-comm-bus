@@ -6,6 +6,7 @@ import type {
   CommId,
   Conversation,
   Message,
+  SessionId,
   Storage,
 } from "agents-comm-bus-core";
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
@@ -110,6 +111,19 @@ export interface AgentBridge {
    * the dispatch — ClaudeBridge uses its text as the verbatim wake seed
    * (AGE-65). Optional so existing bridges can ignore it.
    */
+  /**
+   * AGE-91: is there a daemon-local delivery route for this session?
+   *
+   * This is the per-host half of deliverability — the daemon composes it with
+   * the canonical owner-liveness predicate. It reports only whether THIS daemon
+   * holds a route object for the session; whether the far end answers is a wake
+   * outcome, not a deliverability fact.
+   *
+   * Bridges whose delivery is pull-based (the agent polls) have no route object
+   * and are route-ready by construction once registered.
+   */
+  routeReady?(session: SessionId): boolean;
+
   onInboundConversation?(
     conversation: Conversation,
     message?: Message,

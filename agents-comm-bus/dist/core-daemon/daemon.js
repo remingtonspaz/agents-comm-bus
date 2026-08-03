@@ -4,6 +4,7 @@ import { DAEMON_VERSION } from "./config.js";
 import { normalizeProjectPath } from "./project-path.js";
 import { resolveDiscoveryPaths, resolveStatePaths } from "./paths.js";
 import { CommLeaseArbiter, inferAuthorityRank, wrapWithLease, } from "./runtime/comm-lease.js";
+import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
 import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
@@ -122,6 +123,13 @@ export async function runDaemon(options) {
     // that can invoke `ensureCommsForSession` is a register-session IPC call, and
     // the IPC server doesn't start until further below, by which point `bridges`
     // is fully populated.
+    const daemonSelfIdentity = {
+        discoveryRoot: discoveryPaths.root,
+        checkoutRoot,
+        stateRoot: paths.root,
+        daemonBin,
+        authorityRank,
+    };
     const bridges = [];
     const inFlightAdapters = new Set();
     // AGE-38: `(agent, project)` scopes that have registered a session this
@@ -189,13 +197,7 @@ export async function runDaemon(options) {
         audit,
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
-        daemonOwner: {
-            discoveryRoot: discoveryPaths.root,
-            checkoutRoot,
-            stateRoot: paths.root,
-            daemonBin,
-            authorityRank,
-        },
+        daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive,
     })));
     const pendingInboundMax = 100;
@@ -340,6 +342,10 @@ export async function runDaemon(options) {
                 ensureCommsForSession: ensureCommsForSessionFn,
                 pendingInbound,
                 activeScopes,
+                storage,
+                bridges,
+                daemonOwner: daemonSelfIdentity,
+                sessionOwnerIsLive,
             });
         },
     });
@@ -1078,6 +1084,14 @@ async function dispatchIpc(request, context) {
     }
     if (request.method === "ensure_comms_for_scope") {
         return handleEnsureCommsForScope(params, context.ensureCommsForSession);
+    }
+    if (request.method === "inspect_inbound_target") {
+        return handleInspectInboundTarget(params, {
+            storage: context.storage,
+            bridges: context.bridges,
+            daemonOwner: context.daemonOwner,
+            sessionOwnerIsLive: context.sessionOwnerIsLive,
+        });
     }
     if (request.method === "list_conversations") {
         return context.bus.listConversations({

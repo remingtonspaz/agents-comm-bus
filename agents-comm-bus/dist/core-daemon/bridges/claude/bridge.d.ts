@@ -107,7 +107,8 @@ export declare class ClaudeBridge implements AgentBridge {
      * as a follow-up.
      */
     private ensureCommsBestEffort;
-    private sessionHasWakeRoute;
+    /** AGE-91: daemon-local route = a registered wake dir for this session. */
+    routeReady(session: SessionId): boolean;
     private isLocallyDeliverable;
     /**
      * AGE-89: after a deliverability edge with confirmed rehydration, wake once

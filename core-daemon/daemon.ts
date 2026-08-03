@@ -19,6 +19,7 @@ import {
   inferAuthorityRank,
   wrapWithLease,
 } from "./runtime/comm-lease.js";
+import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js";
 import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
@@ -38,6 +39,8 @@ import type {
   AgentBridgeFactory,
   EnsureCommsForSession,
 } from "./runtime/agent-bridge.js";
+import type { DaemonSelfIdentity } from "./runtime/agent-bridge.js";
+import type { SessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import type { CredentialResolution } from "./runtime/credential-resolution.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
@@ -216,6 +219,14 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   // that can invoke `ensureCommsForSession` is a register-session IPC call, and
   // the IPC server doesn't start until further below, by which point `bridges`
   // is fully populated.
+  const daemonSelfIdentity: DaemonSelfIdentity = {
+  discoveryRoot: discoveryPaths.root,
+  checkoutRoot,
+  stateRoot: paths.root,
+  daemonBin,
+  authorityRank,
+          };
+
   const bridges: AgentBridge[] = [];
   const inFlightAdapters = new Set<string>();
   // AGE-38: `(agent, project)` scopes that have registered a session this
@@ -286,13 +297,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         audit,
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
-        daemonOwner: {
-          discoveryRoot: discoveryPaths.root,
-          checkoutRoot,
-          stateRoot: paths.root,
-          daemonBin,
-          authorityRank,
-        },
+          daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive,
       }),
     ),
@@ -448,6 +453,10 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         ensureCommsForSession: ensureCommsForSessionFn,
         pendingInbound,
         activeScopes,
+        storage,
+        bridges,
+        daemonOwner: daemonSelfIdentity,
+        sessionOwnerIsLive,
       });
     },
   });
@@ -1405,6 +1414,10 @@ async function dispatchIpc(
     ensureCommsForSession: EnsureCommsForSession;
     pendingInbound: PendingInboundEntry[];
     activeScopes: ReadonlySet<string>;
+    storage: Storage;
+    bridges: readonly AgentBridge[];
+    daemonOwner: DaemonSelfIdentity;
+    sessionOwnerIsLive: SessionOwnerLiveness;
   },
 ): Promise<unknown> {
   const params = (request.params ?? {}) as Record<string, unknown>;
@@ -1419,6 +1432,15 @@ async function dispatchIpc(
 
   if (request.method === "ensure_comms_for_scope") {
     return handleEnsureCommsForScope(params, context.ensureCommsForSession);
+  }
+
+  if (request.method === "inspect_inbound_target") {
+    return handleInspectInboundTarget(params, {
+      storage: context.storage,
+      bridges: context.bridges,
+      daemonOwner: context.daemonOwner,
+      sessionOwnerIsLive: context.sessionOwnerIsLive,
+    });
   }
 
   if (request.method === "list_conversations") {

@@ -478,11 +478,12 @@ export class CodexBridge {
             return false;
         }
     }
-    sessionHasRoute(sessionId) {
+    /** AGE-91: daemon-local route = a tracked app-server route for this session. */
+    routeReady(sessionId) {
         return this.sessionRoutes.has(sessionId);
     }
     isLocallyDeliverable(session) {
-        return isSessionLocallyDeliverable(session, this.sessionHasRoute(session.session_id), this.sessionOwnerIsLive);
+        return isSessionLocallyDeliverable(session, this.routeReady(session.session_id), this.sessionOwnerIsLive);
     }
     /**
      * AGE-90: after a deliverability edge with confirmed rehydration, wake once

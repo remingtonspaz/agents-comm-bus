@@ -364,7 +364,8 @@ export class ClaudeBridge implements AgentBridge {
     }
   }
 
-  private sessionHasWakeRoute(session: SessionId): boolean {
+  /** AGE-91: daemon-local route = a registered wake dir for this session. */
+  routeReady(session: SessionId): boolean {
     return this.wake.getForSession(session) !== undefined;
   }
 
@@ -373,7 +374,7 @@ export class ClaudeBridge implements AgentBridge {
   ): boolean {
     return isSessionLocallyDeliverable(
       session,
-      this.sessionHasWakeRoute(session.session_id),
+      this.routeReady(session.session_id),
       this.sessionOwnerIsLive,
     );
   }

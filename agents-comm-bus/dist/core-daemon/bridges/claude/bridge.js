@@ -212,11 +212,12 @@ export class ClaudeBridge {
             return false;
         }
     }
-    sessionHasWakeRoute(session) {
+    /** AGE-91: daemon-local route = a registered wake dir for this session. */
+    routeReady(session) {
         return this.wake.getForSession(session) !== undefined;
     }
     isLocallyDeliverable(session) {
-        return isSessionLocallyDeliverable(session, this.sessionHasWakeRoute(session.session_id), this.sessionOwnerIsLive);
+        return isSessionLocallyDeliverable(session, this.routeReady(session.session_id), this.sessionOwnerIsLive);
     }
     /**
      * AGE-89: after a deliverability edge with confirmed rehydration, wake once

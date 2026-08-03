@@ -127,6 +127,19 @@ export class PiBridge {
         await this.ensureCommsBestEffort(project, accountLabelScope);
         return { ok: true, session, project, agent: "pi" };
     }
+    /**
+     * AGE-91: Pi is route-ready by construction once a session is registered.
+     *
+     * This is NOT a stub. Pi has no wake route and no `onInboundConversation`
+     * because its delivery is **pull-based**: the extension polls
+     * `pi_drain_inbound` with its own session id, so the drain IS the delivery.
+     * There is no daemon-local route object to check, and reporting `false`
+     * would wrongly tell a caller that a live, polling Pi session cannot be
+     * reached. Do not "fix" this by inventing a route check.
+     */
+    routeReady(_session) {
+        return true;
+    }
     async drainInbound(params) {
         const session = requiredString(params.session, "session");
         const sess = await this.options.storage.getSession(session);
