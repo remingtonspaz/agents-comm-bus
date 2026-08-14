@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.45";
+var DAEMON_VERSION = "0.2.46";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -5512,7 +5512,7 @@ var MessageBus = class {
     comm.onConnectionState((state) => {
       void this.options.audit.append({
         timestamp: this.now(),
-        kind: state === "disconnected" ? "outbound_failed" : "inbound_received",
+        kind: "connection_state_changed",
         detail: { comm: comm.id, account: comm.accountId, connection_state: state }
       });
     });
@@ -5657,11 +5657,41 @@ var MessageBus = class {
         `comm adapter not registered: ${target.comm}/${registration.bot_user_id}`
       );
     }
-    const sent = await comm.send(
-      target,
-      request.payload,
-      request.idempotencyKey ?? randomId("outbound")
-    );
+    let sent;
+    try {
+      sent = await comm.send(
+        target,
+        request.payload,
+        request.idempotencyKey ?? randomId("outbound")
+      );
+    } catch (error) {
+      let failureClassification;
+      try {
+        failureClassification = comm.classifyFailure(error);
+      } catch {
+        failureClassification = void 0;
+      }
+      try {
+        await this.options.audit.append({
+          timestamp: this.now(),
+          kind: "outbound_failed",
+          agent: registration.agent,
+          session: request.session,
+          detail: {
+            comm: request.comm,
+            account: registration.bot_user_id,
+            account_label: registration.account_label,
+            chat_native_id: target.chat_native_id,
+            thread_native_id: target.thread_native_id ?? null,
+            requested_account: request.target?.account ?? null,
+            error: error instanceof Error ? error.message : String(error),
+            ...failureClassification !== void 0 ? { failure_classification: failureClassification } : {}
+          }
+        });
+      } catch {
+      }
+      throw error;
+    }
     const messageId = makeMessageId(request.comm, sent.platform_message_id);
     const conversation = await this.findConversationForTarget(target);
     await this.options.transcripts.append({

@@ -17,6 +17,7 @@ import type {
   ChatRef,
   CommAdapter,
   CommId,
+  FailureClassification,
   Conversation,
   ConversationId,
   Decision,
@@ -120,9 +121,13 @@ export class MessageBus {
       return { conversation_id: conversation.conversation_id };
     });
     comm.onConnectionState((state) => {
+      // AGE-93: lifecycle transitions are connection_state_changed, full stop.
+      // Previously "disconnected" was audited as outbound_failed and every
+      // other state as inbound_received — fabricating ~350 message-level
+      // events/day across the fleet and camouflaging real failures.
       void this.options.audit.append({
         timestamp: this.now(),
-        kind: state === "disconnected" ? "outbound_failed" : "inbound_received",
+        kind: "connection_state_changed",
         detail: { comm: comm.id, account: comm.accountId, connection_state: state },
       });
     });
@@ -295,11 +300,54 @@ export class MessageBus {
       );
     }
 
-    const sent = await comm.send(
-      target,
-      request.payload,
-      request.idempotencyKey ?? randomId("outbound"),
-    );
+    let sent: Awaited<ReturnType<CommAdapter["send"]>>;
+    try {
+      sent = await comm.send(
+        target,
+        request.payload,
+        request.idempotencyKey ?? randomId("outbound"),
+      );
+    } catch (error) {
+      // AGE-93: audit the REAL send failure. Previously this throw skipped the
+      // outbound_sent append below and emitted NOTHING — outbound_failed only
+      // ever fired for connection-state churn, never for a failed send. The
+      // kind means exactly "the adapter attempted delivery and it failed".
+      // Routing/lookup failures above stay exceptions with no audit kind
+      // (out of scope here; see the outbound_routing_failed follow-up).
+      //
+      // Rethrow-literal: the caller must receive the ORIGINAL error even if
+      // anything in this catch path (classifier, audit append) itself fails.
+      let failureClassification: FailureClassification | undefined;
+      try {
+        failureClassification = comm.classifyFailure(error);
+      } catch {
+        // The classifier must never join the masking path.
+        failureClassification = undefined;
+      }
+      try {
+        await this.options.audit.append({
+          timestamp: this.now(),
+          kind: "outbound_failed",
+          agent: registration.agent,
+          session: request.session,
+          detail: {
+            comm: request.comm,
+            account: registration.bot_user_id,
+            account_label: registration.account_label,
+            chat_native_id: target.chat_native_id,
+            thread_native_id: target.thread_native_id ?? null,
+            requested_account: request.target?.account ?? null,
+            error: error instanceof Error ? error.message : String(error),
+            ...(failureClassification !== undefined
+              ? { failure_classification: failureClassification }
+              : {}),
+          },
+        });
+      } catch {
+        // An audit-append failure must not mask the original send error.
+      }
+      throw error;
+    }
     const messageId = makeMessageId(request.comm, sent.platform_message_id);
     const conversation = await this.findConversationForTarget(target);
 

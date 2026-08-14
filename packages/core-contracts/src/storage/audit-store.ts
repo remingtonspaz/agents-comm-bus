@@ -9,6 +9,10 @@ export type AuditEventKind =
   | "inbound_received"
   | "outbound_sent"
   | "outbound_failed"
+  // AGE-93: comm adapter connection lifecycle transitions. Previously mapped
+  // onto "outbound_failed"/"inbound_received" (bus.ts), which fabricated
+  // hundreds of message-level events per day and camouflaged real failures.
+  | "connection_state_changed"
   | "query_opened"
   | "query_resolved"
   | "query_expired"
