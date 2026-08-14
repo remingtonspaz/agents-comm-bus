@@ -76,6 +76,7 @@ function conversation(): Conversation {
 }
 
 class FakeStorage {
+  query?: Record<string, unknown>;
   async getAccountByBot(_comm: string, bot: string) {
     return bot === BOT ? registration() : undefined;
   }
@@ -86,6 +87,14 @@ class FakeStorage {
     return rec.conversation_id;
   }
   async touchConversationOutbound() {}
+  async getQuery(id: string) {
+    return this.query && this.query.query_id === id ? this.query : null;
+  }
+  async resolveQuery(id: string, _decision: unknown, at: number) {
+    if (!this.query || this.query.query_id !== id) return false;
+    this.query.resolved_at = at;
+    return true;
+  }
 }
 
 interface FakeComm extends CommAdapter {
@@ -245,6 +254,60 @@ describe("AGE-93 real send failures emit outbound_failed", () => {
       false,
       "no classification field when classifyFailure itself fails",
     );
+  });
+
+  it("resolve_sink_failed stays pinned as the legitimate outbound_failed path", async () => {
+    // B2 (Codex review): the one pre-existing legitimate outbound_failed — a
+    // resolve sink throwing during query resolution — must keep its kind. It
+    // had zero test coverage; pin it so the AGE-93 reshuffle can't silently
+    // move or drop it.
+    const audit: AuditEvent[] = [];
+    const queryRecord = {
+      schema_version: 1,
+      query_id: "q-1",
+      agent: CLAUDE,
+      session: "s-1",
+      kind: "permission",
+      prompt_text: "allow?",
+      created_at: 1000,
+      ttl_seconds: 3600,
+      origin_chat_id: null,
+      source_message_id: null,
+      resolved_at: null,
+      resolution: null,
+      options_json: null,
+    };
+    const storage = new FakeStorage();
+    storage.query = queryRecord;
+    const bus = new MessageBus({
+      project: PROJECT,
+      storage: storage as unknown as Storage,
+      transcripts: { async append() {}, async *read() {} } as never,
+      audit: { async append(e: AuditEvent) { audit.push(e); } },
+      comms: [],
+      now: () => 2000,
+    });
+    bus.setResolveSink({
+      onResolved: async () => {
+        throw new Error("sink exploded");
+      },
+    });
+
+    const resolved = await bus.resolveQuery("q-1" as never, {
+      query_id: "q-1",
+      decision: "allow",
+      decided_by_sender_id: "u-1",
+      decided_in_chat: { comm: TELEGRAM, account: BOT, chat_native_id: CHAT },
+      decided_at: 2000,
+    } as never);
+    assert.equal(resolved, true, "a throwing sink must not fail the resolution itself");
+
+    const failures = audit.filter((e) => e.kind === "outbound_failed");
+    assert.equal(failures.length, 1);
+    const detail = failures[0].detail as Record<string, unknown>;
+    assert.equal(detail.reason, "resolve_sink_failed");
+    assert.equal(detail.query_id, "q-1");
+    assert.match(String(detail.error), /sink exploded/);
   });
 
   it("successful send emits outbound_sent and zero outbound_failed", async () => {
