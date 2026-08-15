@@ -97,8 +97,10 @@ export interface AgentBridge {
      * AGE-94: the daemon guarantees `conversation.agent === this.agentId` at call
      * time — the dispatch loop applies a central ownership default-deny before
      * invoking this hook, so a bridge is never handed a foreign-agent
-     * conversation here. A bridge that wants to observe ALL inbound regardless of
-     * owner uses `bus.setDispatchSink` instead. The bridge-local guard is kept as
+     * conversation here. There is no additive all-inbound bridge observer today:
+     * the daemon owns the single dispatch sink (`setDispatchSink` REPLACES, it
+     * does not fan out), so a bridge must not reach for it. Cross-agent
+     * observation is separate design work. The bridge-local guard is kept as
      * defense-in-depth, not because the contract permits foreign delivery.
      */
     onInboundConversation?(conversation: Conversation, message?: Message): Promise<void>;

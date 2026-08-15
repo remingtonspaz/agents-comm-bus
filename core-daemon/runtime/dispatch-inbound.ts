@@ -17,8 +17,11 @@ import type { PendingInboundEntry } from "./pending-inbound.js";
  * defense-in-depth; this gate is the contract the daemon now enforces so a
  * future bridge cannot accidentally consume foreign inbound.
  *
- * A bridge that legitimately wants to observe ALL inbound regardless of owner
- * uses `bus.setDispatchSink`, not this path — so the gate forecloses nothing.
+ * The gate forecloses nothing a bridge legitimately does: this hook is
+ * owner-specific wake/delivery. There is no additive all-inbound bridge
+ * observer today — the daemon owns the single dispatch sink — so a bridge that
+ * needs foreign-agent inbound is separate design work, not something to reach
+ * for through the sink.
  *
  * Fail closed: if no registered bridge owns the conversation, nothing is
  * invoked or audited and the durable pending entry is left intact for a later
