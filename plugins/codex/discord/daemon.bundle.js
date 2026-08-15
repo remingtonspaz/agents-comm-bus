@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.46";
+var DAEMON_VERSION = "0.2.47";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -7316,6 +7316,57 @@ function createCommFactoryRegistry(input) {
   };
 }
 
+// ../core-daemon/runtime/dispatch-inbound.ts
+async function dispatchInboundToBridges(bridges, conversation, message, audit, pendingInbound) {
+  for (const bridge of bridges) {
+    if (bridge.agentId !== conversation.agent) continue;
+    if (!bridge.onInboundConversation) continue;
+    try {
+      await audit.append({
+        timestamp: Date.now(),
+        kind: "inbound_dispatch_bridge_invoked",
+        agent: bridge.agentId,
+        conversation_id: conversation.conversation_id,
+        detail: {
+          conversation_agent: conversation.agent,
+          platform_message_id: message.platform_message_id,
+          message_id: message.message_id,
+          queue_length: pendingInbound.length
+        }
+      });
+      await bridge.onInboundConversation(conversation, message);
+      await audit.append({
+        timestamp: Date.now(),
+        kind: "inbound_dispatch_bridge_completed",
+        agent: bridge.agentId,
+        conversation_id: conversation.conversation_id,
+        detail: {
+          conversation_agent: conversation.agent,
+          platform_message_id: message.platform_message_id,
+          message_id: message.message_id,
+          queue_length: pendingInbound.length
+        }
+      });
+    } catch (error) {
+      await audit.append({
+        timestamp: Date.now(),
+        kind: "inbound_dispatch_bridge_failed",
+        agent: bridge.agentId,
+        conversation_id: conversation.conversation_id,
+        detail: {
+          conversation_agent: conversation.agent,
+          platform_message_id: message.platform_message_id,
+          message_id: message.message_id,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      console.error(
+        `agents-comm-bus: bridge ${bridge.agentId} onInboundConversation failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+}
+
 // ../core-daemon/runtime/daemon-idle-reaper.ts
 var DEFAULT_IDLE_REAPER_GRACE_MS = 9e4;
 var DEFAULT_IDLE_REAPER_INTERVAL_MS = 5e3;
@@ -7840,53 +7891,13 @@ async function runDaemon(options) {
           queue_length: pendingInbound.length
         }
       });
-      for (const bridge of bridges) {
-        if (bridge.onInboundConversation) {
-          try {
-            await audit.append({
-              timestamp: Date.now(),
-              kind: "inbound_dispatch_bridge_invoked",
-              agent: bridge.agentId,
-              conversation_id: conversation.conversation_id,
-              detail: {
-                conversation_agent: conversation.agent,
-                platform_message_id: message.platform_message_id,
-                message_id: message.message_id,
-                queue_length: pendingInbound.length
-              }
-            });
-            await bridge.onInboundConversation(conversation, message);
-            await audit.append({
-              timestamp: Date.now(),
-              kind: "inbound_dispatch_bridge_completed",
-              agent: bridge.agentId,
-              conversation_id: conversation.conversation_id,
-              detail: {
-                conversation_agent: conversation.agent,
-                platform_message_id: message.platform_message_id,
-                message_id: message.message_id,
-                queue_length: pendingInbound.length
-              }
-            });
-          } catch (error) {
-            await audit.append({
-              timestamp: Date.now(),
-              kind: "inbound_dispatch_bridge_failed",
-              agent: bridge.agentId,
-              conversation_id: conversation.conversation_id,
-              detail: {
-                conversation_agent: conversation.agent,
-                platform_message_id: message.platform_message_id,
-                message_id: message.message_id,
-                error: error instanceof Error ? error.message : String(error)
-              }
-            });
-            console.error(
-              `agents-comm-bus: bridge ${bridge.agentId} onInboundConversation failed: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-        }
-      }
+      await dispatchInboundToBridges(
+        bridges,
+        conversation,
+        message,
+        audit,
+        pendingInbound
+      );
     }
   });
   for (const bridge of bridges) {

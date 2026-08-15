@@ -17,6 +17,7 @@ import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
+import { dispatchInboundToBridges } from "./runtime/dispatch-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
 import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
@@ -239,53 +240,10 @@ export async function runDaemon(options) {
                     queue_length: pendingInbound.length,
                 },
             });
-            for (const bridge of bridges) {
-                if (bridge.onInboundConversation) {
-                    try {
-                        await audit.append({
-                            timestamp: Date.now(),
-                            kind: "inbound_dispatch_bridge_invoked",
-                            agent: bridge.agentId,
-                            conversation_id: conversation.conversation_id,
-                            detail: {
-                                conversation_agent: conversation.agent,
-                                platform_message_id: message.platform_message_id,
-                                message_id: message.message_id,
-                                queue_length: pendingInbound.length,
-                            },
-                        });
-                        await bridge.onInboundConversation(conversation, message);
-                        await audit.append({
-                            timestamp: Date.now(),
-                            kind: "inbound_dispatch_bridge_completed",
-                            agent: bridge.agentId,
-                            conversation_id: conversation.conversation_id,
-                            detail: {
-                                conversation_agent: conversation.agent,
-                                platform_message_id: message.platform_message_id,
-                                message_id: message.message_id,
-                                queue_length: pendingInbound.length,
-                            },
-                        });
-                    }
-                    catch (error) {
-                        await audit.append({
-                            timestamp: Date.now(),
-                            kind: "inbound_dispatch_bridge_failed",
-                            agent: bridge.agentId,
-                            conversation_id: conversation.conversation_id,
-                            detail: {
-                                conversation_agent: conversation.agent,
-                                platform_message_id: message.platform_message_id,
-                                message_id: message.message_id,
-                                error: error instanceof Error ? error.message : String(error),
-                            },
-                        });
-                        console.error(`agents-comm-bus: bridge ${bridge.agentId} onInboundConversation failed: ` +
-                            `${error instanceof Error ? error.message : String(error)}`);
-                    }
-                }
-            }
+            // AGE-94: central ownership default-deny lives in dispatchInboundToBridges
+            // (extracted so the invariant is unit-testable). Only the bridge whose
+            // agentId matches conversation.agent is invoked or audited.
+            await dispatchInboundToBridges(bridges, conversation, message, audit, pendingInbound);
         },
     });
     for (const bridge of bridges) {

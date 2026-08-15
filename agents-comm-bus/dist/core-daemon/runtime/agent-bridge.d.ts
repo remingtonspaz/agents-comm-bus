@@ -76,13 +76,6 @@ export interface AgentBridge {
      */
     invalidateRegistrationCaches?(): void;
     /**
-     * Optional: notification that a fresh inbound conversation just landed.
-     * Bridges can use this to wake the agent (e.g. ClaudeBridge writes a
-     * `trigger-enter` file). `message` is the inbound message that triggered
-     * the dispatch — ClaudeBridge uses its text as the verbatim wake seed
-     * (AGE-65). Optional so existing bridges can ignore it.
-     */
-    /**
      * AGE-91: is there a daemon-local delivery route for this session?
      *
      * This is the per-host half of deliverability — the daemon composes it with
@@ -94,6 +87,20 @@ export interface AgentBridge {
      * and are route-ready by construction once registered.
      */
     routeReady?(session: SessionId): boolean;
+    /**
+     * Optional: notification that a fresh inbound conversation just landed.
+     * Bridges can use this to wake the agent (e.g. ClaudeBridge writes a
+     * `trigger-enter` file). `message` is the inbound message that triggered
+     * the dispatch — ClaudeBridge uses its text as the verbatim wake seed
+     * (AGE-65). Optional so existing bridges can ignore it.
+     *
+     * AGE-94: the daemon guarantees `conversation.agent === this.agentId` at call
+     * time — the dispatch loop applies a central ownership default-deny before
+     * invoking this hook, so a bridge is never handed a foreign-agent
+     * conversation here. A bridge that wants to observe ALL inbound regardless of
+     * owner uses `bus.setDispatchSink` instead. The bridge-local guard is kept as
+     * defense-in-depth, not because the contract permits foreign delivery.
+     */
     onInboundConversation?(conversation: Conversation, message?: Message): Promise<void>;
     /** Handle an IPC method that this bridge advertised in `ipcMethods`. */
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {

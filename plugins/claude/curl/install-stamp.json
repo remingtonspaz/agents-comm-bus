@@ -3,7 +3,7 @@
   "agent": "claude",
   "comm": "curl",
   "plugin_version": "0.1.7",
-  "daemon_bundle_version": "0.2.46",
+  "daemon_bundle_version": "0.2.47",
   "adapter_bundle_version": "0.1.2",
   "adapter_bundle_versions": {
     "curl": "0.1.2"
