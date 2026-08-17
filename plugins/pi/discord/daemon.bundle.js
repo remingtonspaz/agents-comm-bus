@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.47";
+var DAEMON_VERSION = "0.2.48";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -5646,16 +5646,32 @@ var MessageBus = class {
     return conversation;
   }
   async send(request) {
-    const target = request.target ?? await this.targetFromSession(request.session);
-    if (target.comm !== request.comm) {
-      throw new Error(`target comm ${target.comm} does not match requested comm ${request.comm}`);
+    let target;
+    try {
+      target = request.target ?? await this.targetFromSession(request.session);
+    } catch (cause) {
+      await this.auditRoutingFailure("target_resolution_failed", request, cause);
+      throw cause;
     }
-    const registration = await this.registrationFor(target);
+    if (target.comm !== request.comm) {
+      const error = new Error(`target comm ${target.comm} does not match requested comm ${request.comm}`);
+      await this.auditRoutingFailure("comm_mismatch", request, error, target);
+      throw error;
+    }
+    let registration;
+    try {
+      registration = await this.registrationFor(target);
+    } catch (cause) {
+      await this.auditRoutingFailure("registration_resolution_failed", request, cause, target);
+      throw cause;
+    }
     const comm = this.comms.get(adapterKey(target.comm, registration.bot_user_id));
     if (!comm) {
-      throw new Error(
+      const error = new Error(
         `comm adapter not registered: ${target.comm}/${registration.bot_user_id}`
       );
+      await this.auditRoutingFailure("adapter_not_registered", request, error, target, registration);
+      throw error;
     }
     let sent;
     try {
@@ -5933,6 +5949,39 @@ var MessageBus = class {
    * `targetFromSession`, and `origin_chat` is built by `chatRefForConversation`
    * (which returns `bot_user_id`). A label reaching here now fails loud.
    */
+  /**
+   * AGE-95: best-effort audit of a pre-adapter routing failure. NEVER throws —
+   * an audit-append failure must not mask the original routing error
+   * (rethrow-literal, same discipline as AGE-93). Context is progressive:
+   * request comm/session/requested account always; resolved target when known;
+   * registration identity only after it resolves. No payload content.
+   */
+  async auditRoutingFailure(reason, request, cause, target, registration) {
+    try {
+      await this.options.audit.append({
+        timestamp: this.now(),
+        kind: "outbound_routing_failed",
+        agent: registration?.agent,
+        session: request.session,
+        detail: {
+          reason,
+          comm: request.comm,
+          requested_account: request.target?.account ?? null,
+          ...target ? {
+            target_account: target.account,
+            chat_native_id: target.chat_native_id,
+            thread_native_id: target.thread_native_id ?? null
+          } : {},
+          ...registration ? {
+            account: registration.bot_user_id,
+            account_label: registration.account_label
+          } : {},
+          error: cause instanceof Error ? cause.message : String(cause)
+        }
+      });
+    } catch {
+    }
+  }
   async registrationFor(chat) {
     const byBot = await this.options.storage.getAccountByBot(
       chat.comm,

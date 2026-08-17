@@ -187,16 +187,42 @@ export class MessageBus {
         return conversation;
     }
     async send(request) {
-        const target = request.target ?? (await this.targetFromSession(request.session));
+        // AGE-95: every pre-adapter failure below is audited as
+        // outbound_routing_failed with a discriminating reason (previously these
+        // threw with ZERO audit rows — the "agent went silent vs routing broke"
+        // ambiguity). Rethrow-literal per AGE-93: the object thrown is the object
+        // that was caught/constructed; the audit helper never throws.
+        let target;
+        try {
+            target = request.target ?? (await this.targetFromSession(request.session));
+        }
+        catch (cause) {
+            await this.auditRoutingFailure("target_resolution_failed", request, cause);
+            throw cause;
+        }
         if (target.comm !== request.comm) {
-            throw new Error(`target comm ${target.comm} does not match requested comm ${request.comm}`);
+            const error = new Error(`target comm ${target.comm} does not match requested comm ${request.comm}`);
+            await this.auditRoutingFailure("comm_mismatch", request, error, target);
+            throw error;
         }
         // target.account MUST be a concrete bot_user_id (AGE-15). registrationFor
         // rejects account labels — they are ambiguous across agents.
-        const registration = await this.registrationFor(target);
+        let registration;
+        try {
+            registration = await this.registrationFor(target);
+        }
+        catch (cause) {
+            // registration_resolution_failed, NOT "not_found": registrationFor also
+            // propagates storage read errors before its explicit not-registered
+            // throw, and the audit must not claim absence falsely.
+            await this.auditRoutingFailure("registration_resolution_failed", request, cause, target);
+            throw cause;
+        }
         const comm = this.comms.get(adapterKey(target.comm, registration.bot_user_id));
         if (!comm) {
-            throw new Error(`comm adapter not registered: ${target.comm}/${registration.bot_user_id}`);
+            const error = new Error(`comm adapter not registered: ${target.comm}/${registration.bot_user_id}`);
+            await this.auditRoutingFailure("adapter_not_registered", request, error, target, registration);
+            throw error;
         }
         let sent;
         try {
@@ -493,6 +519,45 @@ export class MessageBus {
      * `targetFromSession`, and `origin_chat` is built by `chatRefForConversation`
      * (which returns `bot_user_id`). A label reaching here now fails loud.
      */
+    /**
+     * AGE-95: best-effort audit of a pre-adapter routing failure. NEVER throws —
+     * an audit-append failure must not mask the original routing error
+     * (rethrow-literal, same discipline as AGE-93). Context is progressive:
+     * request comm/session/requested account always; resolved target when known;
+     * registration identity only after it resolves. No payload content.
+     */
+    async auditRoutingFailure(reason, request, cause, target, registration) {
+        try {
+            await this.options.audit.append({
+                timestamp: this.now(),
+                kind: "outbound_routing_failed",
+                agent: registration?.agent,
+                session: request.session,
+                detail: {
+                    reason,
+                    comm: request.comm,
+                    requested_account: request.target?.account ?? null,
+                    ...(target
+                        ? {
+                            target_account: target.account,
+                            chat_native_id: target.chat_native_id,
+                            thread_native_id: target.thread_native_id ?? null,
+                        }
+                        : {}),
+                    ...(registration
+                        ? {
+                            account: registration.bot_user_id,
+                            account_label: registration.account_label,
+                        }
+                        : {}),
+                    error: cause instanceof Error ? cause.message : String(cause),
+                },
+            });
+        }
+        catch {
+            // An audit-append failure must never replace the original routing error.
+        }
+    }
     async registrationFor(chat) {
         const byBot = await this.options.storage.getAccountByBot(chat.comm, String(chat.account));
         if (byBot)

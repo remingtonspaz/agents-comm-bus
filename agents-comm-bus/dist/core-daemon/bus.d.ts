@@ -118,6 +118,14 @@ export declare class MessageBus {
      * `targetFromSession`, and `origin_chat` is built by `chatRefForConversation`
      * (which returns `bot_user_id`). A label reaching here now fails loud.
      */
+    /**
+     * AGE-95: best-effort audit of a pre-adapter routing failure. NEVER throws —
+     * an audit-append failure must not mask the original routing error
+     * (rethrow-literal, same discipline as AGE-93). Context is progressive:
+     * request comm/session/requested account always; resolved target when known;
+     * registration identity only after it resolves. No payload content.
+     */
+    private auditRoutingFailure;
     private registrationFor;
     private upsertConversation;
     private targetFromSession;

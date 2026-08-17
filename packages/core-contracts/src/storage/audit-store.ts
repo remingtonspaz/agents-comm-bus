@@ -13,6 +13,12 @@ export type AuditEventKind =
   // onto "outbound_failed"/"inbound_received" (bus.ts), which fabricated
   // hundreds of message-level events per day and camouflaged real failures.
   | "connection_state_changed"
+  // AGE-95: MessageBus.send() failed BEFORE reaching the adapter — target
+  // resolution, comm mismatch, registration resolution, or adapter-not-
+  // registered. Previously audited as nothing at all. Distinct from
+  // outbound_failed (adapter attempted delivery and failed) so the kinds
+  // don't re-blur.
+  | "outbound_routing_failed"
   | "query_opened"
   | "query_resolved"
   | "query_expired"
