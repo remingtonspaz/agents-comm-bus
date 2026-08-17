@@ -233,8 +233,8 @@ export class MessageBus {
             // outbound_sent append below and emitted NOTHING — outbound_failed only
             // ever fired for connection-state churn, never for a failed send. The
             // kind means exactly "the adapter attempted delivery and it failed".
-            // Routing/lookup failures above stay exceptions with no audit kind
-            // (out of scope here; see the outbound_routing_failed follow-up).
+            // Routing/lookup failures above are audited as outbound_routing_failed
+            // (AGE-95); this kind covers only failures AFTER the adapter call begins.
             //
             // Rethrow-literal: the caller must receive the ORIGINAL error even if
             // anything in this catch path (classifier, audit append) itself fails.
@@ -539,6 +539,7 @@ export class MessageBus {
                     requested_account: request.target?.account ?? null,
                     ...(target
                         ? {
+                            target_comm: target.comm,
                             target_account: target.account,
                             chat_native_id: target.chat_native_id,
                             thread_native_id: target.thread_native_id ?? null,

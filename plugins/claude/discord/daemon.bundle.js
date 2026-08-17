@@ -5968,6 +5968,7 @@ var MessageBus = class {
           comm: request.comm,
           requested_account: request.target?.account ?? null,
           ...target ? {
+            target_comm: target.comm,
             target_account: target.account,
             chat_native_id: target.chat_native_id,
             thread_native_id: target.thread_native_id ?? null

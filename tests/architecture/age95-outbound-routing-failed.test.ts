@@ -144,6 +144,7 @@ describe("AGE-95 outbound_routing_failed", () => {
     assert.equal(failures.length, 1);
     const detail = failures[0].detail as Record<string, unknown>;
     assert.equal(detail.reason, "comm_mismatch");
+    assert.equal(detail.target_comm, DISCORD, "the row must name the comm it mismatched WITH");
     assert.equal(detail.target_account, BOT);
     assert.equal(detail.chat_native_id, CHAT);
     assert.equal("account" in detail, false, "no registration identity before registration resolves");
@@ -209,5 +210,50 @@ describe("AGE-95 outbound_routing_failed", () => {
       /not a registered bot id/,
       "the caller must get the original routing error, not the audit failure",
     );
+  });
+
+  it("rethrow-literal by IDENTITY: a non-Error sentinel survives registration failure + audit failure", async () => {
+    // B2 (Codex review): message-only assertions let an identity-breaking
+    // rewrap stay green. Throw a non-Error sentinel from storage; the caller
+    // must receive that exact object even when the audit append also fails.
+    const sentinel = { weird: "non-error throw", code: 42 };
+    const audit: AuditEvent[] = [];
+    const storage = new FakeStorage();
+    storage.getAccountByBot = async () => {
+      throw sentinel;
+    };
+    const bus = new MessageBus({
+      project: PROJECT,
+      storage: storage as unknown as Storage,
+      transcripts: { async append() {}, async *read() {} } as never,
+      audit: {
+        async append(e: AuditEvent) {
+          audit.push(e);
+          throw new Error("audit store is on fire");
+        },
+      },
+      comms: [],
+      now: () => 2000,
+    });
+
+    const thrown = await bus
+      .send({
+        session: "s-1" as never,
+        comm: TELEGRAM,
+        payload: { text: "hi" },
+        target: { comm: TELEGRAM, account: BOT, chat_native_id: CHAT },
+      } as never)
+      .then(() => null, (e: unknown) => e);
+
+    assert.strictEqual(
+      thrown,
+      sentinel,
+      "the object leaving must be the object that arrived, even a non-Error, even with audit down",
+    );
+    const failures = routingFailures(audit);
+    assert.equal(failures.length, 1, "audit still emitted before the append failed");
+    const detail = failures[0].detail as Record<string, unknown>;
+    assert.equal(detail.reason, "registration_resolution_failed");
+    assert.match(String(detail.error), /weird|object/, "sanitized error string, not the sentinel itself");
   });
 });
