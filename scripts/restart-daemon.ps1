@@ -27,6 +27,15 @@
   AGENTS_COMM_BUS_ADAPTERS_DIR into the respawned process. Missing or
   rejected dev markers fail loud; there is no production fallback.
 
+  Discovery cleanup targets a single resolved discovery root for every reap plan
+  (dry-run and -Exec). The dev-config resolver runs exactly once up front; one
+  parsed result drives discovery-root selection and optional respawn. Explicit
+  -DiscoveryRoot wins for cleanup targeting, but marker resolution still runs and
+  rejected markers or resolver failures fail closed before any kill or file delete.
+  Applied markers select AGENTS_COMM_BUS_DISCOVERY_ROOT, then AGENTS_COMM_BUS_ROOT
+  when only the durable state root changes, then the default production discovery
+  root. Status none uses the default production discovery root for reap-only.
+
   SAFETY: default is a DRY RUN. Pass -Exec to actually kill + clear.
 
 .EXAMPLE
@@ -47,7 +56,7 @@
 #>
 param(
     [string]$RepoDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-    [string]$StateRoot = (Join-Path $env:USERPROFILE ".agents-comm-bus"),
+    [string]$DiscoveryRoot = "",
     [switch]$Exec,
     [switch]$Respawn,
     [switch]$Json
@@ -55,66 +64,89 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$servePath = Join-Path $RepoDir "agents-comm-bus\dist\core-daemon\serve.js"
-# Command lines may use either slash direction; match both forms of this repo's
-# serve.js so we only ever reap daemons belonging to THIS checkout.
-$needleBack = $servePath
-$needleFwd = $servePath -replace '\\', '/'
-
-$daemons = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
-    $_.CommandLine -and ($_.CommandLine -like '*serve.js*') -and
-    (($_.CommandLine -like "*$needleBack*") -or ($_.CommandLine -like "*$needleFwd*"))
-}
-
-$found = @($daemons | Sort-Object CreationDate | ForEach-Object {
-        [PSCustomObject]@{
-            Pid         = $_.ProcessId
-            Started     = $_.CreationDate
-            CommandLine = $_.CommandLine
-        }
-    })
-
-$pidFile = Join-Path $StateRoot "daemon.pid"
-$portFile = Join-Path $StateRoot "port"
-$recordedPid = if (Test-Path $pidFile) { (Get-Content $pidFile -Raw).Trim() } else { $null }
-
-$result = [ordered]@{
-    repoDir          = $RepoDir
-    stateRoot        = $StateRoot
-    servePath        = $servePath
-    recordedPid      = $recordedPid
-    found            = $found
-    killed           = @()
-    clearedDiscovery = $false
-    respawnedPid     = $null
-    respawnEnv       = $null
-    dryRun           = (-not $Exec)
-}
+$defaultDiscoveryRoot = Join-Path $env:USERPROFILE ".agents-comm-bus"
+# core-daemon/paths.ts resolveDiscoveryPaths(): spawnLock = join(root, ".spawn.lock")
+$discoverySpawnLockName = ".spawn.lock"
 
 function Get-NodeExecutable {
     return (Get-Command node -ErrorAction Stop).Source
 }
 
-function Get-DevDaemonRespawnPlan {
+function Invoke-DevConfigResolver {
     param([string]$ProjectRoot)
 
     $helperPath = Join-Path $PSScriptRoot "resolve-dev-daemon-env.mjs"
     $nodeExe = Get-NodeExecutable
-    $resolveLines = & $nodeExe $helperPath $ProjectRoot 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "-Respawn dev-config resolution failed (exit $LASTEXITCODE): $resolveLines"
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $resolveLines = & $nodeExe $helperPath $ProjectRoot 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "dev-config resolution failed (exit $LASTEXITCODE): $resolveLines"
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousEap
     }
 
-    $parsed = ($resolveLines | Out-String).Trim() | ConvertFrom-Json
-    if ($parsed.status -ne "applied") {
+    return ($resolveLines | Out-String).Trim() | ConvertFrom-Json
+}
+
+function Build-ReapPlan {
+    param(
+        [string]$ProjectRoot,
+        [string]$ExplicitDiscoveryRoot,
+        [switch]$Respawn
+    )
+
+    $parsed = Invoke-DevConfigResolver -ProjectRoot $ProjectRoot
+
+    if ($parsed.status -eq "rejected") {
         $reasons = @($parsed.reasons) -join "; "
-        throw "-Respawn requires applied dev config (status=$($parsed.status)): $reasons"
-    }
-    if (-not $parsed.env.AGENTS_COMM_BUS_BIN) {
-        throw "-Respawn dev-config resolution missing AGENTS_COMM_BUS_BIN"
+        throw "dev-config marker rejected (fail closed): $reasons"
     }
 
-    return $parsed
+    if ($Respawn) {
+        if ($parsed.status -ne "applied") {
+            $reasons = @($parsed.reasons) -join "; "
+            throw "-Respawn requires applied dev config (status=$($parsed.status)): $reasons"
+        }
+        if (-not $parsed.env.AGENTS_COMM_BUS_BIN) {
+            throw "-Respawn dev-config resolution missing AGENTS_COMM_BUS_BIN"
+        }
+    }
+
+    if ($ExplicitDiscoveryRoot) {
+        $resolvedDiscoveryRoot = $ExplicitDiscoveryRoot
+    }
+    elseif ($parsed.status -eq "applied") {
+        if ($parsed.env.AGENTS_COMM_BUS_DISCOVERY_ROOT) {
+            $resolvedDiscoveryRoot = [string]$parsed.env.AGENTS_COMM_BUS_DISCOVERY_ROOT
+        }
+        elseif ($parsed.env.AGENTS_COMM_BUS_ROOT) {
+            $resolvedDiscoveryRoot = [string]$parsed.env.AGENTS_COMM_BUS_ROOT
+        }
+        else {
+            $resolvedDiscoveryRoot = $defaultDiscoveryRoot
+        }
+    }
+    else {
+        $resolvedDiscoveryRoot = $defaultDiscoveryRoot
+    }
+
+    $respawnEnv = $null
+    if ($Respawn) {
+        $respawnEnv = @{}
+        foreach ($prop in $parsed.env.PSObject.Properties) {
+            $respawnEnv[$prop.Name] = [string]$prop.Value
+        }
+    }
+
+    return [PSCustomObject]@{
+        DiscoveryRoot = $resolvedDiscoveryRoot
+        DevConfig     = $parsed
+        RespawnEnv    = $respawnEnv
+    }
 }
 
 function Start-DevDaemonRespawn {
@@ -140,12 +172,54 @@ function Start-DevDaemonRespawn {
     return [System.Diagnostics.Process]::Start($psi)
 }
 
+$plan = Build-ReapPlan -ProjectRoot $RepoDir -ExplicitDiscoveryRoot $DiscoveryRoot -Respawn:$Respawn
+$resolvedDiscoveryRoot = $plan.DiscoveryRoot
+
+$servePath = Join-Path $RepoDir "agents-comm-bus\dist\core-daemon\serve.js"
+# Command lines may use either slash direction; match both forms of this repo's
+# serve.js so we only ever reap daemons belonging to THIS checkout.
+$needleBack = $servePath
+$needleFwd = $servePath -replace '\\', '/'
+
+$daemons = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
+    $_.CommandLine -and ($_.CommandLine -like '*serve.js*') -and
+    (($_.CommandLine -like "*$needleBack*") -or ($_.CommandLine -like "*$needleFwd*"))
+}
+
+$found = @($daemons | Sort-Object CreationDate | ForEach-Object {
+        [PSCustomObject]@{
+            Pid         = $_.ProcessId
+            Started     = $_.CreationDate
+            CommandLine = $_.CommandLine
+        }
+    })
+
+$pidFile = Join-Path $resolvedDiscoveryRoot "daemon.pid"
+$portFile = Join-Path $resolvedDiscoveryRoot "port"
+$spawnLockFile = Join-Path $resolvedDiscoveryRoot $discoverySpawnLockName
+$recordedPid = if (Test-Path $pidFile) { (Get-Content $pidFile -Raw).Trim() } else { $null }
+
+$result = [ordered]@{
+    repoDir          = $RepoDir
+    discoveryRoot    = $resolvedDiscoveryRoot
+    spawnLockFile    = $spawnLockFile
+    servePath        = $servePath
+    recordedPid      = $recordedPid
+    found            = $found
+    killed           = @()
+    clearedDiscovery = $false
+    respawnedPid     = $null
+    respawnEnv       = $plan.RespawnEnv
+    dryRun           = (-not $Exec)
+}
+
 if (-not $Exec) {
     if ($Json) {
         $result | ConvertTo-Json -Depth 5
     }
     else {
         Write-Output "DRY RUN (pass -Exec to reap). serve.js = $servePath"
+        Write-Output "Discovery root = $resolvedDiscoveryRoot"
         Write-Output "Recorded daemon.pid = $recordedPid"
         if ($found.Count -eq 0) {
             Write-Output "No matching daemons running."
@@ -176,17 +250,11 @@ $result.killed = $killed
 # so removing the files cannot strand a live canonical daemon's discovery.
 Remove-Item $pidFile -ErrorAction SilentlyContinue
 Remove-Item $portFile -ErrorAction SilentlyContinue
+Remove-Item $spawnLockFile -ErrorAction SilentlyContinue
 $result.clearedDiscovery = $true
 
 if ($Respawn) {
-    $devPlan = Get-DevDaemonRespawnPlan -ProjectRoot $RepoDir
-    $respawnEnv = @{}
-    foreach ($prop in $devPlan.env.PSObject.Properties) {
-        $respawnEnv[$prop.Name] = [string]$prop.Value
-    }
-    $result.respawnEnv = $respawnEnv
-
-    $proc = Start-DevDaemonRespawn -DaemonBin $respawnEnv.AGENTS_COMM_BUS_BIN -RespawnEnv $respawnEnv
+    $proc = Start-DevDaemonRespawn -DaemonBin $plan.RespawnEnv.AGENTS_COMM_BUS_BIN -RespawnEnv $plan.RespawnEnv
     $result.respawnedPid = $proc.Id
 }
 
@@ -195,7 +263,7 @@ if ($Json) {
 }
 else {
     Write-Output ("Reaped {0} daemon(s): {1}" -f $killed.Count, ($(if ($killed.Count) { $killed -join ', ' } else { 'none' })))
-    Write-Output "Cleared daemon.pid + port."
+    Write-Output "Cleared daemon.pid, port, and $discoverySpawnLockName under $resolvedDiscoveryRoot."
     if ($Respawn) {
         $envKeys = @($result.respawnEnv.Keys | Sort-Object) -join ", "
         Write-Output "Respawned fresh daemon PID $($result.respawnedPid) (env: $envKeys)"
