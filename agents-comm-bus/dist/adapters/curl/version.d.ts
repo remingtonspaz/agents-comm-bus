@@ -5,5 +5,5 @@
  * `DAEMON_VERSION` and plugin package versions. Bump when shipped curl adapter
  * behavior changes.
  */
-export declare const ADAPTER_VERSION = "0.1.2";
+export declare const ADAPTER_VERSION = "0.1.3";
 //# sourceMappingURL=version.d.ts.map

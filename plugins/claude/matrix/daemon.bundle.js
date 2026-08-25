@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.48";
+var DAEMON_VERSION = "0.2.49";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4784,8 +4784,10 @@ async function handleRequest(socket, data, onRequest) {
 import { mkdir as mkdir3, open as open3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
 
 // ../core-daemon/storage/audit.ts
+import { createReadStream } from "node:fs";
 import { mkdir as mkdir2 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline/promises";
 
 // ../core-daemon/storage/jsonl.ts
 import { open as open2 } from "node:fs/promises";
@@ -4816,6 +4818,25 @@ var JsonlAuditStore = class {
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+  }
+  async hasInboundReceived(conversation_id, message, auditTimestamp) {
+    const path8 = this.pathFor(auditTimestamp ?? Date.now());
+    try {
+      const lines = createInterface({
+        input: createReadStream(path8, { encoding: "utf8" }),
+        crlfDelay: Infinity
+      });
+      for await (const line of lines) {
+        if (line.trim() === "") continue;
+        const event = JSON.parse(line);
+        if (event.kind === "inbound_received" && event.conversation_id === conversation_id && event.detail?.platform_message_id === message.platform_message_id) {
+          return true;
+        }
+      }
+    } catch {
+      return false;
+    }
+    return false;
   }
 };
 
@@ -5473,6 +5494,21 @@ function isForeignBotAllowed(sender, policy = DEFAULT_FOREIGN_BOT_POLICY) {
   return policy.allowedBotIds?.includes(sender.id) ?? false;
 }
 
+// ../core-daemon/runtime/inbound-message-context.ts
+var INBOUND_MESSAGE_CONTEXT_KEY = "__agents_comm_bus_inbound_context";
+function readInboundMessageContext(message) {
+  const descriptor = Object.getOwnPropertyDescriptor(message, INBOUND_MESSAGE_CONTEXT_KEY);
+  const ctx = descriptor?.value;
+  if (!ctx || ctx.kind !== "curl_idempotency") return null;
+  if (typeof ctx.scope?.registration_id !== "string") return null;
+  if (typeof ctx.scope?.sender_id !== "string") return null;
+  if (typeof ctx.scope?.client_key !== "string") return null;
+  return ctx;
+}
+function readCurlIdempotencyScope(message) {
+  return readInboundMessageContext(message)?.scope ?? null;
+}
+
 // ../core-daemon/bus.ts
 var MessageBus = class {
   constructor(options) {
@@ -5571,6 +5607,10 @@ var MessageBus = class {
   }
   async receiveInbound(message) {
     assertHasOrigin(message);
+    const curlScope = readCurlIdempotencyScope(message);
+    if (curlScope) {
+      return this.receiveInboundForCurlIdempotency(message, curlScope);
+    }
     const seenKey = `${message.chat.comm}:${message.chat.account}:${message.message_id}`;
     if (this.seen.seen(seenKey, this.now())) {
       await this.options.audit.append({
@@ -5644,6 +5684,154 @@ var MessageBus = class {
       await this.dispatchSink.enqueueInbound(message, conversation);
     }
     return conversation;
+  }
+  /**
+   * AGE-96: crash-resumable inbound path for curl POSTs that carry an
+   * idempotency scope. Progress markers live on the scoped curl receipt —
+   * the default receiveInbound path above is unchanged for all other comms.
+   */
+  async receiveInboundForCurlIdempotency(message, scope) {
+    const storage = this.options.storage;
+    let receipt = await storage.getCurlInboundReceipt(scope);
+    if (!receipt) {
+      throw new Error(
+        `curl idempotency receipt missing for ${scope.registration_id}/${scope.sender_id}`
+      );
+    }
+    if (receipt.state === "accepted" && receipt.conversation_id) {
+      const done = await storage.getConversation(receipt.conversation_id);
+      if (done) return done;
+    }
+    const receivingAdapter = this.comms.get(
+      adapterKey(message.chat.comm, message.chat.account)
+    );
+    const foreignBotPolicy = {
+      allowForeignBots: false,
+      allowedBotIds: receivingAdapter?.allowedSenderIds
+    };
+    if (!isForeignBotAllowed(message.sender, foreignBotPolicy)) {
+      await this.options.audit.append({
+        timestamp: this.now(),
+        kind: "loop_prevention_drop",
+        detail: {
+          message_id: message.message_id,
+          reason: "foreign_bot",
+          sender_id: message.sender.id,
+          comm: message.chat.comm,
+          account: message.chat.account,
+          chat_native_id: message.chat.chat_native_id,
+          platform_message_id: message.platform_message_id,
+          sender_is_bot: message.sender.isBot
+        }
+      });
+      throw new Error(`foreign bot sender rejected: ${message.sender.id}`);
+    }
+    const registration = await this.registrationFor(message.chat);
+    this.assertCurlIdempotencyScope(message, scope, registration, receipt);
+    let conversation;
+    if (receipt.conversation_id) {
+      conversation = await storage.getConversation(receipt.conversation_id) ?? await this.upsertConversation(registration, message);
+    } else {
+      conversation = await this.upsertConversation(registration, message);
+      await storage.markCurlReceiptConversation(scope, conversation.conversation_id);
+    }
+    receipt = await storage.getCurlInboundReceipt(scope) ?? receipt;
+    const now = this.now();
+    if (receipt.transcript_recorded_at == null) {
+      const recordedAt = await this.transcriptInboundTimestamp(
+        conversation.conversation_id,
+        message.message_id
+      );
+      if (recordedAt == null) {
+        await this.options.transcripts.append({
+          conversation_id: conversation.conversation_id,
+          timestamp: message.received_at,
+          direction: "inbound",
+          message_id: message.message_id,
+          payload: message
+        });
+      }
+      await storage.touchConversationInbound(
+        conversation.conversation_id,
+        recordedAt ?? message.received_at,
+        message.message_id
+      );
+      await storage.markCurlReceiptTranscript(scope, now);
+    }
+    receipt = await storage.getCurlInboundReceipt(scope) ?? receipt;
+    const auditAt = receipt.audit_recorded_at ?? receipt.reserved_at;
+    const auditDone = receipt.audit_recorded_at != null || await this.auditHasInboundReceived(conversation.conversation_id, message, auditAt);
+    if (!auditDone) {
+      await this.options.audit.append({
+        timestamp: auditAt,
+        kind: "inbound_received",
+        agent: registration.agent,
+        conversation_id: conversation.conversation_id,
+        detail: {
+          comm: registration.comm,
+          account: message.chat.account,
+          account_label: registration.account_label,
+          platform_message_id: message.platform_message_id
+        }
+      });
+      await storage.markCurlReceiptAudit(scope, auditAt);
+    }
+    receipt = await storage.getCurlInboundReceipt(scope) ?? receipt;
+    if (receipt.query_consumed_at == null) {
+      const consumedByQuery = await this.tryResolveOpenQuery(conversation, message, {
+        scope,
+        receipt,
+        now
+      });
+      if (consumedByQuery) return conversation;
+    }
+    receipt = await storage.getCurlInboundReceipt(scope) ?? receipt;
+    const dispatchDone = receipt.query_consumed_at != null || receipt.dispatch_recorded_at != null || await storage.hasPendingInboundDelivery({
+      conversation_id: conversation.conversation_id,
+      message_id: message.message_id,
+      comm: message.chat.comm,
+      account: String(message.chat.account)
+    });
+    if (!dispatchDone && this.dispatchSink) {
+      await this.dispatchSink.enqueueInbound(message, conversation);
+      await storage.markCurlReceiptDispatch(scope, now);
+    }
+    return conversation;
+  }
+  async transcriptInboundTimestamp(conversation_id, message_id) {
+    for await (const entry of this.options.transcripts.read(conversation_id)) {
+      if (entry.direction === "inbound" && entry.message_id === message_id) {
+        return entry.timestamp;
+      }
+    }
+    return null;
+  }
+  assertCurlIdempotencyScope(message, scope, registration, receipt) {
+    if (message.chat.comm !== "curl") {
+      throw new Error(
+        `curl idempotency context on non-curl message: ${message.chat.comm}`
+      );
+    }
+    if (scope.registration_id !== registration.registration_id) {
+      throw new Error(
+        `curl idempotency registration_id mismatch: scope=${scope.registration_id} registration=${registration.registration_id}`
+      );
+    }
+    if (scope.sender_id !== message.sender.id) {
+      throw new Error(
+        `curl idempotency sender_id mismatch: scope=${scope.sender_id} message=${message.sender.id}`
+      );
+    }
+    if (receipt.message_id !== message.message_id) {
+      throw new Error(
+        `curl idempotency message_id mismatch: receipt=${receipt.message_id} message=${message.message_id}`
+      );
+    }
+  }
+  async auditHasInboundReceived(conversation_id, message, auditProbeAt) {
+    const audit = this.options.audit;
+    if (typeof audit.hasInboundReceived !== "function") return false;
+    return audit.hasInboundReceived(conversation_id, message, auditProbeAt);
   }
   async send(request) {
     let target;
@@ -5788,7 +5976,22 @@ var MessageBus = class {
       detail: { query_id: query.query_id, kind: query.kind }
     });
   }
-  async tryResolveOpenQuery(conversation, message) {
+  async tryResolveOpenQuery(conversation, message, curlRecovery) {
+    const storage = this.options.storage;
+    if (curlRecovery?.receipt.planned_query_id) {
+      const plannedId = curlRecovery.receipt.planned_query_id;
+      const record = await storage.getQuery(plannedId);
+      if (!record) return false;
+      if (record.resolved_at != null) {
+        await storage.markCurlReceiptQueryConsumed(curlRecovery.scope, curlRecovery.now);
+        return true;
+      }
+      if (!message.text) return false;
+      const chat2 = chatRefFromConversation(conversation);
+      const decision = decisionFromMessage(record, message, chat2, this.now());
+      if (!decision) return false;
+      return this.resolveQueryForCurlRecovery(plannedId, decision, curlRecovery);
+    }
     if (!message.text) return false;
     const open5 = await this.options.storage.listOpenQueriesByConversation(
       conversation.conversation_id
@@ -5800,7 +6003,11 @@ var MessageBus = class {
       if (target) {
         const decision = decisionFromMessage(target, message, chat, this.now());
         if (!decision) return false;
-        return this.resolveQuery(target.query_id, decision);
+        return this.resolveQueryForCurlRecovery(
+          target.query_id,
+          decision,
+          curlRecovery
+        );
       }
     }
     const candidates = open5.map((q) => ({
@@ -5810,7 +6017,11 @@ var MessageBus = class {
     const strict = candidates.filter((entry) => entry.query.kind !== "freetext");
     const pool = strict.length > 0 ? strict : candidates;
     if (pool.length === 1) {
-      return this.resolveQuery(pool[0].query.query_id, pool[0].decision);
+      return this.resolveQueryForCurlRecovery(
+        pool[0].query.query_id,
+        pool[0].decision,
+        curlRecovery
+      );
     }
     if (pool.length > 1) {
       await this.sendAmbiguousReplyHelper(
@@ -5818,9 +6029,28 @@ var MessageBus = class {
         pool.map((entry) => entry.query),
         message
       );
+      if (curlRecovery) {
+        await storage.markCurlReceiptQueryConsumed(curlRecovery.scope, curlRecovery.now);
+      }
       return true;
     }
     return false;
+  }
+  async resolveQueryForCurlRecovery(queryId, decision, curlRecovery) {
+    if (curlRecovery) {
+      await this.options.storage.markCurlReceiptPlannedQuery(
+        curlRecovery.scope,
+        queryId
+      );
+    }
+    const resolved = await this.resolveQuery(queryId, decision);
+    if (curlRecovery && resolved) {
+      await this.options.storage.markCurlReceiptQueryConsumed(
+        curlRecovery.scope,
+        curlRecovery.now
+      );
+    }
+    return resolved;
   }
   /**
    * AGE-9: a bare reply matched more than one open query — never guess which
@@ -6326,6 +6556,14 @@ var sessionLabelScopeMigration = {
     await ctx.exec(sql);
   }
 };
+var curlInboundIdempotencyMigration = {
+  version: 13,
+  description: "AGE-96: curl inbound idempotency receipts + acceptance progress",
+  async up(ctx) {
+    const sql = await readFile5(join3(schemaDir, "013_curl_inbound_idempotency.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -6339,7 +6577,8 @@ async function runStorageMigrations(db) {
     multiOpenQueriesMigration,
     durablePendingInboundMigration,
     sessionDaemonOwnerMigration,
-    sessionLabelScopeMigration
+    sessionLabelScopeMigration,
+    curlInboundIdempotencyMigration
   ]);
 }
 
@@ -7079,6 +7318,134 @@ var SqliteStorage = class _SqliteStorage {
       stmt.run(key.conversation_id, key.message_id, key.comm, key.account);
     }
   }
+  async reserveCurlInboundReceipt(input) {
+    const existing = await this.getCurlInboundReceipt(input);
+    if (existing) {
+      if (existing.state === "accepted" && existing.expires_at <= input.reserved_at) {
+        this.db.prepare(`
+            DELETE FROM curl_inbound_receipts
+            WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+          `).run(input.registration_id, input.sender_id, input.client_key);
+      } else if (existing.request_hash !== input.request_hash) {
+        return { kind: "conflict" };
+      } else if (existing.state === "accepted") {
+        return {
+          kind: "replay",
+          message_id: existing.message_id,
+          conversation_id: existing.conversation_id
+        };
+      } else {
+        return {
+          kind: "resume",
+          message_id: existing.message_id,
+          conversation_id: existing.conversation_id
+        };
+      }
+    }
+    try {
+      this.db.prepare(`
+          INSERT INTO curl_inbound_receipts (
+            registration_id, sender_id, client_key, request_hash, message_id,
+            conversation_id, state, reserved_at, accepted_at, expires_at,
+            transcript_recorded_at, audit_recorded_at, dispatch_recorded_at,
+            query_consumed_at, planned_query_id
+          ) VALUES (?, ?, ?, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, NULL, NULL, NULL)
+        `).run(
+        input.registration_id,
+        input.sender_id,
+        input.client_key,
+        input.request_hash,
+        input.message_id,
+        input.reserved_at,
+        input.expires_at
+      );
+      return { kind: "reserved", message_id: input.message_id };
+    } catch (error) {
+      if (!isSqliteUniqueViolation(error)) throw error;
+      return this.reserveCurlInboundReceipt(input);
+    }
+  }
+  async acceptCurlInboundReceipt(input) {
+    const result = this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET state = 'accepted',
+            conversation_id = ?,
+            accepted_at = ?
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+          AND state = 'pending'
+      `).run(
+      input.conversation_id,
+      input.accepted_at,
+      input.registration_id,
+      input.sender_id,
+      input.client_key
+    );
+    return (result.changes ?? 0) === 1;
+  }
+  async getCurlInboundReceipt(scope) {
+    const row = this.db.prepare(`
+        SELECT * FROM curl_inbound_receipts
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).get(scope.registration_id, scope.sender_id, scope.client_key);
+    return row ? this.curlInboundReceiptFromRow(row) : null;
+  }
+  async deleteExpiredCurlInboundReceipts(now) {
+    const result = this.db.prepare(
+      "DELETE FROM curl_inbound_receipts WHERE state = 'accepted' AND expires_at <= ?"
+    ).run(now);
+    return result.changes ?? 0;
+  }
+  async markCurlReceiptConversation(scope, conversation_id) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET conversation_id = COALESCE(conversation_id, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(conversation_id, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptTranscript(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET transcript_recorded_at = COALESCE(transcript_recorded_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptAudit(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET audit_recorded_at = COALESCE(audit_recorded_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptDispatch(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET dispatch_recorded_at = COALESCE(dispatch_recorded_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptQueryConsumed(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET query_consumed_at = COALESCE(query_consumed_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptPlannedQuery(scope, query_id) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET planned_query_id = ?
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+          AND planned_query_id IS NULL
+      `).run(query_id, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async hasPendingInboundDelivery(key) {
+    const row = this.db.prepare(`
+        SELECT 1 AS present FROM pending_inbound_deliveries
+        WHERE conversation_id = ? AND message_id = ? AND comm = ? AND account = ?
+        LIMIT 1
+      `).get(key.conversation_id, key.message_id, key.comm, key.account);
+    return row != null;
+  }
   async close() {
     this.db.close();
   }
@@ -7160,6 +7527,26 @@ var SqliteStorage = class _SqliteStorage {
       options_json: r.options_json
     };
   }
+  curlInboundReceiptFromRow(row) {
+    const r = row;
+    return {
+      registration_id: r.registration_id,
+      sender_id: r.sender_id,
+      client_key: r.client_key,
+      request_hash: r.request_hash,
+      message_id: r.message_id,
+      conversation_id: r.conversation_id ?? null,
+      state: r.state,
+      reserved_at: r.reserved_at,
+      accepted_at: r.accepted_at ?? null,
+      expires_at: r.expires_at,
+      transcript_recorded_at: r.transcript_recorded_at ?? null,
+      audit_recorded_at: r.audit_recorded_at ?? null,
+      dispatch_recorded_at: r.dispatch_recorded_at ?? null,
+      query_consumed_at: r.query_consumed_at ?? null,
+      planned_query_id: r.planned_query_id ?? null
+    };
+  }
   pendingInboundDeliveryFromRow(row) {
     const r = row;
     return {
@@ -7197,6 +7584,11 @@ var SqliteStorage = class _SqliteStorage {
     };
   }
 };
+function isSqliteUniqueViolation(error) {
+  if (error == null || typeof error !== "object") return false;
+  const sqliteError = error;
+  return sqliteError.code === "SQLITE_CONSTRAINT_UNIQUE" || sqliteError.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || sqliteError.errcode === 2067 || sqliteError.errcode === 1555;
+}
 async function openSqliteStorage(path8) {
   return SqliteStorage.open(path8);
 }
@@ -7206,10 +7598,10 @@ function isConstraintError(error) {
 }
 
 // ../core-daemon/storage/transcripts.ts
-import { createReadStream } from "node:fs";
+import { createReadStream as createReadStream2 } from "node:fs";
 import { mkdir as mkdir4, stat as stat2 } from "node:fs/promises";
 import { dirname as dirname3, join as join4 } from "node:path";
-import { createInterface } from "node:readline/promises";
+import { createInterface as createInterface2 } from "node:readline/promises";
 function safeSegment2(value) {
   return encodeURIComponent(value);
 }
@@ -7231,8 +7623,8 @@ var JsonlTranscriptStore = class {
       return;
     }
     let yielded = 0;
-    const lines = createInterface({
-      input: createReadStream(path8, { encoding: "utf8" }),
+    const lines = createInterface2({
+      input: createReadStream2(path8, { encoding: "utf8" }),
       crlfDelay: Infinity
     });
     for await (const line of lines) {
@@ -7251,7 +7643,7 @@ var JsonlTranscriptStore = class {
 
 // ../core-daemon/storage/blobs.ts
 import { createHash } from "node:crypto";
-import { createReadStream as createReadStream2 } from "node:fs";
+import { createReadStream as createReadStream3 } from "node:fs";
 import { mkdir as mkdir5, open as open4, stat as stat3 } from "node:fs/promises";
 import { join as join5 } from "node:path";
 import { Readable } from "node:stream";
@@ -7277,7 +7669,7 @@ var ContentAddressedBlobStore = class {
     return ref;
   }
   async open(ref) {
-    return Readable.toWeb(createReadStream2(this.pathFor(ref)));
+    return Readable.toWeb(createReadStream3(this.pathFor(ref)));
   }
   pathFor(ref) {
     return join5(this.root, "blobs", ref.hash.slice(0, 2), ref.hash);
@@ -8273,7 +8665,9 @@ async function createAdapterFromRegistration(input) {
     input.registration.bot_user_id,
     {
       blobs: input.blobs,
-      stateRoot: input.stateRoot
+      stateRoot: input.stateRoot,
+      registrationId: input.registration.registration_id,
+      storage: input.storage
     }
   );
   if (adapter.exclusiveResource?.() != null) {

@@ -18,13 +18,13 @@ import { createServer } from "node:http";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
+import { attachInboundMessageContext } from "../../core-daemon/runtime/inbound-message-context.js";
+import { curlReceiptTtlMs, curlIdempotencyScopeKey, curlRequestHash, syntheticChatNativeId, validateCurlIdempotencyKey, validateCurlMetadata, } from "./idempotency.js";
+// Keep the AGE-50 helper export stable for existing adapter consumers.
+export { syntheticChatNativeId } from "./idempotency.js";
 export const CURL_LOOPBACK_HOST = "127.0.0.1";
 export const CURL_MESSAGES_PATH = "/messages";
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
-/** Deterministic synthetic conversation key when the caller omits `chat_native_id`. */
-export function syntheticChatNativeId(senderId) {
-    return `curl:${senderId}`;
-}
 /** Filesystem-safe folder name for an account id like `curl:local`. */
 export function sanitizeAccountIdForPath(accountId) {
     return accountId.replace(/[^A-Za-z0-9._-]+/g, "-");
@@ -54,6 +54,22 @@ export function parseCurlPostBody(raw) {
         (typeof record.metadata !== "object" || Array.isArray(record.metadata))) {
         return { error: "body.metadata must be a JSON object when present" };
     }
+    let metadata;
+    if (record.metadata != null) {
+        const validatedMetadata = validateCurlMetadata(record.metadata);
+        if ("error" in validatedMetadata)
+            return validatedMetadata;
+        metadata = Object.keys(validatedMetadata.metadata).length > 0
+            ? validatedMetadata.metadata
+            : undefined;
+    }
+    let idempotency_key;
+    if (record.idempotency_key != null) {
+        const validated = validateCurlIdempotencyKey(record.idempotency_key);
+        if ("error" in validated)
+            return validated;
+        idempotency_key = validated.key;
+    }
     return {
         body: {
             project: record.project,
@@ -63,7 +79,8 @@ export function parseCurlPostBody(raw) {
             chat_native_id: typeof record.chat_native_id === "string" && record.chat_native_id.length > 0
                 ? record.chat_native_id
                 : undefined,
-            metadata: record.metadata,
+            metadata,
+            idempotency_key,
         },
     };
 }
@@ -92,6 +109,7 @@ export class CurlCommAdapter {
     connectionState = null;
     server = null;
     boundPort = null;
+    inflightByScope = new Map();
     constructor(options) {
         this.options = options;
         if (!options.token) {
@@ -256,11 +274,114 @@ export class CurlCommAdapter {
             this.respondJson(res, 503, { ok: false, error: "adapter not attached to the bus yet; retry" });
             return;
         }
-        const uuid = crypto.randomUUID();
+        if (body.idempotency_key) {
+            await this.handleIdempotentPost(res, body, handler);
+            return;
+        }
+        const acceptance = await this.dispatchInbound(body, handler, crypto.randomUUID());
+        this.respondAccepted(res, acceptance, body);
+    }
+    async handleIdempotentPost(res, body, handler) {
+        const storage = this.options.storage;
+        const registrationId = this.options.registrationId;
+        if (!storage || !registrationId) {
+            this.respondJson(res, 503, {
+                ok: false,
+                error: "idempotency_key requires daemon storage wiring; retry after adapter reload",
+            });
+            return;
+        }
+        const scopeKey = curlIdempotencyScopeKey({
+            registration_id: registrationId,
+            sender_id: body.sender_id,
+            client_key: body.idempotency_key,
+        });
+        const existing = this.inflightByScope.get(scopeKey);
+        if (existing) {
+            const result = await existing;
+            this.respondJson(res, result.status, result.payload);
+            return;
+        }
+        const work = this.processIdempotentPost(body, handler, storage, registrationId);
+        this.inflightByScope.set(scopeKey, work);
+        try {
+            const result = await work;
+            this.respondJson(res, result.status, result.payload);
+        }
+        finally {
+            this.inflightByScope.delete(scopeKey);
+        }
+    }
+    async processIdempotentPost(body, handler, storage, registrationId) {
+        const now = this.now();
+        await storage.deleteExpiredCurlInboundReceipts(now);
+        const requestHash = curlRequestHash({
+            project: body.project,
+            agent: body.agent,
+            sender_id: body.sender_id,
+            text: body.text,
+            chat_native_id: body.chat_native_id,
+            metadata: body.metadata,
+        });
+        const scope = {
+            registration_id: registrationId,
+            sender_id: body.sender_id,
+            client_key: body.idempotency_key,
+        };
+        const ttlMs = this.options.receiptTtlMs ?? curlReceiptTtlMs();
+        const reserve = await storage.reserveCurlInboundReceipt({
+            ...scope,
+            request_hash: requestHash,
+            message_id: `curl:${crypto.randomUUID()}`,
+            reserved_at: now,
+            expires_at: now + ttlMs,
+        });
+        if (reserve.kind === "conflict") {
+            return {
+                status: 409,
+                payload: {
+                    ok: false,
+                    error: "idempotency_key was already used with a different request body",
+                },
+            };
+        }
+        if (reserve.kind === "replay") {
+            return {
+                status: 202,
+                payload: {
+                    ok: true,
+                    message_id: reserve.message_id,
+                    conversation_id: reserve.conversation_id ?? undefined,
+                    chat_native_id: body.chat_native_id ?? syntheticChatNativeId(body.sender_id),
+                },
+            };
+        }
+        const platformUuid = reserve.message_id.slice("curl:".length);
+        const acceptance = await this.dispatchInbound(body, handler, platformUuid, reserve.message_id, scope);
+        const accepted = await storage.acceptCurlInboundReceipt({
+            ...scope,
+            conversation_id: acceptance.conversation_id,
+            accepted_at: this.now(),
+        });
+        if (!accepted) {
+            throw new Error(`curl idempotency accept failed: pending receipt missing for ` +
+                `${scope.registration_id}/${scope.sender_id}/${scope.client_key}`);
+        }
+        return {
+            status: 202,
+            payload: {
+                ok: true,
+                message_id: reserve.message_id,
+                conversation_id: acceptance.conversation_id,
+                chat_native_id: acceptance.chat_native_id,
+            },
+        };
+    }
+    async dispatchInbound(body, handler, platformUuid, messageId, idempotencyScope) {
         const chatNativeId = body.chat_native_id ?? syntheticChatNativeId(body.sender_id);
-        const message = {
+        let message = {
             schema_version: 1,
-            message_id: `curl:${uuid}`,
+            message_id: messageId ?? `curl:${platformUuid}`,
             chat: {
                 comm: this.id,
                 account: this.accountId,
@@ -273,22 +394,32 @@ export class CurlCommAdapter {
             },
             origin: { comm: this.id },
             text: body.text,
-            platform_message_id: uuid,
+            platform_message_id: platformUuid,
             hop_count: 0,
             received_at: this.now(),
         };
         if (body.metadata) {
-            // Extra transcript-visible context for troubleshooting; the typed
-            // Message contract has no metadata slot, so it rides as an extension
-            // field that JSONL/transcript serialization preserves.
             message.metadata = body.metadata;
         }
+        if (idempotencyScope) {
+            message = attachInboundMessageContext(message, {
+                kind: "curl_idempotency",
+                scope: idempotencyScope,
+            });
+        }
         const acceptance = await handler(message);
-        this.respondJson(res, 202, {
-            ok: true,
+        return {
             message_id: message.message_id,
             conversation_id: acceptance && typeof acceptance === "object" ? acceptance.conversation_id : undefined,
             chat_native_id: chatNativeId,
+        };
+    }
+    respondAccepted(res, acceptance, body) {
+        this.respondJson(res, 202, {
+            ok: true,
+            message_id: acceptance.message_id,
+            conversation_id: acceptance.conversation_id,
+            chat_native_id: body.chat_native_id ?? syntheticChatNativeId(body.sender_id),
         });
     }
     readBody(req) {

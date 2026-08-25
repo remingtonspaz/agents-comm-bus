@@ -25,6 +25,7 @@ import type {
   CommAdapter,
   CommConnectionState,
   CommId,
+  ConversationId,
   FailureClassification,
   FilterDropEvent,
   InboundAcceptance,
@@ -32,9 +33,21 @@ import type {
   MessageId,
   OutboundPayload,
   SendResult,
+  Storage,
 } from "agents-comm-bus-core";
-
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
+import { attachInboundMessageContext } from "../../core-daemon/runtime/inbound-message-context.js";
+import {
+  curlReceiptTtlMs,
+  curlIdempotencyScopeKey,
+  curlRequestHash,
+  syntheticChatNativeId,
+  validateCurlIdempotencyKey,
+  validateCurlMetadata,
+} from "./idempotency.js";
+
+// Keep the AGE-50 helper export stable for existing adapter consumers.
+export { syntheticChatNativeId } from "./idempotency.js";
 
 export const CURL_LOOPBACK_HOST = "127.0.0.1";
 export const CURL_MESSAGES_PATH = "/messages";
@@ -63,11 +76,11 @@ export interface CurlCommAdapterOptions {
   /** AGE-10: verbose allowlist-filter tracing (pass AND drop). */
   filterTrace?: boolean;
   maxBodyBytes?: number;
-}
-
-/** Deterministic synthetic conversation key when the caller omits `chat_native_id`. */
-export function syntheticChatNativeId(senderId: string): string {
-  return `curl:${senderId}`;
+  /** Immutable registration surrogate for idempotency scoping (AGE-96). */
+  registrationId?: string;
+  /** Daemon storage for durable curl idempotency receipts (AGE-96). */
+  storage?: Storage;
+  receiptTtlMs?: number;
 }
 
 /** Filesystem-safe folder name for an account id like `curl:local`. */
@@ -86,6 +99,7 @@ interface ParsedCurlPost {
   text: string;
   chat_native_id?: string;
   metadata?: Record<string, unknown>;
+  idempotency_key?: string;
 }
 
 /**
@@ -112,6 +126,20 @@ export function parseCurlPostBody(raw: unknown): { body: ParsedCurlPost } | { er
   ) {
     return { error: "body.metadata must be a JSON object when present" };
   }
+  let metadata: Record<string, unknown> | undefined;
+  if (record.metadata != null) {
+    const validatedMetadata = validateCurlMetadata(record.metadata);
+    if ("error" in validatedMetadata) return validatedMetadata;
+    metadata = Object.keys(validatedMetadata.metadata).length > 0
+      ? validatedMetadata.metadata
+      : undefined;
+  }
+  let idempotency_key: string | undefined;
+  if (record.idempotency_key != null) {
+    const validated = validateCurlIdempotencyKey(record.idempotency_key);
+    if ("error" in validated) return validated;
+    idempotency_key = validated.key;
+  }
   return {
     body: {
       project: record.project as string,
@@ -122,7 +150,8 @@ export function parseCurlPostBody(raw: unknown): { body: ParsedCurlPost } | { er
         typeof record.chat_native_id === "string" && record.chat_native_id.length > 0
           ? record.chat_native_id
           : undefined,
-      metadata: record.metadata as Record<string, unknown> | undefined,
+      metadata,
+      idempotency_key,
     },
   };
 }
@@ -155,6 +184,7 @@ export class CurlCommAdapter implements CommAdapter {
   private connectionState: CommConnectionState | null = null;
   private server: Server | null = null;
   private boundPort: number | null = null;
+  private readonly inflightByScope = new Map<string, Promise<IdempotentPostResult>>();
 
   constructor(private readonly options: CurlCommAdapterOptions) {
     if (!options.token) {
@@ -342,11 +372,149 @@ export class CurlCommAdapter implements CommAdapter {
       return;
     }
 
-    const uuid = crypto.randomUUID();
+    if (body.idempotency_key) {
+      await this.handleIdempotentPost(res, body, handler);
+      return;
+    }
+
+    const acceptance = await this.dispatchInbound(body, handler, crypto.randomUUID());
+    this.respondAccepted(res, acceptance, body);
+  }
+
+  private async handleIdempotentPost(
+    res: ServerResponse,
+    body: ParsedCurlPost,
+    handler: (msg: Message) => Promise<void | InboundAcceptance>,
+  ): Promise<void> {
+    const storage = this.options.storage;
+    const registrationId = this.options.registrationId;
+    if (!storage || !registrationId) {
+      this.respondJson(res, 503, {
+        ok: false,
+        error: "idempotency_key requires daemon storage wiring; retry after adapter reload",
+      });
+      return;
+    }
+
+    const scopeKey = curlIdempotencyScopeKey({
+      registration_id: registrationId,
+      sender_id: body.sender_id,
+      client_key: body.idempotency_key!,
+    });
+    const existing = this.inflightByScope.get(scopeKey);
+    if (existing) {
+      const result = await existing;
+      this.respondJson(res, result.status, result.payload);
+      return;
+    }
+
+    const work = this.processIdempotentPost(body, handler, storage, registrationId);
+    this.inflightByScope.set(scopeKey, work);
+    try {
+      const result = await work;
+      this.respondJson(res, result.status, result.payload);
+    } finally {
+      this.inflightByScope.delete(scopeKey);
+    }
+  }
+
+  private async processIdempotentPost(
+    body: ParsedCurlPost,
+    handler: (msg: Message) => Promise<void | InboundAcceptance>,
+    storage: Storage,
+    registrationId: string,
+  ): Promise<IdempotentPostResult> {
+    const now = this.now();
+    await storage.deleteExpiredCurlInboundReceipts(now);
+    const requestHash = curlRequestHash({
+      project: body.project,
+      agent: body.agent,
+      sender_id: body.sender_id,
+      text: body.text,
+      chat_native_id: body.chat_native_id,
+      metadata: body.metadata,
+    });
+    const scope = {
+      registration_id: registrationId,
+      sender_id: body.sender_id,
+      client_key: body.idempotency_key!,
+    };
+    const ttlMs = this.options.receiptTtlMs ?? curlReceiptTtlMs();
+    const reserve = await storage.reserveCurlInboundReceipt({
+      ...scope,
+      request_hash: requestHash,
+      message_id: `curl:${crypto.randomUUID()}` as MessageId,
+      reserved_at: now,
+      expires_at: now + ttlMs,
+    });
+
+    if (reserve.kind === "conflict") {
+      return {
+        status: 409,
+        payload: {
+          ok: false,
+          error: "idempotency_key was already used with a different request body",
+        },
+      };
+    }
+
+    if (reserve.kind === "replay") {
+      return {
+        status: 202,
+        payload: {
+          ok: true,
+          message_id: reserve.message_id,
+          conversation_id: reserve.conversation_id ?? undefined,
+          chat_native_id: body.chat_native_id ?? syntheticChatNativeId(body.sender_id),
+        },
+      };
+    }
+
+    const platformUuid = reserve.message_id.slice("curl:".length);
+    const acceptance = await this.dispatchInbound(
+      body,
+      handler,
+      platformUuid,
+      reserve.message_id,
+      scope,
+    );
+    const accepted = await storage.acceptCurlInboundReceipt({
+      ...scope,
+      conversation_id: acceptance.conversation_id as ConversationId,
+      accepted_at: this.now(),
+    });
+    if (!accepted) {
+      throw new Error(
+        `curl idempotency accept failed: pending receipt missing for ` +
+          `${scope.registration_id}/${scope.sender_id}/${scope.client_key}`,
+      );
+    }
+    return {
+      status: 202,
+      payload: {
+        ok: true,
+        message_id: reserve.message_id,
+        conversation_id: acceptance.conversation_id,
+        chat_native_id: acceptance.chat_native_id,
+      },
+    };
+  }
+
+  private async dispatchInbound(
+    body: ParsedCurlPost,
+    handler: (msg: Message) => Promise<void | InboundAcceptance>,
+    platformUuid: string,
+    messageId?: MessageId,
+    idempotencyScope?: {
+      registration_id: string;
+      sender_id: string;
+      client_key: string;
+    },
+  ): Promise<{ message_id: MessageId; conversation_id?: string; chat_native_id: string }> {
     const chatNativeId = body.chat_native_id ?? syntheticChatNativeId(body.sender_id);
-    const message: Message & { metadata?: Record<string, unknown> } = {
+    let message: Message & { metadata?: Record<string, unknown> } = {
       schema_version: 1,
-      message_id: `curl:${uuid}` as MessageId,
+      message_id: messageId ?? (`curl:${platformUuid}` as MessageId),
       chat: {
         comm: this.id,
         account: this.accountId,
@@ -359,23 +527,39 @@ export class CurlCommAdapter implements CommAdapter {
       },
       origin: { comm: this.id },
       text: body.text,
-      platform_message_id: uuid,
+      platform_message_id: platformUuid,
       hop_count: 0,
       received_at: this.now(),
     };
     if (body.metadata) {
-      // Extra transcript-visible context for troubleshooting; the typed
-      // Message contract has no metadata slot, so it rides as an extension
-      // field that JSONL/transcript serialization preserves.
       message.metadata = body.metadata;
+    }
+    if (idempotencyScope) {
+      message = attachInboundMessageContext(message, {
+        kind: "curl_idempotency",
+        scope: idempotencyScope,
+      });
     }
 
     const acceptance = await handler(message);
+    return {
+      message_id: message.message_id,
+      conversation_id:
+        acceptance && typeof acceptance === "object" ? acceptance.conversation_id : undefined,
+      chat_native_id: chatNativeId,
+    };
+  }
+
+  private respondAccepted(
+    res: ServerResponse,
+    acceptance: { message_id: MessageId; conversation_id?: string; chat_native_id: string },
+    body: ParsedCurlPost,
+  ): void {
     this.respondJson(res, 202, {
       ok: true,
-      message_id: message.message_id,
-      conversation_id: acceptance && typeof acceptance === "object" ? acceptance.conversation_id : undefined,
-      chat_native_id: chatNativeId,
+      message_id: acceptance.message_id,
+      conversation_id: acceptance.conversation_id,
+      chat_native_id: body.chat_native_id ?? syntheticChatNativeId(body.sender_id),
     });
   }
 
@@ -477,4 +661,9 @@ export class CurlCommAdapter implements CommAdapter {
         `sender=${senderId} (allowlist size=${this.allowedSenders.size})`,
     );
   }
+}
+
+interface IdempotentPostResult {
+  status: number;
+  payload: Record<string, unknown>;
 }

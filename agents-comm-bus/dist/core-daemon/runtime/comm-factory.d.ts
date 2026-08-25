@@ -52,6 +52,8 @@ export interface CommAdapterFactory {
 export interface CommAdapterCreateContext {
     blobs: BlobStore;
     stateRoot: string;
+    registrationId?: string;
+    storage?: Storage;
 }
 export interface ResolveCredentialsContext {
     storage?: Storage;

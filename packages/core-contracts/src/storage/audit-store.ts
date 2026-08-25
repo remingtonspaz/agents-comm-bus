@@ -82,4 +82,10 @@ export interface AuditEvent {
 
 export interface AuditStore {
   append(event: AuditEvent): Promise<void>;
+  /** Optional probe for crash-resume idempotency (AGE-96 curl path). */
+  hasInboundReceived?(
+    conversation_id: ConversationId,
+    message: Pick<import("../messages.js").Message, "platform_message_id">,
+    auditTimestamp?: number,
+  ): Promise<boolean>;
 }

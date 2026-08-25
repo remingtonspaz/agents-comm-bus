@@ -85,9 +85,19 @@ export declare class MessageBus {
     start(): Promise<void>;
     stop(): Promise<void>;
     receiveInbound(message: Message): Promise<Conversation>;
+    /**
+     * AGE-96: crash-resumable inbound path for curl POSTs that carry an
+     * idempotency scope. Progress markers live on the scoped curl receipt —
+     * the default receiveInbound path above is unchanged for all other comms.
+     */
+    private receiveInboundForCurlIdempotency;
+    private transcriptInboundTimestamp;
+    private assertCurlIdempotencyScope;
+    private auditHasInboundReceived;
     send(request: SendRequest): Promise<MessageId>;
     openQuery(query: Query): Promise<void>;
     private tryResolveOpenQuery;
+    private resolveQueryForCurlRecovery;
     /**
      * AGE-9: a bare reply matched more than one open query — never guess which
      * one was meant. Tell the user how to disambiguate (buttons are precise;

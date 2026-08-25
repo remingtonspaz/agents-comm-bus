@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.48";
+var DAEMON_VERSION = "0.2.49";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -3868,6 +3868,14 @@ var sessionLabelScopeMigration = {
     await ctx.exec(sql);
   }
 };
+var curlInboundIdempotencyMigration = {
+  version: 13,
+  description: "AGE-96: curl inbound idempotency receipts + acceptance progress",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "013_curl_inbound_idempotency.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3881,7 +3889,8 @@ async function runStorageMigrations(db) {
     multiOpenQueriesMigration,
     durablePendingInboundMigration,
     sessionDaemonOwnerMigration,
-    sessionLabelScopeMigration
+    sessionLabelScopeMigration,
+    curlInboundIdempotencyMigration
   ]);
 }
 
@@ -4621,6 +4630,134 @@ var SqliteStorage = class _SqliteStorage {
       stmt.run(key.conversation_id, key.message_id, key.comm, key.account);
     }
   }
+  async reserveCurlInboundReceipt(input) {
+    const existing = await this.getCurlInboundReceipt(input);
+    if (existing) {
+      if (existing.state === "accepted" && existing.expires_at <= input.reserved_at) {
+        this.db.prepare(`
+            DELETE FROM curl_inbound_receipts
+            WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+          `).run(input.registration_id, input.sender_id, input.client_key);
+      } else if (existing.request_hash !== input.request_hash) {
+        return { kind: "conflict" };
+      } else if (existing.state === "accepted") {
+        return {
+          kind: "replay",
+          message_id: existing.message_id,
+          conversation_id: existing.conversation_id
+        };
+      } else {
+        return {
+          kind: "resume",
+          message_id: existing.message_id,
+          conversation_id: existing.conversation_id
+        };
+      }
+    }
+    try {
+      this.db.prepare(`
+          INSERT INTO curl_inbound_receipts (
+            registration_id, sender_id, client_key, request_hash, message_id,
+            conversation_id, state, reserved_at, accepted_at, expires_at,
+            transcript_recorded_at, audit_recorded_at, dispatch_recorded_at,
+            query_consumed_at, planned_query_id
+          ) VALUES (?, ?, ?, ?, ?, NULL, 'pending', ?, NULL, ?, NULL, NULL, NULL, NULL, NULL)
+        `).run(
+        input.registration_id,
+        input.sender_id,
+        input.client_key,
+        input.request_hash,
+        input.message_id,
+        input.reserved_at,
+        input.expires_at
+      );
+      return { kind: "reserved", message_id: input.message_id };
+    } catch (error) {
+      if (!isSqliteUniqueViolation(error)) throw error;
+      return this.reserveCurlInboundReceipt(input);
+    }
+  }
+  async acceptCurlInboundReceipt(input) {
+    const result = this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET state = 'accepted',
+            conversation_id = ?,
+            accepted_at = ?
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+          AND state = 'pending'
+      `).run(
+      input.conversation_id,
+      input.accepted_at,
+      input.registration_id,
+      input.sender_id,
+      input.client_key
+    );
+    return (result.changes ?? 0) === 1;
+  }
+  async getCurlInboundReceipt(scope) {
+    const row = this.db.prepare(`
+        SELECT * FROM curl_inbound_receipts
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).get(scope.registration_id, scope.sender_id, scope.client_key);
+    return row ? this.curlInboundReceiptFromRow(row) : null;
+  }
+  async deleteExpiredCurlInboundReceipts(now) {
+    const result = this.db.prepare(
+      "DELETE FROM curl_inbound_receipts WHERE state = 'accepted' AND expires_at <= ?"
+    ).run(now);
+    return result.changes ?? 0;
+  }
+  async markCurlReceiptConversation(scope, conversation_id) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET conversation_id = COALESCE(conversation_id, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(conversation_id, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptTranscript(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET transcript_recorded_at = COALESCE(transcript_recorded_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptAudit(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET audit_recorded_at = COALESCE(audit_recorded_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptDispatch(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET dispatch_recorded_at = COALESCE(dispatch_recorded_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptQueryConsumed(scope, at) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET query_consumed_at = COALESCE(query_consumed_at, ?)
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+      `).run(at, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async markCurlReceiptPlannedQuery(scope, query_id) {
+    this.db.prepare(`
+        UPDATE curl_inbound_receipts
+        SET planned_query_id = ?
+        WHERE registration_id = ? AND sender_id = ? AND client_key = ?
+          AND planned_query_id IS NULL
+      `).run(query_id, scope.registration_id, scope.sender_id, scope.client_key);
+  }
+  async hasPendingInboundDelivery(key) {
+    const row = this.db.prepare(`
+        SELECT 1 AS present FROM pending_inbound_deliveries
+        WHERE conversation_id = ? AND message_id = ? AND comm = ? AND account = ?
+        LIMIT 1
+      `).get(key.conversation_id, key.message_id, key.comm, key.account);
+    return row != null;
+  }
   async close() {
     this.db.close();
   }
@@ -4702,6 +4839,26 @@ var SqliteStorage = class _SqliteStorage {
       options_json: r.options_json
     };
   }
+  curlInboundReceiptFromRow(row) {
+    const r = row;
+    return {
+      registration_id: r.registration_id,
+      sender_id: r.sender_id,
+      client_key: r.client_key,
+      request_hash: r.request_hash,
+      message_id: r.message_id,
+      conversation_id: r.conversation_id ?? null,
+      state: r.state,
+      reserved_at: r.reserved_at,
+      accepted_at: r.accepted_at ?? null,
+      expires_at: r.expires_at,
+      transcript_recorded_at: r.transcript_recorded_at ?? null,
+      audit_recorded_at: r.audit_recorded_at ?? null,
+      dispatch_recorded_at: r.dispatch_recorded_at ?? null,
+      query_consumed_at: r.query_consumed_at ?? null,
+      planned_query_id: r.planned_query_id ?? null
+    };
+  }
   pendingInboundDeliveryFromRow(row) {
     const r = row;
     return {
@@ -4739,6 +4896,11 @@ var SqliteStorage = class _SqliteStorage {
     };
   }
 };
+function isSqliteUniqueViolation(error) {
+  if (error == null || typeof error !== "object") return false;
+  const sqliteError = error;
+  return sqliteError.code === "SQLITE_CONSTRAINT_UNIQUE" || sqliteError.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || sqliteError.errcode === 2067 || sqliteError.errcode === 1555;
+}
 async function openSqliteStorage(path13) {
   return SqliteStorage.open(path13);
 }
@@ -4995,8 +5157,10 @@ import { mkdir as mkdir3, open as open3, readFile as readFile4, rm as rm2, write
 import path4 from "node:path";
 
 // ../core-daemon/storage/audit.ts
+import { createReadStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname as dirname2, join as join2 } from "node:path";
+import { createInterface } from "node:readline/promises";
 
 // ../core-daemon/storage/jsonl.ts
 import { open } from "node:fs/promises";
@@ -5027,6 +5191,25 @@ var JsonlAuditStore = class {
   }
   pathFor(timestamp) {
     return join2(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
+  }
+  async hasInboundReceived(conversation_id, message, auditTimestamp) {
+    const path13 = this.pathFor(auditTimestamp ?? Date.now());
+    try {
+      const lines = createInterface({
+        input: createReadStream(path13, { encoding: "utf8" }),
+        crlfDelay: Infinity
+      });
+      for await (const line of lines) {
+        if (line.trim() === "") continue;
+        const event = JSON.parse(line);
+        if (event.kind === "inbound_received" && event.conversation_id === conversation_id && event.detail?.platform_message_id === message.platform_message_id) {
+          return true;
+        }
+      }
+    } catch {
+      return false;
+    }
+    return false;
   }
 };
 

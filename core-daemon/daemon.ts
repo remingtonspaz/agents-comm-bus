@@ -787,6 +787,8 @@ async function createAdapterFromRegistration(input: {
     {
       blobs: input.blobs,
       stateRoot: input.stateRoot,
+      registrationId: input.registration.registration_id,
+      storage: input.storage,
     },
   );
   // AGE-35: gate single-consumer adapters behind the cross-checkout ownership

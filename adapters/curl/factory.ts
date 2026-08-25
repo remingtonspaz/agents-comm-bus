@@ -132,6 +132,8 @@ export class CurlCommAdapterFactory implements CommAdapterFactory {
         : undefined,
       allowedSenderIds: allowed,
       stateRoot: context?.stateRoot,
+      registrationId: context?.registrationId,
+      storage: context?.storage,
     });
   }
 

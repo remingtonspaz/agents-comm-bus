@@ -1,4 +1,5 @@
-import type { AccountId, ChatRef, CommAdapter, CommConnectionState, CommId, FailureClassification, FilterDropEvent, InboundAcceptance, Message, OutboundPayload, SendResult } from "agents-comm-bus-core";
+import type { AccountId, ChatRef, CommAdapter, CommConnectionState, CommId, FailureClassification, FilterDropEvent, InboundAcceptance, Message, OutboundPayload, SendResult, Storage } from "agents-comm-bus-core";
+export { syntheticChatNativeId } from "./idempotency.js";
 export declare const CURL_LOOPBACK_HOST = "127.0.0.1";
 export declare const CURL_MESSAGES_PATH = "/messages";
 export interface CurlCommAdapterOptions {
@@ -24,9 +25,12 @@ export interface CurlCommAdapterOptions {
     /** AGE-10: verbose allowlist-filter tracing (pass AND drop). */
     filterTrace?: boolean;
     maxBodyBytes?: number;
+    /** Immutable registration surrogate for idempotency scoping (AGE-96). */
+    registrationId?: string;
+    /** Daemon storage for durable curl idempotency receipts (AGE-96). */
+    storage?: Storage;
+    receiptTtlMs?: number;
 }
-/** Deterministic synthetic conversation key when the caller omits `chat_native_id`. */
-export declare function syntheticChatNativeId(senderId: string): string;
 /** Filesystem-safe folder name for an account id like `curl:local`. */
 export declare function sanitizeAccountIdForPath(accountId: string): string;
 export declare function curlEndpointFilePath(stateRoot: string, accountId: string): string;
@@ -37,6 +41,7 @@ interface ParsedCurlPost {
     text: string;
     chat_native_id?: string;
     metadata?: Record<string, unknown>;
+    idempotency_key?: string;
 }
 /**
  * Validate a decoded POST body. Returns the parsed shape or a caller-facing
@@ -65,6 +70,7 @@ export declare class CurlCommAdapter implements CommAdapter {
     private connectionState;
     private server;
     private boundPort;
+    private readonly inflightByScope;
     constructor(options: CurlCommAdapterOptions);
     get allowedSenderIds(): readonly string[];
     updateAllowedSenderIds(ids: readonly string[]): void;
@@ -95,6 +101,10 @@ export declare class CurlCommAdapter implements CommAdapter {
     };
     classifyFailure(): FailureClassification;
     private handleRequest;
+    private handleIdempotentPost;
+    private processIdempotentPost;
+    private dispatchInbound;
+    private respondAccepted;
     private readBody;
     private respondJson;
     private writeEndpointFile;
@@ -103,5 +113,4 @@ export declare class CurlCommAdapter implements CommAdapter {
     private emitFilterDrop;
     private traceFilterPass;
 }
-export {};
 //# sourceMappingURL=adapter.d.ts.map

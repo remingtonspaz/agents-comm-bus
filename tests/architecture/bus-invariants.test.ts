@@ -426,6 +426,19 @@ class MemoryStorage implements Storage {
   async listPendingInboundDeliveries() { return []; }
   async acknowledgePendingInboundDeliveries(): Promise<void> {}
 
+  async reserveCurlInboundReceipt(): Promise<never> {
+    throw new Error("not implemented");
+  }
+  async getCurlInboundReceipt() { return null; }
+  async deleteExpiredCurlInboundReceipts() { return 0; }
+  async markCurlReceiptConversation(): Promise<void> {}
+  async markCurlReceiptTranscript(): Promise<void> {}
+  async markCurlReceiptAudit(): Promise<void> {}
+  async markCurlReceiptDispatch(): Promise<void> {}
+  async markCurlReceiptQueryConsumed(): Promise<void> {}
+  async markCurlReceiptPlannedQuery(): Promise<void> {}
+  async hasPendingInboundDelivery() { return false; }
+
   async updateQueryKind(): Promise<boolean> { return false; }
   async supersedeOpenQueriesForSession(): Promise<number> { return 0; }
   async cancelOpenQuery(): Promise<boolean> { return false; }

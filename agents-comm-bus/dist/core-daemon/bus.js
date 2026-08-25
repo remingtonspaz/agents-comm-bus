@@ -3,6 +3,7 @@ import { normalizeProjectPath } from "./project-path.js";
 import { sessionOwnsConversation } from "./session-label-scope.js";
 import { createSessionOwnerLiveness, } from "./runtime/session-owner-liveness.js";
 import { SCHEMA_VERSION_CONVERSATION, SCHEMA_VERSION_QUERY, assertHasOrigin, isForeignBotAllowed, RecentSeenCache, tryResolve, } from "agents-comm-bus-core";
+import { readCurlIdempotencyScope } from "./runtime/inbound-message-context.js";
 export class MessageBus {
     options;
     /**
@@ -111,6 +112,10 @@ export class MessageBus {
     }
     async receiveInbound(message) {
         assertHasOrigin(message);
+        const curlScope = readCurlIdempotencyScope(message);
+        if (curlScope) {
+            return this.receiveInboundForCurlIdempotency(message, curlScope);
+        }
         // Scope the seen-key by (comm, account) so the same platform message
         // reaching two different adapters of the same comm (e.g. one Telegram
         // group with two bots, each polled by its own TelegramCommAdapter)
@@ -185,6 +190,144 @@ export class MessageBus {
             await this.dispatchSink.enqueueInbound(message, conversation);
         }
         return conversation;
+    }
+    /**
+     * AGE-96: crash-resumable inbound path for curl POSTs that carry an
+     * idempotency scope. Progress markers live on the scoped curl receipt —
+     * the default receiveInbound path above is unchanged for all other comms.
+     */
+    async receiveInboundForCurlIdempotency(message, scope) {
+        const storage = this.options.storage;
+        let receipt = await storage.getCurlInboundReceipt(scope);
+        if (!receipt) {
+            throw new Error(`curl idempotency receipt missing for ${scope.registration_id}/${scope.sender_id}`);
+        }
+        if (receipt.state === "accepted" && receipt.conversation_id) {
+            const done = await storage.getConversation(receipt.conversation_id);
+            if (done)
+                return done;
+        }
+        const receivingAdapter = this.comms.get(adapterKey(message.chat.comm, message.chat.account));
+        const foreignBotPolicy = {
+            allowForeignBots: false,
+            allowedBotIds: receivingAdapter?.allowedSenderIds,
+        };
+        if (!isForeignBotAllowed(message.sender, foreignBotPolicy)) {
+            await this.options.audit.append({
+                timestamp: this.now(),
+                kind: "loop_prevention_drop",
+                detail: {
+                    message_id: message.message_id,
+                    reason: "foreign_bot",
+                    sender_id: message.sender.id,
+                    comm: message.chat.comm,
+                    account: message.chat.account,
+                    chat_native_id: message.chat.chat_native_id,
+                    platform_message_id: message.platform_message_id,
+                    sender_is_bot: message.sender.isBot,
+                },
+            });
+            throw new Error(`foreign bot sender rejected: ${message.sender.id}`);
+        }
+        const registration = await this.registrationFor(message.chat);
+        this.assertCurlIdempotencyScope(message, scope, registration, receipt);
+        let conversation;
+        if (receipt.conversation_id) {
+            conversation =
+                (await storage.getConversation(receipt.conversation_id)) ??
+                    (await this.upsertConversation(registration, message));
+        }
+        else {
+            conversation = await this.upsertConversation(registration, message);
+            await storage.markCurlReceiptConversation(scope, conversation.conversation_id);
+        }
+        receipt = (await storage.getCurlInboundReceipt(scope)) ?? receipt;
+        const now = this.now();
+        if (receipt.transcript_recorded_at == null) {
+            const recordedAt = await this.transcriptInboundTimestamp(conversation.conversation_id, message.message_id);
+            if (recordedAt == null) {
+                await this.options.transcripts.append({
+                    conversation_id: conversation.conversation_id,
+                    timestamp: message.received_at,
+                    direction: "inbound",
+                    message_id: message.message_id,
+                    payload: message,
+                });
+            }
+            await storage.touchConversationInbound(conversation.conversation_id, recordedAt ?? message.received_at, message.message_id);
+            await storage.markCurlReceiptTranscript(scope, now);
+        }
+        receipt = (await storage.getCurlInboundReceipt(scope)) ?? receipt;
+        const auditAt = receipt.audit_recorded_at ?? receipt.reserved_at;
+        const auditDone = receipt.audit_recorded_at != null ||
+            (await this.auditHasInboundReceived(conversation.conversation_id, message, auditAt));
+        if (!auditDone) {
+            await this.options.audit.append({
+                timestamp: auditAt,
+                kind: "inbound_received",
+                agent: registration.agent,
+                conversation_id: conversation.conversation_id,
+                detail: {
+                    comm: registration.comm,
+                    account: message.chat.account,
+                    account_label: registration.account_label,
+                    platform_message_id: message.platform_message_id,
+                },
+            });
+            await storage.markCurlReceiptAudit(scope, auditAt);
+        }
+        receipt = (await storage.getCurlInboundReceipt(scope)) ?? receipt;
+        if (receipt.query_consumed_at == null) {
+            const consumedByQuery = await this.tryResolveOpenQuery(conversation, message, {
+                scope,
+                receipt,
+                now,
+            });
+            if (consumedByQuery)
+                return conversation;
+        }
+        receipt = (await storage.getCurlInboundReceipt(scope)) ?? receipt;
+        const dispatchDone = receipt.query_consumed_at != null ||
+            receipt.dispatch_recorded_at != null ||
+            (await storage.hasPendingInboundDelivery({
+                conversation_id: conversation.conversation_id,
+                message_id: message.message_id,
+                comm: message.chat.comm,
+                account: String(message.chat.account),
+            }));
+        if (!dispatchDone && this.dispatchSink) {
+            await this.dispatchSink.enqueueInbound(message, conversation);
+            await storage.markCurlReceiptDispatch(scope, now);
+        }
+        return conversation;
+    }
+    async transcriptInboundTimestamp(conversation_id, message_id) {
+        for await (const entry of this.options.transcripts.read(conversation_id)) {
+            if (entry.direction === "inbound" && entry.message_id === message_id) {
+                return entry.timestamp;
+            }
+        }
+        return null;
+    }
+    assertCurlIdempotencyScope(message, scope, registration, receipt) {
+        if (message.chat.comm !== "curl") {
+            throw new Error(`curl idempotency context on non-curl message: ${message.chat.comm}`);
+        }
+        if (scope.registration_id !== registration.registration_id) {
+            throw new Error(`curl idempotency registration_id mismatch: scope=${scope.registration_id} registration=${registration.registration_id}`);
+        }
+        if (scope.sender_id !== message.sender.id) {
+            throw new Error(`curl idempotency sender_id mismatch: scope=${scope.sender_id} message=${message.sender.id}`);
+        }
+        if (receipt.message_id !== message.message_id) {
+            throw new Error(`curl idempotency message_id mismatch: receipt=${receipt.message_id} message=${message.message_id}`);
+        }
+    }
+    async auditHasInboundReceived(conversation_id, message, auditProbeAt) {
+        const audit = this.options.audit;
+        if (typeof audit.hasInboundReceived !== "function")
+            return false;
+        return audit.hasInboundReceived(conversation_id, message, auditProbeAt);
     }
     async send(request) {
         // AGE-95: every pre-adapter failure below is audited as
@@ -348,7 +491,25 @@ export class MessageBus {
             detail: { query_id: query.query_id, kind: query.kind },
         });
     }
-    async tryResolveOpenQuery(conversation, message) {
+    async tryResolveOpenQuery(conversation, message, curlRecovery) {
+        const storage = this.options.storage;
+        if (curlRecovery?.receipt.planned_query_id) {
+            const plannedId = curlRecovery.receipt.planned_query_id;
+            const record = await storage.getQuery(plannedId);
+            if (!record)
+                return false;
+            if (record.resolved_at != null) {
+                await storage.markCurlReceiptQueryConsumed(curlRecovery.scope, curlRecovery.now);
+                return true;
+            }
+            if (!message.text)
+                return false;
+            const chat = chatRefFromConversation(conversation);
+            const decision = decisionFromMessage(record, message, chat, this.now());
+            if (!decision)
+                return false;
+            return this.resolveQueryForCurlRecovery(plannedId, decision, curlRecovery);
+        }
         if (!message.text)
             return false;
         const open = await this.options.storage.listOpenQueriesByConversation(conversation.conversation_id);
@@ -366,7 +527,7 @@ export class MessageBus {
                 const decision = decisionFromMessage(target, message, chat, this.now());
                 if (!decision)
                     return false;
-                return this.resolveQuery(target.query_id, decision);
+                return this.resolveQueryForCurlRecovery(target.query_id, decision, curlRecovery);
             }
         }
         // AGE-9 stage 2 — bare reply: resolve iff exactly one open query parses
@@ -383,13 +544,26 @@ export class MessageBus {
         const strict = candidates.filter((entry) => entry.query.kind !== "freetext");
         const pool = strict.length > 0 ? strict : candidates;
         if (pool.length === 1) {
-            return this.resolveQuery(pool[0].query.query_id, pool[0].decision);
+            return this.resolveQueryForCurlRecovery(pool[0].query.query_id, pool[0].decision, curlRecovery);
         }
         if (pool.length > 1) {
             await this.sendAmbiguousReplyHelper(conversation, pool.map((entry) => entry.query), message);
+            if (curlRecovery) {
+                await storage.markCurlReceiptQueryConsumed(curlRecovery.scope, curlRecovery.now);
+            }
             return true; // consumed: clearly an answer attempt, but ambiguous
         }
         return false;
+    }
+    async resolveQueryForCurlRecovery(queryId, decision, curlRecovery) {
+        if (curlRecovery) {
+            await this.options.storage.markCurlReceiptPlannedQuery(curlRecovery.scope, queryId);
+        }
+        const resolved = await this.resolveQuery(queryId, decision);
+        if (curlRecovery && resolved) {
+            await this.options.storage.markCurlReceiptQueryConsumed(curlRecovery.scope, curlRecovery.now);
+        }
+        return resolved;
     }
     /**
      * AGE-9: a bare reply matched more than one open query — never guess which

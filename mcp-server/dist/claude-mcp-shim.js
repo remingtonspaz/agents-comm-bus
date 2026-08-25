@@ -24784,8 +24784,10 @@ import { mkdir as mkdir3, open as open3, readFile as readFile2, rm as rm2, write
 import path4 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/storage/audit.js
+import { createReadStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline/promises";
 
 // ../agents-comm-bus/dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
@@ -24817,11 +24819,31 @@ var JsonlAuditStore = class {
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
+  async hasInboundReceived(conversation_id, message, auditTimestamp) {
+    const path13 = this.pathFor(auditTimestamp ?? Date.now());
+    try {
+      const lines = createInterface({
+        input: createReadStream(path13, { encoding: "utf8" }),
+        crlfDelay: Infinity
+      });
+      for await (const line of lines) {
+        if (line.trim() === "")
+          continue;
+        const event = JSON.parse(line);
+        if (event.kind === "inbound_received" && event.conversation_id === conversation_id && event.detail?.platform_message_id === message.platform_message_id) {
+          return true;
+        }
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
 };
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.48";
+var DAEMON_VERSION = "0.2.49";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;

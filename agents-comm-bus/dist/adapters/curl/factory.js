@@ -77,6 +77,8 @@ export class CurlCommAdapterFactory {
                 : undefined,
             allowedSenderIds: allowed,
             stateRoot: context?.stateRoot,
+            registrationId: context?.registrationId,
+            storage: context?.storage,
         });
     }
     /**

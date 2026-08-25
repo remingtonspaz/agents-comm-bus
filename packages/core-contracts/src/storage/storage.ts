@@ -296,6 +296,68 @@ export interface Storage {
     keys: PendingInboundDeliveryKey[],
   ): Promise<void>;
 
+  // AGE-96: curl inbound idempotency receipts (durable, survives pending ack)
+  reserveCurlInboundReceipt(input: CurlInboundReceiptReserveInput): Promise<CurlInboundReceiptReserveResult>;
+  /** Returns false when no pending scoped row was updated (B8). */
+  acceptCurlInboundReceipt(input: CurlInboundReceiptAcceptInput): Promise<boolean>;
+  getCurlInboundReceipt(scope: CurlInboundReceiptScope): Promise<CurlInboundReceipt | null>;
+  /** Deletes only accepted receipts past TTL; pending reservations are kept (B5). */
+  deleteExpiredCurlInboundReceipts(now: number): Promise<number>;
+  markCurlReceiptConversation(
+    scope: CurlInboundReceiptScope,
+    conversation_id: ConversationId,
+  ): Promise<void>;
+  markCurlReceiptTranscript(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+  markCurlReceiptAudit(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+  markCurlReceiptDispatch(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+  markCurlReceiptQueryConsumed(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+  markCurlReceiptPlannedQuery(
+    scope: CurlInboundReceiptScope,
+    query_id: import("../types.js").QueryId,
+  ): Promise<void>;
+  hasPendingInboundDelivery(key: PendingInboundDeliveryKey): Promise<boolean>;
+
   // lifecycle
   close(): Promise<void>;
+}
+
+export interface CurlInboundReceiptScope {
+  registration_id: string;
+  sender_id: string;
+  client_key: string;
+}
+
+export type CurlInboundReceiptState = "pending" | "accepted";
+
+export interface CurlInboundReceipt extends CurlInboundReceiptScope {
+  request_hash: string;
+  message_id: MessageId;
+  conversation_id: ConversationId | null;
+  state: CurlInboundReceiptState;
+  reserved_at: number;
+  accepted_at: number | null;
+  expires_at: number;
+  transcript_recorded_at: number | null;
+  audit_recorded_at: number | null;
+  dispatch_recorded_at: number | null;
+  query_consumed_at: number | null;
+  planned_query_id: import("../types.js").QueryId | null;
+}
+
+export interface CurlInboundReceiptReserveInput extends CurlInboundReceiptScope {
+  request_hash: string;
+  message_id: MessageId;
+  reserved_at: number;
+  expires_at: number;
+}
+
+export type CurlInboundReceiptReserveResult =
+  | { kind: "reserved"; message_id: MessageId }
+  | { kind: "resume"; message_id: MessageId; conversation_id: ConversationId | null }
+  | { kind: "replay"; message_id: MessageId; conversation_id: ConversationId | null }
+  | { kind: "conflict" };
+
+export interface CurlInboundReceiptAcceptInput extends CurlInboundReceiptScope {
+  conversation_id: ConversationId;
+  accepted_at: number;
 }

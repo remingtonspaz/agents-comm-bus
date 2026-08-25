@@ -89,6 +89,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/013_curl_inbound_idempotency.sql",
+      "artifact": "plugins/claude/matrix/013_curl_inbound_idempotency.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/claude/matrix/package.json",
       "type": "package-json"

@@ -595,6 +595,8 @@ async function createAdapterFromRegistration(input) {
     const adapter = input.factory.create(resolved.credentials, input.registration.bot_user_id, {
         blobs: input.blobs,
         stateRoot: input.stateRoot,
+        registrationId: input.registration.registration_id,
+        storage: input.storage,
     });
     // AGE-35: gate single-consumer adapters behind the cross-checkout ownership
     // lease. Generic on `exclusiveResource()` — no telegram-specific code here, so

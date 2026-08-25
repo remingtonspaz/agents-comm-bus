@@ -121,6 +121,14 @@ export const sessionLabelScopeMigration = {
         await ctx.exec(sql);
     },
 };
+export const curlInboundIdempotencyMigration = {
+    version: 13,
+    description: "AGE-96: curl inbound idempotency receipts + acceptance progress",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "013_curl_inbound_idempotency.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -135,6 +143,7 @@ export async function runStorageMigrations(db) {
         durablePendingInboundMigration,
         sessionDaemonOwnerMigration,
         sessionLabelScopeMigration,
+        curlInboundIdempotencyMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

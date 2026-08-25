@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "agents-comm-bus-core";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
-import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionEndObservation, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, CurlInboundReceipt, CurlInboundReceiptAcceptInput, CurlInboundReceiptReserveInput, CurlInboundReceiptReserveResult, CurlInboundReceiptScope, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionEndObservation, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -89,12 +89,24 @@ export declare class SqliteStorage implements Storage {
         agent: AgentId;
     }): Promise<PendingInboundDeliveryRow[]>;
     acknowledgePendingInboundDeliveries(keys: PendingInboundDeliveryKey[]): Promise<void>;
+    reserveCurlInboundReceipt(input: CurlInboundReceiptReserveInput): Promise<CurlInboundReceiptReserveResult>;
+    acceptCurlInboundReceipt(input: CurlInboundReceiptAcceptInput): Promise<boolean>;
+    getCurlInboundReceipt(scope: CurlInboundReceiptScope): Promise<CurlInboundReceipt | null>;
+    deleteExpiredCurlInboundReceipts(now: number): Promise<number>;
+    markCurlReceiptConversation(scope: CurlInboundReceiptScope, conversation_id: ConversationId): Promise<void>;
+    markCurlReceiptTranscript(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+    markCurlReceiptAudit(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+    markCurlReceiptDispatch(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+    markCurlReceiptQueryConsumed(scope: CurlInboundReceiptScope, at: number): Promise<void>;
+    markCurlReceiptPlannedQuery(scope: CurlInboundReceiptScope, query_id: QueryId): Promise<void>;
+    hasPendingInboundDelivery(key: PendingInboundDeliveryKey): Promise<boolean>;
     close(): Promise<void>;
     private allowlistGlobalFromRow;
     private allowlistPerBotFromRow;
     private accountFromRow;
     private conversationFromRow;
     private queryFromRow;
+    private curlInboundReceiptFromRow;
     private pendingInboundDeliveryFromRow;
     private sessionFromRow;
 }
