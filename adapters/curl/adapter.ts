@@ -184,7 +184,7 @@ export class CurlCommAdapter implements CommAdapter {
   private connectionState: CommConnectionState | null = null;
   private server: Server | null = null;
   private boundPort: number | null = null;
-  private readonly inflightByScope = new Map<string, Promise<IdempotentPostResult>>();
+  private readonly inflightByScope = new Map<string, InflightIdempotentPost>();
 
   constructor(private readonly options: CurlCommAdapterOptions) {
     if (!options.token) {
@@ -401,15 +401,30 @@ export class CurlCommAdapter implements CommAdapter {
       sender_id: body.sender_id,
       client_key: body.idempotency_key!,
     });
+    const requestHash = curlRequestHash({
+      project: body.project,
+      agent: body.agent,
+      sender_id: body.sender_id,
+      text: body.text,
+      chat_native_id: body.chat_native_id,
+      metadata: body.metadata,
+    });
     const existing = this.inflightByScope.get(scopeKey);
     if (existing) {
-      const result = await existing;
+      if (existing.requestHash !== requestHash) {
+        this.respondJson(res, 409, {
+          ok: false,
+          error: "idempotency_key was already used with a different request body",
+        });
+        return;
+      }
+      const result = await existing.work;
       this.respondJson(res, result.status, result.payload);
       return;
     }
 
-    const work = this.processIdempotentPost(body, handler, storage, registrationId);
-    this.inflightByScope.set(scopeKey, work);
+    const work = this.processIdempotentPost(body, handler, storage, registrationId, requestHash);
+    this.inflightByScope.set(scopeKey, { requestHash, work });
     try {
       const result = await work;
       this.respondJson(res, result.status, result.payload);
@@ -423,17 +438,10 @@ export class CurlCommAdapter implements CommAdapter {
     handler: (msg: Message) => Promise<void | InboundAcceptance>,
     storage: Storage,
     registrationId: string,
+    requestHash: string,
   ): Promise<IdempotentPostResult> {
     const now = this.now();
     await storage.deleteExpiredCurlInboundReceipts(now);
-    const requestHash = curlRequestHash({
-      project: body.project,
-      agent: body.agent,
-      sender_id: body.sender_id,
-      text: body.text,
-      chat_native_id: body.chat_native_id,
-      metadata: body.metadata,
-    });
     const scope = {
       registration_id: registrationId,
       sender_id: body.sender_id,
@@ -666,4 +674,9 @@ export class CurlCommAdapter implements CommAdapter {
 interface IdempotentPostResult {
   status: number;
   payload: Record<string, unknown>;
+}
+
+interface InflightIdempotentPost {
+  requestHash: string;
+  work: Promise<IdempotentPostResult>;
 }

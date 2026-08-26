@@ -412,6 +412,62 @@ describe("AGE-96 curl inbound idempotency HTTP", { concurrency: 1 }, () => {
     }
   });
 
+  it("concurrent same-key requests with different content return 409", async () => {
+    const dir = await makeTempDir("acb-age96-http-");
+    const inner = new JsonlTranscriptStore(dir);
+    let releaseAppend!: () => void;
+    const appendRelease = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    let signalAppend!: () => void;
+    const appendStarted = new Promise<void>((resolve) => {
+      signalAppend = resolve;
+    });
+    const transcripts: TranscriptStoreContract = {
+      async append(entry: TranscriptEntry): Promise<void> {
+        signalAppend();
+        await appendRelease;
+        await inner.append(entry);
+      },
+      read: inner.read.bind(inner),
+    };
+    const harness = await startHarness(dir, { transcripts });
+    try {
+      const firstPromise = post(
+        harness.url,
+        postBody({ idempotency_key: "concurrent-conflict", text: "one" }),
+      );
+      await appendStarted;
+
+      const conflictPromise = post(
+        harness.url,
+        postBody({ idempotency_key: "concurrent-conflict", text: "two" }),
+      );
+      let timeout: NodeJS.Timeout | undefined;
+      const conflict = await Promise.race([
+        conflictPromise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("conflicting request joined in-flight work")),
+            1_000,
+          );
+        }),
+      ]).finally(() => {
+        if (timeout) clearTimeout(timeout);
+      });
+      assert.equal(conflict.status, 409);
+
+      releaseAppend();
+      const first = await firstPromise;
+      assert.equal(first.status, 202);
+      assert.equal(harness.audit.events.filter((e) => e.kind === "inbound_received").length, 1);
+      assert.equal(harness.counters.dispatchCount, 1);
+    } finally {
+      releaseAppend();
+      await stopHarness(harness);
+    }
+  });
+
   it("in-flight scope keys do not alias crafted sender/key tuples (B7)", async () => {
     const dir = await makeTempDir("acb-age96-collision-");
     const harness = await startHarness(dir);

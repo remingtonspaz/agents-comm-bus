@@ -296,25 +296,6 @@ export class CurlCommAdapter {
             sender_id: body.sender_id,
             client_key: body.idempotency_key,
         });
-        const existing = this.inflightByScope.get(scopeKey);
-        if (existing) {
-            const result = await existing;
-            this.respondJson(res, result.status, result.payload);
-            return;
-        }
-        const work = this.processIdempotentPost(body, handler, storage, registrationId);
-        this.inflightByScope.set(scopeKey, work);
-        try {
-            const result = await work;
-            this.respondJson(res, result.status, result.payload);
-        }
-        finally {
-            this.inflightByScope.delete(scopeKey);
-        }
-    }
-    async processIdempotentPost(body, handler, storage, registrationId) {
-        const now = this.now();
-        await storage.deleteExpiredCurlInboundReceipts(now);
         const requestHash = curlRequestHash({
             project: body.project,
             agent: body.agent,
@@ -323,6 +304,32 @@ export class CurlCommAdapter {
             chat_native_id: body.chat_native_id,
             metadata: body.metadata,
         });
+        const existing = this.inflightByScope.get(scopeKey);
+        if (existing) {
+            if (existing.requestHash !== requestHash) {
+                this.respondJson(res, 409, {
+                    ok: false,
+                    error: "idempotency_key was already used with a different request body",
+                });
+                return;
+            }
+            const result = await existing.work;
+            this.respondJson(res, result.status, result.payload);
+            return;
+        }
+        const work = this.processIdempotentPost(body, handler, storage, registrationId, requestHash);
+        this.inflightByScope.set(scopeKey, { requestHash, work });
+        try {
+            const result = await work;
+            this.respondJson(res, result.status, result.payload);
+        }
+        finally {
+            this.inflightByScope.delete(scopeKey);
+        }
+    }
+    async processIdempotentPost(body, handler, storage, registrationId, requestHash) {
+        const now = this.now();
+        await storage.deleteExpiredCurlInboundReceipts(now);
         const scope = {
             registration_id: registrationId,
             sender_id: body.sender_id,
