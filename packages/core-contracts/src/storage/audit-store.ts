@@ -29,6 +29,7 @@ export type AuditEventKind =
   | "agent_wake_succeeded"
   | "agent_wake_failed"
   | "agent_wake_skipped"
+  | "agent_wake_target_invalid"
   | "inbound_dispatch_enqueued"
   | "inbound_dispatch_bridge_invoked"
   | "inbound_dispatch_bridge_completed"

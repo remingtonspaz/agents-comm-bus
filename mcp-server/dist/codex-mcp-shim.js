@@ -24854,7 +24854,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.49";
+var DAEMON_VERSION = "0.2.50";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -26842,12 +26842,14 @@ async function startPersistentCodexRegistration() {
     session
   };
   const ownerProcess = discoverCodexOwnerProcess(appServerUrl);
+  const threadId = process.env.CODEX_SESSION_ID ?? process.env.CODEX_THREAD_ID ?? codexRuntime.threadId ?? null;
   const registerParams = {
     agent: "codex",
     session,
     project,
     cwd: project,
     app_server_url: appServerUrl,
+    thread_id: threadId ?? void 0,
     owner_process_pid: ownerProcess.pid,
     owner_process_label: ownerProcess.label,
     source: "mcp-server",

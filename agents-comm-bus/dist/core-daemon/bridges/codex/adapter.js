@@ -54,6 +54,25 @@ export class CodexAgentAdapter {
         if (state && url)
             state.appServerUrl = url;
     }
+    setWakeTarget(session, target) {
+        const state = this.sessions.get(session);
+        if (!state)
+            return;
+        state.project = target.project;
+        if (target.appServerUrl)
+            state.appServerUrl = target.appServerUrl;
+        if (target.threadId)
+            state.threadId = target.threadId;
+    }
+    recordedTargetFor(session) {
+        const state = this.sessions.get(session);
+        if (!state?.threadId || !state.project)
+            return null;
+        return {
+            threadId: state.threadId,
+            expectedProject: state.project,
+        };
+    }
     appServerUrlFor(session) {
         return this.sessions.get(session)?.appServerUrl ?? this.defaultAppServerUrl;
     }
@@ -93,7 +112,8 @@ export class CodexAgentAdapter {
         });
     }
     async wake(session) {
-        const result = await this.clientFor(session).wakeMostRecentThread(this.wakePlaceholder);
+        const target = this.requireRecordedTarget(session);
+        const result = await this.clientFor(session).wakeRecordedTarget(target, this.wakePlaceholder);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.wake",
             agent: this.id,
@@ -103,9 +123,10 @@ export class CodexAgentAdapter {
         throwIfTurnFailed(result);
     }
     async wakeOrSteer(session, payload) {
+        const target = this.requireRecordedTarget(session);
         const client = this.clientFor(session);
         const text = steerText(payload);
-        const steerResult = await client.steerMostRecentThread(text);
+        const steerResult = await client.steerRecordedTarget(target, text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.steer",
             agent: this.id,
@@ -114,7 +135,10 @@ export class CodexAgentAdapter {
         });
         if (steerResult.ok)
             return steerResult;
-        const wakeResult = await client.wakeMostRecentThread(text);
+        if (isCodexWakeTargetValidationFailure(steerResult.reason)) {
+            return steerResult;
+        }
+        const wakeResult = await client.wakeRecordedTarget(target, text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.wake",
             agent: this.id,
@@ -122,14 +146,14 @@ export class CodexAgentAdapter {
             result: wakeResult,
             fallback_from: steerResult,
         });
-        throwIfTurnFailed(wakeResult);
-        return wakeResult.ok
-            ? { ...wakeResult, fallbackFrom: steerResult }
-            : wakeResult;
+        if (!wakeResult.ok)
+            return wakeResult;
+        return { ...wakeResult, fallbackFrom: steerResult };
     }
     async steer(session, payload) {
+        const target = this.requireRecordedTarget(session);
         const text = steerText(payload);
-        const result = await this.clientFor(session).steerMostRecentThread(text);
+        const result = await this.clientFor(session).steerRecordedTarget(target, text);
         await this.sessions.get(session)?.controlChannel.send({
             type: "turn.steer",
             agent: this.id,
@@ -167,6 +191,13 @@ export class CodexAgentAdapter {
         if (!state)
             throw new Error(`Codex session is not connected: ${session}`);
         return state;
+    }
+    requireRecordedTarget(session) {
+        const target = this.recordedTargetFor(session);
+        if (!target) {
+            throw new Error(`Codex wake target is not configured for session ${session} (missing threadId or project)`);
+        }
+        return target;
     }
 }
 export function mapCodexHookPayloadToQuery(session, payload, options = {}) {
@@ -230,6 +261,14 @@ function steerText(payload) {
         return payload.text;
     }
     return JSON.stringify(payload);
+}
+export function isCodexWakeTargetValidationFailure(reason) {
+    return reason === "missing-recorded-target"
+        || reason === "recorded-thread-absent"
+        || reason === "recorded-thread-not-live"
+        || reason === "recorded-thread-wrong-project"
+        || reason === "recorded-thread-missing-cwd"
+        || reason === "listThreads-failed";
 }
 function throwIfTurnFailed(result) {
     if (!result.ok) {

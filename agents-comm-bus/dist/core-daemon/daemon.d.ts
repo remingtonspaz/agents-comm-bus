@@ -1,5 +1,5 @@
 import { type AccountId, type AccountRegistration, type AgentId, type CommId, type Storage } from "agents-comm-bus-core";
-import { CommLeaseArbiter } from "./runtime/comm-lease.js";
+import { CommLeaseArbiter, type AgentLeaseProperties } from "./runtime/comm-lease.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlAuditStore } from "./storage/audit.js";
@@ -104,6 +104,8 @@ export declare function ensureCommsForSession(input: {
     agent: AgentId;
     /** AGE-72: canonical serialized scope JSON, or null when unscoped. */
     accountLabelScope?: string | null;
+    /** AGE-100: optional agent metadata stamped onto comm-resource leases. */
+    agentLeaseProperties?: AgentLeaseProperties;
     factories: CommAdapterFactory[];
     /**
      * AGE-49: on-demand factory discovery when `factories` has no entry for a

@@ -34,15 +34,18 @@ import type {
   AgentBridgeFactory,
   DaemonSelfIdentity,
   EnsureCommsForSession,
+  ReadHeldCommLease,
   RetirementBlockerSnapshot,
 } from "../../runtime/agent-bridge.js";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
+import type { AgentLeaseProperties } from "../../runtime/comm-lease.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import {
   CodexAgentAdapter,
   type CodexAgentAdapterOptions,
   codexDecisionFromResolution,
   codexHookDecision,
+  isCodexWakeTargetValidationFailure,
 } from "./adapter.js";
 import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
@@ -75,6 +78,8 @@ export interface CodexBridgeOptions {
   clearTimeoutFn?: (handle: unknown) => void;
   /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
   sessionOwnerIsLive?: SessionOwnerLiveness;
+  /** AGE-100: on-disk comm-lock lookup for inbound wake target resolution. */
+  readHeldCommLease?: ReadHeldCommLease;
 }
 
 export interface RegisterCodexSessionResult {
@@ -116,7 +121,8 @@ type CodexWakeAuditKind =
   | "agent_wake_attempt"
   | "agent_wake_succeeded"
   | "agent_wake_failed"
-  | "agent_wake_skipped";
+  | "agent_wake_skipped"
+  | "agent_wake_target_invalid";
 
 const CODEX_IPC_METHODS = new Set<string>([
   "codex_bootstrap_status",
@@ -211,8 +217,28 @@ export class CodexBridge implements AgentBridge {
     const mostRecentConversationId =
       pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
     await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
+
+    const wakeTarget = await this.resolveInboundWakeTargetFromCommLock(conversation);
+    if (!wakeTarget.ok) {
+      await this.auditInboundWakeTargetFailure(
+        conversation,
+        session,
+        wakeTarget.reason,
+        pendingForSession.length,
+      );
+      return;
+    }
+
+    this.applyRegistrationTargets(
+      session,
+      wakeTarget.project,
+      wakeTarget.appServerUrl,
+      wakeTarget.threadId,
+    );
     await this.auditWake("agent_wake_attempt", conversation, session, {
-      app_server_url: this.adapter.appServerUrlFor(session),
+      app_server_url: wakeTarget.appServerUrl,
+      thread_id: wakeTarget.threadId,
+      wake_target_source: "comm_lease",
       pending_count: pendingForSession.length,
       pending_message_ids: pendingForSession.map((entry) => entry.message.message_id),
       pending_conversation_ids: [...new Set(pendingForSession.map((entry) => entry.conversation.conversation_id))],
@@ -224,7 +250,7 @@ export class CodexBridge implements AgentBridge {
       );
       if (result.ok) {
         await this.auditWake("agent_wake_succeeded", conversation, session, {
-          app_server_url: this.adapter.appServerUrlFor(session),
+          app_server_url: wakeTarget.appServerUrl,
           method: result.method,
           thread_id: result.threadId,
           fallback_reason: result.fallbackFrom?.reason,
@@ -234,10 +260,12 @@ export class CodexBridge implements AgentBridge {
           removed_pending_count: pendingForSession.length,
         });
         await this.removePendingInbound(session, pendingForSession);
+        return;
       }
+      await this.auditWakeFailure(conversation, session, result, pendingForSession.length);
     } catch (error) {
       await this.auditWake("agent_wake_failed", conversation, session, {
-        app_server_url: this.adapter.appServerUrlFor(session),
+        app_server_url: wakeTarget.appServerUrl,
         pending_count: pendingForSession.length,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -387,6 +415,17 @@ export class CodexBridge implements AgentBridge {
         );
       }
     }
+    const appServerUrl = typeof params.app_server_url === "string"
+      ? params.app_server_url
+      : undefined;
+    const threadId = threadIdFromRegisterParams(params);
+    const agentLeaseProperties = this.applyRegistrationTargets(
+      session,
+      project,
+      appServerUrl,
+      threadId,
+    );
+
     if (!acquired) {
       const existing = await this.options.storage.getSession(session);
       if (existing?.lease_holder_connection_id && replaceExistingLease) {
@@ -402,30 +441,32 @@ export class CodexBridge implements AgentBridge {
           leaseOwner,
         );
         if (!reacquired) {
-          await this.ensureCommsBestEffort(project, accountLabelScope);
+          await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
           return { ok: false, reason: "same-project codex session lease already held" };
         }
       } else if (existing?.lease_holder_connection_id) {
-        await this.ensureCommsBestEffort(project, accountLabelScope);
+        await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
         return {
           ok: true,
           reason: "codex session lease already held; registration refreshed",
           capabilities: this.adapter.capabilities,
         };
       } else {
-        await this.ensureCommsBestEffort(project, accountLabelScope);
+        await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
         return { ok: false, reason: "same-project codex session lease already held" };
       }
     }
 
     const control = new BridgeControlChannel();
     await this.adapter.connect(session, control);
-    if (typeof params.app_server_url === "string") {
-      this.adapter.setAppServerUrl(session, params.app_server_url);
-    }
+    this.applyRegistrationTargets(session, project, appServerUrl, threadId);
     this.trackSession(project, session, accountLabelScope);
     // AGE-38/AGE-45: after connect + trackSession so inbound cannot race ahead of setup.
-    const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+    const rehydrated = await this.ensureCommsBestEffort(
+      project,
+      accountLabelScope,
+      agentLeaseProperties,
+    );
     const afterSession = await this.options.storage.getSession(session);
     const deliverabilityAfter = afterSession
       ? this.isLocallyDeliverable(afterSession)
@@ -569,8 +610,18 @@ export class CodexBridge implements AgentBridge {
   async turnControl(params: Record<string, unknown>): Promise<unknown> {
     const session = requiredString(params.session, "session") as SessionId;
     const kind = params.kind === "steer" ? "steer" : params.kind === "interrupt" ? "interrupt" : "start";
-    if (typeof params.app_server_url === "string") {
-      this.adapter.setAppServerUrl(session, params.app_server_url);
+    const appServerUrl = typeof params.app_server_url === "string" ? params.app_server_url : undefined;
+    const threadId = threadIdFromRegisterParams(params);
+    const route = this.sessionRoutes.get(session);
+    if (route && (appServerUrl || threadId)) {
+      this.adapter.setWakeTarget(session, {
+        project: route.project,
+        appServerUrl,
+        threadId,
+      });
+    }
+    if (appServerUrl) {
+      this.adapter.setAppServerUrl(session, appServerUrl);
     }
     if (kind === "start") {
       await this.adapter.wake(session);
@@ -659,15 +710,88 @@ export class CodexBridge implements AgentBridge {
     this.waiters.delete(queryId);
   }
 
+  private async resolveInboundWakeTargetFromCommLock(
+    conversation: Conversation,
+  ): Promise<
+    | { ok: true; appServerUrl: string; threadId: string; project: string }
+    | { ok: false; reason: string }
+  > {
+    if (!conversation.bot_user_id) {
+      return { ok: false, reason: "missing_bot_user_id" };
+    }
+    const readHeld = this.options.readHeldCommLease;
+    if (!readHeld) {
+      return { ok: false, reason: "comm_lease_lookup_unavailable" };
+    }
+    const lookup = await readHeld(conversation.comm, conversation.bot_user_id);
+    if (!lookup.ok) {
+      return { ok: false, reason: `comm_lease_${lookup.reason}` };
+    }
+    const codex = lookup.agentProperties?.codex;
+    const appServerUrl = codex?.appServerUrl;
+    const threadId = codex?.threadId;
+    if (typeof appServerUrl !== "string" || appServerUrl.length === 0
+      || typeof threadId !== "string" || threadId.length === 0) {
+      return { ok: false, reason: "comm_lease_missing_codex_target" };
+    }
+    return {
+      ok: true,
+      appServerUrl,
+      threadId,
+      project: normalizeProjectPath(conversation.project),
+    };
+  }
+
+  private async auditInboundWakeTargetFailure(
+    conversation: Conversation,
+    session: SessionId,
+    reason: string,
+    pendingCount: number,
+  ): Promise<void> {
+    const detail = {
+      reason,
+      repair_required: true,
+      pending_count: pendingCount,
+      comm: conversation.comm,
+      bot_user_id: conversation.bot_user_id ?? undefined,
+    };
+    await this.auditWake("agent_wake_failed", conversation, session, detail);
+    await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
+    console.error(
+      `agents-comm-bus: inbound Codex wake target invalid for ${conversation.conversation_id}: ${reason}`,
+    );
+  }
+
+  private applyRegistrationTargets(
+    session: SessionId,
+    project: string,
+    appServerUrl: string | undefined,
+    threadId: string | undefined,
+  ): AgentLeaseProperties | undefined {
+    if (appServerUrl || threadId) {
+      this.adapter.setWakeTarget(session, {
+        project,
+        appServerUrl,
+        threadId,
+      });
+    }
+    if (appServerUrl) {
+      this.adapter.setAppServerUrl(session, appServerUrl);
+    }
+    return codexAgentLeaseProperties(appServerUrl, threadId);
+  }
+
   private async ensureCommsBestEffort(
     project: string,
     accountLabelScope?: string | null,
+    agentLeaseProperties?: AgentLeaseProperties,
   ): Promise<boolean> {
     const hook = this.options.ensureCommsForSession;
     if (!hook) return false;
     try {
       const result = await hook(project, this.agentId, {
         accountLabelScope: accountLabelScope ?? null,
+        agentLeaseProperties,
       });
       return result.rehydrated;
     } catch (error) {
@@ -975,6 +1099,30 @@ export class CodexBridge implements AgentBridge {
     }
   }
 
+  private async auditWakeFailure(
+    conversation: Conversation,
+    session: SessionId,
+    result: { ok: false; reason: string; error?: string; threadId?: string },
+    pendingCount: number,
+  ): Promise<void> {
+    const detail = {
+      app_server_url: this.adapter.appServerUrlFor(session),
+      pending_count: pendingCount,
+      reason: result.reason,
+      error: result.error,
+      thread_id: result.threadId,
+      repair_required: isCodexWakeTargetValidationFailure(result.reason),
+    };
+    await this.auditWake("agent_wake_failed", conversation, session, detail);
+    if (isCodexWakeTargetValidationFailure(result.reason)) {
+      await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
+    }
+    console.error(
+      `agents-comm-bus: failed to wake Codex for ${conversation.conversation_id}: ${result.reason}` +
+        `${result.error ? `: ${result.error}` : ""}`,
+    );
+  }
+
   private async pendingInboundForConversation(
     conversation: Conversation,
     session: SessionId,
@@ -1163,6 +1311,31 @@ function ackTextFor(decision: ResolvedDecision): string {
   }
 }
 
+function codexAgentLeaseProperties(
+  appServerUrl: string | undefined,
+  threadId: string | undefined,
+): AgentLeaseProperties | undefined {
+  if (!appServerUrl || !threadId) return undefined;
+  return {
+    codex: {
+      appServerUrl,
+      threadId,
+    },
+  };
+}
+
+function threadIdFromRegisterParams(params: Record<string, unknown>): string | undefined {
+  const direct = params.thread_id ?? params.threadId;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const codex = recordOrEmpty(params.codex);
+  const fromHook =
+    codex.thread_id ??
+    codex.threadId ??
+    codex.session_id ??
+    codex.sessionId;
+  return typeof fromHook === "string" && fromHook.length > 0 ? fromHook : undefined;
+}
+
 function requiredString(paramsValue: unknown, name: string): string {
   if (typeof paramsValue !== "string" || paramsValue.length === 0) {
     throw new Error(`${name} is required`);
@@ -1233,6 +1406,7 @@ export class CodexBridgeFactory implements AgentBridgeFactory {
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
       sessionOwnerIsLive: context.sessionOwnerIsLive,
+      readHeldCommLease: context.readHeldCommLease,
     });
   }
 }

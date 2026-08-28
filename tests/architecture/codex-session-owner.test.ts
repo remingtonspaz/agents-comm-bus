@@ -138,6 +138,17 @@ describe("Codex session owner liveness", () => {
         audit,
         pendingInbound,
         appServerClientFactory: () => fakeClient,
+        readHeldCommLease: async (commId, resourceId) => ({
+          ok: true,
+          comm_id: commId,
+          resource_id: resourceId,
+          agentProperties: {
+            codex: {
+              appServerUrl: "ws://127.0.0.1:4509",
+              threadId: "thread-1",
+            },
+          },
+        }),
       });
 
       const session = "codex-session" as SessionId;
@@ -146,6 +157,7 @@ describe("Codex session owner liveness", () => {
         session,
         project: "project-a",
         app_server_url: "ws://127.0.0.1:4509",
+        thread_id: "thread-1",
       }, socket);
 
       const conversation = conversationRecord();
@@ -186,6 +198,17 @@ describe("Codex session owner liveness", () => {
       bus: {} as never,
       pendingInbound,
       appServerClientFactory: () => fakeClient,
+      readHeldCommLease: async (commId, resourceId) => ({
+        ok: true,
+        comm_id: commId,
+        resource_id: resourceId,
+        agentProperties: {
+          codex: {
+            appServerUrl: "ws://127.0.0.1:4509",
+            threadId: "thread-1",
+          },
+        },
+      }),
     });
 
     const session = "codex-session" as SessionId;
@@ -194,6 +217,7 @@ describe("Codex session owner liveness", () => {
       session,
       project: "project-a",
       app_server_url: "ws://127.0.0.1:4509",
+      thread_id: "thread-1",
     }, socket);
 
     const conversation = conversationRecord("discord");
@@ -383,7 +407,7 @@ class FakeCodexClient {
     return {};
   }
 
-  async listLoadedThreads(): Promise<unknown> {
+  async listThreads(): Promise<unknown> {
     return { data: ["thread-1"] };
   }
 
@@ -402,12 +426,16 @@ class FakeCodexClient {
     return {};
   }
 
-  async wakeMostRecentThread(_text?: string): Promise<any> {
+  async validateRecordedTarget(target: { threadId: string; expectedProject: string }) {
+    return { ok: true as const, threadId: target.threadId, cwd: target.expectedProject };
+  }
+
+  async wakeRecordedTarget(_target: { threadId: string; expectedProject: string }): Promise<any> {
     await this.startTurn("thread-1");
     return { ok: true, threadId: "thread-1", method: "turn/start" };
   }
 
-  async steerMostRecentThread(text = ""): Promise<any> {
+  async steerRecordedTarget(_target: { threadId: string; expectedProject: string }, text = ""): Promise<any> {
     await this.steerTurn("thread-1", text, "turn-1");
     return { ok: true, threadId: "thread-1", method: "turn/steer" };
   }

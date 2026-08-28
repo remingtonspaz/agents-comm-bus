@@ -424,13 +424,31 @@ describe("AGE-56 durable inbound delivery", () => {
         bus: {} as never,
         audit: ctx.audit,
         pendingInbound,
+        readHeldCommLease: async (commId, resourceId) => ({
+          ok: true,
+          comm_id: commId,
+          resource_id: resourceId,
+          agentProperties: {
+            codex: {
+              appServerUrl: "ws://127.0.0.1:4509",
+              threadId: "thread-1",
+            },
+          },
+        }),
         appServerClientFactory: () => ({
           async call() { return {}; },
-          async listLoadedThreads() { return { data: ["thread-1"] }; },
+          async listThreads() { return { data: ["thread-1"] }; },
           async listThreadTurns() { return { data: [{ id: "turn-1", status: "inProgress" }] }; },
+          async startTurn() { return {}; },
           async steerTurn() { return {}; },
-          async steerMostRecentThread() {
+          async validateRecordedTarget(target: { threadId: string; expectedProject: string }) {
+            return { ok: true as const, threadId: target.threadId, cwd: target.expectedProject };
+          },
+          async steerRecordedTarget() {
             return { ok: true, threadId: "thread-1", method: "turn/steer" };
+          },
+          async wakeRecordedTarget() {
+            return { ok: true, threadId: "thread-1", method: "turn/start" };
           },
         }),
       });
@@ -439,6 +457,7 @@ describe("AGE-56 durable inbound delivery", () => {
         session: "codex-session" as SessionId,
         project: PROJECT,
         app_server_url: "ws://127.0.0.1:4509",
+        thread_id: "thread-1",
       });
 
       await bridge.onInboundConversation(conv);

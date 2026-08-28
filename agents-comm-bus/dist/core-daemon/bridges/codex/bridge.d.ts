@@ -1,6 +1,6 @@
 import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, ReadHeldCommLease, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
@@ -28,6 +28,8 @@ export interface CodexBridgeOptions {
     clearTimeoutFn?: (handle: unknown) => void;
     /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
     sessionOwnerIsLive?: SessionOwnerLiveness;
+    /** AGE-100: on-disk comm-lock lookup for inbound wake target resolution. */
+    readHeldCommLease?: ReadHeldCommLease;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;
@@ -84,6 +86,9 @@ export declare class CodexBridge implements AgentBridge {
     private handleCommCallback;
     private waitForResolution;
     private clearWaiter;
+    private resolveInboundWakeTargetFromCommLock;
+    private auditInboundWakeTargetFailure;
+    private applyRegistrationTargets;
     private ensureCommsBestEffort;
     /** AGE-91: daemon-local route = a tracked app-server route for this session. */
     routeReady(sessionId: SessionId): boolean;
@@ -106,6 +111,7 @@ export declare class CodexBridge implements AgentBridge {
     private cleanupManagedAppServerIfLeaseIsIdle;
     private chatRefForConversation;
     private auditWake;
+    private auditWakeFailure;
     private pendingInboundForConversation;
     /**
      * Cache the set of `${comm}:${bot_user_id}` keys this agent owns. See

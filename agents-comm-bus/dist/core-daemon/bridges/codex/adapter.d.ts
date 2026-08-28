@@ -1,5 +1,5 @@
 import type { AgentAdapter, AgentCapabilities, AgentId, ControlChannel, Message, Query, QueryChannel, QueryId, ResolvedDecision, SessionId } from "agents-comm-bus-core";
-import { type CodexAppServerClient, type CodexTurnResult } from "./app-server.js";
+import { type CodexAppServerClient, type CodexRecordedTarget, type CodexTurnResult } from "./app-server.js";
 export interface CodexHookPayload {
     hook_event_name?: string;
     session_id?: string;
@@ -48,6 +48,12 @@ export declare class CodexAgentAdapter implements AgentAdapter {
     connect(session: SessionId, controlChannel: ControlChannel): Promise<void>;
     disconnect(session: SessionId): Promise<void>;
     setAppServerUrl(session: SessionId, url: string | undefined): void;
+    setWakeTarget(session: SessionId, target: {
+        project: string;
+        appServerUrl?: string;
+        threadId?: string;
+    }): void;
+    recordedTargetFor(session: SessionId): CodexRecordedTarget | null;
     appServerUrlFor(session: SessionId): string;
     deliverInbound(session: SessionId, message: Message): Promise<void>;
     openQuery(session: SessionId, query: Query, queryChannel: QueryChannel): Promise<void>;
@@ -60,6 +66,7 @@ export declare class CodexAgentAdapter implements AgentAdapter {
     private supportsQueryKind;
     private clientFor;
     private requireSession;
+    private requireRecordedTarget;
 }
 export declare function mapCodexHookPayloadToQuery(session: SessionId, payload: CodexHookPayload, options?: {
     agent?: AgentId;
@@ -69,4 +76,5 @@ export declare function mapCodexHookPayloadToQuery(session: SessionId, payload: 
 }): CodexQueryMapping;
 export declare function codexDecisionFromResolution(resolution: ResolvedDecision | null): CodexHookDecision;
 export declare function codexHookDecision(behavior: "allow" | "deny", message?: string): CodexHookDecision;
+export declare function isCodexWakeTargetValidationFailure(reason: string | undefined): boolean;
 //# sourceMappingURL=adapter.d.ts.map

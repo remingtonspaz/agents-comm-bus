@@ -1,10 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import {
-  CodexAgentAdapter,
-  codexDecisionFromResolution,
-} from "../../core-daemon/bridges/codex/adapter.js";
+import { CodexAgentAdapter, codexDecisionFromResolution } from "../../core-daemon/bridges/codex/adapter.js";
+import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import type {
   ChatRef,
   ControlChannel,
@@ -55,6 +53,10 @@ describe("CodexAgentAdapter", () => {
     const control = new RecordingControlChannel();
     const session = "session-1" as SessionId;
     await adapter.connect(session, control);
+    adapter.setWakeTarget(session, {
+      project: normalizeProjectPath("D:\\tmp\\project-a"),
+      threadId: "thread-1",
+    });
 
     await adapter.deliverInbound(session, message());
     await adapter.wake(session);
@@ -79,6 +81,10 @@ describe("CodexAgentAdapter", () => {
     const control = new RecordingControlChannel();
     const session = "session-1" as SessionId;
     await adapter.connect(session, control);
+    adapter.setWakeTarget(session, {
+      project: normalizeProjectPath("D:\\tmp\\project-a"),
+      threadId: "thread-1",
+    });
 
     const result = await adapter.wakeOrSteer(session, { text: "new Telegram guidance" });
 
@@ -99,6 +105,32 @@ describe("CodexAgentAdapter", () => {
       ["turn/steer", "new Telegram guidance"],
       ["turn/start", "new Telegram guidance"],
     ]);
+  });
+
+  it("returns steer target-validation failures without a second thread/list or turn/start", async () => {
+    const fake = new FakeCodexClient({ steerValidationFailure: "recorded-thread-not-live" });
+    const adapter = new CodexAgentAdapter({
+      appServerClientFactory: () => fake,
+    });
+    const control = new RecordingControlChannel();
+    const session = "session-1" as SessionId;
+    await adapter.connect(session, control);
+    adapter.setWakeTarget(session, {
+      project: normalizeProjectPath("D:\\tmp\\project-a"),
+      threadId: "thread-1",
+    });
+
+    const result = await adapter.wakeOrSteer(session, { text: "telegram guidance" });
+
+    assert.deepEqual(result, {
+      ok: false,
+      reason: "recorded-thread-not-live",
+      threadId: "thread-1",
+    });
+    assert.equal(fake.listThreadsCalls, 1);
+    assert.equal(fake.startTurnCalls, 0);
+    assert.equal(control.sent.at(-1)?.type, "turn.steer");
+    assert.equal(control.sent.some((entry) => entry?.type === "turn.wake"), false);
   });
 
   it("opens only approval queries for Codex permission hooks", async () => {
@@ -213,14 +245,22 @@ function chat(): ChatRef {
 
 class FakeCodexClient {
   readonly calls: Array<[string, string]> = [];
+  listThreadsCalls = 0;
+  startTurnCalls = 0;
 
-  constructor(private readonly options: { steerOk?: boolean } = {}) {}
+  constructor(
+    private readonly options: {
+      steerOk?: boolean;
+      steerValidationFailure?: string;
+    } = {},
+  ) {}
 
   async call(): Promise<unknown> {
     return {};
   }
 
-  async listLoadedThreads(): Promise<unknown> {
+  async listThreads(): Promise<unknown> {
+    this.listThreadsCalls += 1;
     return { data: ["thread-1"] };
   }
 
@@ -229,6 +269,7 @@ class FakeCodexClient {
   }
 
   async startTurn(_threadId: string, text: string): Promise<unknown> {
+    this.startTurnCalls += 1;
     this.calls.push(["turn/start", text]);
     return {};
   }
@@ -238,13 +279,28 @@ class FakeCodexClient {
     return {};
   }
 
-  async wakeMostRecentThread(text = "."): Promise<any> {
+  async validateRecordedTarget(target: { threadId: string; expectedProject: string }) {
+    if (this.options.steerValidationFailure) {
+      this.listThreadsCalls += 1;
+      return {
+        ok: false as const,
+        reason: this.options.steerValidationFailure,
+        threadId: target.threadId,
+      };
+    }
+    return { ok: true as const, threadId: target.threadId, cwd: target.expectedProject };
+  }
+
+  async wakeRecordedTarget(_target: { threadId: string; expectedProject: string }, text = "."): Promise<any> {
+    this.startTurnCalls += 1;
     await this.startTurn("thread-1", text);
     return { ok: true, threadId: "thread-1", method: "turn/start" };
   }
 
-  async steerMostRecentThread(text: string): Promise<any> {
-    await this.steerTurn("thread-1", text);
+  async steerRecordedTarget(_target: { threadId: string; expectedProject: string }, text: string): Promise<any> {
+    const validated = await this.validateRecordedTarget(_target);
+    if (!validated.ok) return validated;
+    await this.steerTurn("thread-1", text, "turn-1");
     if (this.options.steerOk === false) {
       return { ok: false, reason: "steerTurn-failed", error: "no active turn", threadId: "thread-1" };
     }

@@ -170,6 +170,7 @@ export async function runDaemon(options) {
             requestedProject: project,
             agent,
             accountLabelScope,
+            agentLeaseProperties: options?.agentLeaseProperties,
             factories: commAdapterFactories,
             rescanFactories: rescanFactoriesForComm,
             bus,
@@ -200,6 +201,7 @@ export async function runDaemon(options) {
         ensureCommsForSession: ensureCommsForSessionFn,
         daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive,
+        readHeldCommLease: (commId, resourceId) => leaseArbiter.readHeldCommLease(commId, resourceId),
     })));
     const pendingInboundMax = 100;
     bus.setDispatchSink({
@@ -541,46 +543,53 @@ export async function ensureCommsForSession(input) {
         }
         const accountId = registration.bot_user_id;
         const key = adapterMapKey(registration.comm, accountId);
-        if (input.bus.getComm(registration.comm, accountId) || input.inFlight.has(key))
-            continue;
-        input.inFlight.add(key);
-        try {
-            const result = await addAdapterForRegistration({
-                factory,
-                registration,
-                bus: input.bus,
-                bridges: input.bridges,
-                env: input.env,
-                blobs: input.blobs,
-                stateRoot: input.stateRoot,
-                storage: input.storage,
-                leaseArbiter: input.leaseArbiter,
-            });
-            if (!result.ok) {
-                if (result.resolution.status === "invalid") {
-                    await appendCredentialResolutionFailedAudit(input.audit, registration, factory.commId, result.resolution);
-                }
-                else {
-                    console.error(`agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`);
-                    await input.audit
-                        ?.append({
-                        timestamp: Date.now(),
-                        kind: "comm_adapter_skip",
-                        agent: input.agent,
-                        detail: {
-                            comm: registration.comm,
-                            account_id: registration.bot_user_id,
-                            account_label: registration.account_label,
-                            project,
-                            reason: result.reason,
-                        },
-                    })
-                        .catch(() => { });
+        if (input.agentLeaseProperties) {
+            input.leaseArbiter.setDesiredAgentProperties(registration.comm, registration.bot_user_id, input.agentLeaseProperties);
+        }
+        const alreadyLive = Boolean(input.bus.getComm(registration.comm, accountId));
+        if (!alreadyLive && !input.inFlight.has(key)) {
+            input.inFlight.add(key);
+            try {
+                const result = await addAdapterForRegistration({
+                    factory,
+                    registration,
+                    bus: input.bus,
+                    bridges: input.bridges,
+                    env: input.env,
+                    blobs: input.blobs,
+                    stateRoot: input.stateRoot,
+                    storage: input.storage,
+                    leaseArbiter: input.leaseArbiter,
+                });
+                if (!result.ok) {
+                    if (result.resolution.status === "invalid") {
+                        await appendCredentialResolutionFailedAudit(input.audit, registration, factory.commId, result.resolution);
+                    }
+                    else {
+                        console.error(`agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`);
+                        await input.audit
+                            ?.append({
+                            timestamp: Date.now(),
+                            kind: "comm_adapter_skip",
+                            agent: input.agent,
+                            detail: {
+                                comm: registration.comm,
+                                account_id: registration.bot_user_id,
+                                account_label: registration.account_label,
+                                project,
+                                reason: result.reason,
+                            },
+                        })
+                            .catch(() => { });
+                    }
                 }
             }
+            finally {
+                input.inFlight.delete(key);
+            }
         }
-        finally {
-            input.inFlight.delete(key);
+        if (input.agentLeaseProperties) {
+            await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
         }
     }
 }

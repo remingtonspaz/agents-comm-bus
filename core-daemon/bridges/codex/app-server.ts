@@ -1,5 +1,7 @@
 import WebSocket, { type RawData } from "ws";
 
+import { normalizeProjectPath } from "../../project-path.js";
+
 export const DEFAULT_CODEX_APP_SERVER_URL = "ws://127.0.0.1:4500";
 
 const CLIENT_INFO = {
@@ -7,14 +9,37 @@ const CLIENT_INFO = {
   version: "0.1.0",
 };
 
+export interface CodexRecordedTarget {
+  threadId: string;
+  expectedProject: string;
+}
+
+export type CodexTargetValidationResult =
+  | { ok: true; threadId: string; cwd: string }
+  | {
+      ok: false;
+      reason:
+        | "missing-recorded-target"
+        | "listThreads-failed"
+        | "recorded-thread-absent"
+        | "recorded-thread-not-live"
+        | "recorded-thread-wrong-project"
+        | "recorded-thread-missing-cwd";
+      error?: string;
+      threadId?: string;
+      raw?: string;
+      url?: string;
+    };
+
 export interface CodexAppServerClient {
   call(method: string, params: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
-  listLoadedThreads(): Promise<unknown>;
+  listThreads(): Promise<unknown>;
   listThreadTurns(threadId: string): Promise<unknown>;
   startTurn(threadId: string, text: string): Promise<unknown>;
   steerTurn(threadId: string, text: string, expectedTurnId: string): Promise<unknown>;
-  wakeMostRecentThread(text?: string): Promise<CodexTurnResult>;
-  steerMostRecentThread(text: string): Promise<CodexTurnResult>;
+  validateRecordedTarget(target: CodexRecordedTarget): Promise<CodexTargetValidationResult>;
+  wakeRecordedTarget(target: CodexRecordedTarget, text?: string): Promise<CodexTurnResult>;
+  steerRecordedTarget(target: CodexRecordedTarget, text: string): Promise<CodexTurnResult>;
 }
 
 export type CodexTurnResult =
@@ -33,8 +58,8 @@ export class WebSocketCodexAppServerClient implements CodexAppServerClient {
     return callOnce(this.url, method, params, options);
   }
 
-  listLoadedThreads(): Promise<unknown> {
-    return this.call("thread/loaded/list", {});
+  listThreads(): Promise<unknown> {
+    return this.call("thread/list", {});
   }
 
   listThreadTurns(threadId: string): Promise<unknown> {
@@ -56,75 +81,102 @@ export class WebSocketCodexAppServerClient implements CodexAppServerClient {
     });
   }
 
-  async wakeMostRecentThread(text = "."): Promise<CodexTurnResult> {
-    const thread = await this.mostRecentThread();
-    if (!thread.ok) return thread;
+  async validateRecordedTarget(target: CodexRecordedTarget): Promise<CodexTargetValidationResult> {
+    if (!target.threadId || !target.expectedProject) {
+      return { ok: false, reason: "missing-recorded-target", threadId: target.threadId };
+    }
+
+    let result: unknown;
     try {
-      await this.startTurn(thread.threadId, text);
-      return { ok: true, threadId: thread.threadId, method: "turn/start" };
+      result = await this.listThreads();
+    } catch (error) {
+      return {
+        ok: false,
+        reason: "listThreads-failed",
+        error: error instanceof Error ? error.message : String(error),
+        threadId: target.threadId,
+        url: this.url,
+      };
+    }
+
+    const threads = listedThreads(result);
+    const match = threads.find((entry) => threadIdFrom(entry) === target.threadId);
+    if (!match) {
+      return {
+        ok: false,
+        reason: "recorded-thread-absent",
+        threadId: target.threadId,
+        raw: stringifyShort(result),
+      };
+    }
+
+    const statusType = threadStatusType(match);
+    if (!isLiveThreadStatus(statusType)) {
+      return {
+        ok: false,
+        reason: "recorded-thread-not-live",
+        threadId: target.threadId,
+        raw: stringifyShort(match),
+      };
+    }
+
+    const cwd = threadCwd(match);
+    if (!cwd) {
+      return {
+        ok: false,
+        reason: "recorded-thread-missing-cwd",
+        threadId: target.threadId,
+        raw: stringifyShort(match),
+      };
+    }
+
+    if (normalizeProjectPath(cwd) !== normalizeProjectPath(target.expectedProject)) {
+      return {
+        ok: false,
+        reason: "recorded-thread-wrong-project",
+        threadId: target.threadId,
+        raw: stringifyShort(match),
+      };
+    }
+
+    return { ok: true, threadId: target.threadId, cwd };
+  }
+
+  async wakeRecordedTarget(
+    target: CodexRecordedTarget,
+    text = ".",
+  ): Promise<CodexTurnResult> {
+    const validated = await this.validateRecordedTarget(target);
+    if (!validated.ok) return validated;
+    try {
+      await this.startTurn(validated.threadId, text);
+      return { ok: true, threadId: validated.threadId, method: "turn/start" };
     } catch (error) {
       return {
         ok: false,
         reason: "startTurn-failed",
         error: error instanceof Error ? error.message : String(error),
-        threadId: thread.threadId,
+        threadId: validated.threadId,
       };
     }
   }
 
-  async steerMostRecentThread(text: string): Promise<CodexTurnResult> {
-    const thread = await this.mostRecentThread();
-    if (!thread.ok) return thread;
-    const turn = await this.activeTurn(thread.threadId);
+  async steerRecordedTarget(target: CodexRecordedTarget, text: string): Promise<CodexTurnResult> {
+    const validated = await this.validateRecordedTarget(target);
+    if (!validated.ok) return validated;
+    const turn = await this.activeTurn(validated.threadId);
     if (!turn.ok) return turn;
     try {
-      await this.steerTurn(thread.threadId, text, turn.turnId);
-      return { ok: true, threadId: thread.threadId, method: "turn/steer" };
+      await this.steerTurn(validated.threadId, text, turn.turnId);
+      return { ok: true, threadId: validated.threadId, method: "turn/steer" };
     } catch (error) {
       return {
         ok: false,
         reason: "steerTurn-failed",
         error: error instanceof Error ? error.message : String(error),
-        threadId: thread.threadId,
+        threadId: validated.threadId,
       };
     }
-  }
-
-  private async mostRecentThread(): Promise<
-    | { ok: true; threadId: string }
-    | { ok: false; reason: string; error?: string; raw?: string; url?: string }
-  > {
-    let result: unknown;
-    try {
-      result = await this.listLoadedThreads();
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "listLoadedThreads-failed",
-        error: error instanceof Error ? error.message : String(error),
-        url: this.url,
-      };
-    }
-
-    const threads = loadedThreads(result);
-    if (threads.length === 0) {
-      return {
-        ok: false,
-        reason: "no-threads-loaded",
-        raw: stringifyShort(result),
-      };
-    }
-
-    const target = [...threads].sort(compareThreadRecency)[0];
-    const threadId = threadIdFrom(target);
-    if (!threadId) {
-      return {
-        ok: false,
-        reason: "no-thread-id-in-response",
-        raw: stringifyShort(target),
-      };
-    }
-    return { ok: true, threadId };
   }
 
   private async activeTurn(threadId: string): Promise<
@@ -246,7 +298,7 @@ function callOnce(
   });
 }
 
-function loadedThreads(result: unknown): unknown[] {
+function listedThreads(result: unknown): unknown[] {
   if (Array.isArray(result)) return result;
   if (!result || typeof result !== "object") return [];
   const record = result as Record<string, unknown>;
@@ -262,25 +314,30 @@ function listedTurns(result: unknown): unknown[] {
   return Array.isArray(candidate) ? candidate : [];
 }
 
-function compareThreadRecency(a: unknown, b: unknown): number {
-  if (typeof a === "string" || typeof b === "string") return 0;
-  const left = Date.parse(String((a as Record<string, unknown>)?.lastActiveAt
-    ?? (a as Record<string, unknown>)?.updatedAt
-    ?? (a as Record<string, unknown>)?.startedAt
-    ?? 0)) || 0;
-  const right = Date.parse(String((b as Record<string, unknown>)?.lastActiveAt
-    ?? (b as Record<string, unknown>)?.updatedAt
-    ?? (b as Record<string, unknown>)?.startedAt
-    ?? 0)) || 0;
-  return right - left;
-}
-
 function threadIdFrom(value: unknown): string | null {
   if (typeof value === "string" && value.length > 0) return value;
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const id = record.threadId ?? record.id;
   return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function threadCwd(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const cwd = (value as Record<string, unknown>).cwd;
+  return typeof cwd === "string" && cwd.length > 0 ? cwd : null;
+}
+
+function threadStatusType(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const status = (value as Record<string, unknown>).status;
+  if (!status || typeof status !== "object") return null;
+  const type = (status as Record<string, unknown>).type;
+  return typeof type === "string" ? type : null;
+}
+
+export function isLiveThreadStatus(statusType: string | null): boolean {
+  return statusType === "active" || statusType === "idle";
 }
 
 function turnIdFrom(value: unknown): string | null {

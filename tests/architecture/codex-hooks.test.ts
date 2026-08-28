@@ -98,6 +98,11 @@ test("Codex staged hooks use artifact-local shimNames", async () => {
   }
 });
 
+test("Codex MCP shim passes thread_id with app_server_url on register", async () => {
+  const shim = await readRepoFile("hosts/codex/codex-mcp-shim.js");
+  assert.match(shim, /thread_id: threadId/);
+});
+
 test("Codex staged MCP shim owns Codex metadata inference", async () => {
   const shim = await readArtifactFile("codex-mcp-shim.js");
   const shared = await readRepoFile("hosts/common/mcp-shim-shared.js");

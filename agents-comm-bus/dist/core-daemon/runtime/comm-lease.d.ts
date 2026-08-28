@@ -38,6 +38,13 @@ export declare const DEFAULT_IPC_RECENCY_MARGIN_MS = 30000;
  */
 export type AuthorityRank = "main-dev" | "production" | "worktree";
 export declare const AUTHORITY_RANK_ORDER: Record<AuthorityRank, number>;
+/** Agent-neutral optional metadata stamped onto a comm-resource lease (AGE-100). */
+export interface AgentLeaseProperties {
+    codex?: {
+        appServerUrl: string;
+        threadId: string;
+    };
+}
 export interface LeaseRecord {
     comm_id: string;
     resource_id: string;
@@ -50,6 +57,8 @@ export interface LeaseRecord {
     acquiredAt: number;
     renewedAt: number;
     lastIpcServedAt: number;
+    /** Optional per-agent wake/control metadata; omitted on legacy lease files. */
+    agentProperties?: AgentLeaseProperties;
 }
 export interface SelfIdentity {
     pid: number;
@@ -76,6 +85,17 @@ export type RenewResult = {
     reason: "lost";
     holder: LeaseRecord | null;
 };
+/** Read-only snapshot of a comm-resource lease held by this daemon (AGE-100). */
+export type HeldCommLeaseLookupResult = {
+    ok: true;
+    comm_id: string;
+    resource_id: string;
+    agentProperties?: AgentLeaseProperties;
+} | {
+    ok: false;
+    reason: "missing-record" | "unreadable" | "not-held-by-self";
+};
+export type ReadHeldCommLease = (commId: string, resourceId: string) => Promise<HeldCommLeaseLookupResult>;
 /**
  * FIXED, homedir-anchored lease path. Deliberately bypasses resolveStatePaths /
  * AGENTS_COMM_BUS_ROOT: the whole point is that every checkout and every state
@@ -194,6 +214,8 @@ export declare class CommLeaseArbiter {
     private readonly lastDenyAudit;
     /** AGE-36: runtime-local inventory of leases this arbiter currently holds. */
     private readonly heldLeases;
+    /** Locally desired agent properties keyed by `${commId}:${resourceId}` (AGE-100). */
+    private readonly desiredAgentProperties;
     constructor(options: CommLeaseArbiterOptions);
     get authorityRank(): AuthorityRank;
     /** Count of `(comm, resource)` leases this arbiter currently owns. */
@@ -203,6 +225,22 @@ export declare class CommLeaseArbiter {
         comm_id: string;
         resource_id: string;
     }>;
+    /**
+     * Record daemon-local desired agent properties for a comm resource. The next
+     * acquire/renew/sync stamps them onto the lease when this arbiter holds it.
+     */
+    setDesiredAgentProperties(commId: string, resourceId: string, agentProperties: AgentLeaseProperties): void;
+    desiredAgentPropertiesFor(commId: string, resourceId: string): AgentLeaseProperties | undefined;
+    /**
+     * Re-write `agentProperties` on an already-held lease from the desired map.
+     * No-op when this arbiter does not currently hold the lease.
+     */
+    syncAgentProperties(commId: string, resourceId: string): Promise<void>;
+    /**
+     * Read the on-disk comm-resource lease when this arbiter's pid is the holder.
+     * Does not acquire or mutate the lease.
+     */
+    readHeldCommLease(commId: string, resourceId: string): Promise<HeldCommLeaseLookupResult>;
     /**
      * Attempt to acquire (or reclaim) the lease for `(commId, resourceId)`. Reads
      * the existing record under a guard lock, applies {@link decideContention},
@@ -221,6 +259,11 @@ export declare class CommLeaseArbiter {
     private leasePath;
     private leaseKey;
     private buildRecord;
+    /**
+     * Stamp agent properties from the locally desired map. A lease reclaimed from
+     * another holder must never inherit the prior holder's properties.
+     */
+    private agentPropertiesForRecord;
     private placeholderHolder;
     private readRecord;
     private writeRecord;

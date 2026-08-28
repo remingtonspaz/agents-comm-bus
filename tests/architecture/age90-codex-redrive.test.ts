@@ -73,7 +73,7 @@ class FakeCodexClient {
     return {};
   }
 
-  async listLoadedThreads(): Promise<unknown> {
+  async listThreads(): Promise<unknown> {
     return { data: ["thread-1"] };
   }
 
@@ -91,7 +91,11 @@ class FakeCodexClient {
     return {};
   }
 
-  async wakeMostRecentThread(_text?: string): Promise<{ ok: boolean; threadId: string; method: string }> {
+  async validateRecordedTarget(target: { threadId: string; expectedProject: string }) {
+    return { ok: true as const, threadId: target.threadId, cwd: target.expectedProject };
+  }
+
+  async wakeRecordedTarget(_target: { threadId: string; expectedProject: string }): Promise<{ ok: boolean; threadId: string; method: string }> {
     if (this.wakeOk) {
       await this.startTurn("thread-1");
       return { ok: true, threadId: "thread-1", method: "turn/start" };
@@ -99,7 +103,7 @@ class FakeCodexClient {
     return { ok: false, threadId: "thread-1", method: "turn/start" };
   }
 
-  async steerMostRecentThread(_text = ""): Promise<{ ok: boolean; threadId: string; method: string }> {
+  async steerRecordedTarget(_target: { threadId: string; expectedProject: string }, _text = ""): Promise<{ ok: boolean; threadId: string; method: string }> {
     if (this.steerOk) {
       await this.steerTurn("thread-1", _text, "turn-1");
       return { ok: true, threadId: "thread-1", method: "turn/steer" };
@@ -256,6 +260,14 @@ function makeBridge(input: {
     ensureCommsForSession: input.ensureCommsForSession ?? (async () => ({ rehydrated: true })),
     sessionOwnerIsLive: input.sessionOwnerIsLive,
     sessionOwnerCheckIntervalMs: DISABLED_OWNER_CHECK_INTERVAL_MS,
+    readHeldCommLease: async (commId, resourceId) => ({
+      ok: true,
+      comm_id: commId,
+      resource_id: resourceId,
+      agentProperties: {
+        codex: { appServerUrl: APP_SERVER_URL, threadId: "thread-1" },
+      },
+    }),
   });
   return { bridge, client };
 }
@@ -281,6 +293,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 100,
         owner_process_label: "codex",
       });
@@ -383,6 +396,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 100,
       });
 
@@ -426,6 +440,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 100,
       });
 
@@ -461,6 +476,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 100,
       });
       assert.equal(client.steerCalls.length, 0);
@@ -490,6 +506,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: livePid,
       });
       await releaseConnectionPreservingOwner(storage, session);
@@ -507,6 +524,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-2",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 303,
         replace_existing_lease: true,
       });
@@ -517,6 +535,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-3",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 303,
         replace_existing_lease: true,
       });
@@ -591,6 +610,14 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         isPidAlive: (pid) => pid === 101,
       }),
       sessionOwnerCheckIntervalMs: DISABLED_OWNER_CHECK_INTERVAL_MS,
+      readHeldCommLease: async (commId, resourceId) => ({
+        ok: true,
+        comm_id: commId,
+        resource_id: resourceId,
+        agentProperties: {
+          codex: { appServerUrl: APP_SERVER_URL, threadId: "thread-1" },
+        },
+      }),
     });
 
     try {
@@ -599,6 +626,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-main",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 100,
       });
       assert.equal(client.steerCalls.length, 1);
@@ -610,6 +638,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-consult",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 101,
         account_label_scope: labeledScope,
       });
@@ -640,6 +669,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: livePid,
       });
       await releaseConnectionPreservingOwner(storage, session);
@@ -657,6 +687,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-2",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: livePid,
       });
 
@@ -687,6 +718,7 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
         project: PROJECT,
         connection_id: "codex:conn-1",
         app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
         owner_process_pid: 100,
       });
 

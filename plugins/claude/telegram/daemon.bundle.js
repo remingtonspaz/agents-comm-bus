@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.49";
+var DAEMON_VERSION = "0.2.50";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3841,6 +3841,8 @@ var CommLeaseArbiter = class {
   lastDenyAudit = /* @__PURE__ */ new Map();
   /** AGE-36: runtime-local inventory of leases this arbiter currently holds. */
   heldLeases = /* @__PURE__ */ new Set();
+  /** Locally desired agent properties keyed by `${commId}:${resourceId}` (AGE-100). */
+  desiredAgentProperties = /* @__PURE__ */ new Map();
   constructor(options) {
     this.self = options.self;
     this.lastIpcServedAt = options.lastIpcServedAt;
@@ -3867,6 +3869,67 @@ var CommLeaseArbiter = class {
         resource_id: key.slice(sep + 1)
       };
     });
+  }
+  /**
+   * Record daemon-local desired agent properties for a comm resource. The next
+   * acquire/renew/sync stamps them onto the lease when this arbiter holds it.
+   */
+  setDesiredAgentProperties(commId, resourceId, agentProperties) {
+    this.desiredAgentProperties.set(this.leaseKey(commId, resourceId), agentProperties);
+  }
+  desiredAgentPropertiesFor(commId, resourceId) {
+    return this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
+  }
+  /**
+   * Re-write `agentProperties` on an already-held lease from the desired map.
+   * No-op when this arbiter does not currently hold the lease.
+   */
+  async syncAgentProperties(commId, resourceId) {
+    const desired = this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
+    if (!desired) return;
+    const leasePath = this.leasePath(commId, resourceId);
+    const guard = await this.acquireGuard(leasePath);
+    if (!guard) return;
+    try {
+      const existing = await this.readRecord(leasePath);
+      if (!existing || existing.pid !== this.self.pid) return;
+      const updated = {
+        ...existing,
+        renewedAt: this.now(),
+        lastIpcServedAt: this.lastIpcServedAt(),
+        agentProperties: desired
+      };
+      await this.writeRecord(leasePath, updated);
+    } finally {
+      await this.releaseGuard(leasePath, guard);
+    }
+  }
+  /**
+   * Read the on-disk comm-resource lease when this arbiter's pid is the holder.
+   * Does not acquire or mutate the lease.
+   */
+  async readHeldCommLease(commId, resourceId) {
+    const key = this.leaseKey(commId, resourceId);
+    if (!this.heldLeases.has(key)) {
+      return { ok: false, reason: "not-held-by-self" };
+    }
+    const leasePath = this.leasePath(commId, resourceId);
+    let exists = false;
+    try {
+      exists = existsSync(leasePath);
+    } catch {
+      return { ok: false, reason: "unreadable" };
+    }
+    if (!exists) return { ok: false, reason: "missing-record" };
+    const existing = await this.readRecord(leasePath);
+    if (!existing) return { ok: false, reason: "unreadable" };
+    if (existing.pid !== this.self.pid) return { ok: false, reason: "not-held-by-self" };
+    return {
+      ok: true,
+      comm_id: commId,
+      resource_id: resourceId,
+      agentProperties: existing.agentProperties
+    };
   }
   /**
    * Attempt to acquire (or reclaim) the lease for `(commId, resourceId)`. Reads
@@ -3970,7 +4033,8 @@ var CommLeaseArbiter = class {
       const renewed = {
         ...existing,
         renewedAt: this.now(),
-        lastIpcServedAt: this.lastIpcServedAt()
+        lastIpcServedAt: this.lastIpcServedAt(),
+        agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing)
       };
       await this.writeRecord(leasePath, renewed);
       return { ok: true, record: renewed };
@@ -4019,8 +4083,19 @@ var CommLeaseArbiter = class {
       // Preserve the original acquisition time only if WE already held it.
       acquiredAt: existing && existing.pid === this.self.pid ? existing.acquiredAt : now,
       renewedAt: now,
-      lastIpcServedAt: this.lastIpcServedAt()
+      lastIpcServedAt: this.lastIpcServedAt(),
+      agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing)
     };
+  }
+  /**
+   * Stamp agent properties from the locally desired map. A lease reclaimed from
+   * another holder must never inherit the prior holder's properties.
+   */
+  agentPropertiesForRecord(commId, resourceId, existing) {
+    const desired = this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
+    if (desired) return desired;
+    if (existing && existing.pid === this.self.pid) return existing.agentProperties;
+    return void 0;
   }
   placeholderHolder(commId, resourceId) {
     return {
@@ -8257,6 +8332,7 @@ async function runDaemon(options) {
       requestedProject: project,
       agent,
       accountLabelScope,
+      agentLeaseProperties: options2?.agentLeaseProperties,
       factories: commAdapterFactories,
       rescanFactories: rescanFactoriesForComm,
       bus,
@@ -8288,7 +8364,8 @@ async function runDaemon(options) {
         pendingInbound,
         ensureCommsForSession: ensureCommsForSessionFn,
         daemonOwner: daemonSelfIdentity,
-        sessionOwnerIsLive
+        sessionOwnerIsLive,
+        readHeldCommLease: (commId, resourceId) => leaseArbiter.readHeldCommLease(commId, resourceId)
       })
     )
   );
@@ -8606,49 +8683,61 @@ async function ensureCommsForSession(input) {
     }
     const accountId = registration.bot_user_id;
     const key = adapterMapKey(registration.comm, accountId);
-    if (input.bus.getComm(registration.comm, accountId) || input.inFlight.has(key)) continue;
-    input.inFlight.add(key);
-    try {
-      const result = await addAdapterForRegistration({
-        factory,
-        registration,
-        bus: input.bus,
-        bridges: input.bridges,
-        env: input.env,
-        blobs: input.blobs,
-        stateRoot: input.stateRoot,
-        storage: input.storage,
-        leaseArbiter: input.leaseArbiter
-      });
-      if (!result.ok) {
-        if (result.resolution.status === "invalid") {
-          await appendCredentialResolutionFailedAudit(
-            input.audit,
-            registration,
-            factory.commId,
-            result.resolution
-          );
-        } else {
-          console.error(
-            `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
-          );
-          await input.audit?.append({
-            timestamp: Date.now(),
-            kind: "comm_adapter_skip",
-            agent: input.agent,
-            detail: {
-              comm: registration.comm,
-              account_id: registration.bot_user_id,
-              account_label: registration.account_label,
-              project,
-              reason: result.reason
-            }
-          }).catch(() => {
-          });
+    if (input.agentLeaseProperties) {
+      input.leaseArbiter.setDesiredAgentProperties(
+        registration.comm,
+        registration.bot_user_id,
+        input.agentLeaseProperties
+      );
+    }
+    const alreadyLive = Boolean(input.bus.getComm(registration.comm, accountId));
+    if (!alreadyLive && !input.inFlight.has(key)) {
+      input.inFlight.add(key);
+      try {
+        const result = await addAdapterForRegistration({
+          factory,
+          registration,
+          bus: input.bus,
+          bridges: input.bridges,
+          env: input.env,
+          blobs: input.blobs,
+          stateRoot: input.stateRoot,
+          storage: input.storage,
+          leaseArbiter: input.leaseArbiter
+        });
+        if (!result.ok) {
+          if (result.resolution.status === "invalid") {
+            await appendCredentialResolutionFailedAudit(
+              input.audit,
+              registration,
+              factory.commId,
+              result.resolution
+            );
+          } else {
+            console.error(
+              `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
+            );
+            await input.audit?.append({
+              timestamp: Date.now(),
+              kind: "comm_adapter_skip",
+              agent: input.agent,
+              detail: {
+                comm: registration.comm,
+                account_id: registration.bot_user_id,
+                account_label: registration.account_label,
+                project,
+                reason: result.reason
+              }
+            }).catch(() => {
+            });
+          }
         }
+      } finally {
+        input.inFlight.delete(key);
       }
-    } finally {
-      input.inFlight.delete(key);
+    }
+    if (input.agentLeaseProperties) {
+      await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
     }
   }
 }
@@ -10238,8 +10327,8 @@ var WebSocketCodexAppServerClient = class {
   call(method, params, options = {}) {
     return callOnce(this.url, method, params, options);
   }
-  listLoadedThreads() {
-    return this.call("thread/loaded/list", {});
+  listThreads() {
+    return this.call("thread/list", {});
   }
   listThreadTurns(threadId) {
     return this.call("thread/turns/list", { threadId });
@@ -10257,68 +10346,91 @@ var WebSocketCodexAppServerClient = class {
       input: [{ type: "text", text }]
     });
   }
-  async wakeMostRecentThread(text = ".") {
-    const thread = await this.mostRecentThread();
-    if (!thread.ok) return thread;
+  async validateRecordedTarget(target) {
+    if (!target.threadId || !target.expectedProject) {
+      return { ok: false, reason: "missing-recorded-target", threadId: target.threadId };
+    }
+    let result;
     try {
-      await this.startTurn(thread.threadId, text);
-      return { ok: true, threadId: thread.threadId, method: "turn/start" };
+      result = await this.listThreads();
+    } catch (error) {
+      return {
+        ok: false,
+        reason: "listThreads-failed",
+        error: error instanceof Error ? error.message : String(error),
+        threadId: target.threadId,
+        url: this.url
+      };
+    }
+    const threads = listedThreads(result);
+    const match = threads.find((entry) => threadIdFrom(entry) === target.threadId);
+    if (!match) {
+      return {
+        ok: false,
+        reason: "recorded-thread-absent",
+        threadId: target.threadId,
+        raw: stringifyShort(result)
+      };
+    }
+    const statusType = threadStatusType(match);
+    if (!isLiveThreadStatus(statusType)) {
+      return {
+        ok: false,
+        reason: "recorded-thread-not-live",
+        threadId: target.threadId,
+        raw: stringifyShort(match)
+      };
+    }
+    const cwd = threadCwd(match);
+    if (!cwd) {
+      return {
+        ok: false,
+        reason: "recorded-thread-missing-cwd",
+        threadId: target.threadId,
+        raw: stringifyShort(match)
+      };
+    }
+    if (normalizeProjectPath(cwd) !== normalizeProjectPath(target.expectedProject)) {
+      return {
+        ok: false,
+        reason: "recorded-thread-wrong-project",
+        threadId: target.threadId,
+        raw: stringifyShort(match)
+      };
+    }
+    return { ok: true, threadId: target.threadId, cwd };
+  }
+  async wakeRecordedTarget(target, text = ".") {
+    const validated = await this.validateRecordedTarget(target);
+    if (!validated.ok) return validated;
+    try {
+      await this.startTurn(validated.threadId, text);
+      return { ok: true, threadId: validated.threadId, method: "turn/start" };
     } catch (error) {
       return {
         ok: false,
         reason: "startTurn-failed",
         error: error instanceof Error ? error.message : String(error),
-        threadId: thread.threadId
+        threadId: validated.threadId
       };
     }
   }
-  async steerMostRecentThread(text) {
-    const thread = await this.mostRecentThread();
-    if (!thread.ok) return thread;
-    const turn = await this.activeTurn(thread.threadId);
+  async steerRecordedTarget(target, text) {
+    const validated = await this.validateRecordedTarget(target);
+    if (!validated.ok) return validated;
+    const turn = await this.activeTurn(validated.threadId);
     if (!turn.ok) return turn;
     try {
-      await this.steerTurn(thread.threadId, text, turn.turnId);
-      return { ok: true, threadId: thread.threadId, method: "turn/steer" };
+      await this.steerTurn(validated.threadId, text, turn.turnId);
+      return { ok: true, threadId: validated.threadId, method: "turn/steer" };
     } catch (error) {
       return {
         ok: false,
         reason: "steerTurn-failed",
         error: error instanceof Error ? error.message : String(error),
-        threadId: thread.threadId
+        threadId: validated.threadId
       };
     }
-  }
-  async mostRecentThread() {
-    let result;
-    try {
-      result = await this.listLoadedThreads();
-    } catch (error) {
-      return {
-        ok: false,
-        reason: "listLoadedThreads-failed",
-        error: error instanceof Error ? error.message : String(error),
-        url: this.url
-      };
-    }
-    const threads = loadedThreads(result);
-    if (threads.length === 0) {
-      return {
-        ok: false,
-        reason: "no-threads-loaded",
-        raw: stringifyShort(result)
-      };
-    }
-    const target = [...threads].sort(compareThreadRecency)[0];
-    const threadId = threadIdFrom(target);
-    if (!threadId) {
-      return {
-        ok: false,
-        reason: "no-thread-id-in-response",
-        raw: stringifyShort(target)
-      };
-    }
-    return { ok: true, threadId };
   }
   async activeTurn(threadId) {
     let result;
@@ -10418,7 +10530,7 @@ function callOnce(url, method, params, { timeoutMs = 5e3 } = {}) {
     });
   });
 }
-function loadedThreads(result) {
+function listedThreads(result) {
   if (Array.isArray(result)) return result;
   if (!result || typeof result !== "object") return [];
   const record = result;
@@ -10432,18 +10544,27 @@ function listedTurns(result) {
   const candidate = record.data ?? record.turns ?? record.items;
   return Array.isArray(candidate) ? candidate : [];
 }
-function compareThreadRecency(a, b) {
-  if (typeof a === "string" || typeof b === "string") return 0;
-  const left = Date.parse(String(a?.lastActiveAt ?? a?.updatedAt ?? a?.startedAt ?? 0)) || 0;
-  const right = Date.parse(String(b?.lastActiveAt ?? b?.updatedAt ?? b?.startedAt ?? 0)) || 0;
-  return right - left;
-}
 function threadIdFrom(value) {
   if (typeof value === "string" && value.length > 0) return value;
   if (!value || typeof value !== "object") return null;
   const record = value;
   const id = record.threadId ?? record.id;
   return typeof id === "string" && id.length > 0 ? id : null;
+}
+function threadCwd(value) {
+  if (!value || typeof value !== "object") return null;
+  const cwd = value.cwd;
+  return typeof cwd === "string" && cwd.length > 0 ? cwd : null;
+}
+function threadStatusType(value) {
+  if (!value || typeof value !== "object") return null;
+  const status = value.status;
+  if (!status || typeof status !== "object") return null;
+  const type = status.type;
+  return typeof type === "string" ? type : null;
+}
+function isLiveThreadStatus(statusType) {
+  return statusType === "active" || statusType === "idle";
 }
 function turnIdFrom(value) {
   if (typeof value === "string" && value.length > 0) return value;
@@ -10524,6 +10645,21 @@ var CodexAgentAdapter = class {
     const state = this.sessions.get(session);
     if (state && url) state.appServerUrl = url;
   }
+  setWakeTarget(session, target) {
+    const state = this.sessions.get(session);
+    if (!state) return;
+    state.project = target.project;
+    if (target.appServerUrl) state.appServerUrl = target.appServerUrl;
+    if (target.threadId) state.threadId = target.threadId;
+  }
+  recordedTargetFor(session) {
+    const state = this.sessions.get(session);
+    if (!state?.threadId || !state.project) return null;
+    return {
+      threadId: state.threadId,
+      expectedProject: state.project
+    };
+  }
   appServerUrlFor(session) {
     return this.sessions.get(session)?.appServerUrl ?? this.defaultAppServerUrl;
   }
@@ -10563,7 +10699,8 @@ var CodexAgentAdapter = class {
     });
   }
   async wake(session) {
-    const result = await this.clientFor(session).wakeMostRecentThread(this.wakePlaceholder);
+    const target = this.requireRecordedTarget(session);
+    const result = await this.clientFor(session).wakeRecordedTarget(target, this.wakePlaceholder);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.wake",
       agent: this.id,
@@ -10573,9 +10710,10 @@ var CodexAgentAdapter = class {
     throwIfTurnFailed(result);
   }
   async wakeOrSteer(session, payload) {
+    const target = this.requireRecordedTarget(session);
     const client = this.clientFor(session);
     const text = steerText(payload);
-    const steerResult = await client.steerMostRecentThread(text);
+    const steerResult = await client.steerRecordedTarget(target, text);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.steer",
       agent: this.id,
@@ -10583,7 +10721,10 @@ var CodexAgentAdapter = class {
       result: steerResult
     });
     if (steerResult.ok) return steerResult;
-    const wakeResult = await client.wakeMostRecentThread(text);
+    if (isCodexWakeTargetValidationFailure(steerResult.reason)) {
+      return steerResult;
+    }
+    const wakeResult = await client.wakeRecordedTarget(target, text);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.wake",
       agent: this.id,
@@ -10591,12 +10732,13 @@ var CodexAgentAdapter = class {
       result: wakeResult,
       fallback_from: steerResult
     });
-    throwIfTurnFailed(wakeResult);
-    return wakeResult.ok ? { ...wakeResult, fallbackFrom: steerResult } : wakeResult;
+    if (!wakeResult.ok) return wakeResult;
+    return { ...wakeResult, fallbackFrom: steerResult };
   }
   async steer(session, payload) {
+    const target = this.requireRecordedTarget(session);
     const text = steerText(payload);
-    const result = await this.clientFor(session).steerMostRecentThread(text);
+    const result = await this.clientFor(session).steerRecordedTarget(target, text);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.steer",
       agent: this.id,
@@ -10633,6 +10775,15 @@ var CodexAgentAdapter = class {
     const state = this.sessions.get(session);
     if (!state) throw new Error(`Codex session is not connected: ${session}`);
     return state;
+  }
+  requireRecordedTarget(session) {
+    const target = this.recordedTargetFor(session);
+    if (!target) {
+      throw new Error(
+        `Codex wake target is not configured for session ${session} (missing threadId or project)`
+      );
+    }
+    return target;
   }
 };
 function mapCodexHookPayloadToQuery(session, payload, options = {}) {
@@ -10694,6 +10845,9 @@ function steerText(payload) {
     return payload.text;
   }
   return JSON.stringify(payload);
+}
+function isCodexWakeTargetValidationFailure(reason) {
+  return reason === "missing-recorded-target" || reason === "recorded-thread-absent" || reason === "recorded-thread-not-live" || reason === "recorded-thread-wrong-project" || reason === "recorded-thread-missing-cwd" || reason === "listThreads-failed";
 }
 function throwIfTurnFailed(result) {
   if (!result.ok) {
@@ -10922,8 +11076,26 @@ var CodexBridge = class {
     );
     const mostRecentConversationId = pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
     await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
+    const wakeTarget = await this.resolveInboundWakeTargetFromCommLock(conversation);
+    if (!wakeTarget.ok) {
+      await this.auditInboundWakeTargetFailure(
+        conversation,
+        session,
+        wakeTarget.reason,
+        pendingForSession.length
+      );
+      return;
+    }
+    this.applyRegistrationTargets(
+      session,
+      wakeTarget.project,
+      wakeTarget.appServerUrl,
+      wakeTarget.threadId
+    );
     await this.auditWake("agent_wake_attempt", conversation, session, {
-      app_server_url: this.adapter.appServerUrlFor(session),
+      app_server_url: wakeTarget.appServerUrl,
+      thread_id: wakeTarget.threadId,
+      wake_target_source: "comm_lease",
       pending_count: pendingForSession.length,
       pending_message_ids: pendingForSession.map((entry) => entry.message.message_id),
       pending_conversation_ids: [...new Set(pendingForSession.map((entry) => entry.conversation.conversation_id))]
@@ -10935,7 +11107,7 @@ var CodexBridge = class {
       );
       if (result.ok) {
         await this.auditWake("agent_wake_succeeded", conversation, session, {
-          app_server_url: this.adapter.appServerUrlFor(session),
+          app_server_url: wakeTarget.appServerUrl,
           method: result.method,
           thread_id: result.threadId,
           fallback_reason: result.fallbackFrom?.reason,
@@ -10945,10 +11117,12 @@ var CodexBridge = class {
           removed_pending_count: pendingForSession.length
         });
         await this.removePendingInbound(session, pendingForSession);
+        return;
       }
+      await this.auditWakeFailure(conversation, session, result, pendingForSession.length);
     } catch (error) {
       await this.auditWake("agent_wake_failed", conversation, session, {
-        app_server_url: this.adapter.appServerUrlFor(session),
+        app_server_url: wakeTarget.appServerUrl,
         pending_count: pendingForSession.length,
         error: error instanceof Error ? error.message : String(error)
       });
@@ -11067,6 +11241,14 @@ var CodexBridge = class {
         );
       }
     }
+    const appServerUrl = typeof params.app_server_url === "string" ? params.app_server_url : void 0;
+    const threadId = threadIdFromRegisterParams(params);
+    const agentLeaseProperties = this.applyRegistrationTargets(
+      session,
+      project,
+      appServerUrl,
+      threadId
+    );
     if (!acquired) {
       const existing = await this.options.storage.getSession(session);
       if (existing?.lease_holder_connection_id && replaceExistingLease) {
@@ -11082,28 +11264,30 @@ var CodexBridge = class {
           leaseOwner
         );
         if (!reacquired) {
-          await this.ensureCommsBestEffort(project, accountLabelScope);
+          await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
           return { ok: false, reason: "same-project codex session lease already held" };
         }
       } else if (existing?.lease_holder_connection_id) {
-        await this.ensureCommsBestEffort(project, accountLabelScope);
+        await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
         return {
           ok: true,
           reason: "codex session lease already held; registration refreshed",
           capabilities: this.adapter.capabilities
         };
       } else {
-        await this.ensureCommsBestEffort(project, accountLabelScope);
+        await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
         return { ok: false, reason: "same-project codex session lease already held" };
       }
     }
     const control = new BridgeControlChannel();
     await this.adapter.connect(session, control);
-    if (typeof params.app_server_url === "string") {
-      this.adapter.setAppServerUrl(session, params.app_server_url);
-    }
+    this.applyRegistrationTargets(session, project, appServerUrl, threadId);
     this.trackSession(project, session, accountLabelScope);
-    const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
+    const rehydrated = await this.ensureCommsBestEffort(
+      project,
+      accountLabelScope,
+      agentLeaseProperties
+    );
     const afterSession = await this.options.storage.getSession(session);
     const deliverabilityAfter = afterSession ? this.isLocallyDeliverable(afterSession) : false;
     if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
@@ -11225,8 +11409,18 @@ var CodexBridge = class {
   async turnControl(params) {
     const session = requiredString2(params.session, "session");
     const kind = params.kind === "steer" ? "steer" : params.kind === "interrupt" ? "interrupt" : "start";
-    if (typeof params.app_server_url === "string") {
-      this.adapter.setAppServerUrl(session, params.app_server_url);
+    const appServerUrl = typeof params.app_server_url === "string" ? params.app_server_url : void 0;
+    const threadId = threadIdFromRegisterParams(params);
+    const route = this.sessionRoutes.get(session);
+    if (route && (appServerUrl || threadId)) {
+      this.adapter.setWakeTarget(session, {
+        project: route.project,
+        appServerUrl,
+        threadId
+      });
+    }
+    if (appServerUrl) {
+      this.adapter.setAppServerUrl(session, appServerUrl);
     }
     if (kind === "start") {
       await this.adapter.wake(session);
@@ -11303,12 +11497,65 @@ var CodexBridge = class {
   clearWaiter(queryId) {
     this.waiters.delete(queryId);
   }
-  async ensureCommsBestEffort(project, accountLabelScope) {
+  async resolveInboundWakeTargetFromCommLock(conversation) {
+    if (!conversation.bot_user_id) {
+      return { ok: false, reason: "missing_bot_user_id" };
+    }
+    const readHeld = this.options.readHeldCommLease;
+    if (!readHeld) {
+      return { ok: false, reason: "comm_lease_lookup_unavailable" };
+    }
+    const lookup = await readHeld(conversation.comm, conversation.bot_user_id);
+    if (!lookup.ok) {
+      return { ok: false, reason: `comm_lease_${lookup.reason}` };
+    }
+    const codex = lookup.agentProperties?.codex;
+    const appServerUrl = codex?.appServerUrl;
+    const threadId = codex?.threadId;
+    if (typeof appServerUrl !== "string" || appServerUrl.length === 0 || typeof threadId !== "string" || threadId.length === 0) {
+      return { ok: false, reason: "comm_lease_missing_codex_target" };
+    }
+    return {
+      ok: true,
+      appServerUrl,
+      threadId,
+      project: normalizeProjectPath(conversation.project)
+    };
+  }
+  async auditInboundWakeTargetFailure(conversation, session, reason, pendingCount) {
+    const detail = {
+      reason,
+      repair_required: true,
+      pending_count: pendingCount,
+      comm: conversation.comm,
+      bot_user_id: conversation.bot_user_id ?? void 0
+    };
+    await this.auditWake("agent_wake_failed", conversation, session, detail);
+    await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
+    console.error(
+      `agents-comm-bus: inbound Codex wake target invalid for ${conversation.conversation_id}: ${reason}`
+    );
+  }
+  applyRegistrationTargets(session, project, appServerUrl, threadId) {
+    if (appServerUrl || threadId) {
+      this.adapter.setWakeTarget(session, {
+        project,
+        appServerUrl,
+        threadId
+      });
+    }
+    if (appServerUrl) {
+      this.adapter.setAppServerUrl(session, appServerUrl);
+    }
+    return codexAgentLeaseProperties(appServerUrl, threadId);
+  }
+  async ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties) {
     const hook = this.options.ensureCommsForSession;
     if (!hook) return false;
     try {
       const result = await hook(project, this.agentId, {
-        accountLabelScope: accountLabelScope ?? null
+        accountLabelScope: accountLabelScope ?? null,
+        agentLeaseProperties
       });
       return result.rehydrated;
     } catch (error) {
@@ -11567,6 +11814,23 @@ var CodexBridge = class {
       );
     }
   }
+  async auditWakeFailure(conversation, session, result, pendingCount) {
+    const detail = {
+      app_server_url: this.adapter.appServerUrlFor(session),
+      pending_count: pendingCount,
+      reason: result.reason,
+      error: result.error,
+      thread_id: result.threadId,
+      repair_required: isCodexWakeTargetValidationFailure(result.reason)
+    };
+    await this.auditWake("agent_wake_failed", conversation, session, detail);
+    if (isCodexWakeTargetValidationFailure(result.reason)) {
+      await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
+    }
+    console.error(
+      `agents-comm-bus: failed to wake Codex for ${conversation.conversation_id}: ${result.reason}${result.error ? `: ${result.error}` : ""}`
+    );
+  }
   async pendingInboundForConversation(conversation, session) {
     const owned = await this.ownedAccountKeys(session);
     return this.options.pendingInbound.filter(
@@ -11721,6 +11985,22 @@ function ackTextFor2(decision) {
       return "Recorded";
   }
 }
+function codexAgentLeaseProperties(appServerUrl, threadId) {
+  if (!appServerUrl || !threadId) return void 0;
+  return {
+    codex: {
+      appServerUrl,
+      threadId
+    }
+  };
+}
+function threadIdFromRegisterParams(params) {
+  const direct = params.thread_id ?? params.threadId;
+  if (typeof direct === "string" && direct.length > 0) return direct;
+  const codex = recordOrEmpty3(params.codex);
+  const fromHook = codex.thread_id ?? codex.threadId ?? codex.session_id ?? codex.sessionId;
+  return typeof fromHook === "string" && fromHook.length > 0 ? fromHook : void 0;
+}
 function requiredString2(paramsValue, name) {
   if (typeof paramsValue !== "string" || paramsValue.length === 0) {
     throw new Error(`${name} is required`);
@@ -11773,7 +12053,8 @@ var CodexBridgeFactory = class {
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
-      sessionOwnerIsLive: context.sessionOwnerIsLive
+      sessionOwnerIsLive: context.sessionOwnerIsLive,
+      readHeldCommLease: context.readHeldCommLease
     });
   }
 };

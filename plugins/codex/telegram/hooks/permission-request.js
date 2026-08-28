@@ -3775,7 +3775,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.49";
+var DAEMON_VERSION = "0.2.50";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -5045,8 +5045,11 @@ function stableSessionId(hookInput) {
   if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
     return process.env.AGENTS_COMM_BUS_SESSION_ID;
   }
-  const raw = hookInput?.session_id || hookInput?.sessionId || process.env.CODEX_SESSION_ID || process.env.CODEX_THREAD_ID || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ""}`;
+  const raw = codexThreadId(hookInput) || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ""}`;
   return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
+}
+function codexThreadId(hookInput) {
+  return hookInput?.thread_id || hookInput?.threadId || hookInput?.session_id || hookInput?.sessionId || process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "";
 }
 async function readStdinJson() {
   let input = "";
@@ -5141,6 +5144,7 @@ async function main() {
       project,
       cwd: project,
       app_server_url: process.env.CODEX_APP_SERVER_URL,
+      thread_id: codexThreadId(hookInput) || void 0,
       hook: "PermissionRequest",
       codex: hookInput,
       account_label_scope: accountLabelScopeFromEnvSafe()

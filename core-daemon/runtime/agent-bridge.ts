@@ -12,6 +12,12 @@ import type {
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 
 import type { MessageBus } from "../bus.js";
+import type { AgentLeaseProperties, ReadHeldCommLease } from "./comm-lease.js";
+export type {
+  AgentLeaseProperties,
+  HeldCommLeaseLookupResult,
+  ReadHeldCommLease,
+} from "./comm-lease.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
@@ -22,6 +28,8 @@ export type RetirementBlockerSnapshot = Readonly<Record<string, number>>;
 export type EnsureCommsForSessionOptions = {
   /** Canonical serialized account_label_scope JSON, or null when unscoped. */
   accountLabelScope?: string | null;
+  /** Optional agent metadata to stamp onto comm-resource leases (AGE-100). */
+  agentLeaseProperties?: AgentLeaseProperties;
 };
 
 /** Outcome of the daemon ensure-comms path (AGE-89 rehydration signal). */
@@ -63,6 +71,8 @@ export interface AgentBridgeContext {
   daemonOwner: DaemonSelfIdentity;
   /** AGE-81: live connection or recent, still-running durable owner process. */
   sessionOwnerIsLive: SessionOwnerLiveness;
+  /** AGE-100: read the on-disk comm lock when held by this daemon. */
+  readHeldCommLease: ReadHeldCommLease;
 }
 
 export interface AgentBridge {

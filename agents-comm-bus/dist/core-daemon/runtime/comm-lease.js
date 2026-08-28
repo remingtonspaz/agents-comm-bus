@@ -196,6 +196,8 @@ export class CommLeaseArbiter {
     lastDenyAudit = new Map();
     /** AGE-36: runtime-local inventory of leases this arbiter currently holds. */
     heldLeases = new Set();
+    /** Locally desired agent properties keyed by `${commId}:${resourceId}` (AGE-100). */
+    desiredAgentProperties = new Map();
     constructor(options) {
         this.self = options.self;
         this.lastIpcServedAt = options.lastIpcServedAt;
@@ -222,6 +224,75 @@ export class CommLeaseArbiter {
                 resource_id: key.slice(sep + 1),
             };
         });
+    }
+    /**
+     * Record daemon-local desired agent properties for a comm resource. The next
+     * acquire/renew/sync stamps them onto the lease when this arbiter holds it.
+     */
+    setDesiredAgentProperties(commId, resourceId, agentProperties) {
+        this.desiredAgentProperties.set(this.leaseKey(commId, resourceId), agentProperties);
+    }
+    desiredAgentPropertiesFor(commId, resourceId) {
+        return this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
+    }
+    /**
+     * Re-write `agentProperties` on an already-held lease from the desired map.
+     * No-op when this arbiter does not currently hold the lease.
+     */
+    async syncAgentProperties(commId, resourceId) {
+        const desired = this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
+        if (!desired)
+            return;
+        const leasePath = this.leasePath(commId, resourceId);
+        const guard = await this.acquireGuard(leasePath);
+        if (!guard)
+            return;
+        try {
+            const existing = await this.readRecord(leasePath);
+            if (!existing || existing.pid !== this.self.pid)
+                return;
+            const updated = {
+                ...existing,
+                renewedAt: this.now(),
+                lastIpcServedAt: this.lastIpcServedAt(),
+                agentProperties: desired,
+            };
+            await this.writeRecord(leasePath, updated);
+        }
+        finally {
+            await this.releaseGuard(leasePath, guard);
+        }
+    }
+    /**
+     * Read the on-disk comm-resource lease when this arbiter's pid is the holder.
+     * Does not acquire or mutate the lease.
+     */
+    async readHeldCommLease(commId, resourceId) {
+        const key = this.leaseKey(commId, resourceId);
+        if (!this.heldLeases.has(key)) {
+            return { ok: false, reason: "not-held-by-self" };
+        }
+        const leasePath = this.leasePath(commId, resourceId);
+        let exists = false;
+        try {
+            exists = existsSync(leasePath);
+        }
+        catch {
+            return { ok: false, reason: "unreadable" };
+        }
+        if (!exists)
+            return { ok: false, reason: "missing-record" };
+        const existing = await this.readRecord(leasePath);
+        if (!existing)
+            return { ok: false, reason: "unreadable" };
+        if (existing.pid !== this.self.pid)
+            return { ok: false, reason: "not-held-by-self" };
+        return {
+            ok: true,
+            comm_id: commId,
+            resource_id: resourceId,
+            agentProperties: existing.agentProperties,
+        };
     }
     /**
      * Attempt to acquire (or reclaim) the lease for `(commId, resourceId)`. Reads
@@ -335,6 +406,7 @@ export class CommLeaseArbiter {
                 ...existing,
                 renewedAt: this.now(),
                 lastIpcServedAt: this.lastIpcServedAt(),
+                agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing),
             };
             await this.writeRecord(leasePath, renewed);
             return { ok: true, record: renewed };
@@ -387,7 +459,20 @@ export class CommLeaseArbiter {
             acquiredAt: existing && existing.pid === this.self.pid ? existing.acquiredAt : now,
             renewedAt: now,
             lastIpcServedAt: this.lastIpcServedAt(),
+            agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing),
         };
+    }
+    /**
+     * Stamp agent properties from the locally desired map. A lease reclaimed from
+     * another holder must never inherit the prior holder's properties.
+     */
+    agentPropertiesForRecord(commId, resourceId, existing) {
+        const desired = this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
+        if (desired)
+            return desired;
+        if (existing && existing.pid === this.self.pid)
+            return existing.agentProperties;
+        return undefined;
     }
     placeholderHolder(commId, resourceId) {
         // Synthetic record for the "guard contended and no readable record" edge —

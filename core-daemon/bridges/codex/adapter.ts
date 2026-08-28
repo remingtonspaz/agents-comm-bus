@@ -18,6 +18,7 @@ import {
   DEFAULT_CODEX_APP_SERVER_URL,
   WebSocketCodexAppServerClient,
   type CodexAppServerClient,
+  type CodexRecordedTarget,
   type CodexTurnResult,
 } from "./app-server.js";
 
@@ -64,6 +65,8 @@ interface SessionState {
   queuedInbound: Message[];
   openQueries: Map<QueryId, QueryChannel>;
   appServerUrl?: string;
+  project?: string;
+  threadId?: string;
 }
 
 export class CodexAgentAdapter implements AgentAdapter {
@@ -126,6 +129,26 @@ export class CodexAgentAdapter implements AgentAdapter {
     if (state && url) state.appServerUrl = url;
   }
 
+  setWakeTarget(
+    session: SessionId,
+    target: { project: string; appServerUrl?: string; threadId?: string },
+  ): void {
+    const state = this.sessions.get(session);
+    if (!state) return;
+    state.project = target.project;
+    if (target.appServerUrl) state.appServerUrl = target.appServerUrl;
+    if (target.threadId) state.threadId = target.threadId;
+  }
+
+  recordedTargetFor(session: SessionId): CodexRecordedTarget | null {
+    const state = this.sessions.get(session);
+    if (!state?.threadId || !state.project) return null;
+    return {
+      threadId: state.threadId,
+      expectedProject: state.project,
+    };
+  }
+
   appServerUrlFor(session: SessionId): string {
     return this.sessions.get(session)?.appServerUrl ?? this.defaultAppServerUrl;
   }
@@ -172,7 +195,8 @@ export class CodexAgentAdapter implements AgentAdapter {
   }
 
   async wake(session: SessionId): Promise<void> {
-    const result = await this.clientFor(session).wakeMostRecentThread(this.wakePlaceholder);
+    const target = this.requireRecordedTarget(session);
+    const result = await this.clientFor(session).wakeRecordedTarget(target, this.wakePlaceholder);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.wake",
       agent: this.id,
@@ -183,9 +207,10 @@ export class CodexAgentAdapter implements AgentAdapter {
   }
 
   async wakeOrSteer(session: SessionId, payload: unknown): Promise<CodexTurnResult> {
+    const target = this.requireRecordedTarget(session);
     const client = this.clientFor(session);
     const text = steerText(payload);
-    const steerResult = await client.steerMostRecentThread(text);
+    const steerResult = await client.steerRecordedTarget(target, text);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.steer",
       agent: this.id,
@@ -193,8 +218,11 @@ export class CodexAgentAdapter implements AgentAdapter {
       result: steerResult,
     });
     if (steerResult.ok) return steerResult;
+    if (isCodexWakeTargetValidationFailure(steerResult.reason)) {
+      return steerResult;
+    }
 
-    const wakeResult = await client.wakeMostRecentThread(text);
+    const wakeResult = await client.wakeRecordedTarget(target, text);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.wake",
       agent: this.id,
@@ -202,15 +230,14 @@ export class CodexAgentAdapter implements AgentAdapter {
       result: wakeResult,
       fallback_from: steerResult,
     });
-    throwIfTurnFailed(wakeResult);
-    return wakeResult.ok
-      ? { ...wakeResult, fallbackFrom: steerResult }
-      : wakeResult;
+    if (!wakeResult.ok) return wakeResult;
+    return { ...wakeResult, fallbackFrom: steerResult };
   }
 
   async steer(session: SessionId, payload: unknown): Promise<void> {
+    const target = this.requireRecordedTarget(session);
     const text = steerText(payload);
-    const result = await this.clientFor(session).steerMostRecentThread(text);
+    const result = await this.clientFor(session).steerRecordedTarget(target, text);
     await this.sessions.get(session)?.controlChannel.send({
       type: "turn.steer",
       agent: this.id,
@@ -256,6 +283,16 @@ export class CodexAgentAdapter implements AgentAdapter {
     const state = this.sessions.get(session);
     if (!state) throw new Error(`Codex session is not connected: ${session}`);
     return state;
+  }
+
+  private requireRecordedTarget(session: SessionId): CodexRecordedTarget {
+    const target = this.recordedTargetFor(session);
+    if (!target) {
+      throw new Error(
+        `Codex wake target is not configured for session ${session} (missing threadId or project)`,
+      );
+    }
+    return target;
   }
 }
 
@@ -334,6 +371,15 @@ function steerText(payload: unknown): string {
     return (payload as Record<string, string>).text;
   }
   return JSON.stringify(payload);
+}
+
+export function isCodexWakeTargetValidationFailure(reason: string | undefined): boolean {
+  return reason === "missing-recorded-target"
+    || reason === "recorded-thread-absent"
+    || reason === "recorded-thread-not-live"
+    || reason === "recorded-thread-wrong-project"
+    || reason === "recorded-thread-missing-cwd"
+    || reason === "listThreads-failed";
 }
 
 function throwIfTurnFailed(result: CodexTurnResult): void {
