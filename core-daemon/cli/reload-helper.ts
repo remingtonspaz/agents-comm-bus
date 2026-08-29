@@ -16,6 +16,13 @@ export interface ForceCredentialRefreshTarget {
   accountId: string;
 }
 
+export interface ReloadDaemonOptions {
+  timeoutMs?: number;
+  forceCredentialRefresh?: ForceCredentialRefreshTarget[];
+  /** AGE-97: exact-registration ensure after activation flag updates. */
+  ensureRegistrationIds?: string[];
+}
+
 /**
  * Best-effort hot-reload trigger for the CLI's account-add / account-remove
  * commands. Reads the daemon's discovery files and, if a daemon is alive,
@@ -24,10 +31,7 @@ export interface ForceCredentialRefreshTarget {
  * so the caller can print "the change takes effect on next daemon spawn"
  * instead of throwing.
  */
-export async function reloadDaemonRegistrations(options: {
-  timeoutMs?: number;
-  forceCredentialRefresh?: ForceCredentialRefreshTarget[];
-} = {}): Promise<ReloadResult> {
+export async function reloadDaemonRegistrations(options: ReloadDaemonOptions = {}): Promise<ReloadResult> {
   const statePaths = resolveStatePaths({
     stateRoot: process.env.AGENTS_COMM_BUS_ROOT ?? process.env.AGENTS_COMM_BUS_STATE_ROOT,
   });
@@ -49,10 +53,17 @@ export async function reloadDaemonRegistrations(options: {
       timeoutMs,
       metadata: { shimName: "agents-comm-bus/cli" },
     });
-    const params = options.forceCredentialRefresh
-      ? { forceCredentialRefresh: options.forceCredentialRefresh }
-      : undefined;
-    const summary = await connection.request("reload_registrations", params);
+    const params: Record<string, unknown> = {};
+    if (options.forceCredentialRefresh) {
+      params.forceCredentialRefresh = options.forceCredentialRefresh;
+    }
+    if (options.ensureRegistrationIds) {
+      params.ensureRegistrationIds = options.ensureRegistrationIds;
+    }
+    const summary = await connection.request(
+      "reload_registrations",
+      Object.keys(params).length > 0 ? params : undefined,
+    );
     return { attempted: true, ok: true, summary };
   } catch (error) {
     return {

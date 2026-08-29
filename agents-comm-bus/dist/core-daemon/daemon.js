@@ -3,7 +3,7 @@ import os from "node:os";
 import { DAEMON_VERSION } from "./config.js";
 import { normalizeProjectPath } from "./project-path.js";
 import { resolveDiscoveryPaths, resolveStatePaths } from "./paths.js";
-import { CommLeaseArbiter, inferAuthorityRank, wrapWithLease, } from "./runtime/comm-lease.js";
+import { CommLeaseArbiter, inferAuthorityRank, } from "./runtime/comm-lease.js";
 import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
@@ -15,6 +15,9 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
+import { addAdapterForRegistration, adapterMapKey, appendCredentialResolutionFailedAudit, createAdapterFromRegistration, logInvalidCredentialResolution, unresolvedCredentialsReason, } from "./runtime/comm-adapter-lifecycle.js";
+import { ensureRegistrationById, ensureRegistrationForAccount, reconcileEagerRegistrations, } from "./runtime/ensure-registration.js";
+import { createEagerActivationRetryScheduler, } from "./runtime/eager-activation-retry.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
 import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import { dispatchInboundToBridges } from "./runtime/dispatch-inbound.js";
@@ -161,11 +164,33 @@ export async function runDaemon(options) {
             registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
         }
     }
-    const ensureCommsForSessionFn = async (project, agent, options) => {
+    const buildEnsureRegistrationContext = (options) => ({
+        factories: commAdapterFactories,
+        rescanFactories: rescanFactoriesForComm,
+        bus,
+        bridges,
+        storage,
+        env,
+        blobs,
+        stateRoot: paths.root,
+        leaseArbiter,
+        inFlight: inFlightAdapters,
+        audit,
+        ...options,
+    });
+    let eagerRetry;
+    const scheduleEagerRetry = (registration_id) => {
+        eagerRetry?.schedule(registration_id);
+    };
+    eagerRetry = createEagerActivationRetryScheduler({
+        storage,
+        ensure: buildEnsureRegistrationContext({ scheduleEagerRetry }),
+    });
+    const ensureCommsForSessionWithOutcomes = async (project, agent, options) => {
         const canonicalProject = normalizeProjectPath(project);
         const accountLabelScope = options?.accountLabelScope ?? null;
         activeScopes.add(scopeKey(agent, canonicalProject, accountLabelScope));
-        await ensureCommsForSession({
+        const { outcomes } = await ensureCommsForSession({
             project: canonicalProject,
             requestedProject: project,
             agent,
@@ -183,6 +208,11 @@ export async function runDaemon(options) {
             inFlight: inFlightAdapters,
             audit,
         });
+        return outcomes;
+    };
+    const ensureCommsForSessionFn = async (project, agent, options) => {
+        const canonicalProject = normalizeProjectPath(project);
+        const outcomes = await ensureCommsForSessionWithOutcomes(project, agent, options);
         await rehydratePendingInboundForScope({
             storage,
             transcripts,
@@ -191,7 +221,7 @@ export async function runDaemon(options) {
             project: canonicalProject,
             agent,
         });
-        return { rehydrated: true };
+        return { rehydrated: true, outcomes };
     };
     bridges.push(...options.agentBridgeFactories.map((factory) => factory.create({
         storage,
@@ -282,6 +312,7 @@ export async function runDaemon(options) {
         leaseArbiter,
         activeScopes,
         audit,
+        ensureRegistrationContext: buildEnsureRegistrationContext({ scheduleEagerRetry }),
         options: reloadOptions,
     });
     const server = await startIpcServer({
@@ -342,6 +373,7 @@ export async function runDaemon(options) {
                 pidWatchdogHandle?.stop();
                 idleReaperHandle?.stop();
                 sessionEndSweepHandle?.stop();
+                eagerRetry?.stopAll();
             },
             stopBus: () => bestEffortWithTimeout(() => bus.stop(), 5_000, "stop comm adapters during daemon retirement"),
             closeIpc: () => bestEffortWithTimeout(() => server.close(), 1_000, "close IPC server during daemon retirement"),
@@ -382,6 +414,11 @@ export async function runDaemon(options) {
         ensureCommsForSession: ensureCommsForSessionFn,
         audit,
     });
+    // AGE-97: eager registrations reconcile after identity + IPC + discovery are live.
+    void reconcileEagerRegistrations({
+        storage,
+        ensure: buildEnsureRegistrationContext({ scheduleEagerRetry }),
+    });
     console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }
 async function bestEffortWithTimeout(action, timeoutMs, label) {
@@ -410,72 +447,11 @@ async function bestEffortWithTimeout(action, timeoutMs, label) {
             clearTimeout(timeout);
     }
 }
-/**
- * AGE-38: the shared adapter add-sequence — construct, register on the bus,
- * wire every bridge's per-comm callbacks (`attachComm`, which wires button-tap
- * resolution), start (which acquires the comm lease), and roll back cleanly on
- * failure so a failed-to-start adapter is never left wedged in the bus map
- * (which would block a future re-add for the same bot). The caller owns the
- * "already live" idempotency check before calling.
- */
-export async function addAdapterForRegistration(input) {
-    const { adapter, resolution } = await createAdapterFromRegistration({
-        factory: input.factory,
-        registration: input.registration,
-        env: input.env,
-        blobs: input.blobs,
-        stateRoot: input.stateRoot,
-        storage: input.storage,
-        leaseArbiter: input.leaseArbiter,
-    });
-    if (!adapter) {
-        if (resolution.status === "invalid") {
-            logInvalidCredentialResolution(input.registration, input.factory.commId, resolution);
-        }
-        return {
-            ok: false,
-            reason: resolution.status === "invalid"
-                ? resolution.reason
-                : unresolvedCredentialsReason(input.registration.credentials_ref),
-            resolution,
-        };
-    }
-    const accountId = input.registration.bot_user_id;
-    try {
-        input.bus.registerComm(adapter);
-        for (const bridge of input.bridges) {
-            bridge.attachComm?.(adapter);
-        }
-        await adapter.start();
-        return { ok: true };
-    }
-    catch (error) {
-        // Best-effort stop FIRST: an adapter can partially start before throwing
-        // (e.g. the Telegram adapter spins up its getUpdates poller before `getMe()`
-        // resolves), so a failed start must not leak a poller that keeps consuming
-        // updates outside the bus and lease. `stop()` is idempotent enough to be
-        // safe even if start() never got that far.
-        await adapter.stop().catch(() => { });
-        input.bus.unregisterComm(input.registration.comm, accountId);
-        for (const bridge of input.bridges) {
-            bridge.detachComm?.(input.registration.comm, accountId);
-        }
-        return {
-            ok: false,
-            reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`,
-            resolution,
-        };
-    }
-}
+export { addAdapterForRegistration } from "./runtime/comm-adapter-lifecycle.js";
 /**
  * AGE-38: instantiate (and lease) only the comm adapters a `(project, agent)`
- * session needs, lazily on session entry. Resolves the session's registrations
- * and brings up only those bots — never every registered bot — skipping any
- * already live or being brought up by a concurrent register (`inFlight` de-dupes
- * the race so two near-simultaneous registers for the same new bot don't both
- * construct and collide on `bus.registerComm`). Best-effort per bot: a failure
- * is logged and skipped, never thrown, so one bad credential can't fail session
- * registration.
+ * session needs, lazily on session entry. Uses the per-registration primitive
+ * (AGE-97) for each row in the session scope — never scope-wide over-activation.
  */
 export async function ensureCommsForSession(input) {
     const project = normalizeProjectPath(input.project);
@@ -511,110 +487,27 @@ export async function ensureCommsForSession(input) {
             storage: input.storage,
             audit: input.audit,
         });
-        return;
+        return { outcomes: [] };
     }
+    const outcomes = [];
     for (const registration of registrations) {
-        let factory = input.factories.find((f) => f.commId === registration.comm);
-        const attemptedRescan = !factory && Boolean(input.rescanFactories);
-        if (!factory && input.rescanFactories) {
-            factory = await input.rescanFactories(registration.comm);
-        }
-        if (!factory) {
-            if (attemptedRescan) {
-                console.error(`agents-comm-bus: no comm adapter factory for "${registration.comm}" after on-demand re-scan ` +
-                    `(project=${project}, agent=${input.agent}, bot=${registration.bot_user_id}) — skipping adapter`);
-            }
-            await input.audit
-                ?.append({
-                timestamp: Date.now(),
-                kind: "comm_adapter_skip",
-                agent: input.agent,
-                detail: {
-                    comm: registration.comm,
-                    account_id: registration.bot_user_id,
-                    account_label: registration.account_label,
-                    project,
-                    reason: "no_comm_factory",
-                    rescanned: Boolean(input.rescanFactories),
-                },
-            })
-                .catch(() => { });
-            continue;
-        }
-        const accountId = registration.bot_user_id;
-        const key = adapterMapKey(registration.comm, accountId);
-        if (input.agentLeaseProperties) {
-            input.leaseArbiter.setDesiredAgentProperties(registration.comm, registration.bot_user_id, input.agentLeaseProperties);
-        }
-        const alreadyLive = Boolean(input.bus.getComm(registration.comm, accountId));
-        if (!alreadyLive && !input.inFlight.has(key)) {
-            input.inFlight.add(key);
-            try {
-                const result = await addAdapterForRegistration({
-                    factory,
-                    registration,
-                    bus: input.bus,
-                    bridges: input.bridges,
-                    env: input.env,
-                    blobs: input.blobs,
-                    stateRoot: input.stateRoot,
-                    storage: input.storage,
-                    leaseArbiter: input.leaseArbiter,
-                });
-                if (!result.ok) {
-                    if (result.resolution.status === "invalid") {
-                        await appendCredentialResolutionFailedAudit(input.audit, registration, factory.commId, result.resolution);
-                    }
-                    else {
-                        console.error(`agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`);
-                        await input.audit
-                            ?.append({
-                            timestamp: Date.now(),
-                            kind: "comm_adapter_skip",
-                            agent: input.agent,
-                            detail: {
-                                comm: registration.comm,
-                                account_id: registration.bot_user_id,
-                                account_label: registration.account_label,
-                                project,
-                                reason: result.reason,
-                            },
-                        })
-                            .catch(() => { });
-                    }
-                }
-            }
-            finally {
-                input.inFlight.delete(key);
-            }
-        }
-        if (input.agentLeaseProperties) {
-            await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
-        }
+        outcomes.push(await ensureRegistrationForAccount(registration, {
+            factories: input.factories,
+            rescanFactories: input.rescanFactories,
+            bus: input.bus,
+            bridges: input.bridges,
+            storage: input.storage,
+            env: input.env,
+            blobs: input.blobs,
+            stateRoot: input.stateRoot,
+            leaseArbiter: input.leaseArbiter,
+            inFlight: input.inFlight,
+            audit: input.audit,
+            agent: input.agent,
+            agentLeaseProperties: input.agentLeaseProperties,
+        }));
     }
-}
-async function createAdapterFromRegistration(input) {
-    const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
-        storage: input.storage,
-        stateRoot: input.stateRoot,
-    });
-    if (resolved.status !== "ok") {
-        return { adapter: null, resolution: resolved };
-    }
-    const adapter = input.factory.create(resolved.credentials, input.registration.bot_user_id, {
-        blobs: input.blobs,
-        stateRoot: input.stateRoot,
-        registrationId: input.registration.registration_id,
-        storage: input.storage,
-    });
-    // AGE-35: gate single-consumer adapters behind the cross-checkout ownership
-    // lease. Generic on `exclusiveResource()` — no telegram-specific code here, so
-    // the composition root stays clean. Adapters with no exclusive backend (null)
-    // pass through unwrapped.
-    if (adapter.exclusiveResource?.() != null) {
-        return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
-    }
-    return { adapter, resolution: resolved };
+    return { outcomes };
 }
 /**
  * Reconcile the live comm-adapter set with `account_registrations`. Called
@@ -636,6 +529,11 @@ export async function reloadAdapters(input) {
     const removed = [];
     const updated = [];
     const skipped = [];
+    if (input.options?.ensureRegistrationIds && input.ensureRegistrationContext) {
+        for (const registration_id of input.options.ensureRegistrationIds) {
+            await ensureRegistrationById(registration_id, input.ensureRegistrationContext);
+        }
+    }
     const current = new Map();
     for (const entry of input.bus.listComms()) {
         current.set(adapterMapKey(entry.commId, entry.accountId), entry);
@@ -655,8 +553,9 @@ export async function reloadAdapters(input) {
             const key = adapterMapKey(factory.commId, reg.bot_user_id);
             const scopeActive = input.activeScopes != null &&
                 isRegistrationScopeActive(reg, input.activeScopes);
-            if (!current.has(key) && !scopeActive)
-                continue; // inactive project → stay lazy
+            const eagerStanding = reg.activation === "eager";
+            if (!current.has(key) && !scopeActive && !eagerStanding)
+                continue;
             if (!desired.has(key))
                 desired.set(key, { factory, registration: reg });
         }
@@ -689,7 +588,7 @@ export async function reloadAdapters(input) {
                 account_id: entry.registration.bot_user_id,
                 reason: result.reason,
             });
-            if (result.resolution.status === "invalid") {
+            if (result.resolution?.status === "invalid") {
                 await appendCredentialResolutionFailedAudit(input.audit, entry.registration, entry.registration.comm, result.resolution);
             }
             else {
@@ -936,39 +835,6 @@ function sameStringSet(a, b) {
     }
     return true;
 }
-function unresolvedCredentialsReason(ref, action = "resolve") {
-    if (ref.startsWith("env:")) {
-        return `could not ${action} credentials_ref=${ref}: env: credential refs are retired; ` +
-            "rerun account-update-token with --bot-token to create a daemon-owned file: ref";
-    }
-    return `could not ${action} credentials_ref=${ref}`;
-}
-function logInvalidCredentialResolution(registration, commId, resolution) {
-    const pathSuffix = resolution.path ? ` [${resolution.path}]` : "";
-    console.error(`agents-comm-bus: credential file for ${commId} account ${registration.account_label} ` +
-        `(project ${registration.project}) exists but failed to resolve: ${resolution.reason}${pathSuffix}`);
-}
-async function appendCredentialResolutionFailedAudit(audit, registration, commId, resolution) {
-    await audit
-        ?.append({
-        timestamp: Date.now(),
-        kind: "credential_resolution_failed",
-        agent: registration.agent,
-        detail: {
-            comm: commId,
-            account_label: registration.account_label,
-            project: registration.project,
-            bot_user_id: registration.bot_user_id,
-            credential_path: resolution.path ?? null,
-            failure_kind: resolution.failureKind,
-            reason: resolution.reason,
-        },
-    })
-        .catch(() => { });
-}
-function adapterMapKey(commId, accountId) {
-    return `${commId}:${accountId}`;
-}
 // AGE-38/AGE-72: key for the active-(project, agent[, label-scope]) set used to
 // gate reload hot-adds.
 function scopeKey(agent, project, accountLabelScope) {
@@ -1113,20 +979,26 @@ export async function probeCommIdentity(params, factories, env, rescanFactories)
     };
 }
 function parseReloadOptions(params) {
-    const raw = params.forceCredentialRefresh;
-    if (!Array.isArray(raw))
-        return {};
-    const forceCredentialRefresh = raw.flatMap((item) => {
-        if (!item || typeof item !== "object")
-            return [];
-        const record = item;
-        if (record.comm == null || record.accountId == null)
-            return [];
-        return [{
-                comm: String(record.comm),
-                accountId: String(record.accountId),
-            }];
-    });
-    return { forceCredentialRefresh };
+    const forceRaw = params.forceCredentialRefresh;
+    const ensureRaw = params.ensureRegistrationIds;
+    const options = {};
+    if (Array.isArray(forceRaw)) {
+        options.forceCredentialRefresh = forceRaw.flatMap((item) => {
+            if (!item || typeof item !== "object")
+                return [];
+            const record = item;
+            if (record.comm == null || record.accountId == null)
+                return [];
+            return [{
+                    comm: String(record.comm),
+                    accountId: String(record.accountId),
+                }];
+        });
+    }
+    if (Array.isArray(ensureRaw)) {
+        options.ensureRegistrationIds = ensureRaw
+            .filter((id) => typeof id === "string" && id.length > 0);
+    }
+    return options;
 }
 //# sourceMappingURL=daemon.js.map

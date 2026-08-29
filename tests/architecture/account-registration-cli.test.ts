@@ -26,6 +26,7 @@ describe("account registration CLI contract", () => {
     assert.match(source, /account-remove/);
     assert.match(source, /account-relabel/);
     assert.match(source, /account-update-token/);
+    assert.match(source, /account-update-activation/);
     assert.doesNotMatch(source, /implicit/i);
     assert.doesNotMatch(source, /credentials-ref/);
     assert.doesNotMatch(source, /credentialsRef/);

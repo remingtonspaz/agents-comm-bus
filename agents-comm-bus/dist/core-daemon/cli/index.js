@@ -5,6 +5,7 @@ import { accountList } from "./account-list.js";
 import { accountRelabel, } from "./account-relabel.js";
 import { accountRemove } from "./account-remove.js";
 import { accountUpdateToken, } from "./account-update-token.js";
+import { accountUpdateActivation, } from "./account-update-activation.js";
 import { allowlistAdd } from "./allowlist-add.js";
 import { allowlistImportFromEnv, allowlistImportFromFiles, } from "./allowlist-import.js";
 import { allowlistList } from "./allowlist-list.js";
@@ -100,6 +101,24 @@ async function main() {
                     : [{ comm: result.next.comm, accountId: result.next.bot_user_id }],
             });
             console.log(JSON.stringify({ ...redact(result.next), update: resultSummary(result), reload }, null, 2));
+            return;
+        }
+        case "account-update-activation": {
+            const result = await accountUpdateActivation({
+                comm: args.comm,
+                botId: args.botId ?? args["bot-id"],
+                accountLabel: args.accountLabel ?? args["account-label"],
+                agent: args.agent,
+                project: args.project,
+                activation: args.activation,
+            });
+            const becameEager = result.previous.activation !== "eager" && result.next.activation === "eager";
+            const reload = await reloadDaemonRegistrations(becameEager ? { ensureRegistrationIds: [result.next.registration_id] } : {});
+            console.log(JSON.stringify({
+                ...redact(result.next),
+                update: activationSummary(result),
+                reload,
+            }, null, 2));
             return;
         }
         case "allowlist": {
@@ -230,6 +249,7 @@ Account commands:
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
   agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) (--bot-token <token> | --credentials-file <path.json> | --credentials-json <json>) [--account-id <id>] [--allow-bot-change]
+  agents-comm-bus account-update-activation [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --activation eager|lazy
 
 Allowlist commands:
   agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                                                      # global
@@ -261,6 +281,14 @@ function relabelSummary(result) {
     return {
         previous_account_label: result.previous.account_label,
         account_label: result.next.account_label,
+        bot_user_id: result.next.bot_user_id,
+    };
+}
+function activationSummary(result) {
+    return {
+        previous_activation: result.previous.activation,
+        activation: result.next.activation,
+        registration_id: result.next.registration_id,
         bot_user_id: result.next.bot_user_id,
     };
 }

@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.50";
+var DAEMON_VERSION = "0.2.51";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -3876,6 +3876,14 @@ var curlInboundIdempotencyMigration = {
     await ctx.exec(sql);
   }
 };
+var registrationActivationMigration = {
+  version: 14,
+  description: "AGE-97: account_registrations activation flag (lazy | eager)",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "014_registration_activation.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3890,7 +3898,8 @@ async function runStorageMigrations(db) {
     durablePendingInboundMigration,
     sessionDaemonOwnerMigration,
     sessionLabelScopeMigration,
-    curlInboundIdempotencyMigration
+    curlInboundIdempotencyMigration,
+    registrationActivationMigration
   ]);
 }
 
@@ -3926,8 +3935,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db.prepare(`
         INSERT INTO account_registrations (
           schema_version, registration_id, project, comm, agent, account_label,
-          bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          bot_user_id, credentials_ref, activation, bot_username, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, comm, agent, account_label) DO UPDATE SET
           bot_user_id = excluded.bot_user_id,
           credentials_ref = excluded.credentials_ref,
@@ -3943,6 +3952,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.account_label,
       rec.bot_user_id,
       rec.credentials_ref,
+      rec.activation ?? "lazy",
       rec.bot_username ?? null,
       rec.created_at,
       rec.updated_at,
@@ -3951,6 +3961,10 @@ var SqliteStorage = class _SqliteStorage {
   }
   async getAccountByBot(comm, bot_user_id) {
     const row = this.db.prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?").get(comm, bot_user_id);
+    return row ? this.accountFromRow(row) : null;
+  }
+  async getAccountByRegistrationId(registration_id) {
+    const row = this.db.prepare("SELECT * FROM account_registrations WHERE registration_id = ?").get(registration_id);
     return row ? this.accountFromRow(row) : null;
   }
   async listAccountRegistrations(filter = {}) {
@@ -4099,6 +4113,42 @@ var SqliteStorage = class _SqliteStorage {
       if (Number(result.changes ?? 0) !== 1) {
         throw new Error(
           `failed to relabel account registration for ${input.comm}/${input.bot_user_id}`
+        );
+      }
+      const nextRow = this.db.prepare("SELECT * FROM account_registrations WHERE registration_id = ?").get(previous.registration_id);
+      if (!nextRow) {
+        throw new Error(`updated account registration not found for ${previous.registration_id}`);
+      }
+      this.db.exec("COMMIT");
+      return { previous, next: this.accountFromRow(nextRow) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  async updateAccountRegistrationActivation(input) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previousRow = this.db.prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?").get(input.comm, input.bot_user_id);
+      if (!previousRow) {
+        throw new Error(
+          `no account registration found for (comm=${input.comm}, bot-id=${input.bot_user_id})`
+        );
+      }
+      const previous = this.accountFromRow(previousRow);
+      if (previous.activation === input.activation) {
+        this.db.exec("COMMIT");
+        return { previous, next: previous };
+      }
+      const result = this.db.prepare(`
+          UPDATE account_registrations
+          SET activation = ?,
+              updated_at = ?
+          WHERE registration_id = ?
+        `).run(input.activation, input.updated_at, previous.registration_id);
+      if (Number(result.changes ?? 0) !== 1) {
+        throw new Error(
+          `failed to update activation for account registration ${previous.registration_id}`
         );
       }
       const nextRow = this.db.prepare("SELECT * FROM account_registrations WHERE registration_id = ?").get(previous.registration_id);
@@ -4793,6 +4843,7 @@ var SqliteStorage = class _SqliteStorage {
       account_label: r.account_label,
       bot_user_id: r.bot_user_id,
       credentials_ref: r.credentials_ref,
+      activation: r.activation ?? "lazy",
       bot_username: r.bot_username ?? void 0,
       created_at: r.created_at,
       updated_at: r.updated_at,
@@ -6384,6 +6435,7 @@ async function accountAdd(options) {
       bot_user_id: identity.bot_user_id,
       bot_username: identity.bot_username ?? void 0,
       credentials_ref: credentialsRef,
+      activation: "lazy",
       created_at: now,
       updated_at: now,
       metadata: { source: "account-add" }
@@ -6666,6 +6718,56 @@ async function removeTokenFile(ref) {
 }
 function filePathFromRef(ref) {
   return ref.startsWith("file:") ? ref.slice("file:".length) : null;
+}
+
+// ../core-daemon/cli/account-update-activation.ts
+function parseActivation(value) {
+  if (value === "eager" || value === "lazy") return value;
+  throw new Error("--activation is required and must be eager or lazy");
+}
+async function accountUpdateActivation(options) {
+  const comm = options.comm ?? "telegram";
+  const activation = parseActivation(options.activation);
+  const storage = await openSqliteStorage(resolveStatePaths({ stateRoot: options.stateRoot }).database);
+  try {
+    const current = await resolveCurrentAccount3(storage, {
+      comm,
+      botId: options.botId,
+      accountLabel: options.accountLabel,
+      agent: options.agent,
+      project: options.project
+    });
+    return storage.updateAccountRegistrationActivation({
+      comm,
+      bot_user_id: current.bot_user_id,
+      activation,
+      updated_at: Date.now()
+    });
+  } finally {
+    await storage.close();
+  }
+}
+async function resolveCurrentAccount3(storage, selector) {
+  if (selector.botId) {
+    const row = await storage.getAccountByBot(selector.comm, selector.botId);
+    if (!row) {
+      throw new Error(
+        `no account registration found for (comm=${selector.comm}, bot-id=${selector.botId}); run \`agents-comm account-list\` to inspect registered accounts`
+      );
+    }
+    return row;
+  }
+  if (!selector.accountLabel) {
+    throw new Error(
+      `account-update-activation requires --bot-id or --account-label for ${selector.comm}; run \`agents-comm account-list\` to inspect registered accounts`
+    );
+  }
+  return resolveAccountByLabel(storage, {
+    comm: selector.comm,
+    accountLabel: selector.accountLabel,
+    agent: selector.agent,
+    project: selector.project
+  });
 }
 
 // ../core-daemon/cli/allowlist-shared.ts
@@ -7433,8 +7535,17 @@ async function reloadDaemonRegistrations(options = {}) {
       timeoutMs,
       metadata: { shimName: "agents-comm-bus/cli" }
     });
-    const params = options.forceCredentialRefresh ? { forceCredentialRefresh: options.forceCredentialRefresh } : void 0;
-    const summary = await connection.request("reload_registrations", params);
+    const params = {};
+    if (options.forceCredentialRefresh) {
+      params.forceCredentialRefresh = options.forceCredentialRefresh;
+    }
+    if (options.ensureRegistrationIds) {
+      params.ensureRegistrationIds = options.ensureRegistrationIds;
+    }
+    const summary = await connection.request(
+      "reload_registrations",
+      Object.keys(params).length > 0 ? params : void 0
+    );
     return { attempted: true, ok: true, summary };
   } catch (error) {
     return {
@@ -7764,6 +7875,32 @@ async function main() {
       console.log(JSON.stringify({ ...redact(result.next), update: resultSummary(result), reload }, null, 2));
       return;
     }
+    case "account-update-activation": {
+      const result = await accountUpdateActivation({
+        comm: args.comm,
+        botId: args.botId ?? args["bot-id"],
+        accountLabel: args.accountLabel ?? args["account-label"],
+        agent: args.agent,
+        project: args.project,
+        activation: args.activation
+      });
+      const becameEager = result.previous.activation !== "eager" && result.next.activation === "eager";
+      const reload = await reloadDaemonRegistrations(
+        becameEager ? { ensureRegistrationIds: [result.next.registration_id] } : {}
+      );
+      console.log(
+        JSON.stringify(
+          {
+            ...redact(result.next),
+            update: activationSummary(result),
+            reload
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
     case "allowlist": {
       await handleAllowlist(rest);
       return;
@@ -7891,6 +8028,7 @@ Account commands:
   agents-comm-bus account-remove [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>])
   agents-comm-bus account-relabel [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --new-account-label <label>
   agents-comm-bus account-update-token [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) (--bot-token <token> | --credentials-file <path.json> | --credentials-json <json>) [--account-id <id>] [--allow-bot-change]
+  agents-comm-bus account-update-activation [--comm telegram] (--bot-id <id> | --account-label <label> [--agent <agent>] [--project <path>]) --activation eager|lazy
 
 Allowlist commands:
   agents-comm-bus allowlist add    --comm <c> --user <id> [--note "..."]                                                      # global
@@ -7922,6 +8060,14 @@ function relabelSummary(result) {
   return {
     previous_account_label: result.previous.account_label,
     account_label: result.next.account_label,
+    bot_user_id: result.next.bot_user_id
+  };
+}
+function activationSummary(result) {
+  return {
+    previous_activation: result.previous.activation,
+    activation: result.next.activation,
+    registration_id: result.next.registration_id,
     bot_user_id: result.next.bot_user_id
   };
 }

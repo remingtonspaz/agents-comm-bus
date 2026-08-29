@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.50";
+var DAEMON_VERSION = "0.2.51";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -6639,6 +6639,14 @@ var curlInboundIdempotencyMigration = {
     await ctx.exec(sql);
   }
 };
+var registrationActivationMigration = {
+  version: 14,
+  description: "AGE-97: account_registrations activation flag (lazy | eager)",
+  async up(ctx) {
+    const sql = await readFile5(join3(schemaDir, "014_registration_activation.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -6653,7 +6661,8 @@ async function runStorageMigrations(db) {
     durablePendingInboundMigration,
     sessionDaemonOwnerMigration,
     sessionLabelScopeMigration,
-    curlInboundIdempotencyMigration
+    curlInboundIdempotencyMigration,
+    registrationActivationMigration
   ]);
 }
 
@@ -6689,8 +6698,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db.prepare(`
         INSERT INTO account_registrations (
           schema_version, registration_id, project, comm, agent, account_label,
-          bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          bot_user_id, credentials_ref, activation, bot_username, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, comm, agent, account_label) DO UPDATE SET
           bot_user_id = excluded.bot_user_id,
           credentials_ref = excluded.credentials_ref,
@@ -6706,6 +6715,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.account_label,
       rec.bot_user_id,
       rec.credentials_ref,
+      rec.activation ?? "lazy",
       rec.bot_username ?? null,
       rec.created_at,
       rec.updated_at,
@@ -6714,6 +6724,10 @@ var SqliteStorage = class _SqliteStorage {
   }
   async getAccountByBot(comm, bot_user_id) {
     const row = this.db.prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?").get(comm, bot_user_id);
+    return row ? this.accountFromRow(row) : null;
+  }
+  async getAccountByRegistrationId(registration_id) {
+    const row = this.db.prepare("SELECT * FROM account_registrations WHERE registration_id = ?").get(registration_id);
     return row ? this.accountFromRow(row) : null;
   }
   async listAccountRegistrations(filter = {}) {
@@ -6862,6 +6876,42 @@ var SqliteStorage = class _SqliteStorage {
       if (Number(result.changes ?? 0) !== 1) {
         throw new Error(
           `failed to relabel account registration for ${input.comm}/${input.bot_user_id}`
+        );
+      }
+      const nextRow = this.db.prepare("SELECT * FROM account_registrations WHERE registration_id = ?").get(previous.registration_id);
+      if (!nextRow) {
+        throw new Error(`updated account registration not found for ${previous.registration_id}`);
+      }
+      this.db.exec("COMMIT");
+      return { previous, next: this.accountFromRow(nextRow) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  async updateAccountRegistrationActivation(input) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previousRow = this.db.prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?").get(input.comm, input.bot_user_id);
+      if (!previousRow) {
+        throw new Error(
+          `no account registration found for (comm=${input.comm}, bot-id=${input.bot_user_id})`
+        );
+      }
+      const previous = this.accountFromRow(previousRow);
+      if (previous.activation === input.activation) {
+        this.db.exec("COMMIT");
+        return { previous, next: previous };
+      }
+      const result = this.db.prepare(`
+          UPDATE account_registrations
+          SET activation = ?,
+              updated_at = ?
+          WHERE registration_id = ?
+        `).run(input.activation, input.updated_at, previous.registration_id);
+      if (Number(result.changes ?? 0) !== 1) {
+        throw new Error(
+          `failed to update activation for account registration ${previous.registration_id}`
         );
       }
       const nextRow = this.db.prepare("SELECT * FROM account_registrations WHERE registration_id = ?").get(previous.registration_id);
@@ -7556,6 +7606,7 @@ var SqliteStorage = class _SqliteStorage {
       account_label: r.account_label,
       bot_user_id: r.bot_user_id,
       credentials_ref: r.credentials_ref,
+      activation: r.activation ?? "lazy",
       bot_username: r.bot_username ?? void 0,
       created_at: r.created_at,
       updated_at: r.updated_at,
@@ -7758,6 +7809,354 @@ var ContentAddressedBlobStore = class {
     }
   }
 };
+
+// ../core-daemon/runtime/comm-adapter-lifecycle.ts
+function adapterMapKey(commId, accountId) {
+  return `${commId}:${accountId}`;
+}
+function unresolvedCredentialsReason(ref, action = "resolve") {
+  if (ref.startsWith("env:")) {
+    return `could not ${action} credentials_ref=${ref}: env: credential refs are retired; rerun account-update-token with --bot-token to create a daemon-owned file: ref`;
+  }
+  return `could not ${action} credentials_ref=${ref}`;
+}
+function logInvalidCredentialResolution(registration, commId, resolution) {
+  const pathSuffix = resolution.path ? ` [${resolution.path}]` : "";
+  console.error(
+    `agents-comm-bus: credential file for ${commId} account ${registration.account_label} (project ${registration.project}) exists but failed to resolve: ${resolution.reason}${pathSuffix}`
+  );
+}
+async function appendCredentialResolutionFailedAudit(audit, registration, commId, resolution) {
+  await audit?.append({
+    timestamp: Date.now(),
+    kind: "credential_resolution_failed",
+    agent: registration.agent,
+    detail: {
+      comm: commId,
+      account_id: registration.bot_user_id,
+      account_label: registration.account_label,
+      project: registration.project,
+      credentials_ref: registration.credentials_ref,
+      failure_kind: resolution.failureKind,
+      reason: resolution.reason,
+      credential_path: resolution.path ?? null
+    }
+  }).catch(() => {
+  });
+}
+async function createAdapterFromRegistration(input) {
+  const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
+    storage: input.storage,
+    stateRoot: input.stateRoot
+  });
+  if (resolved.status !== "ok") {
+    return { adapter: null, resolution: resolved };
+  }
+  const adapter = input.factory.create(
+    resolved.credentials,
+    input.registration.bot_user_id,
+    {
+      blobs: input.blobs,
+      stateRoot: input.stateRoot,
+      registrationId: input.registration.registration_id,
+      storage: input.storage
+    }
+  );
+  if (adapter.exclusiveResource?.() != null) {
+    return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
+  }
+  return { adapter, resolution: resolved };
+}
+async function addAdapterForRegistration(input) {
+  try {
+    const { adapter, resolution } = await createAdapterFromRegistration({
+      factory: input.factory,
+      registration: input.registration,
+      env: input.env,
+      blobs: input.blobs,
+      stateRoot: input.stateRoot,
+      storage: input.storage,
+      leaseArbiter: input.leaseArbiter
+    });
+    if (!adapter) {
+      if (resolution.status === "invalid") {
+        logInvalidCredentialResolution(input.registration, input.factory.commId, resolution);
+      }
+      return {
+        ok: false,
+        reason: resolution.status === "invalid" ? resolution.reason : unresolvedCredentialsReason(input.registration.credentials_ref),
+        retryClass: "permanent",
+        resolution
+      };
+    }
+    const accountId = input.registration.bot_user_id;
+    try {
+      input.bus.registerComm(adapter);
+      for (const bridge of input.bridges) {
+        bridge.attachComm?.(adapter);
+      }
+      await adapter.start();
+      return { ok: true };
+    } catch (error) {
+      await adapter.stop().catch(() => {
+      });
+      input.bus.unregisterComm(input.registration.comm, accountId);
+      for (const bridge of input.bridges) {
+        bridge.detachComm?.(input.registration.comm, accountId);
+      }
+      return {
+        ok: false,
+        reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`,
+        retryClass: "transient",
+        resolution
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `adapter construction failed: ${error instanceof Error ? error.message : String(error)}`,
+      retryClass: "transient"
+    };
+  }
+}
+
+// ../core-daemon/runtime/ensure-registration.ts
+function registrationBase(registration) {
+  return {
+    registration_id: registration.registration_id,
+    comm: registration.comm,
+    account_id: registration.bot_user_id
+  };
+}
+async function ensureRegistrationForAccount(registration, input) {
+  const base = registrationBase(registration);
+  let factory = input.factories.find((candidate) => candidate.commId === registration.comm);
+  let rescanned = false;
+  if (!factory && input.rescanFactories) {
+    factory = await input.rescanFactories(registration.comm);
+    rescanned = true;
+  }
+  if (!factory) {
+    const reason = "no_comm_factory";
+    console.error(
+      `agents-comm-bus: ensureRegistration ${registration.registration_id}: no comm adapter factory for "${registration.comm}" after on-demand re-scan (project=${registration.project}, agent=${registration.agent}, bot=${registration.bot_user_id}) \u2014 skipping adapter`
+    );
+    await input.audit?.append({
+      timestamp: Date.now(),
+      kind: "comm_adapter_skip",
+      agent: registration.agent,
+      detail: {
+        comm: registration.comm,
+        account_id: registration.bot_user_id,
+        account_label: registration.account_label,
+        project: registration.project,
+        reason,
+        rescanned,
+        via: "ensure_registration",
+        registration_id: registration.registration_id
+      }
+    }).catch(() => {
+    });
+    return {
+      status: "no-factory",
+      ...base,
+      rescanned,
+      retryClass: "permanent",
+      reason
+    };
+  }
+  const accountId = registration.bot_user_id;
+  const key = adapterMapKey(registration.comm, accountId);
+  if (input.agentLeaseProperties) {
+    input.leaseArbiter.setDesiredAgentProperties(
+      registration.comm,
+      registration.bot_user_id,
+      input.agentLeaseProperties
+    );
+  }
+  if (input.bus.getComm(registration.comm, accountId)) {
+    if (input.agentLeaseProperties) {
+      await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
+    }
+    return { status: "already-live", ...base, retryClass: "success" };
+  }
+  if (input.inFlight.has(key)) {
+    return { status: "in-flight", ...base, retryClass: "success" };
+  }
+  input.inFlight.add(key);
+  try {
+    const result = await addAdapterForRegistration({
+      factory,
+      registration,
+      bus: input.bus,
+      bridges: input.bridges,
+      env: input.env,
+      blobs: input.blobs,
+      stateRoot: input.stateRoot,
+      storage: input.storage,
+      leaseArbiter: input.leaseArbiter
+    });
+    if (result.ok) {
+      if (input.agentLeaseProperties) {
+        await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
+      }
+      return { status: "started", ...base, retryClass: "success" };
+    }
+    if (result.retryClass === "permanent") {
+      if (result.resolution?.status === "invalid") {
+        logInvalidCredentialResolution(registration, factory.commId, result.resolution);
+        await appendCredentialResolutionFailedAudit(
+          input.audit,
+          registration,
+          factory.commId,
+          result.resolution
+        );
+      } else {
+        console.error(
+          `agents-comm-bus: ensureRegistration could not start ${key}: ${result.reason}`
+        );
+        await input.audit?.append({
+          timestamp: Date.now(),
+          kind: "comm_adapter_skip",
+          agent: registration.agent,
+          detail: {
+            comm: registration.comm,
+            account_id: registration.bot_user_id,
+            account_label: registration.account_label,
+            project: registration.project,
+            reason: result.reason,
+            via: "ensure_registration",
+            registration_id: registration.registration_id
+          }
+        }).catch(() => {
+        });
+      }
+      return {
+        status: "invalid-credentials",
+        ...base,
+        reason: result.reason,
+        retryClass: "permanent",
+        resolution: result.resolution
+      };
+    }
+    if (result.resolution) {
+      console.error(
+        `agents-comm-bus: ensureRegistration could not start ${key}: ${result.reason}`
+      );
+      await input.audit?.append({
+        timestamp: Date.now(),
+        kind: "comm_adapter_skip",
+        agent: registration.agent,
+        detail: {
+          comm: registration.comm,
+          account_id: registration.bot_user_id,
+          account_label: registration.account_label,
+          project: registration.project,
+          reason: result.reason,
+          via: "ensure_registration",
+          registration_id: registration.registration_id
+        }
+      }).catch(() => {
+      });
+      if (registration.activation === "eager" && input.scheduleEagerRetry) {
+        input.scheduleEagerRetry(registration.registration_id);
+      }
+      return {
+        status: "start-failed",
+        ...base,
+        reason: result.reason,
+        retryClass: "transient",
+        resolution: result.resolution
+      };
+    }
+    console.error(
+      `agents-comm-bus: ensureRegistration construction failed ${key}: ${result.reason}`
+    );
+    if (registration.activation === "eager" && input.scheduleEagerRetry) {
+      input.scheduleEagerRetry(registration.registration_id);
+    }
+    return {
+      status: "construction-failed",
+      ...base,
+      reason: result.reason,
+      retryClass: "transient"
+    };
+  } finally {
+    input.inFlight.delete(key);
+  }
+}
+async function ensureRegistrationById(registration_id, input) {
+  const registration = await input.storage.getAccountByRegistrationId(registration_id);
+  if (!registration) return null;
+  return ensureRegistrationForAccount(registration, input);
+}
+async function reconcileEagerRegistrations(input) {
+  const registrations = await input.storage.listAccountRegistrations();
+  const eager = registrations.filter((row) => row.activation === "eager");
+  const outcomes = [];
+  for (const registration of eager) {
+    try {
+      outcomes.push(await ensureRegistrationForAccount(registration, input.ensure));
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(
+        `agents-comm-bus: eager reconcile failed for ${registration.registration_id}: ${reason}`
+      );
+    }
+  }
+  return outcomes;
+}
+
+// ../core-daemon/runtime/eager-activation-retry.ts
+var INITIAL_RETRY_MS = 1e3;
+var MAX_RETRY_MS = 3e4;
+var MAX_RETRY_ATTEMPTS = 5;
+function createEagerActivationRetryScheduler(input) {
+  const timers = /* @__PURE__ */ new Map();
+  const attempts = /* @__PURE__ */ new Map();
+  const stopAll = () => {
+    for (const timer of timers.values()) {
+      clearTimeout(timer);
+    }
+    timers.clear();
+    attempts.clear();
+  };
+  const cancel = (registration_id) => {
+    const timer = timers.get(registration_id);
+    if (timer) clearTimeout(timer);
+    timers.delete(registration_id);
+    attempts.delete(registration_id);
+  };
+  const schedule = (registration_id) => {
+    const prior = attempts.get(registration_id) ?? 0;
+    if (prior >= MAX_RETRY_ATTEMPTS) return;
+    const attempt = prior + 1;
+    attempts.set(registration_id, attempt);
+    const delayMs = Math.min(INITIAL_RETRY_MS * 2 ** (attempt - 1), MAX_RETRY_MS);
+    cancel(registration_id);
+    const timer = setTimeout(() => {
+      timers.delete(registration_id);
+      void (async () => {
+        const row = await input.storage.getAccountByRegistrationId(registration_id);
+        if (!row || row.activation !== "eager") {
+          cancel(registration_id);
+          return;
+        }
+        const outcome = await ensureRegistrationById(registration_id, input.ensure);
+        if (outcome && outcome.retryClass === "transient") {
+          schedule(registration_id);
+        }
+      })().catch((error) => {
+        console.error(
+          `agents-comm-bus: eager retry failed for ${registration_id}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    }, delayMs);
+    timer.unref?.();
+    timers.set(registration_id, timer);
+  };
+  return { schedule, cancel, stopAll };
+}
 
 // ../core-daemon/runtime/register-comm-ipc-methods.ts
 var DuplicateCommIpcMethodError = class extends Error {
@@ -8323,11 +8722,33 @@ async function runDaemon(options) {
       registerCommIpcMethods(ipcMethods, factory, ipcDeps, { commIdByMethod });
     }
   }
-  const ensureCommsForSessionFn = async (project, agent, options2) => {
+  const buildEnsureRegistrationContext = (options2) => ({
+    factories: commAdapterFactories,
+    rescanFactories: rescanFactoriesForComm,
+    bus,
+    bridges,
+    storage,
+    env,
+    blobs,
+    stateRoot: paths.root,
+    leaseArbiter,
+    inFlight: inFlightAdapters,
+    audit,
+    ...options2
+  });
+  let eagerRetry;
+  const scheduleEagerRetry = (registration_id) => {
+    eagerRetry?.schedule(registration_id);
+  };
+  eagerRetry = createEagerActivationRetryScheduler({
+    storage,
+    ensure: buildEnsureRegistrationContext({ scheduleEagerRetry })
+  });
+  const ensureCommsForSessionWithOutcomes = async (project, agent, options2) => {
     const canonicalProject = normalizeProjectPath(project);
     const accountLabelScope = options2?.accountLabelScope ?? null;
     activeScopes.add(scopeKey(agent, canonicalProject, accountLabelScope));
-    await ensureCommsForSession({
+    const { outcomes } = await ensureCommsForSession({
       project: canonicalProject,
       requestedProject: project,
       agent,
@@ -8345,6 +8766,11 @@ async function runDaemon(options) {
       inFlight: inFlightAdapters,
       audit
     });
+    return outcomes;
+  };
+  const ensureCommsForSessionFn = async (project, agent, options2) => {
+    const canonicalProject = normalizeProjectPath(project);
+    const outcomes = await ensureCommsForSessionWithOutcomes(project, agent, options2);
     await rehydratePendingInboundForScope({
       storage,
       transcripts,
@@ -8353,7 +8779,7 @@ async function runDaemon(options) {
       project: canonicalProject,
       agent
     });
-    return { rehydrated: true };
+    return { rehydrated: true, outcomes };
   };
   bridges.push(
     ...options.agentBridgeFactories.map(
@@ -8447,6 +8873,7 @@ async function runDaemon(options) {
     leaseArbiter,
     activeScopes,
     audit,
+    ensureRegistrationContext: buildEnsureRegistrationContext({ scheduleEagerRetry }),
     options: reloadOptions
   });
   const server = await startIpcServer({
@@ -8504,6 +8931,7 @@ async function runDaemon(options) {
         pidWatchdogHandle?.stop();
         idleReaperHandle?.stop();
         sessionEndSweepHandle?.stop();
+        eagerRetry?.stopAll();
       },
       stopBus: () => bestEffortWithTimeout(
         () => bus.stop(),
@@ -8551,6 +8979,10 @@ async function runDaemon(options) {
     ensureCommsForSession: ensureCommsForSessionFn,
     audit
   });
+  void reconcileEagerRegistrations({
+    storage,
+    ensure: buildEnsureRegistrationContext({ scheduleEagerRetry })
+  });
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }
 async function bestEffortWithTimeout(action, timeoutMs, label) {
@@ -8575,48 +9007,6 @@ async function bestEffortWithTimeout(action, timeoutMs, label) {
     );
   } finally {
     if (timeout) clearTimeout(timeout);
-  }
-}
-async function addAdapterForRegistration(input) {
-  const { adapter, resolution } = await createAdapterFromRegistration({
-    factory: input.factory,
-    registration: input.registration,
-    env: input.env,
-    blobs: input.blobs,
-    stateRoot: input.stateRoot,
-    storage: input.storage,
-    leaseArbiter: input.leaseArbiter
-  });
-  if (!adapter) {
-    if (resolution.status === "invalid") {
-      logInvalidCredentialResolution(input.registration, input.factory.commId, resolution);
-    }
-    return {
-      ok: false,
-      reason: resolution.status === "invalid" ? resolution.reason : unresolvedCredentialsReason(input.registration.credentials_ref),
-      resolution
-    };
-  }
-  const accountId = input.registration.bot_user_id;
-  try {
-    input.bus.registerComm(adapter);
-    for (const bridge of input.bridges) {
-      bridge.attachComm?.(adapter);
-    }
-    await adapter.start();
-    return { ok: true };
-  } catch (error) {
-    await adapter.stop().catch(() => {
-    });
-    input.bus.unregisterComm(input.registration.comm, accountId);
-    for (const bridge of input.bridges) {
-      bridge.detachComm?.(input.registration.comm, accountId);
-    }
-    return {
-      ok: false,
-      reason: `failed to start adapter: ${error instanceof Error ? error.message : String(error)}`,
-      resolution
-    };
   }
 }
 async function ensureCommsForSession(input) {
@@ -8651,124 +9041,40 @@ async function ensureCommsForSession(input) {
       storage: input.storage,
       audit: input.audit
     });
-    return;
+    return { outcomes: [] };
   }
+  const outcomes = [];
   for (const registration of registrations) {
-    let factory = input.factories.find((f) => f.commId === registration.comm);
-    const attemptedRescan = !factory && Boolean(input.rescanFactories);
-    if (!factory && input.rescanFactories) {
-      factory = await input.rescanFactories(registration.comm);
-    }
-    if (!factory) {
-      if (attemptedRescan) {
-        console.error(
-          `agents-comm-bus: no comm adapter factory for "${registration.comm}" after on-demand re-scan (project=${project}, agent=${input.agent}, bot=${registration.bot_user_id}) \u2014 skipping adapter`
-        );
-      }
-      await input.audit?.append({
-        timestamp: Date.now(),
-        kind: "comm_adapter_skip",
+    outcomes.push(
+      await ensureRegistrationForAccount(registration, {
+        factories: input.factories,
+        rescanFactories: input.rescanFactories,
+        bus: input.bus,
+        bridges: input.bridges,
+        storage: input.storage,
+        env: input.env,
+        blobs: input.blobs,
+        stateRoot: input.stateRoot,
+        leaseArbiter: input.leaseArbiter,
+        inFlight: input.inFlight,
+        audit: input.audit,
         agent: input.agent,
-        detail: {
-          comm: registration.comm,
-          account_id: registration.bot_user_id,
-          account_label: registration.account_label,
-          project,
-          reason: "no_comm_factory",
-          rescanned: Boolean(input.rescanFactories)
-        }
-      }).catch(() => {
-      });
-      continue;
-    }
-    const accountId = registration.bot_user_id;
-    const key = adapterMapKey(registration.comm, accountId);
-    if (input.agentLeaseProperties) {
-      input.leaseArbiter.setDesiredAgentProperties(
-        registration.comm,
-        registration.bot_user_id,
-        input.agentLeaseProperties
-      );
-    }
-    const alreadyLive = Boolean(input.bus.getComm(registration.comm, accountId));
-    if (!alreadyLive && !input.inFlight.has(key)) {
-      input.inFlight.add(key);
-      try {
-        const result = await addAdapterForRegistration({
-          factory,
-          registration,
-          bus: input.bus,
-          bridges: input.bridges,
-          env: input.env,
-          blobs: input.blobs,
-          stateRoot: input.stateRoot,
-          storage: input.storage,
-          leaseArbiter: input.leaseArbiter
-        });
-        if (!result.ok) {
-          if (result.resolution.status === "invalid") {
-            await appendCredentialResolutionFailedAudit(
-              input.audit,
-              registration,
-              factory.commId,
-              result.resolution
-            );
-          } else {
-            console.error(
-              `agents-comm-bus: ensureCommsForSession could not start ${key}: ${result.reason}`
-            );
-            await input.audit?.append({
-              timestamp: Date.now(),
-              kind: "comm_adapter_skip",
-              agent: input.agent,
-              detail: {
-                comm: registration.comm,
-                account_id: registration.bot_user_id,
-                account_label: registration.account_label,
-                project,
-                reason: result.reason
-              }
-            }).catch(() => {
-            });
-          }
-        }
-      } finally {
-        input.inFlight.delete(key);
-      }
-    }
-    if (input.agentLeaseProperties) {
-      await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
-    }
+        agentLeaseProperties: input.agentLeaseProperties
+      })
+    );
   }
-}
-async function createAdapterFromRegistration(input) {
-  const resolved = await input.factory.resolveCredentials(input.registration, input.env, {
-    storage: input.storage,
-    stateRoot: input.stateRoot
-  });
-  if (resolved.status !== "ok") {
-    return { adapter: null, resolution: resolved };
-  }
-  const adapter = input.factory.create(
-    resolved.credentials,
-    input.registration.bot_user_id,
-    {
-      blobs: input.blobs,
-      stateRoot: input.stateRoot,
-      registrationId: input.registration.registration_id,
-      storage: input.storage
-    }
-  );
-  if (adapter.exclusiveResource?.() != null) {
-    return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
-  }
-  return { adapter, resolution: resolved };
+  return { outcomes };
 }
 async function reloadAdapters(input) {
   const added = [];
   const removed = [];
   const updated = [];
   const skipped = [];
+  if (input.options?.ensureRegistrationIds && input.ensureRegistrationContext) {
+    for (const registration_id of input.options.ensureRegistrationIds) {
+      await ensureRegistrationById(registration_id, input.ensureRegistrationContext);
+    }
+  }
   const current = /* @__PURE__ */ new Map();
   for (const entry of input.bus.listComms()) {
     current.set(adapterMapKey(entry.commId, entry.accountId), entry);
@@ -8779,7 +9085,8 @@ async function reloadAdapters(input) {
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id);
       const scopeActive = input.activeScopes != null && isRegistrationScopeActive(reg, input.activeScopes);
-      if (!current.has(key) && !scopeActive) continue;
+      const eagerStanding = reg.activation === "eager";
+      if (!current.has(key) && !scopeActive && !eagerStanding) continue;
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
     }
   }
@@ -8807,7 +9114,7 @@ async function reloadAdapters(input) {
         account_id: entry.registration.bot_user_id,
         reason: result.reason
       });
-      if (result.resolution.status === "invalid") {
+      if (result.resolution?.status === "invalid") {
         await appendCredentialResolutionFailedAudit(
           input.audit,
           entry.registration,
@@ -9013,38 +9320,6 @@ function sameStringSet(a, b) {
   }
   return true;
 }
-function unresolvedCredentialsReason(ref, action = "resolve") {
-  if (ref.startsWith("env:")) {
-    return `could not ${action} credentials_ref=${ref}: env: credential refs are retired; rerun account-update-token with --bot-token to create a daemon-owned file: ref`;
-  }
-  return `could not ${action} credentials_ref=${ref}`;
-}
-function logInvalidCredentialResolution(registration, commId, resolution) {
-  const pathSuffix = resolution.path ? ` [${resolution.path}]` : "";
-  console.error(
-    `agents-comm-bus: credential file for ${commId} account ${registration.account_label} (project ${registration.project}) exists but failed to resolve: ${resolution.reason}${pathSuffix}`
-  );
-}
-async function appendCredentialResolutionFailedAudit(audit, registration, commId, resolution) {
-  await audit?.append({
-    timestamp: Date.now(),
-    kind: "credential_resolution_failed",
-    agent: registration.agent,
-    detail: {
-      comm: commId,
-      account_label: registration.account_label,
-      project: registration.project,
-      bot_user_id: registration.bot_user_id,
-      credential_path: resolution.path ?? null,
-      failure_kind: resolution.failureKind,
-      reason: resolution.reason
-    }
-  }).catch(() => {
-  });
-}
-function adapterMapKey(commId, accountId) {
-  return `${commId}:${accountId}`;
-}
 function scopeKey(agent, project, accountLabelScope) {
   return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
 }
@@ -9179,18 +9454,24 @@ async function probeCommIdentity(params, factories, env, rescanFactories) {
   };
 }
 function parseReloadOptions(params) {
-  const raw = params.forceCredentialRefresh;
-  if (!Array.isArray(raw)) return {};
-  const forceCredentialRefresh = raw.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const record = item;
-    if (record.comm == null || record.accountId == null) return [];
-    return [{
-      comm: String(record.comm),
-      accountId: String(record.accountId)
-    }];
-  });
-  return { forceCredentialRefresh };
+  const forceRaw = params.forceCredentialRefresh;
+  const ensureRaw = params.ensureRegistrationIds;
+  const options = {};
+  if (Array.isArray(forceRaw)) {
+    options.forceCredentialRefresh = forceRaw.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item;
+      if (record.comm == null || record.accountId == null) return [];
+      return [{
+        comm: String(record.comm),
+        accountId: String(record.accountId)
+      }];
+    });
+  }
+  if (Array.isArray(ensureRaw)) {
+    options.ensureRegistrationIds = ensureRaw.filter((id) => typeof id === "string" && id.length > 0);
+  }
+  return options;
 }
 
 // ../core-daemon/bridges/claude/bridge.ts

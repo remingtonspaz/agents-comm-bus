@@ -1,12 +1,12 @@
-import { type AccountId, type AccountRegistration, type AgentId, type CommId, type Storage } from "agents-comm-bus-core";
+import { type AccountId, type AgentId, type CommId, type Storage } from "agents-comm-bus-core";
 import { CommLeaseArbiter, type AgentLeaseProperties } from "./runtime/comm-lease.js";
 import { MessageBus } from "./bus.js";
 import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
-import type { AgentBridge, AgentBridgeFactory, EnsureCommsForSession } from "./runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeFactory, EnsureCommsForSession, EnsureRegistrationResult } from "./runtime/agent-bridge.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
-import type { CredentialResolution } from "./runtime/credential-resolution.js";
+import { type EnsureRegistrationContext } from "./runtime/ensure-registration.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 export type { AgentBridge, AgentBridgeFactory, AgentBridgeContext, } from "./runtime/agent-bridge.js";
 export type { CommAdapterFactory, CommAdapterFactoryEnv, CommIpcDeps, } from "./runtime/comm-factory.js";
@@ -62,40 +62,11 @@ export interface RunDaemonOptions {
  *      (which starts the comm pollers).
  */
 export declare function runDaemon(options: RunDaemonOptions): Promise<void>;
-/**
- * AGE-38: the shared adapter add-sequence — construct, register on the bus,
- * wire every bridge's per-comm callbacks (`attachComm`, which wires button-tap
- * resolution), start (which acquires the comm lease), and roll back cleanly on
- * failure so a failed-to-start adapter is never left wedged in the bus map
- * (which would block a future re-add for the same bot). The caller owns the
- * "already live" idempotency check before calling.
- */
-export declare function addAdapterForRegistration(input: {
-    factory: CommAdapterFactory;
-    registration: AccountRegistration;
-    bus: MessageBus;
-    bridges: AgentBridge[];
-    env: NodeJS.ProcessEnv;
-    blobs: ContentAddressedBlobStore;
-    stateRoot: string;
-    storage: Storage;
-    leaseArbiter: CommLeaseArbiter;
-}): Promise<{
-    ok: true;
-} | {
-    ok: false;
-    reason: string;
-    resolution: CredentialResolution;
-}>;
+export { addAdapterForRegistration } from "./runtime/comm-adapter-lifecycle.js";
 /**
  * AGE-38: instantiate (and lease) only the comm adapters a `(project, agent)`
- * session needs, lazily on session entry. Resolves the session's registrations
- * and brings up only those bots — never every registered bot — skipping any
- * already live or being brought up by a concurrent register (`inFlight` de-dupes
- * the race so two near-simultaneous registers for the same new bot don't both
- * construct and collide on `bus.registerComm`). Best-effort per bot: a failure
- * is logged and skipped, never thrown, so one bad credential can't fail session
- * registration.
+ * session needs, lazily on session entry. Uses the per-registration primitive
+ * (AGE-97) for each row in the session scope — never scope-wide over-activation.
  */
 export declare function ensureCommsForSession(input: {
     project: string;
@@ -121,7 +92,9 @@ export declare function ensureCommsForSession(input: {
     leaseArbiter: CommLeaseArbiter;
     inFlight: Set<string>;
     audit?: JsonlAuditStore;
-}): Promise<void>;
+}): Promise<{
+    outcomes: EnsureRegistrationResult[];
+}>;
 export interface ReloadSummary {
     ok: true;
     added: Array<{
@@ -153,6 +126,8 @@ export interface ReloadOptions {
         comm: CommId | string;
         accountId: AccountId | string;
     }>;
+    /** AGE-97: exact-registration ensure after DB writes (lazy→eager). */
+    ensureRegistrationIds?: string[];
 }
 /**
  * Reconcile the live comm-adapter set with `account_registrations`. Called
@@ -187,6 +162,8 @@ export declare function reloadAdapters(input: {
      */
     activeScopes?: ReadonlySet<string>;
     audit?: JsonlAuditStore;
+    /** AGE-97: exact-registration ensure for activation flag updates. */
+    ensureRegistrationContext?: EnsureRegistrationContext;
     options?: ReloadOptions;
 }): Promise<ReloadSummary>;
 /**

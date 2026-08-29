@@ -40,8 +40,8 @@ export class SqliteStorage {
             .prepare(`
         INSERT INTO account_registrations (
           schema_version, registration_id, project, comm, agent, account_label,
-          bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          bot_user_id, credentials_ref, activation, bot_username, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, comm, agent, account_label) DO UPDATE SET
           bot_user_id = excluded.bot_user_id,
           credentials_ref = excluded.credentials_ref,
@@ -49,12 +49,18 @@ export class SqliteStorage {
           updated_at = excluded.updated_at,
           metadata_json = excluded.metadata_json
       `)
-            .run(rec.schema_version, rec.registration_id ?? null, project, rec.comm, rec.agent, rec.account_label, rec.bot_user_id, rec.credentials_ref, rec.bot_username ?? null, rec.created_at, rec.updated_at, encodeJson(rec.metadata));
+            .run(rec.schema_version, rec.registration_id ?? null, project, rec.comm, rec.agent, rec.account_label, rec.bot_user_id, rec.credentials_ref, rec.activation ?? "lazy", rec.bot_username ?? null, rec.created_at, rec.updated_at, encodeJson(rec.metadata));
     }
     async getAccountByBot(comm, bot_user_id) {
         const row = this.db
             .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
             .get(comm, bot_user_id);
+        return row ? this.accountFromRow(row) : null;
+    }
+    async getAccountByRegistrationId(registration_id) {
+        const row = this.db
+            .prepare("SELECT * FROM account_registrations WHERE registration_id = ?")
+            .get(registration_id);
         return row ? this.accountFromRow(row) : null;
     }
     async listAccountRegistrations(filter = {}) {
@@ -211,6 +217,45 @@ export class SqliteStorage {
                 .run(input.account_label, input.updated_at, previous.registration_id);
             if (Number(result.changes ?? 0) !== 1) {
                 throw new Error(`failed to relabel account registration for ${input.comm}/${input.bot_user_id}`);
+            }
+            const nextRow = this.db
+                .prepare("SELECT * FROM account_registrations WHERE registration_id = ?")
+                .get(previous.registration_id);
+            if (!nextRow) {
+                throw new Error(`updated account registration not found for ${previous.registration_id}`);
+            }
+            this.db.exec("COMMIT");
+            return { previous, next: this.accountFromRow(nextRow) };
+        }
+        catch (error) {
+            this.db.exec("ROLLBACK");
+            throw error;
+        }
+    }
+    async updateAccountRegistrationActivation(input) {
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+            const previousRow = this.db
+                .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
+                .get(input.comm, input.bot_user_id);
+            if (!previousRow) {
+                throw new Error(`no account registration found for (comm=${input.comm}, bot-id=${input.bot_user_id})`);
+            }
+            const previous = this.accountFromRow(previousRow);
+            if (previous.activation === input.activation) {
+                this.db.exec("COMMIT");
+                return { previous, next: previous };
+            }
+            const result = this.db
+                .prepare(`
+          UPDATE account_registrations
+          SET activation = ?,
+              updated_at = ?
+          WHERE registration_id = ?
+        `)
+                .run(input.activation, input.updated_at, previous.registration_id);
+            if (Number(result.changes ?? 0) !== 1) {
+                throw new Error(`failed to update activation for account registration ${previous.registration_id}`);
             }
             const nextRow = this.db
                 .prepare("SELECT * FROM account_registrations WHERE registration_id = ?")
@@ -912,6 +957,7 @@ export class SqliteStorage {
             account_label: r.account_label,
             bot_user_id: r.bot_user_id,
             credentials_ref: r.credentials_ref,
+            activation: r.activation ?? "lazy",
             bot_username: r.bot_username ?? undefined,
             created_at: r.created_at,
             updated_at: r.updated_at,

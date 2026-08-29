@@ -8,6 +8,12 @@ export interface ForceCredentialRefreshTarget {
     comm: string;
     accountId: string;
 }
+export interface ReloadDaemonOptions {
+    timeoutMs?: number;
+    forceCredentialRefresh?: ForceCredentialRefreshTarget[];
+    /** AGE-97: exact-registration ensure after activation flag updates. */
+    ensureRegistrationIds?: string[];
+}
 /**
  * Best-effort hot-reload trigger for the CLI's account-add / account-remove
  * commands. Reads the daemon's discovery files and, if a daemon is alive,
@@ -16,8 +22,5 @@ export interface ForceCredentialRefreshTarget {
  * so the caller can print "the change takes effect on next daemon spawn"
  * instead of throwing.
  */
-export declare function reloadDaemonRegistrations(options?: {
-    timeoutMs?: number;
-    forceCredentialRefresh?: ForceCredentialRefreshTarget[];
-}): Promise<ReloadResult>;
+export declare function reloadDaemonRegistrations(options?: ReloadDaemonOptions): Promise<ReloadResult>;
 //# sourceMappingURL=reload-helper.d.ts.map

@@ -96,6 +96,7 @@ function makeRegistration(
     account_label: "main",
     bot_user_id: comm === "matrix" ? BOT_MXID : "123456789",
     credentials_ref: credentialsRef,
+    activation: "lazy",
     created_at: 1,
     updated_at: 1,
     ...overrides,
@@ -272,10 +273,11 @@ describe("daemon credential_resolution_failed audit", () => {
     const dir = await mkdtemp(join(tmpdir(), "acb-daemon-cred-audit-"));
     const tokenFile = join(dir, "bad-token.json");
     const auditDir = join(dir, "audit-root");
+    let storage: Awaited<ReturnType<typeof openSqliteStorage>> | undefined;
     try {
       await writeFile(tokenFile, JSON.stringify({}), "utf8");
 
-      const storage = await openSqliteStorage(join(dir, "storage.db"));
+      storage = await openSqliteStorage(join(dir, "storage.db"));
       const audit = new JsonlAuditStore(auditDir);
       const transcripts = new JsonlTranscriptStore(dir);
       const blobs = new ContentAddressedBlobStore(dir);
@@ -355,10 +357,13 @@ describe("daemon credential_resolution_failed audit", () => {
 
       assert.equal(events.some((e) => e.kind === "credential_resolution_failed"), false);
       assert.equal(events.some((e) => e.kind === "comm_adapter_skip"), true);
-
-      await storage.close();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      if (storage) await storage.close();
+      try {
+        await rm(dir, { recursive: true, force: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
+      }
     }
   });
 });

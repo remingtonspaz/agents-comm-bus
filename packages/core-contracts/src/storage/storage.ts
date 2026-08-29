@@ -26,6 +26,7 @@ export interface PendingInboundDeliveryRow extends PendingInboundDeliveryKey {
 }
 import type { ResolvedDecision } from "../queries.js";
 import type {
+  AccountActivation,
   AccountRegistration,
   AllowlistGlobalEntry,
   AllowlistPerBotEntry,
@@ -86,12 +87,27 @@ export interface AccountRelabelResult {
   next: AccountRegistration;
 }
 
+export interface AccountActivationUpdateInput {
+  comm: CommId;
+  bot_user_id: string;
+  activation: AccountActivation;
+  updated_at: number;
+}
+
+export interface AccountActivationUpdateResult {
+  previous: AccountRegistration;
+  next: AccountRegistration;
+}
+
 export interface Storage {
   // account_registrations
   putAccountRegistration(rec: AccountRegistration): Promise<void>;
   getAccountByBot(
     comm: CommId,
     bot_user_id: string,
+  ): Promise<AccountRegistration | null>;
+  getAccountByRegistrationId(
+    registration_id: string,
   ): Promise<AccountRegistration | null>;
   listAccountRegistrations(filter?: {
     project?: string;
@@ -110,6 +126,9 @@ export interface Storage {
   updateAccountRegistrationLabel(
     input: AccountRelabelInput,
   ): Promise<AccountRelabelResult>;
+  updateAccountRegistrationActivation(
+    input: AccountActivationUpdateInput,
+  ): Promise<AccountActivationUpdateResult>;
 
   // conversations
   upsertConversation(rec: Conversation): Promise<ConversationId>;

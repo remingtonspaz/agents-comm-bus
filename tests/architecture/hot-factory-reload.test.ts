@@ -109,6 +109,7 @@ function registration(project: string, comm: CommId, botId: string): AccountRegi
     bot_user_id: botId,
     registration_id: `reg-${comm}-${botId}`,
     credentials_ref: "file:/missing/token.json",
+    activation: "lazy",
     bot_username: "test_bot",
     created_at: 1,
     updated_at: 1,

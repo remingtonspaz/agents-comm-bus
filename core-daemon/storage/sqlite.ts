@@ -10,6 +10,8 @@ import type {
   Session,
 } from "agents-comm-bus-core/records";
 import type {
+  AccountActivationUpdateInput,
+  AccountActivationUpdateResult,
   AccountRelabelInput,
   AccountRelabelResult,
   AccountTokenUpdateInput,
@@ -81,8 +83,8 @@ export class SqliteStorage implements Storage {
       .prepare(`
         INSERT INTO account_registrations (
           schema_version, registration_id, project, comm, agent, account_label,
-          bot_user_id, credentials_ref, bot_username, created_at, updated_at, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          bot_user_id, credentials_ref, activation, bot_username, created_at, updated_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(project, comm, agent, account_label) DO UPDATE SET
           bot_user_id = excluded.bot_user_id,
           credentials_ref = excluded.credentials_ref,
@@ -99,6 +101,7 @@ export class SqliteStorage implements Storage {
         rec.account_label,
         rec.bot_user_id,
         rec.credentials_ref,
+        rec.activation ?? "lazy",
         rec.bot_username ?? null,
         rec.created_at,
         rec.updated_at,
@@ -113,6 +116,15 @@ export class SqliteStorage implements Storage {
     const row = this.db
       .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
       .get(comm, bot_user_id);
+    return row ? this.accountFromRow(row) : null;
+  }
+
+  async getAccountByRegistrationId(
+    registration_id: string,
+  ): Promise<AccountRegistration | null> {
+    const row = this.db
+      .prepare("SELECT * FROM account_registrations WHERE registration_id = ?")
+      .get(registration_id);
     return row ? this.accountFromRow(row) : null;
   }
 
@@ -317,6 +329,55 @@ export class SqliteStorage implements Storage {
       if (Number(result.changes ?? 0) !== 1) {
         throw new Error(
           `failed to relabel account registration for ${input.comm}/${input.bot_user_id}`,
+        );
+      }
+
+      const nextRow = this.db
+        .prepare("SELECT * FROM account_registrations WHERE registration_id = ?")
+        .get(previous.registration_id);
+      if (!nextRow) {
+        throw new Error(`updated account registration not found for ${previous.registration_id}`);
+      }
+
+      this.db.exec("COMMIT");
+      return { previous, next: this.accountFromRow(nextRow) };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async updateAccountRegistrationActivation(
+    input: AccountActivationUpdateInput,
+  ): Promise<AccountActivationUpdateResult> {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previousRow = this.db
+        .prepare("SELECT * FROM account_registrations WHERE comm = ? AND bot_user_id = ?")
+        .get(input.comm, input.bot_user_id);
+      if (!previousRow) {
+        throw new Error(
+          `no account registration found for (comm=${input.comm}, bot-id=${input.bot_user_id})`,
+        );
+      }
+      const previous = this.accountFromRow(previousRow);
+
+      if (previous.activation === input.activation) {
+        this.db.exec("COMMIT");
+        return { previous, next: previous };
+      }
+
+      const result = this.db
+        .prepare(`
+          UPDATE account_registrations
+          SET activation = ?,
+              updated_at = ?
+          WHERE registration_id = ?
+        `)
+        .run(input.activation, input.updated_at, previous.registration_id) as { changes?: number };
+      if (Number(result.changes ?? 0) !== 1) {
+        throw new Error(
+          `failed to update activation for account registration ${previous.registration_id}`,
         );
       }
 
@@ -1264,6 +1325,7 @@ export class SqliteStorage implements Storage {
       account_label: r.account_label as string,
       bot_user_id: r.bot_user_id as string,
       credentials_ref: r.credentials_ref as string,
+      activation: (r.activation as AccountRegistration["activation"]) ?? "lazy",
       bot_username: (r.bot_username as string | null) ?? undefined,
       created_at: r.created_at as number,
       updated_at: r.updated_at as number,

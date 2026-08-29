@@ -118,6 +118,7 @@ function registration(project: string, botId: string): AccountRegistration {
     bot_user_id: botId,
     registration_id: `reg-${botId}`,
     credentials_ref: "file:/does/not/matter.json",
+    activation: "lazy",
     bot_username: "test_bot",
     created_at: 1,
     updated_at: 1,

@@ -41,6 +41,7 @@ function account(overrides: Partial<AccountRegistration> = {}): AccountRegistrat
     // from the (unique) bot id so fixtures that omit it still insert.
     registration_id: `reg-${bot_user_id}`,
     credentials_ref: "keyring://telegram/main",
+    activation: "lazy",
     created_at: 1,
     updated_at: 1,
     ...overrides,

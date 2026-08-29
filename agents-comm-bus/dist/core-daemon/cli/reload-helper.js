@@ -31,10 +31,14 @@ export async function reloadDaemonRegistrations(options = {}) {
             timeoutMs,
             metadata: { shimName: "agents-comm-bus/cli" },
         });
-        const params = options.forceCredentialRefresh
-            ? { forceCredentialRefresh: options.forceCredentialRefresh }
-            : undefined;
-        const summary = await connection.request("reload_registrations", params);
+        const params = {};
+        if (options.forceCredentialRefresh) {
+            params.forceCredentialRefresh = options.forceCredentialRefresh;
+        }
+        if (options.ensureRegistrationIds) {
+            params.ensureRegistrationIds = options.ensureRegistrationIds;
+        }
+        const summary = await connection.request("reload_registrations", Object.keys(params).length > 0 ? params : undefined);
         return { attempted: true, ok: true, summary };
     }
     catch (error) {

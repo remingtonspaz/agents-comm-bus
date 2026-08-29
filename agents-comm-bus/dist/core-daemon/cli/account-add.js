@@ -65,6 +65,7 @@ export async function accountAdd(options) {
             bot_user_id: identity.bot_user_id,
             bot_username: identity.bot_username ?? undefined,
             credentials_ref: credentialsRef,
+            activation: "lazy",
             created_at: now,
             updated_at: now,
             metadata: { source: "account-add" },

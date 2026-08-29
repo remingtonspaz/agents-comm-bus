@@ -17,6 +17,59 @@ export type EnsureCommsForSessionOptions = {
 export type EnsureCommsForSessionResult = {
     /** True when durable pending-inbound rehydration completed for this scope. */
     rehydrated: boolean;
+    /** AGE-97: per-registration outcomes from the ensure loop (empty when none attempted). */
+    outcomes: EnsureRegistrationResult[];
+};
+export type EnsureRegistrationRetryClass = "permanent" | "transient" | "success";
+export type EnsureRegistrationResult = {
+    status: "started";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    retryClass: "success";
+} | {
+    status: "already-live";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    retryClass: "success";
+} | {
+    status: "in-flight";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    retryClass: "success";
+} | {
+    status: "no-factory";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    rescanned: boolean;
+    retryClass: "permanent";
+    reason: string;
+} | {
+    status: "invalid-credentials";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    reason: string;
+    retryClass: "permanent";
+    resolution: import("./credential-resolution.js").CredentialResolution;
+} | {
+    status: "construction-failed";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    reason: string;
+    retryClass: "transient";
+} | {
+    status: "start-failed";
+    registration_id: string;
+    comm: CommId;
+    account_id: string;
+    reason: string;
+    retryClass: "transient";
+    resolution: import("./credential-resolution.js").CredentialResolution;
 };
 /**
  * Lazily bring up the comm adapters a `(project, agent)` session needs, on

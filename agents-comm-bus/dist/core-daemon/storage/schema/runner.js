@@ -129,6 +129,14 @@ export const curlInboundIdempotencyMigration = {
         await ctx.exec(sql);
     },
 };
+export const registrationActivationMigration = {
+    version: 14,
+    description: "AGE-97: account_registrations activation flag (lazy | eager)",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "014_registration_activation.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -144,6 +152,7 @@ export async function runStorageMigrations(db) {
         sessionDaemonOwnerMigration,
         sessionLabelScopeMigration,
         curlInboundIdempotencyMigration,
+        registrationActivationMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

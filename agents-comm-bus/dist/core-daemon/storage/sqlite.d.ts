@@ -1,6 +1,6 @@
 import type { ResolvedDecision } from "agents-comm-bus-core";
 import type { AccountRegistration, AllowlistGlobalEntry, AllowlistPerBotEntry, Conversation, QueryRecord, Session } from "agents-comm-bus-core/records";
-import type { AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, CurlInboundReceipt, CurlInboundReceiptAcceptInput, CurlInboundReceiptReserveInput, CurlInboundReceiptReserveResult, CurlInboundReceiptScope, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionEndObservation, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
+import type { AccountActivationUpdateInput, AccountActivationUpdateResult, AccountRelabelInput, AccountRelabelResult, AccountTokenUpdateInput, AccountTokenUpdateResult, CurlInboundReceipt, CurlInboundReceiptAcceptInput, CurlInboundReceiptReserveInput, CurlInboundReceiptReserveResult, CurlInboundReceiptScope, PendingInboundDeliveryKey, PendingInboundDeliveryRow, SessionEndObservation, SessionLeaseOwner, Storage } from "agents-comm-bus-core/storage/storage";
 import type { AgentId, CommId, ConversationId, MessageId, QueryId, SessionId } from "agents-comm-bus-core";
 import { type SqliteLike } from "./schema/runner.js";
 export declare class SqliteStorage implements Storage {
@@ -11,6 +11,7 @@ export declare class SqliteStorage implements Storage {
     static open(path: string): Promise<SqliteStorage>;
     putAccountRegistration(rec: AccountRegistration): Promise<void>;
     getAccountByBot(comm: CommId, bot_user_id: string): Promise<AccountRegistration | null>;
+    getAccountByRegistrationId(registration_id: string): Promise<AccountRegistration | null>;
     listAccountRegistrations(filter?: {
         project?: string;
         comm?: CommId;
@@ -19,6 +20,7 @@ export declare class SqliteStorage implements Storage {
     deleteAccountRegistration(project: string, comm: CommId, agent: AgentId, account_label: string): Promise<void>;
     updateAccountRegistrationToken(input: AccountTokenUpdateInput): Promise<AccountTokenUpdateResult>;
     updateAccountRegistrationLabel(input: AccountRelabelInput): Promise<AccountRelabelResult>;
+    updateAccountRegistrationActivation(input: AccountActivationUpdateInput): Promise<AccountActivationUpdateResult>;
     upsertConversation(rec: Conversation): Promise<ConversationId>;
     /**
      * Resolve an existing conversation's stable conversation_id by its immutable
