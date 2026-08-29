@@ -31,7 +31,12 @@ export type AddAdapterForRegistrationResult = {
 } | {
     ok: false;
     reason: string;
-    retryClass: "permanent" | "transient";
+    retryClass: "permanent";
+    resolution: CredentialResolution;
+} | {
+    ok: false;
+    reason: string;
+    retryClass: "transient";
     resolution?: CredentialResolution;
 };
 /**

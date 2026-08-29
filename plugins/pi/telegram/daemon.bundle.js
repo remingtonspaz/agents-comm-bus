@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.51";
+var DAEMON_VERSION = "0.2.52";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -7981,6 +7981,9 @@ async function ensureRegistrationForAccount(registration, input) {
     return { status: "already-live", ...base, retryClass: "success" };
   }
   if (input.inFlight.has(key)) {
+    if (input.agentLeaseProperties) {
+      await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
+    }
     return { status: "in-flight", ...base, retryClass: "success" };
   }
   input.inFlight.add(key);
@@ -8003,7 +8006,7 @@ async function ensureRegistrationForAccount(registration, input) {
       return { status: "started", ...base, retryClass: "success" };
     }
     if (result.retryClass === "permanent") {
-      if (result.resolution?.status === "invalid") {
+      if (result.resolution.status === "invalid") {
         logInvalidCredentialResolution(registration, factory.commId, result.resolution);
         await appendCredentialResolutionFailedAudit(
           input.audit,
@@ -8112,47 +8115,64 @@ var INITIAL_RETRY_MS = 1e3;
 var MAX_RETRY_MS = 3e4;
 var MAX_RETRY_ATTEMPTS = 5;
 function createEagerActivationRetryScheduler(input) {
+  const setTimeoutFn = input.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = input.clearTimeoutFn ?? clearTimeout;
   const timers = /* @__PURE__ */ new Map();
   const attempts = /* @__PURE__ */ new Map();
+  let stopped = false;
+  const clearTimer = (registration_id) => {
+    const timer = timers.get(registration_id);
+    if (timer !== void 0) clearTimeoutFn(timer);
+    timers.delete(registration_id);
+  };
+  const cancel = (registration_id) => {
+    clearTimer(registration_id);
+    attempts.delete(registration_id);
+  };
   const stopAll = () => {
+    stopped = true;
     for (const timer of timers.values()) {
-      clearTimeout(timer);
+      clearTimeoutFn(timer);
     }
     timers.clear();
     attempts.clear();
   };
-  const cancel = (registration_id) => {
-    const timer = timers.get(registration_id);
-    if (timer) clearTimeout(timer);
-    timers.delete(registration_id);
-    attempts.delete(registration_id);
-  };
   const schedule = (registration_id) => {
+    if (stopped) return;
     const prior = attempts.get(registration_id) ?? 0;
     if (prior >= MAX_RETRY_ATTEMPTS) return;
     const attempt = prior + 1;
     attempts.set(registration_id, attempt);
     const delayMs = Math.min(INITIAL_RETRY_MS * 2 ** (attempt - 1), MAX_RETRY_MS);
-    cancel(registration_id);
-    const timer = setTimeout(() => {
+    clearTimer(registration_id);
+    const timer = setTimeoutFn(() => {
       timers.delete(registration_id);
       void (async () => {
+        if (stopped) return;
         const row = await input.storage.getAccountByRegistrationId(registration_id);
         if (!row || row.activation !== "eager") {
           cancel(registration_id);
           return;
         }
-        const outcome = await ensureRegistrationById(registration_id, input.ensure);
-        if (outcome && outcome.retryClass === "transient") {
-          schedule(registration_id);
+        const outcome = await ensureRegistrationById(registration_id, {
+          ...input.ensure,
+          scheduleEagerRetry: void 0
+        });
+        if (stopped) return;
+        if (!outcome || outcome.retryClass !== "transient") {
+          cancel(registration_id);
+          return;
         }
+        schedule(registration_id);
       })().catch((error) => {
         console.error(
           `agents-comm-bus: eager retry failed for ${registration_id}: ${error instanceof Error ? error.message : String(error)}`
         );
       });
     }, delayMs);
-    timer.unref?.();
+    if (timer && typeof timer === "object" && "unref" in timer) {
+      timer.unref?.();
+    }
     timers.set(registration_id, timer);
   };
   return { schedule, cancel, stopAll };

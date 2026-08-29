@@ -60,6 +60,9 @@ export async function ensureRegistrationForAccount(registration, input) {
         return { status: "already-live", ...base, retryClass: "success" };
     }
     if (input.inFlight.has(key)) {
+        if (input.agentLeaseProperties) {
+            await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
+        }
         return { status: "in-flight", ...base, retryClass: "success" };
     }
     input.inFlight.add(key);
@@ -82,7 +85,7 @@ export async function ensureRegistrationForAccount(registration, input) {
             return { status: "started", ...base, retryClass: "success" };
         }
         if (result.retryClass === "permanent") {
-            if (result.resolution?.status === "invalid") {
+            if (result.resolution.status === "invalid") {
                 logInvalidCredentialResolution(registration, factory.commId, result.resolution);
                 await appendCredentialResolutionFailedAudit(input.audit, registration, factory.commId, result.resolution);
             }

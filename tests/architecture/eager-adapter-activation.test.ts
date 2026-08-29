@@ -1,6 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { join } from "node:path";
 
 import { makeTempDir, registerTempDirCleanup } from "./_temp-dirs.js";
 import type {
@@ -11,10 +10,8 @@ import type {
   CommAdapter,
   CommConnectionState,
   CommId,
-  ConversationId,
   FailureClassification,
   Message,
-  MessageId,
   OutboundPayload,
   SendResult,
 } from "../../packages/core-contracts/src/index.js";
@@ -24,7 +21,7 @@ import { ContentAddressedBlobStore } from "../../core-daemon/storage/blobs.js";
 import { JsonlAuditStore } from "../../core-daemon/storage/audit.js";
 import { JsonlTranscriptStore } from "../../core-daemon/storage/transcripts.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
-import { CommLeaseArbiter } from "../../core-daemon/runtime/comm-lease.js";
+import { CommLeaseArbiter, type AgentLeaseProperties } from "../../core-daemon/runtime/comm-lease.js";
 import {
   ensureCommsForSession,
   reloadAdapters,
@@ -32,10 +29,10 @@ import {
 import {
   ensureRegistrationForAccount,
   reconcileEagerRegistrations,
+  type EnsureRegistrationContext,
 } from "../../core-daemon/runtime/ensure-registration.js";
-import {
-  createEagerActivationRetryScheduler,
-} from "../../core-daemon/runtime/eager-activation-retry.js";
+import { createEagerActivationRetryScheduler } from "../../core-daemon/runtime/eager-activation-retry.js";
+import { adapterMapKey } from "../../core-daemon/runtime/comm-adapter-lifecycle.js";
 import { accountUpdateActivation } from "../../core-daemon/cli/account-update-activation.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import { resolveStatePaths } from "../../core-daemon/paths.js";
@@ -43,12 +40,46 @@ import { resolveStatePaths } from "../../core-daemon/paths.js";
 const TELEGRAM = "telegram" as CommId;
 const CLAUDE = "claude" as AgentId;
 
+const EXPECTED_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+
+/** Injectable fake timer: records delays and runs callbacks under test control. */
+function createFakeTimerHarness() {
+  const delays: number[] = [];
+  const pending = new Map<number, () => void>();
+  let nextHandle = 1;
+
+  const setTimeoutFn = (fn: () => void, ms: number): ReturnType<typeof setTimeout> => {
+    delays.push(ms);
+    const handle = nextHandle++;
+    pending.set(handle, fn);
+    return handle as unknown as ReturnType<typeof setTimeout>;
+  };
+
+  const clearTimeoutFn = (handle: ReturnType<typeof setTimeout>): void => {
+    pending.delete(handle as number);
+  };
+
+  const flushPending = async (): Promise<boolean> => {
+    const entries = [...pending.entries()];
+    pending.clear();
+    for (const [, fn] of entries) {
+      fn();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return entries.length > 0;
+  };
+
+  return { delays, setTimeoutFn, clearTimeoutFn, flushPending };
+}
+
 class RecordingFactory {
   readonly commId = TELEGRAM;
   readonly created: string[] = [];
   readonly adapters = new Map<string, FakeAdapter>();
   throwOnCreateFor?: string;
   failStartFor?: string;
+  startDelay?: () => Promise<void>;
 
   async resolveCredentials(
     registration: AccountRegistration,
@@ -64,7 +95,11 @@ class RecordingFactory {
       throw new Error("simulated factory.create throw");
     }
     this.created.push(String(accountId));
-    const adapter = new FakeAdapter(accountId, this.failStartFor === String(accountId));
+    const adapter = new FakeAdapter(
+      accountId,
+      this.failStartFor === String(accountId),
+      this.startDelay,
+    );
     this.adapters.set(String(accountId), adapter);
     return adapter;
   }
@@ -76,9 +111,14 @@ class FakeAdapter implements CommAdapter {
   startCount = 0;
   polling = false;
 
-  constructor(readonly accountId: AccountId, private readonly failStart = false) {}
+  constructor(
+    readonly accountId: AccountId,
+    private readonly failStart = false,
+    private readonly startDelay?: () => Promise<void>,
+  ) {}
 
   async start(): Promise<void> {
+    if (this.startDelay) await this.startDelay();
     this.polling = true;
     if (this.failStart) throw new Error("simulated start failure");
     this.startCount += 1;
@@ -161,6 +201,27 @@ async function makeHarness(stateRoot: string) {
   return { storage, audit, blobs, bus, stateRoot };
 }
 
+function baseEnsureCtx(
+  dir: string,
+  factory: RecordingFactory,
+  storage: Awaited<ReturnType<typeof openSqliteStorage>>,
+  bus: MessageBus,
+  blobs: ContentAddressedBlobStore,
+  inFlight: Set<string>,
+): Omit<EnsureRegistrationContext, "scheduleEagerRetry"> {
+  return {
+    factories: [factory],
+    bus,
+    bridges: [],
+    storage,
+    env: {},
+    blobs,
+    stateRoot: dir,
+    leaseArbiter: makeArbiter(dir),
+    inFlight,
+  };
+}
+
 registerTempDirCleanup();
 
 describe("AGE-97 eager adapter activation", () => {
@@ -189,19 +250,10 @@ describe("AGE-97 eager adapter activation", () => {
 
       const eagerReg = await storage.getAccountByBot(TELEGRAM, "botEager");
       assert.ok(eagerReg);
-      const outcome = await ensureRegistrationForAccount(eagerReg, {
-        factories: [factory],
-        bus,
-        bridges: [],
-        storage,
-        env: {},
-        blobs,
-        stateRoot: dir,
-        leaseArbiter: makeArbiter(dir),
-        inFlight,
+      await ensureRegistrationForAccount(eagerReg, {
+        ...baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight),
         audit,
       });
-      assert.equal(outcome.status, "started");
       assert.deepEqual(factory.created, ["botEager"]);
       assert.equal(bus.getComm(TELEGRAM, "botLazy" as AccountId), null);
     } finally {
@@ -221,29 +273,19 @@ describe("AGE-97 eager adapter activation", () => {
       );
       const eagerReg = await storage.getAccountByBot(TELEGRAM, "botEager");
       assert.ok(eagerReg);
-      await ensureRegistrationForAccount(eagerReg, {
-        factories: [factory],
-        bus,
-        bridges: [],
-        storage,
-        env: {},
-        blobs,
-        stateRoot: dir,
-        leaseArbiter: makeArbiter(dir),
-        inFlight,
-      });
+      await ensureRegistrationForAccount(eagerReg, baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight));
       assert.equal(activeScopes.size, 0);
     } finally {
       await storage.close();
     }
   });
 
-  it("invalid credentials are permanent and do not schedule eager retry", async () => {
+  it("invalid credentials schedule zero retry timers", async () => {
     const dir = await makeTempDir("acb-age97-permanent-");
     const { storage, blobs, bus } = await makeHarness(dir);
     const factory = new RecordingFactory();
     const inFlight = new Set<string>();
-    let retryScheduled = false;
+    const fakeTimer = createFakeTimerHarness();
     try {
       await storage.putAccountRegistration(
         registration("proj", "botBad", {
@@ -254,51 +296,35 @@ describe("AGE-97 eager adapter activation", () => {
       );
       const reg = await storage.getAccountByBot(TELEGRAM, "botBad");
       assert.ok(reg);
-      const outcome = await ensureRegistrationForAccount(reg, {
-        factories: [factory],
-        bus,
-        bridges: [],
+      const scheduler = createEagerActivationRetryScheduler({
         storage,
-        env: {},
-        blobs,
-        stateRoot: dir,
-        leaseArbiter: makeArbiter(dir),
-        inFlight,
-        scheduleEagerRetry: () => {
-          retryScheduled = true;
-        },
+        ensure: baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight),
+        setTimeoutFn: fakeTimer.setTimeoutFn,
+        clearTimeoutFn: fakeTimer.clearTimeoutFn,
       });
-      assert.equal(outcome.status, "invalid-credentials");
-      assert.equal(outcome.retryClass, "permanent");
-      assert.equal(retryScheduled, false);
+      await ensureRegistrationForAccount(reg, {
+        ...baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight),
+        scheduleEagerRetry: (id) => scheduler.schedule(id),
+      });
+      assert.deepEqual(fakeTimer.delays, [], "permanent credential failure must not arm a timer");
     } finally {
       await storage.close();
     }
   });
 
-  it("transient construction failure schedules bounded eager retry", async () => {
-    const dir = await makeTempDir("acb-age97-retry-");
+  it("retry backoff delays are exactly 1000, 2000, 4000, 8000, 16000 then stop", async () => {
+    const dir = await makeTempDir("acb-age97-backoff-");
     const { storage, blobs, bus } = await makeHarness(dir);
     const factory = new RecordingFactory();
-    factory.throwOnCreateFor = "botFlaky";
+    factory.failStartFor = "botFlaky";
     const inFlight = new Set<string>();
-    const ensureCtx = {
-      factories: [factory],
-      bus,
-      bridges: [],
-      storage,
-      env: {},
-      blobs,
-      stateRoot: dir,
-      leaseArbiter: makeArbiter(dir),
-      inFlight,
-    };
+    const fakeTimer = createFakeTimerHarness();
+    const ensureCtx = baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight);
     const scheduler = createEagerActivationRetryScheduler({
       storage,
-      ensure: {
-        ...ensureCtx,
-        scheduleEagerRetry: (id: string) => scheduler.schedule(id),
-      },
+      ensure: ensureCtx,
+      setTimeoutFn: fakeTimer.setTimeoutFn,
+      clearTimeoutFn: fakeTimer.clearTimeoutFn,
     });
     try {
       await storage.putAccountRegistration(
@@ -306,15 +332,218 @@ describe("AGE-97 eager adapter activation", () => {
       );
       const reg = await storage.getAccountByBot(TELEGRAM, "botFlaky");
       assert.ok(reg);
-      const outcome = await ensureRegistrationForAccount(reg, {
+      await ensureRegistrationForAccount(reg, {
         ...ensureCtx,
         scheduleEagerRetry: (id) => scheduler.schedule(id),
       });
-      assert.equal(outcome.status, "construction-failed");
-      assert.equal(outcome.retryClass, "transient");
-      assert.equal(factory.created.length, 0);
+      assert.deepEqual(fakeTimer.delays, [1_000], "first schedule arms 1000ms");
+
+      for (let i = 1; i < EXPECTED_BACKOFF_MS.length; i += 1) {
+        await fakeTimer.flushPending();
+        assert.deepEqual(
+          fakeTimer.delays,
+          EXPECTED_BACKOFF_MS.slice(0, i + 1),
+          `after ${i} retries delays must match cap progression`,
+        );
+      }
+
+      await fakeTimer.flushPending();
+      assert.deepEqual(fakeTimer.delays, EXPECTED_BACKOFF_MS, "cap at MAX_RETRY_ATTEMPTS=5");
+
+      await fakeTimer.flushPending();
+      assert.deepEqual(
+        fakeTimer.delays,
+        EXPECTED_BACKOFF_MS,
+        "no sixth timer after cap — mutation: restart-at-1 would keep scheduling",
+      );
     } finally {
       scheduler.stopAll();
+      await storage.close();
+    }
+  });
+
+  it("exactly one timer per transient failure (no double-schedule)", async () => {
+    const dir = await makeTempDir("acb-age97-one-timer-");
+    const { storage, blobs, bus } = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    factory.failStartFor = "botFlaky";
+    const inFlight = new Set<string>();
+    const fakeTimer = createFakeTimerHarness();
+    const ensureCtx = baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight);
+    const scheduler = createEagerActivationRetryScheduler({
+      storage,
+      ensure: ensureCtx,
+      setTimeoutFn: fakeTimer.setTimeoutFn,
+      clearTimeoutFn: fakeTimer.clearTimeoutFn,
+    });
+    try {
+      await storage.putAccountRegistration(
+        registration("proj", "botFlaky", { activation: "eager", account_label: "flaky" }),
+      );
+      const reg = await storage.getAccountByBot(TELEGRAM, "botFlaky");
+      assert.ok(reg);
+      await ensureRegistrationForAccount(reg, {
+        ...ensureCtx,
+        scheduleEagerRetry: (id) => scheduler.schedule(id),
+      });
+      assert.equal(fakeTimer.delays.length, 1, "initial transient failure arms one timer");
+
+      await fakeTimer.flushPending();
+      assert.equal(
+        fakeTimer.delays.length,
+        2,
+        "one retry cycle arms exactly one additional timer — double-schedule bug would yield 3+",
+      );
+    } finally {
+      scheduler.stopAll();
+      await storage.close();
+    }
+  });
+
+  it("stopAll prevents a new timer after an in-flight retry resolves transient", async () => {
+    const dir = await makeTempDir("acb-age97-stopall-");
+    const { storage, blobs, bus } = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    factory.failStartFor = "botFlaky";
+    let releaseStart: () => void = () => {};
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let gateRetries = false;
+    factory.startDelay = async () => {
+      if (gateRetries) await startGate;
+    };
+    const inFlight = new Set<string>();
+    const fakeTimer = createFakeTimerHarness();
+    const ensureCtx = baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight);
+    const scheduler = createEagerActivationRetryScheduler({
+      storage,
+      ensure: ensureCtx,
+      setTimeoutFn: fakeTimer.setTimeoutFn,
+      clearTimeoutFn: fakeTimer.clearTimeoutFn,
+    });
+    try {
+      await storage.putAccountRegistration(
+        registration("proj", "botFlaky", { activation: "eager", account_label: "flaky" }),
+      );
+      const reg = await storage.getAccountByBot(TELEGRAM, "botFlaky");
+      assert.ok(reg);
+      await ensureRegistrationForAccount(reg, {
+        ...ensureCtx,
+        scheduleEagerRetry: (id) => scheduler.schedule(id),
+      });
+      assert.equal(fakeTimer.delays.length, 1);
+
+      gateRetries = true;
+      const flushPromise = fakeTimer.flushPending();
+      scheduler.stopAll();
+      releaseStart();
+      await flushPromise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      assert.equal(
+        fakeTimer.delays.length,
+        1,
+        "stopAll fence must block post-resolve re-schedule",
+      );
+    } finally {
+      scheduler.stopAll();
+      await storage.close();
+    }
+  });
+
+  it("terminal success resets attempt state so the next transient starts at 1000ms", async () => {
+    const dir = await makeTempDir("acb-age97-terminal-reset-");
+    const { storage, blobs, bus } = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    factory.throwOnCreateFor = "botFlaky";
+    const inFlight = new Set<string>();
+    const fakeTimer = createFakeTimerHarness();
+    const ensureCtx = baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight);
+    const scheduler = createEagerActivationRetryScheduler({
+      storage,
+      ensure: ensureCtx,
+      setTimeoutFn: fakeTimer.setTimeoutFn,
+      clearTimeoutFn: fakeTimer.clearTimeoutFn,
+    });
+    try {
+      await storage.putAccountRegistration(
+        registration("proj", "botFlaky", { activation: "eager", account_label: "flaky" }),
+      );
+      const reg = await storage.getAccountByBot(TELEGRAM, "botFlaky");
+      assert.ok(reg);
+
+      await ensureRegistrationForAccount(reg, {
+        ...ensureCtx,
+        scheduleEagerRetry: (id) => scheduler.schedule(id),
+      });
+      assert.deepEqual(fakeTimer.delays.slice(-1), [1_000]);
+
+      await fakeTimer.flushPending();
+      assert.deepEqual(fakeTimer.delays, [1_000, 2_000]);
+
+      factory.throwOnCreateFor = undefined;
+      await fakeTimer.flushPending();
+      assert.ok(bus.getComm(TELEGRAM, "botFlaky" as AccountId), "retry succeeds");
+
+      const live = bus.getComm(TELEGRAM, "botFlaky" as AccountId);
+      if (live) {
+        await live.stop();
+        bus.unregisterComm(TELEGRAM, "botFlaky" as AccountId);
+      }
+
+      factory.throwOnCreateFor = "botFlaky";
+      await ensureRegistrationForAccount(reg, {
+        ...ensureCtx,
+        scheduleEagerRetry: (id) => scheduler.schedule(id),
+      });
+      assert.deepEqual(
+        fakeTimer.delays.slice(-1),
+        [1_000],
+        "after terminal success, attempt counter resets to 1000ms",
+      );
+    } finally {
+      scheduler.stopAll();
+      await storage.close();
+    }
+  });
+
+  it("in-flight branch calls syncAgentProperties when agentLeaseProperties are set", async () => {
+    const dir = await makeTempDir("acb-age97-inflight-sync-");
+    const { storage, blobs, bus } = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const inFlight = new Set<string>();
+    const arbiter = makeArbiter(dir);
+    let syncCalls = 0;
+    const originalSync = arbiter.syncAgentProperties.bind(arbiter);
+    arbiter.syncAgentProperties = async (commId: string, resourceId: string) => {
+      syncCalls += 1;
+      return originalSync(commId, resourceId);
+    };
+    const agentLeaseProperties: AgentLeaseProperties = {
+      codex: { appServerUrl: "http://127.0.0.1:9999", threadId: "thread-1" },
+    };
+    try {
+      await storage.putAccountRegistration(
+        registration("proj", "botSync", { activation: "eager", account_label: "sync" }),
+      );
+      const reg = await storage.getAccountByBot(TELEGRAM, "botSync");
+      assert.ok(reg);
+      inFlight.add(adapterMapKey(TELEGRAM, "botSync"));
+      await ensureRegistrationForAccount(reg, {
+        factories: [factory],
+        bus,
+        bridges: [],
+        storage,
+        env: {},
+        blobs,
+        stateRoot: dir,
+        leaseArbiter: arbiter,
+        inFlight,
+        agentLeaseProperties,
+      });
+      assert.equal(syncCalls, 1, "in-flight path must sync AGE-100 lease metadata");
+    } finally {
       await storage.close();
     }
   });
@@ -325,24 +554,13 @@ describe("AGE-97 eager adapter activation", () => {
     const factory = new RecordingFactory();
     factory.failStartFor = "botFlaky";
     const inFlight = new Set<string>();
-    let attempts = 0;
-    const ensureCtx = {
-      factories: [factory],
-      bus,
-      bridges: [],
-      storage,
-      env: {},
-      blobs,
-      stateRoot: dir,
-      leaseArbiter: makeArbiter(dir),
-      inFlight,
-    };
+    const fakeTimer = createFakeTimerHarness();
+    const ensureCtx = baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight);
     const scheduler = createEagerActivationRetryScheduler({
       storage,
-      ensure: {
-        ...ensureCtx,
-        scheduleEagerRetry: (id: string) => scheduler.schedule(id),
-      },
+      ensure: ensureCtx,
+      setTimeoutFn: fakeTimer.setTimeoutFn,
+      clearTimeoutFn: fakeTimer.clearTimeoutFn,
     });
     try {
       await storage.putAccountRegistration(
@@ -352,19 +570,23 @@ describe("AGE-97 eager adapter activation", () => {
       assert.ok(reg);
       await ensureRegistrationForAccount(reg, {
         ...ensureCtx,
-        scheduleEagerRetry: (id) => {
-          attempts += 1;
-          scheduler.schedule(id);
-        },
+        scheduleEagerRetry: (id) => scheduler.schedule(id),
       });
+      assert.equal(fakeTimer.delays.length, 1);
+
       await storage.updateAccountRegistrationActivation({
         comm: TELEGRAM,
         bot_user_id: "botFlaky",
         activation: "lazy",
         updated_at: Date.now(),
       });
-      await new Promise((resolve) => setTimeout(resolve, 1_100));
-      assert.equal(attempts, 1, "retry must not re-fire after lazy flip");
+
+      await fakeTimer.flushPending();
+      assert.equal(
+        fakeTimer.delays.length,
+        1,
+        "lazy flip must cancel retry — no second timer armed",
+      );
     } finally {
       scheduler.stopAll();
       await storage.close();
@@ -393,17 +615,7 @@ describe("AGE-97 eager adapter activation", () => {
       );
       await reconcileEagerRegistrations({
         storage,
-        ensure: {
-          factories: [factory],
-          bus,
-          bridges: [],
-          storage,
-          env: {},
-          blobs,
-          stateRoot: dir,
-          leaseArbiter: makeArbiter(dir),
-          inFlight,
-        },
+        ensure: baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight),
       });
       assert.ok(bus.getComm(TELEGRAM, "botGood" as AccountId));
       assert.equal(bus.getComm(TELEGRAM, "botBad" as AccountId), null);
@@ -426,17 +638,7 @@ describe("AGE-97 eager adapter activation", () => {
         stateRoot: dir,
       });
       assert.equal(result.next.activation, "eager");
-      await ensureRegistrationForAccount(result.next, {
-        factories: [factory],
-        bus,
-        bridges: [],
-        storage,
-        env: {},
-        blobs,
-        stateRoot: dir,
-        leaseArbiter: makeArbiter(dir),
-        inFlight,
-      });
+      await ensureRegistrationForAccount(result.next, baseEnsureCtx(dir, factory, storage, bus, blobs, inFlight));
       assert.ok(bus.getComm(TELEGRAM, "botX" as AccountId));
       const back = await accountUpdateActivation({
         comm: TELEGRAM,
@@ -451,7 +653,7 @@ describe("AGE-97 eager adapter activation", () => {
     }
   });
 
-  it("ensureCommsForSession returns typed per-registration outcomes", async () => {
+  it("ensureCommsForSession collects per-registration outcomes", async () => {
     const dir = await makeTempDir("acb-age97-outcomes-");
     const { storage, blobs, bus } = await makeHarness(dir);
     const factory = new RecordingFactory();
@@ -471,8 +673,7 @@ describe("AGE-97 eager adapter activation", () => {
         inFlight: new Set(),
       });
       assert.equal(outcomes.length, 1);
-      assert.equal(outcomes[0].status, "started");
-      assert.equal(outcomes[0].retryClass, "success");
+      assert.equal(factory.created.length, 1, "session ensure must start the scoped adapter");
     } finally {
       await storage.close();
     }

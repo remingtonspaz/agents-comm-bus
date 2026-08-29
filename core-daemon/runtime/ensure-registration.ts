@@ -119,6 +119,9 @@ export async function ensureRegistrationForAccount(
   }
 
   if (input.inFlight.has(key)) {
+    if (input.agentLeaseProperties) {
+      await input.leaseArbiter.syncAgentProperties(registration.comm, registration.bot_user_id);
+    }
     return { status: "in-flight", ...base, retryClass: "success" };
   }
 
@@ -143,7 +146,7 @@ export async function ensureRegistrationForAccount(
     }
 
     if (result.retryClass === "permanent") {
-      if (result.resolution?.status === "invalid") {
+      if (result.resolution.status === "invalid") {
         logInvalidCredentialResolution(registration, factory.commId, result.resolution);
         await appendCredentialResolutionFailedAudit(
           input.audit,
@@ -177,7 +180,7 @@ export async function ensureRegistrationForAccount(
         ...base,
         reason: result.reason,
         retryClass: "permanent",
-        resolution: result.resolution!,
+        resolution: result.resolution,
       };
     }
 

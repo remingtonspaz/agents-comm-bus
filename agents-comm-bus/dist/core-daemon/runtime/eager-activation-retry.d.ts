@@ -8,5 +8,7 @@ export interface EagerActivationRetryScheduler {
 export declare function createEagerActivationRetryScheduler(input: {
     storage: Storage;
     ensure: EnsureRegistrationContext;
+    setTimeoutFn?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+    clearTimeoutFn?: (h: ReturnType<typeof setTimeout>) => void;
 }): EagerActivationRetryScheduler;
 //# sourceMappingURL=eager-activation-retry.d.ts.map
