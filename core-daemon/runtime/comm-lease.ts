@@ -947,6 +947,9 @@ export function wrapWithLease(
   let reacquireTimer: unknown = null;
   let innerStarted = false;
   let holdingLease = false;
+  let stopped = false;
+  let reacquireInFlight = false;
+  let pendingReacquire = false;
 
   const resource = inner.exclusiveResource?.() ?? null;
 
@@ -962,7 +965,7 @@ export function wrapWithLease(
   };
 
   const startRenewTimer = (resourceId: string): void => {
-    if (renewTimer != null) return;
+    if (stopped || renewTimer != null) return;
     renewTimer = setIntervalFn(() => {
       void arbiter
         .renew(inner.id, resourceId)
@@ -996,16 +999,36 @@ export function wrapWithLease(
   };
 
   const startReacquireTimer = (resourceId: string): void => {
-    if (reacquireTimer != null) return;
+    if (stopped || reacquireTimer != null) return;
     reacquireTimer = setIntervalFn(() => {
-      void attemptReacquire(resourceId);
+      scheduleReacquireAttempt(resourceId);
     }, reacquireIntervalMs);
   };
 
-  const attemptReacquire = async (resourceId: string): Promise<void> => {
+  const scheduleReacquireAttempt = (resourceId: string): void => {
+    if (stopped || holdingLease || innerStarted) return;
+    if (reacquireInFlight) {
+      pendingReacquire = true;
+      return;
+    }
+    void runReacquireAttempt(resourceId);
+  };
+
+  const runReacquireAttempt = async (resourceId: string): Promise<void> => {
+    if (stopped || holdingLease || innerStarted) return;
+    if (reacquireInFlight) {
+      pendingReacquire = true;
+      return;
+    }
+    reacquireInFlight = true;
     try {
       const eligible = await isLeaseEligible();
+      if (stopped) return;
       const result = await arbiter.tryAcquire(inner.id, resourceId, { eligible });
+      if (stopped) {
+        if (result.ok) await arbiter.release(inner.id, resourceId).catch(() => {});
+        return;
+      }
       if (!result.ok) {
         startReacquireTimer(resourceId);
         return;
@@ -1015,12 +1038,24 @@ export function wrapWithLease(
         reacquireTimer = null;
       }
       holdingLease = true;
+      if (stopped) {
+        holdingLease = false;
+        await arbiter.release(inner.id, resourceId).catch(() => {});
+        return;
+      }
       log(
         `comm ${inner.id} resource ${resourceId}: acquired the poll lease ` +
           `on re-acquire; starting this consumer.`,
       );
       try {
         await inner.start();
+        if (stopped) {
+          innerStarted = false;
+          holdingLease = false;
+          await inner.stop().catch(() => {});
+          await arbiter.release(inner.id, resourceId).catch(() => {});
+          return;
+        }
         innerStarted = true;
         startRenewTimer(resourceId);
       } catch (error) {
@@ -1032,21 +1067,29 @@ export function wrapWithLease(
             `releasing lease.`,
         );
         await arbiter.release(inner.id, resourceId).catch(() => {});
-        startReacquireTimer(resourceId);
+        if (!stopped) startReacquireTimer(resourceId);
       }
     } catch {
-      startReacquireTimer(resourceId);
+      if (!stopped) startReacquireTimer(resourceId);
+    } finally {
+      reacquireInFlight = false;
+      if (!stopped && pendingReacquire && !holdingLease && !innerStarted) {
+        pendingReacquire = false;
+        scheduleReacquireAttempt(resourceId);
+      } else {
+        pendingReacquire = false;
+      }
     }
   };
 
   const nudgeReacquire = (): void => {
-    if (!resource) return;
+    if (stopped || !resource) return;
     if (holdingLease || innerStarted) return;
     if (reacquireTimer != null) {
       clearIntervalFn(reacquireTimer);
       reacquireTimer = null;
     }
-    void attemptReacquire(resource.resourceId).catch(() => {});
+    scheduleReacquireAttempt(resource.resourceId);
   };
 
   if (resource) {
@@ -1105,6 +1148,7 @@ export function wrapWithLease(
     },
 
     async stop(): Promise<void> {
+      stopped = true;
       clearTimers();
       if (resource) {
         leaseReacquireNudges.delete(leaseResourceKey(inner.id, resource.resourceId));

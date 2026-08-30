@@ -61,7 +61,7 @@ async function listAllRegistrations(storage, factories) {
  * Union of lazy+eager registrations desired by every live LOCAL session scope
  * plus all eager standing registrations.
  */
-async function buildGlobalDesiredRegistrationIds(input) {
+export async function buildGlobalDesiredRegistrationIds(input) {
     const allRegistrations = input.allRegistrations ?? await listAllRegistrations(input.storage, input.factories);
     const activeSessions = input.activeSessions ??
         (await input.storage.listSessions({ status: "active" }));

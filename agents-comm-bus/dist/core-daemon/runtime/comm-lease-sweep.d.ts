@@ -3,6 +3,8 @@ import type { JsonlAuditStore } from "../storage/audit.js";
 import type { EnsureRegistrationContext } from "./ensure-registration.js";
 import { commLeasePath, type LeaseRecord } from "./comm-lease.js";
 import { type ProcessStartIdentityOptions } from "./process-start-epoch.js";
+import { type SessionOwnerLiveness } from "./session-owner-liveness.js";
+import type { CommAdapterFactory } from "./comm-factory.js";
 /** Default periodic comm-lease sweep interval. */
 export declare const DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS: number;
 export interface CommLeaseSweepCounts {
@@ -27,9 +29,11 @@ export declare function classifyCommLeaseOwner(record: Pick<LeaseRecord, "pid" |
 export declare function commLeaseLockRoot(homeDir?: string): string;
 export interface CommLeaseSweepRecoveryInput {
     storage: Storage;
-    activeScopes: ReadonlySet<string>;
     ensure: EnsureRegistrationContext;
     audit?: JsonlAuditStore;
+    discoveryRoot?: string;
+    sessionOwnerIsLive?: SessionOwnerLiveness;
+    factories?: readonly CommAdapterFactory[];
 }
 export declare function runCommLeaseSweep(input: {
     homeDir?: string;
@@ -88,4 +92,16 @@ export declare function runCommLeaseDaemonBootstrap(input: {
     eagerReconcile: () => Promise<void>;
     onBootSweepFailed: (error: unknown) => Promise<void>;
 }): Promise<CommLeaseSweepHandle | null>;
+/**
+ * AGE-102: retirement-safe publication of the periodic sweep handle returned
+ * from async bootstrap. Late handles are stopped immediately and not retained.
+ */
+export declare function publishCommLeaseSweepHandle(input: {
+    retiring: boolean;
+    current: CommLeaseSweepHandle | null;
+    incoming: CommLeaseSweepHandle | null;
+}): {
+    current: CommLeaseSweepHandle | null;
+    stoppedIncoming: boolean;
+};
 //# sourceMappingURL=comm-lease-sweep.d.ts.map

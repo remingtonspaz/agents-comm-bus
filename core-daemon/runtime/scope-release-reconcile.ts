@@ -108,7 +108,7 @@ async function listAllRegistrations(
  * Union of lazy+eager registrations desired by every live LOCAL session scope
  * plus all eager standing registrations.
  */
-async function buildGlobalDesiredRegistrationIds(input: {
+export async function buildGlobalDesiredRegistrationIds(input: {
   storage: Storage;
   factories: CommAdapterFactory[];
   discoveryRoot: string;

@@ -69,7 +69,7 @@ import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import { dispatchInboundToBridges } from "./runtime/dispatch-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
 import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
-import { runCommLeaseSweep, startCommLeaseSweep, runCommLeaseDaemonBootstrap } from "./runtime/comm-lease-sweep.js";
+import { runCommLeaseSweep, startCommLeaseSweep, runCommLeaseDaemonBootstrap, publishCommLeaseSweepHandle } from "./runtime/comm-lease-sweep.js";
 import type { ScopeReleaseReconcileState } from "./runtime/scope-release-reconcile.js";
 import { scopeKey } from "./runtime/scope-release-reconcile.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
@@ -521,8 +521,10 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   let idleReaperHandle: ReturnType<typeof startIdleReaper> | null = null;
   let sessionEndSweepHandle: ReturnType<typeof startSessionEndSweep> | null = null;
   let commLeaseSweepHandle: ReturnType<typeof startCommLeaseSweep> | null = null;
+  let daemonRetiring = false;
 
   const runDaemonRetirement = async (reason: string, recordAudit: boolean): Promise<void> => {
+    daemonRetiring = true;
     await retireDaemon({
       reason,
       port: server.port,
@@ -534,6 +536,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         idleReaperHandle?.stop();
         sessionEndSweepHandle?.stop();
         commLeaseSweepHandle?.stop();
+        commLeaseSweepHandle = null;
         eagerRetry?.stopAll();
       },
       stopBus: () =>
@@ -597,9 +600,11 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
 
   const commLeaseSweepRecovery = {
     storage,
-    activeScopes,
     ensure: buildEnsureRegistrationContext({ scheduleEagerRetry }),
     audit,
+    discoveryRoot: discoveryPaths.root,
+    sessionOwnerIsLive,
+    factories: commAdapterFactories,
   };
 
   // AGE-102: boot sweep → periodic (on success) → restore → eager, strictly ordered.
@@ -642,7 +647,12 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         .catch(() => {});
     },
   }).then((handle) => {
-    commLeaseSweepHandle = handle;
+    const published = publishCommLeaseSweepHandle({
+      retiring: daemonRetiring,
+      current: commLeaseSweepHandle,
+      incoming: handle,
+    });
+    commLeaseSweepHandle = published.current;
   });
 
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);

@@ -708,6 +708,9 @@ export function wrapWithLease(inner, arbiter, options = {}) {
     let reacquireTimer = null;
     let innerStarted = false;
     let holdingLease = false;
+    let stopped = false;
+    let reacquireInFlight = false;
+    let pendingReacquire = false;
     const resource = inner.exclusiveResource?.() ?? null;
     const clearTimers = () => {
         if (renewTimer != null) {
@@ -720,7 +723,7 @@ export function wrapWithLease(inner, arbiter, options = {}) {
         }
     };
     const startRenewTimer = (resourceId) => {
-        if (renewTimer != null)
+        if (stopped || renewTimer != null)
             return;
         renewTimer = setIntervalFn(() => {
             void arbiter
@@ -754,16 +757,39 @@ export function wrapWithLease(inner, arbiter, options = {}) {
         }, renewIntervalMs);
     };
     const startReacquireTimer = (resourceId) => {
-        if (reacquireTimer != null)
+        if (stopped || reacquireTimer != null)
             return;
         reacquireTimer = setIntervalFn(() => {
-            void attemptReacquire(resourceId);
+            scheduleReacquireAttempt(resourceId);
         }, reacquireIntervalMs);
     };
-    const attemptReacquire = async (resourceId) => {
+    const scheduleReacquireAttempt = (resourceId) => {
+        if (stopped || holdingLease || innerStarted)
+            return;
+        if (reacquireInFlight) {
+            pendingReacquire = true;
+            return;
+        }
+        void runReacquireAttempt(resourceId);
+    };
+    const runReacquireAttempt = async (resourceId) => {
+        if (stopped || holdingLease || innerStarted)
+            return;
+        if (reacquireInFlight) {
+            pendingReacquire = true;
+            return;
+        }
+        reacquireInFlight = true;
         try {
             const eligible = await isLeaseEligible();
+            if (stopped)
+                return;
             const result = await arbiter.tryAcquire(inner.id, resourceId, { eligible });
+            if (stopped) {
+                if (result.ok)
+                    await arbiter.release(inner.id, resourceId).catch(() => { });
+                return;
+            }
             if (!result.ok) {
                 startReacquireTimer(resourceId);
                 return;
@@ -773,10 +799,22 @@ export function wrapWithLease(inner, arbiter, options = {}) {
                 reacquireTimer = null;
             }
             holdingLease = true;
+            if (stopped) {
+                holdingLease = false;
+                await arbiter.release(inner.id, resourceId).catch(() => { });
+                return;
+            }
             log(`comm ${inner.id} resource ${resourceId}: acquired the poll lease ` +
                 `on re-acquire; starting this consumer.`);
             try {
                 await inner.start();
+                if (stopped) {
+                    innerStarted = false;
+                    holdingLease = false;
+                    await inner.stop().catch(() => { });
+                    await arbiter.release(inner.id, resourceId).catch(() => { });
+                    return;
+                }
                 innerStarted = true;
                 startRenewTimer(resourceId);
             }
@@ -787,15 +825,27 @@ export function wrapWithLease(inner, arbiter, options = {}) {
                     `re-acquire: ${error instanceof Error ? error.message : String(error)}; ` +
                     `releasing lease.`);
                 await arbiter.release(inner.id, resourceId).catch(() => { });
-                startReacquireTimer(resourceId);
+                if (!stopped)
+                    startReacquireTimer(resourceId);
             }
         }
         catch {
-            startReacquireTimer(resourceId);
+            if (!stopped)
+                startReacquireTimer(resourceId);
+        }
+        finally {
+            reacquireInFlight = false;
+            if (!stopped && pendingReacquire && !holdingLease && !innerStarted) {
+                pendingReacquire = false;
+                scheduleReacquireAttempt(resourceId);
+            }
+            else {
+                pendingReacquire = false;
+            }
         }
     };
     const nudgeReacquire = () => {
-        if (!resource)
+        if (stopped || !resource)
             return;
         if (holdingLease || innerStarted)
             return;
@@ -803,7 +853,7 @@ export function wrapWithLease(inner, arbiter, options = {}) {
             clearIntervalFn(reacquireTimer);
             reacquireTimer = null;
         }
-        void attemptReacquire(resource.resourceId).catch(() => { });
+        scheduleReacquireAttempt(resource.resourceId);
     };
     if (resource) {
         leaseReacquireNudges.set(leaseResourceKey(inner.id, resource.resourceId), nudgeReacquire);
@@ -857,6 +907,7 @@ export function wrapWithLease(inner, arbiter, options = {}) {
             }
         },
         async stop() {
+            stopped = true;
             clearTimers();
             if (resource) {
                 leaseReacquireNudges.delete(leaseResourceKey(inner.id, resource.resourceId));

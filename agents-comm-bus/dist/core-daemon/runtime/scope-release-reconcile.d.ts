@@ -1,4 +1,4 @@
-import type { AccountRegistration, AgentId, Storage } from "agents-comm-bus-core";
+import type { AccountRegistration, AgentId, Session, Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../bus.js";
 import type { AgentBridge } from "./agent-bridge.js";
 import type { CommAdapterFactory } from "./comm-factory.js";
@@ -19,6 +19,18 @@ export interface ScopeReleaseReconcileState {
 }
 export declare function scopeKey(agent: AgentId | string, project: string, accountLabelScope?: string | null): string;
 export declare function isRegistrationScopeActive(registration: AccountRegistration, activeScopes: ReadonlySet<string>): boolean;
+/**
+ * Union of lazy+eager registrations desired by every live LOCAL session scope
+ * plus all eager standing registrations.
+ */
+export declare function buildGlobalDesiredRegistrationIds(input: {
+    storage: Storage;
+    factories: CommAdapterFactory[];
+    discoveryRoot: string;
+    sessionOwnerIsLive: SessionOwnerLiveness;
+    allRegistrations?: AccountRegistration[];
+    activeSessions?: readonly Session[];
+}): Promise<Set<string>>;
 /**
  * AGE-101: reconcile lazy adapters when durable live-session truth shows zero
  * local owners for an active scope. Reuses the reload removal path via removeLiveAdapter.

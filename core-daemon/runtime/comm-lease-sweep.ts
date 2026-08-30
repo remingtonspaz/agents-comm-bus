@@ -18,8 +18,9 @@ import {
   compareProcessStartIdentity,
   type ProcessStartIdentityOptions,
 } from "./process-start-epoch.js";
-import { defaultIsPidAlive } from "./session-owner-liveness.js";
-import { isRegistrationScopeActive } from "./scope-release-reconcile.js";
+import { defaultIsPidAlive, type SessionOwnerLiveness } from "./session-owner-liveness.js";
+import { buildGlobalDesiredRegistrationIds } from "./scope-release-reconcile.js";
+import type { CommAdapterFactory } from "./comm-factory.js";
 
 /** Default periodic comm-lease sweep interval. */
 export const DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
@@ -157,9 +158,11 @@ async function releaseSweepGuard(leasePath: string, token: string): Promise<void
 
 export interface CommLeaseSweepRecoveryInput {
   storage: Storage;
-  activeScopes: ReadonlySet<string>;
   ensure: EnsureRegistrationContext;
   audit?: JsonlAuditStore;
+  discoveryRoot?: string;
+  sessionOwnerIsLive?: SessionOwnerLiveness;
+  factories?: readonly CommAdapterFactory[];
 }
 
 async function recoverAfterLeaseDeletion(
@@ -175,7 +178,7 @@ async function recoverAfterLeaseDeletion(
     comm: comm_id as CommId,
   });
   const registration = registrations.find((row) => row.bot_user_id === resource_id);
-  if (!registration || !isRegistrationDesired(registration, input.activeScopes)) {
+  if (!registration || !(await isRegistrationDesiredForRecovery(registration, input))) {
     return false;
   }
 
@@ -183,14 +186,21 @@ async function recoverAfterLeaseDeletion(
   return true;
 }
 
-function isRegistrationDesired(
+async function isRegistrationDesiredForRecovery(
   registration: AccountRegistration,
-  activeScopes: ReadonlySet<string>,
-): boolean {
-  return (
-    registration.activation === "eager" ||
-    isRegistrationScopeActive(registration, activeScopes)
-  );
+  input: CommLeaseSweepRecoveryInput,
+): Promise<boolean> {
+  if (registration.activation === "eager") return true;
+  if (!input.discoveryRoot || !input.sessionOwnerIsLive || !input.factories?.length) {
+    return false;
+  }
+  const desired = await buildGlobalDesiredRegistrationIds({
+    storage: input.storage,
+    factories: [...input.factories],
+    discoveryRoot: input.discoveryRoot,
+    sessionOwnerIsLive: input.sessionOwnerIsLive,
+  });
+  return desired.has(registration.registration_id);
 }
 
 export async function runCommLeaseSweep(input: {
@@ -237,8 +247,11 @@ export async function runCommLeaseSweep(input: {
   let commDirs: string[];
   try {
     commDirs = await readdir(root);
-  } catch {
-    return counts;
+  } catch (error) {
+    throw new Error(
+      `comm lease sweep: unreadable lock root ${root}: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   for (const commId of commDirs) {
@@ -423,12 +436,17 @@ export function startCommLeaseSweep(options: {
       afterGuardAcquired: options.afterGuardAcquired,
       beforeRecovery: options.beforeRecovery,
     })
-      .catch((error) => {
+      .catch(async (error) => {
         const log = options.log ?? console.error;
-        log(
-          `agents-comm-bus: comm lease sweep failed: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-        );
+        const reason = error instanceof Error ? error.message : String(error);
+        log(`agents-comm-bus: comm lease sweep failed: ${reason}`);
+        await options.audit
+          ?.append({
+            timestamp: (options.now ?? Date.now)(),
+            kind: "comm_lease_sweep_failed",
+            detail: { phase: "periodic", reason },
+          })
+          .catch(() => {});
       })
       .finally(() => {
         sweepInFlight = false;
@@ -494,4 +512,20 @@ export async function runCommLeaseDaemonBootstrap(input: {
   await input.bootRestore();
   await input.eagerReconcile();
   return periodic;
+}
+
+/**
+ * AGE-102: retirement-safe publication of the periodic sweep handle returned
+ * from async bootstrap. Late handles are stopped immediately and not retained.
+ */
+export function publishCommLeaseSweepHandle(input: {
+  retiring: boolean;
+  current: CommLeaseSweepHandle | null;
+  incoming: CommLeaseSweepHandle | null;
+}): { current: CommLeaseSweepHandle | null; stoppedIncoming: boolean } {
+  if (input.retiring) {
+    input.incoming?.stop();
+    return { current: input.current, stoppedIncoming: input.incoming != null };
+  }
+  return { current: input.incoming, stoppedIncoming: false };
 }

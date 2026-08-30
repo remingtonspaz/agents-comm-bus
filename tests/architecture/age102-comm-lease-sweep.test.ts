@@ -31,6 +31,7 @@ import {
   classifyCommLeaseOwner,
   commLeaseLockRoot,
   DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS,
+  publishCommLeaseSweepHandle,
   runCommLeaseDaemonBootstrap,
   runCommLeaseSweep,
   startCommLeaseSweep,
@@ -193,6 +194,7 @@ function makeTimers() {
     fire: (id: number) => {
       handles.get(id)?.();
     },
+    ids: () => [...handles.keys()],
     count: () => handles.size,
   };
 }
@@ -204,6 +206,72 @@ function makeSweepHoldGate() {
       release = resolve;
     });
   return { hold, release: () => release?.() };
+}
+
+function liveLocalSession(
+  over: Partial<Parameters<typeof sessionFixture>[0]> & { session_id: string },
+) {
+  return sessionFixture({
+    project: "D:/proj/a",
+    agent: CLAUDE,
+    lease_owner_daemon_discovery_root: OUR_ROOT,
+    lease_owner_process_pid: 500,
+    lease_owner_process_registered_at: Date.now(),
+    lease_owner_process_start_time: 100,
+    ...over,
+  });
+}
+
+function makeRecoveryEnsure(
+  harness: Awaited<ReturnType<typeof makeHarness>>,
+  dir: string,
+  factory: RecordingFactory,
+  arb: CommLeaseArbiter,
+  over: Record<string, unknown> = {},
+) {
+  return {
+    factories: [factory],
+    bus: harness.bus,
+    bridges: [],
+    storage: harness.storage,
+    env: process.env,
+    blobs: harness.blobs,
+    stateRoot: dir,
+    leaseArbiter: arb,
+    inFlight: new Set<string>(),
+    discoveryRoot: OUR_ROOT,
+    sessionOwnerIsLive: createSessionOwnerLiveness({
+      isPidAlive: () => true,
+      readProcessStartEpochMs: () => 100,
+    }),
+    ...over,
+  };
+}
+
+function makeRecoveryInput(
+  harness: Awaited<ReturnType<typeof makeHarness>>,
+  dir: string,
+  factory: RecordingFactory,
+  arb: CommLeaseArbiter,
+  over: {
+    discoveryRoot?: string;
+    sessionOwnerIsLive?: ReturnType<typeof createSessionOwnerLiveness>;
+    factories?: CommAdapterFactory[];
+    ensure?: Record<string, unknown>;
+  } = {},
+) {
+  return {
+    storage: harness.storage,
+    discoveryRoot: over.discoveryRoot ?? OUR_ROOT,
+    sessionOwnerIsLive:
+      over.sessionOwnerIsLive ??
+      createSessionOwnerLiveness({
+        isPidAlive: () => true,
+        readProcessStartEpochMs: () => 100,
+      }),
+    factories: over.factories ?? [factory],
+    ensure: makeRecoveryEnsure(harness, dir, factory, arb, over.ensure),
+  };
 }
 
 describe("AGE-102 comm lease owner liveness (pure)", () => {
@@ -506,23 +574,7 @@ describe("AGE-102 recovery after reap (real path)", () => {
     await runCommLeaseSweep({
       homeDir: home,
       isPidAlive: (pid) => alive.has(pid),
-      recovery: {
-        storage: harness.storage,
-        activeScopes: new Set([scopeKey(CLAUDE, reg.project, null)]),
-        ensure: {
-          factories: [factory],
-          bus: harness.bus,
-          bridges: [],
-          storage: harness.storage,
-          env: process.env,
-          blobs: harness.blobs,
-          stateRoot: dir,
-          leaseArbiter: arb,
-          inFlight: new Set(),
-          discoveryRoot: OUR_ROOT,
-          sessionOwnerIsLive,
-        },
-      },
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
     });
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(inner.startCount, 0);
@@ -553,23 +605,7 @@ describe("AGE-102 recovery after reap (real path)", () => {
     const counts = await runCommLeaseSweep({
       homeDir: home,
       isPidAlive: () => false,
-      recovery: {
-        storage: harness.storage,
-        activeScopes: new Set(),
-        ensure: {
-          factories: [factory],
-          bus: harness.bus,
-          bridges: [],
-          storage: harness.storage,
-          env: process.env,
-          blobs: harness.blobs,
-          stateRoot: dir,
-          leaseArbiter: arb,
-          inFlight: new Set(),
-          discoveryRoot: OUR_ROOT,
-          sessionOwnerIsLive: createSessionOwnerLiveness(),
-        },
-      },
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
     });
     assert.equal(counts.reaped, 1);
     assert.equal(counts.recovered, 1);
@@ -578,7 +614,7 @@ describe("AGE-102 recovery after reap (real path)", () => {
     await harness.storage.close();
   });
 
-  it("does not ensure undesired lazy registration after deletion", async () => {
+  it("does not ensure undesired lazy registration after deletion (no durable live session)", async () => {
     const dir = await makeTempDir("acb-age102-lazy-");
     const harness = await makeHarness(dir);
     const home = await makeTempDir("acb-age102-lazy-home-");
@@ -600,21 +636,7 @@ describe("AGE-102 recovery after reap (real path)", () => {
     const counts = await runCommLeaseSweep({
       homeDir: home,
       isPidAlive: () => false,
-      recovery: {
-        storage: harness.storage,
-        activeScopes: new Set(),
-        ensure: {
-          factories: [factory],
-          bus: harness.bus,
-          bridges: [],
-          storage: harness.storage,
-          env: process.env,
-          blobs: harness.blobs,
-          stateRoot: dir,
-          leaseArbiter: arb,
-          inFlight: new Set(),
-        },
-      },
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
     });
     assert.equal(counts.reaped, 1);
     assert.equal(counts.recovered, 0);
@@ -663,23 +685,7 @@ describe("AGE-102 recovery after reap (real path)", () => {
     const counts = await runCommLeaseSweep({
       homeDir: home,
       isPidAlive: (pid) => alive.has(pid),
-      recovery: {
-        storage: harness.storage,
-        activeScopes: new Set([scopeKey(CLAUDE, reg.project, null)]),
-        ensure: {
-          factories: [factory],
-          bus: harness.bus,
-          bridges: [],
-          storage: harness.storage,
-          env: process.env,
-          blobs: harness.blobs,
-          stateRoot: dir,
-          leaseArbiter: arb,
-          inFlight: new Set(),
-          discoveryRoot: OUR_ROOT,
-          sessionOwnerIsLive: createSessionOwnerLiveness(),
-        },
-      },
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
     });
     assert.equal(counts.reaped, 1);
     assert.equal(counts.recovered, 1);
@@ -884,21 +890,7 @@ describe("AGE-102 fix-round: guard released before recovery (real path)", () => 
         const result = await arb.tryAcquire(TELEGRAM, "guard-bot");
         acquireOk = result.ok;
       },
-      recovery: {
-        storage: harness.storage,
-        activeScopes: new Set(),
-        ensure: {
-          factories: [factory],
-          bus: harness.bus,
-          bridges: [],
-          storage: harness.storage,
-          env: process.env,
-          blobs: harness.blobs,
-          stateRoot: dir,
-          leaseArbiter: arb,
-          inFlight: new Set(),
-        },
-      },
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
     });
 
     assert.equal(guardAbsent, true);
@@ -1061,5 +1053,346 @@ describe("AGE-102 ensure path after deletion (exact registration)", () => {
     });
     assert.equal(outcome.status, "started");
     await harness.storage.close();
+  });
+});
+
+describe("AGE-102 fix-round-2: wrapper reacquire single-flight (real path)", () => {
+  it("overlapping timer and nudge produce exactly one inner start", async () => {
+    const home = await makeTempDir("acb-age102-overlap-");
+    const alive = new Set<number>([300]);
+    const holderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 300, authorityRank: "main-dev" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    await holderArb.tryAcquire("fakecomm", "overlap-bot");
+
+    const contenderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 301, authorityRank: "worktree" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    const timers = makeTimers();
+    let releaseAcquire: (() => void) | undefined;
+    const acquireGate = new Promise<void>((resolve) => {
+      releaseAcquire = resolve;
+    });
+    const realTryAcquire = contenderArb.tryAcquire.bind(contenderArb);
+    let reacquireTryCount = 0;
+    contenderArb.tryAcquire = async (...args) => realTryAcquire(...args);
+    let innerStartCount = 0;
+    const inner = {
+      id: "fakecomm" as CommId,
+      accountId: "overlap-bot" as AccountId,
+      allowedSenderIds: [] as readonly string[],
+      exclusiveResource() {
+        return { resourceId: "overlap-bot" };
+      },
+      async start() {
+        innerStartCount += 1;
+      },
+      async stop() {},
+      onInbound() {},
+      onConnectionState() {},
+      async send(): Promise<never> {
+        throw new Error("not used");
+      },
+      reportPressure() {
+        return { backlog: 0, rateLimited: false };
+      },
+      classifyFailure() {
+        return "transient" as const;
+      },
+    };
+    const wrapped = wrapWithLease(inner as unknown as CommAdapter, contenderArb, {
+      setIntervalFn: timers.setIntervalFn,
+      clearIntervalFn: timers.clearIntervalFn,
+      reacquireIntervalMs: 60_000,
+      log: () => {},
+    });
+    await wrapped.start();
+    assert.equal(innerStartCount, 0);
+    assert.equal(timers.count(), 1);
+
+    contenderArb.tryAcquire = async (...args) => {
+      reacquireTryCount += 1;
+      if (reacquireTryCount === 1) await acquireGate;
+      return realTryAcquire(...args);
+    };
+
+    await holderArb.release("fakecomm", "overlap-bot");
+    const [timerId] = timers.ids();
+    timers.fire(timerId);
+    assert.equal(nudgeLeaseReacquire("fakecomm", "overlap-bot"), true);
+    releaseAcquire!();
+    await waitFor(() => innerStartCount === 1);
+    assert.equal(reacquireTryCount, 1);
+    assert.equal(innerStartCount, 1);
+    await wrapped.stop();
+  });
+
+  it("stop during in-flight nudged acquire produces zero post-stop starts", async () => {
+    const home = await makeTempDir("acb-age102-stop-reacquire-");
+    const alive = new Set<number>([300]);
+    const holderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 300, authorityRank: "main-dev" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    await holderArb.tryAcquire("fakecomm", "stop-reacquire-bot");
+
+    const contenderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 301, authorityRank: "worktree" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    const timers = makeTimers();
+    let releaseAcquire: (() => void) | undefined;
+    const acquireGate = new Promise<void>((resolve) => {
+      releaseAcquire = resolve;
+    });
+    const realTryAcquire = contenderArb.tryAcquire.bind(contenderArb);
+    let innerStartCount = 0;
+    const inner = {
+      id: "fakecomm" as CommId,
+      accountId: "stop-reacquire-bot" as AccountId,
+      allowedSenderIds: [] as readonly string[],
+      exclusiveResource() {
+        return { resourceId: "stop-reacquire-bot" };
+      },
+      async start() {
+        innerStartCount += 1;
+      },
+      async stop() {},
+      onInbound() {},
+      onConnectionState() {},
+      async send(): Promise<never> {
+        throw new Error("not used");
+      },
+      reportPressure() {
+        return { backlog: 0, rateLimited: false };
+      },
+      classifyFailure() {
+        return "transient" as const;
+      },
+    };
+    const wrapped = wrapWithLease(inner as unknown as CommAdapter, contenderArb, {
+      setIntervalFn: timers.setIntervalFn,
+      clearIntervalFn: timers.clearIntervalFn,
+      reacquireIntervalMs: 60_000,
+      log: () => {},
+    });
+    await wrapped.start();
+    contenderArb.tryAcquire = async (...args) => {
+      await acquireGate;
+      return realTryAcquire(...args);
+    };
+    await holderArb.release("fakecomm", "stop-reacquire-bot");
+    assert.equal(nudgeLeaseReacquire("fakecomm", "stop-reacquire-bot"), true);
+    await wrapped.stop();
+    releaseAcquire!();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(innerStartCount, 0);
+    assert.equal(timers.count(), 0);
+    assert.equal(contenderArb.heldLeaseCount(), 0);
+  });
+});
+
+describe("AGE-102 fix-round-2: bootstrap handle publication (real path)", () => {
+  it("retirement before bootstrap resolution stops periodic handle exactly once", async () => {
+    const gate = makeSweepHoldGate();
+    let stopCount = 0;
+    const bootstrapPromise = runCommLeaseDaemonBootstrap({
+      bootSweep: async () => {
+        await gate.hold();
+      },
+      startPeriodicSweep: () => ({
+        stop() {
+          stopCount += 1;
+        },
+      }),
+      bootRestore: async () => {},
+      eagerReconcile: async () => {},
+      onBootSweepFailed: async () => {},
+    });
+    gate.release();
+    const handle = await bootstrapPromise;
+    assert.ok(handle);
+    const published = publishCommLeaseSweepHandle({
+      retiring: true,
+      current: null,
+      incoming: handle,
+    });
+    assert.equal(published.stoppedIncoming, true);
+    assert.equal(stopCount, 1);
+    assert.equal(published.current, null);
+  });
+});
+
+describe("AGE-102 fix-round-2: durable session truth for recovery (real path)", () => {
+  it("does not ensure lazy registration when stale scope memory has no live session", async () => {
+    const dir = await makeTempDir("acb-age102-stale-scope-");
+    const harness = await makeHarness(dir);
+    const home = await makeTempDir("acb-age102-stale-scope-home-");
+    const reg = registration({ bot_user_id: "stale-scope-bot", activation: "lazy" });
+    await harness.storage.putAccountRegistration(reg);
+    await writeLeaseFile(
+      home,
+      leaseRecord({ comm_id: TELEGRAM, resource_id: "stale-scope-bot", pid: 1 }),
+    );
+    const factory = new RecordingFactory();
+    const arb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: process.pid }),
+      lastIpcServedAt: () => Date.now(),
+      homeDir: home,
+      isPidAlive: () => false,
+    });
+    const staleScopeWouldHaveMatched = scopeKey(CLAUDE, reg.project, null);
+    assert.ok(staleScopeWouldHaveMatched.length > 0);
+
+    const counts = await runCommLeaseSweep({
+      homeDir: home,
+      isPidAlive: () => false,
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
+    });
+    assert.equal(counts.reaped, 1);
+    assert.equal(counts.recovered, 0);
+    assert.equal(harness.bus.listComms().length, 0);
+    await harness.storage.close();
+  });
+
+  it("ensures lazy registration when durable live local session owns scope", async () => {
+    const dir = await makeTempDir("acb-age102-live-session-");
+    const harness = await makeHarness(dir);
+    const home = await makeTempDir("acb-age102-live-session-home-");
+    const reg = registration({ bot_user_id: "live-session-bot", activation: "lazy" });
+    await harness.storage.putAccountRegistration(reg);
+    await harness.storage.upsertSession(liveLocalSession({ session_id: "s-live" }));
+    await writeLeaseFile(
+      home,
+      leaseRecord({ comm_id: TELEGRAM, resource_id: "live-session-bot", pid: 1 }),
+    );
+    const factory = new RecordingFactory();
+    const arb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: process.pid }),
+      lastIpcServedAt: () => Date.now(),
+      homeDir: home,
+      isPidAlive: () => false,
+    });
+
+    const counts = await runCommLeaseSweep({
+      homeDir: home,
+      isPidAlive: () => false,
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
+    });
+    assert.equal(counts.reaped, 1);
+    assert.equal(counts.recovered, 1);
+    assert.equal(factory.adapters.get("live-session-bot")?.startCount, 1);
+    await harness.storage.close();
+  });
+
+  it("does not ensure lazy registration for foreign-root session", async () => {
+    const dir = await makeTempDir("acb-age102-foreign-recovery-");
+    const harness = await makeHarness(dir);
+    const home = await makeTempDir("acb-age102-foreign-recovery-home-");
+    const reg = registration({ bot_user_id: "foreign-recovery-bot", activation: "lazy" });
+    await harness.storage.putAccountRegistration(reg);
+    await harness.storage.upsertSession(
+      sessionFixture({
+        session_id: "s-foreign-recovery",
+        project: reg.project,
+        agent: CLAUDE,
+        lease_owner_daemon_discovery_root: FOREIGN_ROOT,
+        lease_owner_process_pid: 500,
+        lease_owner_process_registered_at: Date.now(),
+        lease_owner_process_start_time: 100,
+      }),
+    );
+    await writeLeaseFile(
+      home,
+      leaseRecord({ comm_id: TELEGRAM, resource_id: "foreign-recovery-bot", pid: 1 }),
+    );
+    const factory = new RecordingFactory();
+    const arb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: process.pid }),
+      lastIpcServedAt: () => Date.now(),
+      homeDir: home,
+      isPidAlive: () => false,
+    });
+
+    const counts = await runCommLeaseSweep({
+      homeDir: home,
+      isPidAlive: () => false,
+      recovery: makeRecoveryInput(harness, dir, factory, arb, {
+        sessionOwnerIsLive: createSessionOwnerLiveness({
+          isPidAlive: () => true,
+          readProcessStartEpochMs: () => 100,
+        }),
+      }),
+    });
+    assert.equal(counts.reaped, 1);
+    assert.equal(counts.recovered, 0);
+    assert.equal(harness.bus.listComms().length, 0);
+    await harness.storage.close();
+  });
+});
+
+describe("AGE-102 fix-round-2: sweep failure handling (real path)", () => {
+  it("treats unreadable existing lock root as boot sweep failure", async () => {
+    const home = await makeTempDir("acb-age102-unreadable-root-");
+    const lockRoot = commLeaseLockRoot(home);
+    await mkdir(path.dirname(lockRoot), { recursive: true });
+    await writeFile(lockRoot, "not-a-directory", "utf8");
+
+    await assert.rejects(
+      () =>
+        runCommLeaseSweep({
+          homeDir: home,
+          isPidAlive: () => false,
+        }),
+      /unreadable lock root/,
+    );
+  });
+
+  it("appends comm_lease_sweep_failed on periodic sweep failure", async () => {
+    const home = await makeTempDir("acb-age102-periodic-fail-home-");
+    const lockRoot = commLeaseLockRoot(home);
+    await mkdir(path.dirname(lockRoot), { recursive: true });
+    await writeFile(lockRoot, "not-a-directory", "utf8");
+    const events: Array<{ kind: string; detail?: { phase?: string } }> = [];
+    const audit = {
+      append: async (event: { kind: string; detail?: { phase?: string } }) => {
+        events.push(event);
+      },
+    };
+    let tick: (() => void) | null = null;
+    const handle = startCommLeaseSweep({
+      homeDir: home,
+      runOnStart: false,
+      isPidAlive: () => false,
+      intervalMs: 60_000,
+      audit: audit as unknown as JsonlAuditStore,
+      setIntervalFn: (fn) => {
+        tick = fn as () => void;
+        return 1;
+      },
+    });
+    assert.ok(tick);
+    tick!();
+    await waitFor(() =>
+      events.some(
+        (event) =>
+          event.kind === "comm_lease_sweep_failed" && event.detail?.phase === "periodic",
+      ),
+    );
+    handle.stop();
   });
 });
