@@ -331,11 +331,28 @@ describe("AGE-101 lazy scope release reconcile", () => {
 
     const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
     const state = { zeroLiveSince: new Map<string, number>() };
+    const now = { t: 5_000 };
     const leaseArbiter = new CommLeaseArbiter({
       self: selfIdentity(),
-      lastIpcServedAt: () => 0,
+      lastIpcServedAt: () => now.t,
     });
 
+    // First call records zeroLiveSince (grace not yet elapsed).
+    await reconcileLazyAdapterScopes({
+      storage,
+      bus,
+      bridges: [],
+      factories: [factory],
+      activeScopes,
+      leaseArbiter,
+      sessionOwnerIsLive: () => false,
+      removeAdapter: removeLiveAdapter,
+      state,
+      graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
+      now: () => now.t,
+    });
+    // After grace the release path IS reached — the eager-skip must protect it.
+    now.t += DEFAULT_SCOPE_RELEASE_GRACE_MS;
     const counts = await reconcileLazyAdapterScopes({
       storage,
       bus,
@@ -346,11 +363,11 @@ describe("AGE-101 lazy scope release reconcile", () => {
       sessionOwnerIsLive: () => false,
       removeAdapter: removeLiveAdapter,
       state,
-      graceMs: 0,
-      now: () => 99_999,
+      graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
+      now: () => now.t,
     });
-    assert.equal(counts.adapters_removed, 0);
-    assert.equal(bus.listComms().length, 1);
+    assert.equal(counts.adapters_removed, 0, "eager adapter must NOT be released");
+    assert.equal(bus.listComms().length, 1, "eager adapter stays live at zero sessions");
 
     await storage.close();
   });
