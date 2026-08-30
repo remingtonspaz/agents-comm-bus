@@ -917,6 +917,32 @@ function makeSweepHoldGate(): { hold: () => Promise<void>; release: () => void }
   return { hold, release: () => release() };
 }
 
+/**
+ * Hold specific sweep passes (1-indexed by session-end-pass invocation order) so
+ * a test can pin an in-flight sweep AND the replay sweep independently. Lets the
+ * grace-expiry test fire a grace tick against an ALREADY in-flight *different*
+ * sweep and advance the clock across the replay boundary.
+ */
+function makeSweepHoldQueue(holdPasses: number[]): {
+  hold: () => Promise<void>;
+  release: (pass: number) => void;
+  pass: () => number;
+} {
+  const holds = new Set(holdPasses);
+  const resolvers = new Map<number, () => void>();
+  let pass = 0;
+  const hold = () => {
+    pass += 1;
+    if (!holds.has(pass)) return Promise.resolve();
+    return new Promise<void>((resolve) => resolvers.set(pass, resolve));
+  };
+  return {
+    hold,
+    release: (p: number) => resolvers.get(p)?.(),
+    pass: () => pass,
+  };
+}
+
 describe("AGE-101 session-end-sweep replay + stop fence (real path)", () => {
   it("hint during in-flight sweep replays and releases", async () => {
     const dir = await makeTempDir("acb-age101-replay-hint-");
@@ -982,20 +1008,25 @@ describe("AGE-101 session-end-sweep replay + stop fence (real path)", () => {
       lastIpcServedAt: () => 1_000,
     });
     const timers = makeFakeTimers();
-    const clock = { t: 5_000 };
-    let sweepPass = 0;
-    const gate = makeSweepHoldGate();
+    const T0 = 5_000;
+    const clock = { t: T0 };
+    // Hold the in-flight sweep (#2) AND the replay sweep (#3) independently. This
+    // is the property Codex flagged: the grace tick must land against an ALREADY
+    // in-flight *different* sweep, and the queued replay — not that in-flight
+    // sweep's own reconcile — must be what performs the releasing pass.
+    const holds = makeSweepHoldQueue([2, 3]);
+    let intervalTick: (() => void) | null = null;
 
     const handle = startSessionEndSweep({
       storage: harness.storage,
       runOnStart: true,
       now: () => clock.t,
-      sweepHold: async () => {
-        sweepPass += 1;
-        if (sweepPass >= 2) await gate.hold();
-      },
+      sweepHold: holds.hold,
       intervalMs: 60_000,
-      setIntervalFn: () => null,
+      setIntervalFn: (fn) => {
+        intervalTick = fn as () => void;
+        return { id: -1 };
+      },
       setTimeoutFn: timers.setTimeoutFn,
       clearTimeoutFn: timers.clearTimeoutFn,
       reconcile: reconcileSweepInput(
@@ -1008,21 +1039,63 @@ describe("AGE-101 session-end-sweep replay + stop fence (real path)", () => {
       ),
       reconcileState,
     });
-    await new Promise((r) => setTimeout(r, 50));
-    assert.equal(harness.bus.listComms().length, 1);
 
-    clock.t += DEFAULT_SCOPE_RELEASE_GRACE_MS;
+    // Sweep #1 (runOnStart, not held): first zero-live pass records
+    // zeroLiveSince=T0 and schedules the grace timer; it does NOT release.
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(
+      harness.bus.listComms().length,
+      1,
+      "first pass records grace, no release",
+    );
+
+    // Install the interval (fire the initial install timeout) so we can trigger a
+    // NORMAL sweep on demand.
+    for (const item of timers.pending.filter((p) => p.ms === 60_000)) item.fn();
+    assert.ok(intervalTick, "interval tick captured");
+
+    // Trigger a NORMAL sweep #2 and hold it in-flight — clock is still pre-grace.
+    intervalTick!();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(holds.pass(), 2, "sweep #2 is in-flight (held)");
+
+    // Fire the grace-expiry callback WHILE sweep #2 is in-flight → tick() sees
+    // sweepInFlight and queues pendingTick (it does not start a new sweep).
     for (const item of timers.pending.filter(
       (p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS,
     )) {
       item.fn();
     }
     await new Promise((r) => setTimeout(r, 20));
-    assert.equal(harness.bus.listComms().length, 1, "grace tick blocked in-flight");
+    assert.equal(
+      harness.bus.listComms().length,
+      1,
+      "grace tick queued during in-flight, not yet released",
+    );
 
-    gate.release();
+    // Release sweep #2. Its own reconcile runs at pre-grace clock (T0), so it does
+    // NOT release. The finally then replays the queued pendingTick → sweep #3.
+    holds.release(2);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(
+      harness.bus.listComms().length,
+      1,
+      "in-flight sweep's own reconcile does not release (pre-grace)",
+    );
+    assert.equal(holds.pass(), 3, "pendingTick replay spawned sweep #3");
+
+    // Advance the clock past grace, then release the replay sweep. Its reconcile —
+    // the queued grace tick — is the only pass at post-grace clock, so IT releases.
+    // Mutation guard: removing the finally pendingTick replay leaves sweep #3
+    // unspawned, so the adapter is never released and this test reds.
+    clock.t = T0 + DEFAULT_SCOPE_RELEASE_GRACE_MS;
+    holds.release(3);
     await new Promise((r) => setTimeout(r, 100));
-    assert.equal(harness.bus.listComms().length, 0, "replay after grace releases adapter");
+    assert.equal(
+      harness.bus.listComms().length,
+      0,
+      "replayed grace tick releases adapter",
+    );
     handle.stop();
     await harness.storage.close();
   });
