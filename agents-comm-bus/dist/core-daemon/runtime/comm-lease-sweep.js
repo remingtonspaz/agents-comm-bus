@@ -1,0 +1,346 @@
+import { constants, existsSync } from "node:fs";
+import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { DAEMON_NAME } from "../config.js";
+import { ensureRegistrationForAccount } from "./ensure-registration.js";
+import { commLeasePath, nudgeLeaseReacquire, } from "./comm-lease.js";
+import { compareProcessStartIdentity, } from "./process-start-epoch.js";
+import { defaultIsPidAlive } from "./session-owner-liveness.js";
+import { isRegistrationScopeActive } from "./scope-release-reconcile.js";
+/** Default periodic comm-lease sweep interval. */
+export const DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+/**
+ * AGE-102: classify an on-disk comm lease owner. Never treats renewedAt age alone
+ * as dead — only absent pid or a definite process-start mismatch.
+ */
+export function classifyCommLeaseOwner(record, options = {}) {
+    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    if (!Number.isInteger(record.pid) || record.pid <= 0 || !isPidAlive(record.pid)) {
+        return "definitely_dead";
+    }
+    if (record.process_start_time != null) {
+        const compare = options.readProcessStartEpochMs
+            ? (() => {
+                const current = options.readProcessStartEpochMs(record.pid);
+                if (current == null)
+                    return "inconclusive";
+                return current === record.process_start_time ? "match" : "mismatch";
+            })()
+            : compareProcessStartIdentity(record.process_start_time, record.pid, options);
+        if (compare === "mismatch")
+            return "definitely_dead";
+    }
+    return "retain";
+}
+export function commLeaseLockRoot(homeDir = os.homedir()) {
+    return path.join(homeDir, `.${DAEMON_NAME}`, "comm-locks");
+}
+function isAlreadyExistsError(error) {
+    return (typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "EEXIST");
+}
+function parseLeaseRecord(raw) {
+    try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.pid !== "number" || typeof parsed.comm_id !== "string")
+            return null;
+        if (typeof parsed.resource_id !== "string")
+            return null;
+        return parsed;
+    }
+    catch {
+        return null;
+    }
+}
+async function acquireSweepGuard(leasePath, selfPid, now, isPidAlive, stalenessMs) {
+    const guardPath = `${leasePath}.guard`;
+    await mkdir(path.dirname(guardPath), { recursive: true });
+    const token = `${selfPid}:${now()}`;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const handle = await open(guardPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+            await handle.writeFile(`${token}\n`, "utf8");
+            await handle.close();
+            return token;
+        }
+        catch (error) {
+            if (!isAlreadyExistsError(error))
+                throw error;
+            if (attempt === 0 && (await guardIsStale(guardPath, selfPid, now, isPidAlive, stalenessMs))) {
+                await rm(guardPath, { force: true });
+                continue;
+            }
+            return null;
+        }
+    }
+    return null;
+}
+async function guardIsStale(guardPath, selfPid, now, isPidAlive, stalenessMs) {
+    try {
+        const raw = (await readFile(guardPath, "utf8")).trim();
+        const pid = Number(raw.split(":")[0]);
+        if (!Number.isInteger(pid) || pid <= 0)
+            return true;
+        if (pid === selfPid)
+            return true;
+        return !isPidAlive(pid);
+    }
+    catch {
+        try {
+            const info = await stat(guardPath);
+            return now() - info.mtimeMs > stalenessMs;
+        }
+        catch {
+            return false;
+        }
+    }
+}
+async function releaseSweepGuard(leasePath, token) {
+    const guardPath = `${leasePath}.guard`;
+    try {
+        const current = (await readFile(guardPath, "utf8")).trim();
+        if (current === token) {
+            await rm(guardPath, { force: true });
+        }
+    }
+    catch {
+        // best-effort
+    }
+}
+async function recoverAfterLeaseDeletion(comm_id, resource_id, input) {
+    if (nudgeLeaseReacquire(comm_id, resource_id)) {
+        return true;
+    }
+    const registrations = await input.storage.listAccountRegistrations({
+        comm: comm_id,
+    });
+    const registration = registrations.find((row) => row.bot_user_id === resource_id);
+    if (!registration || !isRegistrationDesired(registration, input.activeScopes)) {
+        return false;
+    }
+    await ensureRegistrationForAccount(registration, input.ensure);
+    return true;
+}
+function isRegistrationDesired(registration, activeScopes) {
+    return (registration.activation === "eager" ||
+        isRegistrationScopeActive(registration, activeScopes));
+}
+export async function runCommLeaseSweep(input) {
+    const counts = {
+        examined: 0,
+        retained: 0,
+        reaped: 0,
+        cas_lost: 0,
+        guard_contended: 0,
+        malformed: 0,
+        recovered: 0,
+    };
+    const homeDir = input.homeDir ?? os.homedir();
+    const selfPid = input.selfPid ?? process.pid;
+    const now = input.now ?? Date.now;
+    const isPidAlive = input.isPidAlive ?? input.ownerLivenessOptions?.isPidAlive ?? defaultIsPidAlive;
+    const livenessOptions = {
+        ...input.ownerLivenessOptions,
+        isPidAlive,
+    };
+    const stalenessMs = input.stalenessMs ?? 90_000;
+    const root = commLeaseLockRoot(homeDir);
+    if (!existsSync(root)) {
+        return counts;
+    }
+    let commDirs;
+    try {
+        commDirs = await readdir(root);
+    }
+    catch {
+        return counts;
+    }
+    for (const commId of commDirs) {
+        const commDir = path.join(root, commId);
+        let entries;
+        try {
+            const info = await stat(commDir);
+            if (!info.isDirectory())
+                continue;
+            entries = await readdir(commDir);
+        }
+        catch {
+            continue;
+        }
+        for (const entry of entries) {
+            if (!entry.endsWith(".json") || entry.endsWith(".json.guard"))
+                continue;
+            if (entry.endsWith(".guard"))
+                continue;
+            const leasePath = path.join(commDir, entry);
+            counts.examined += 1;
+            let snapshot;
+            try {
+                snapshot = await readFile(leasePath, "utf8");
+            }
+            catch {
+                counts.malformed += 1;
+                continue;
+            }
+            const record = parseLeaseRecord(snapshot);
+            if (!record) {
+                counts.malformed += 1;
+                continue;
+            }
+            if (classifyCommLeaseOwner(record, livenessOptions) !== "definitely_dead") {
+                counts.retained += 1;
+                continue;
+            }
+            const guard = await acquireSweepGuard(leasePath, selfPid, now, isPidAlive, stalenessMs);
+            if (!guard) {
+                counts.guard_contended += 1;
+                continue;
+            }
+            try {
+                if (input.afterGuardAcquired) {
+                    await input.afterGuardAcquired(leasePath, snapshot);
+                }
+                let reread;
+                try {
+                    reread = await readFile(leasePath, "utf8");
+                }
+                catch {
+                    counts.cas_lost += 1;
+                    continue;
+                }
+                if (reread !== snapshot) {
+                    counts.cas_lost += 1;
+                    continue;
+                }
+                const current = parseLeaseRecord(reread);
+                if (!current || classifyCommLeaseOwner(current, livenessOptions) !== "definitely_dead") {
+                    counts.cas_lost += 1;
+                    continue;
+                }
+                await rm(leasePath, { force: true });
+                counts.reaped += 1;
+                await input.audit
+                    ?.append({
+                    timestamp: now(),
+                    kind: "comm_lease_reaped",
+                    detail: {
+                        comm_id: current.comm_id,
+                        resource_id: current.resource_id,
+                        holder_pid: current.pid,
+                        holder_rank: current.authorityRank,
+                        process_start_time: current.process_start_time ?? null,
+                    },
+                })
+                    .catch(() => { });
+                if (input.recovery) {
+                    const recovered = await recoverAfterLeaseDeletion(current.comm_id, current.resource_id, input.recovery).catch(() => false);
+                    if (recovered)
+                        counts.recovered += 1;
+                }
+            }
+            finally {
+                await releaseSweepGuard(leasePath, guard);
+            }
+        }
+    }
+    if (input.sweepHold) {
+        await input.sweepHold();
+    }
+    const log = input.log ?? (() => { });
+    log(`agents-comm-bus: comm lease sweep: examined=${counts.examined} ` +
+        `retained=${counts.retained} reaped=${counts.reaped} cas_lost=${counts.cas_lost} ` +
+        `guard_contended=${counts.guard_contended} malformed=${counts.malformed} ` +
+        `recovered=${counts.recovered}`);
+    return counts;
+}
+export function startCommLeaseSweep(options) {
+    const intervalMs = options.intervalMs ?? DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS;
+    const setIntervalFn = options.setIntervalFn ??
+        ((fn, ms) => {
+            const handle = setInterval(fn, ms);
+            handle.unref?.();
+            return handle;
+        });
+    const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
+    const setTimeoutFn = options.setTimeoutFn ??
+        ((fn, ms) => {
+            const handle = setTimeout(fn, ms);
+            handle.unref?.();
+            return handle;
+        });
+    const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
+    let sweepInFlight = false;
+    let pendingTick = false;
+    let stopped = false;
+    let interval = null;
+    const tick = () => {
+        if (stopped)
+            return;
+        if (sweepInFlight) {
+            pendingTick = true;
+            return;
+        }
+        sweepInFlight = true;
+        void runCommLeaseSweep({
+            homeDir: options.homeDir,
+            selfPid: options.selfPid,
+            now: options.now,
+            isPidAlive: options.isPidAlive,
+            ownerLivenessOptions: options.ownerLivenessOptions,
+            stalenessMs: options.stalenessMs,
+            log: options.log,
+            audit: options.audit,
+            recovery: options.recovery,
+            sweepHold: options.sweepHold,
+            afterGuardAcquired: options.afterGuardAcquired,
+        })
+            .catch((error) => {
+            const log = options.log ?? console.error;
+            log(`agents-comm-bus: comm lease sweep failed: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        })
+            .finally(() => {
+            sweepInFlight = false;
+            if (!stopped && pendingTick) {
+                pendingTick = false;
+                tick();
+            }
+        });
+    };
+    if (options.runOnStart !== false) {
+        tick();
+    }
+    const initial = setTimeoutFn(() => {
+        if (stopped)
+            return;
+        interval = setIntervalFn(tick, intervalMs);
+    }, intervalMs);
+    return {
+        stop() {
+            stopped = true;
+            clearTimeoutFn(initial);
+            if (interval != null)
+                clearIntervalFn(interval);
+            interval = null;
+        },
+    };
+}
+/** Resolve comm/resource ids from a lease path under the fixed comm-lock root. */
+export function commLeaseIdsFromPath(leasePath, homeDir = os.homedir()) {
+    const root = commLeaseLockRoot(homeDir);
+    const rel = path.relative(root, leasePath);
+    if (rel.startsWith("..") || path.isAbsolute(rel))
+        return null;
+    const parts = rel.split(path.sep);
+    if (parts.length !== 2 || !parts[1].endsWith(".json"))
+        return null;
+    return {
+        comm_id: parts[0],
+        resource_id: parts[1].slice(0, -".json".length),
+    };
+}
+export { commLeasePath };
+//# sourceMappingURL=comm-lease-sweep.js.map

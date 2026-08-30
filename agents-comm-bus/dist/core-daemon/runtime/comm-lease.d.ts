@@ -59,6 +59,8 @@ export interface LeaseRecord {
     lastIpcServedAt: number;
     /** Optional per-agent wake/control metadata; omitted on legacy lease files. */
     agentProperties?: AgentLeaseProperties;
+    /** Process creation epoch (ms); stamped at acquire/renew for AGE-102 liveness. */
+    process_start_time?: number;
 }
 export interface SelfIdentity {
     pid: number;
@@ -298,6 +300,11 @@ export interface WrapWithLeaseOptions {
     log?: (message: string) => void;
 }
 export declare const DEFAULT_RENEW_INTERVAL_MS = 10000;
+/**
+ * AGE-102: immediately retry lease acquisition for a dormant denied wrapper.
+ * Returns true when a registered wrapper was nudged.
+ */
+export declare function nudgeLeaseReacquire(commId: string, resourceId: string): boolean;
 /**
  * Wrap an adapter so the daemon only starts it once it holds the
  * `(comm, resource)` ownership lease. The bus and the inner adapter stay

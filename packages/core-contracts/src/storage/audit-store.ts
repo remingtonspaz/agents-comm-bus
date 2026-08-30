@@ -43,6 +43,8 @@ export type AuditEventKind =
   | "comm_lease_denied"
   | "comm_lease_lost"
   | "comm_lease_released"
+  | "comm_lease_reaped"
+  | "comm_lease_sweep_failed"
   | "registration_added"
   | "registration_removed"
   // AGE-52: session registered for a project with no exact registration row,

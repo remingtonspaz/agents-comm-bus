@@ -40,7 +40,7 @@ export function scopeKey(
   return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
 }
 
-function isRegistrationScopeActive(
+export function isRegistrationScopeActive(
   registration: AccountRegistration,
   activeScopes: ReadonlySet<string>,
 ): boolean {

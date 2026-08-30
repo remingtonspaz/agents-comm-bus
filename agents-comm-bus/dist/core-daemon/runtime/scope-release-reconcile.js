@@ -7,7 +7,7 @@ export const DEFAULT_SCOPE_RELEASE_GRACE_MS = 30_000;
 export function scopeKey(agent, project, accountLabelScope) {
     return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
 }
-function isRegistrationScopeActive(registration, activeScopes) {
+export function isRegistrationScopeActive(registration, activeScopes) {
     const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
     const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;
     for (const key of activeScopes) {

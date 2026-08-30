@@ -69,6 +69,7 @@ import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import { dispatchInboundToBridges } from "./runtime/dispatch-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
 import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
+import { runCommLeaseSweep, startCommLeaseSweep } from "./runtime/comm-lease-sweep.js";
 import type { ScopeReleaseReconcileState } from "./runtime/scope-release-reconcile.js";
 import { scopeKey } from "./runtime/scope-release-reconcile.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
@@ -519,6 +520,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   let pidWatchdogHandle: ReturnType<typeof startDaemonPidWatchdog> | null = null;
   let idleReaperHandle: ReturnType<typeof startIdleReaper> | null = null;
   let sessionEndSweepHandle: ReturnType<typeof startSessionEndSweep> | null = null;
+  let commLeaseSweepHandle: ReturnType<typeof startCommLeaseSweep> | null = null;
 
   const runDaemonRetirement = async (reason: string, recordAudit: boolean): Promise<void> => {
     await retireDaemon({
@@ -531,6 +533,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         pidWatchdogHandle?.stop();
         idleReaperHandle?.stop();
         sessionEndSweepHandle?.stop();
+        commLeaseSweepHandle?.stop();
         eagerRetry?.stopAll();
       },
       stopBus: () =>
@@ -591,6 +594,40 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     reconcileState: scopeReconcileState,
   });
   requestScopeReconcile = () => sessionEndSweepHandle?.requestEarlyReconcile();
+
+  const commLeaseSweepRecovery = {
+    storage,
+    activeScopes,
+    ensure: buildEnsureRegistrationContext({ scheduleEagerRetry }),
+    audit,
+  };
+
+  // AGE-102: reclaim orphaned comm leases before boot restore / eager reconcile.
+  void (async () => {
+    try {
+      await runCommLeaseSweep({
+        log: (message) => console.error(message),
+        audit,
+        recovery: commLeaseSweepRecovery,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`agents-comm-bus: boot comm lease sweep failed: ${reason}`);
+      await audit
+        .append({
+          timestamp: Date.now(),
+          kind: "comm_lease_sweep_failed",
+          detail: { phase: "boot", reason },
+        })
+        .catch(() => {});
+    }
+    commLeaseSweepHandle = startCommLeaseSweep({
+      runOnStart: false,
+      log: (message) => console.error(message),
+      audit,
+      recovery: commLeaseSweepRecovery,
+    });
+  })();
 
   // AGE-55: async boot restore — never block daemon readiness on comm bring-up.
   void runBootScopeRestore({

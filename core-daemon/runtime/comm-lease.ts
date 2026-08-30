@@ -6,6 +6,7 @@ import path from "node:path";
 import type { CommAdapter } from "agents-comm-bus-core";
 
 import { DAEMON_NAME } from "../config.js";
+import { currentProcessStartEpochMs } from "./process-start-epoch.js";
 
 /**
  * AGE-35: single-consumer comm-resource ownership lease.
@@ -76,6 +77,8 @@ export interface LeaseRecord {
   lastIpcServedAt: number;
   /** Optional per-agent wake/control metadata; omitted on legacy lease files. */
   agentProperties?: AgentLeaseProperties;
+  /** Process creation epoch (ms); stamped at acquire/renew for AGE-102 liveness. */
+  process_start_time?: number;
 }
 
 export interface SelfIdentity {
@@ -632,6 +635,8 @@ export class CommLeaseArbiter {
         ...existing,
         renewedAt: this.now(),
         lastIpcServedAt: this.lastIpcServedAt(),
+        process_start_time:
+          existing.process_start_time ?? currentProcessStartEpochMs(),
         agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing),
       };
       await this.writeRecord(leasePath, renewed);
@@ -690,6 +695,10 @@ export class CommLeaseArbiter {
       acquiredAt: existing && existing.pid === this.self.pid ? existing.acquiredAt : now,
       renewedAt: now,
       lastIpcServedAt: this.lastIpcServedAt(),
+      process_start_time:
+        existing && existing.pid === this.self.pid
+          ? (existing.process_start_time ?? currentProcessStartEpochMs())
+          : currentProcessStartEpochMs(),
       agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing),
     };
   }
@@ -864,6 +873,23 @@ export interface WrapWithLeaseOptions {
 export const DEFAULT_RENEW_INTERVAL_MS = 10_000;
 const DEFAULT_REACQUIRE_INTERVAL_MS = 60_000;
 
+const leaseReacquireNudges = new Map<string, () => void>();
+
+function leaseResourceKey(commId: string, resourceId: string): string {
+  return `${commId}:${resourceId}`;
+}
+
+/**
+ * AGE-102: immediately retry lease acquisition for a dormant denied wrapper.
+ * Returns true when a registered wrapper was nudged.
+ */
+export function nudgeLeaseReacquire(commId: string, resourceId: string): boolean {
+  const nudge = leaseReacquireNudges.get(leaseResourceKey(commId, resourceId));
+  if (!nudge) return false;
+  nudge();
+  return true;
+}
+
 /**
  * Wrap an adapter so the daemon only starts it once it holds the
  * `(comm, resource)` ownership lease. The bus and the inner adapter stay
@@ -960,42 +986,53 @@ export function wrapWithLease(
   const startReacquireTimer = (resourceId: string): void => {
     if (reacquireTimer != null) return;
     reacquireTimer = setIntervalFn(() => {
-      void isLeaseEligible()
-        .then((eligible) =>
-          arbiter.tryAcquire(inner.id, resourceId, { eligible }),
-        )
-        .then(async (result) => {
-          if (!result.ok) return; // still denied; keep slow-polling
-          if (reacquireTimer != null) {
-            clearIntervalFn(reacquireTimer);
-            reacquireTimer = null;
-          }
-          holdingLease = true;
-          log(
-            `comm ${inner.id} resource ${resourceId}: acquired the poll lease ` +
-              `on re-acquire; starting this consumer.`,
-          );
-          try {
-            await inner.start();
-            innerStarted = true;
-            startRenewTimer(resourceId);
-          } catch (error) {
-            innerStarted = false;
-            holdingLease = false;
-            log(
-              `comm ${inner.id} resource ${resourceId}: inner.start() failed after ` +
-                `re-acquire: ${error instanceof Error ? error.message : String(error)}; ` +
-                `releasing lease.`,
-            );
-            await arbiter.release(inner.id, resourceId).catch(() => {});
-            startReacquireTimer(resourceId);
-          }
-        })
-        .catch(() => {
-          // Re-acquire error — keep slow-polling.
-        });
+      void attemptReacquire(resourceId);
     }, reacquireIntervalMs);
   };
+
+  const attemptReacquire = async (resourceId: string): Promise<void> => {
+    const eligible = await isLeaseEligible();
+    const result = await arbiter.tryAcquire(inner.id, resourceId, { eligible });
+    if (!result.ok) return; // still denied; keep slow-polling
+    if (reacquireTimer != null) {
+      clearIntervalFn(reacquireTimer);
+      reacquireTimer = null;
+    }
+    holdingLease = true;
+    log(
+      `comm ${inner.id} resource ${resourceId}: acquired the poll lease ` +
+        `on re-acquire; starting this consumer.`,
+    );
+    try {
+      await inner.start();
+      innerStarted = true;
+      startRenewTimer(resourceId);
+    } catch (error) {
+      innerStarted = false;
+      holdingLease = false;
+      log(
+        `comm ${inner.id} resource ${resourceId}: inner.start() failed after ` +
+          `re-acquire: ${error instanceof Error ? error.message : String(error)}; ` +
+          `releasing lease.`,
+      );
+      await arbiter.release(inner.id, resourceId).catch(() => {});
+      startReacquireTimer(resourceId);
+    }
+  };
+
+  const nudgeReacquire = (): void => {
+    if (!resource) return;
+    if (holdingLease || innerStarted) return;
+    if (reacquireTimer != null) {
+      clearIntervalFn(reacquireTimer);
+      reacquireTimer = null;
+    }
+    void attemptReacquire(resource.resourceId).catch(() => {});
+  };
+
+  if (resource) {
+    leaseReacquireNudges.set(leaseResourceKey(inner.id, resource.resourceId), nudgeReacquire);
+  }
 
   const proxy: CommAdapter = {
     get id() {
@@ -1050,6 +1087,9 @@ export function wrapWithLease(
 
     async stop(): Promise<void> {
       clearTimers();
+      if (resource) {
+        leaseReacquireNudges.delete(leaseResourceKey(inner.id, resource.resourceId));
+      }
       try {
         if (innerStarted) await inner.stop();
       } finally {
