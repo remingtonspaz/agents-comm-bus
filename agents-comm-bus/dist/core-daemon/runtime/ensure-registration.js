@@ -77,6 +77,8 @@ export async function ensureRegistrationForAccount(registration, input) {
             stateRoot: input.stateRoot,
             storage: input.storage,
             leaseArbiter: input.leaseArbiter,
+            discoveryRoot: input.discoveryRoot,
+            sessionOwnerIsLive: input.sessionOwnerIsLive,
         });
         if (result.ok) {
             if (input.agentLeaseProperties) {

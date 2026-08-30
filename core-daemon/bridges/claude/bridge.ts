@@ -495,6 +495,7 @@ export class ClaudeBridge implements AgentBridge {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
       lease_owner_daemon_discovery_root: null,
       lease_owner_daemon_checkout_root: null,
       lease_owner_daemon_state_root: null,
@@ -1102,14 +1103,17 @@ function formatQuestionPrompt(
 function sessionLeaseOwnerFromParams(params: Record<string, unknown>): {
   process_pid: number | null;
   process_label?: string | null;
+  process_start_time?: number | null;
 } | undefined {
   const pid = numberParam(params.owner_process_pid);
   if (!pid) return undefined;
+  const startTime = numberParam(params.owner_process_start_time);
   return {
     process_pid: pid,
     process_label: typeof params.owner_process_label === "string"
       ? params.owner_process_label
       : "claude",
+    process_start_time: startTime,
   };
 }
 

@@ -147,6 +147,13 @@ function defaultIsDirectory(p) {
  */
 export function decideContention(input) {
     const { self, existing, now, isPidAlive, stalenessMs } = input;
+    // AGE-101: foreign/missing discovery-root ownership blocks acquire even when
+    // rank would win — eligibility is computed outside this module and injected.
+    if (input.eligible === false) {
+        const holder = existing ??
+            ineligiblePlaceholderHolder(input.commId, input.resourceId);
+        return { take: false, reason: "not-eligible-for-scope", holder };
+    }
     // 1. No holder, dead holder, or stale holder → take.
     if (!existing)
         return { take: true, reason: "no-holder" };
@@ -172,6 +179,21 @@ export function decideContention(input) {
         return { take: true, reason: "same-rank-staler-holder" };
     }
     return { take: false, reason: "held-by-same-rank-fresh", holder: existing };
+}
+function ineligiblePlaceholderHolder(commId, resourceId) {
+    return {
+        comm_id: commId,
+        resource_id: resourceId,
+        pid: -1,
+        stateRoot: "",
+        checkoutRoot: null,
+        daemonBin: null,
+        daemonVersion: "",
+        authorityRank: "worktree",
+        acquiredAt: 0,
+        renewedAt: 0,
+        lastIpcServedAt: 0,
+    };
 }
 export class CommLeaseArbiter {
     self;
@@ -299,7 +321,7 @@ export class CommLeaseArbiter {
      * the existing record under a guard lock, applies {@link decideContention},
      * and writes the self record on a take. Returns a discriminated result.
      */
-    async tryAcquire(commId, resourceId) {
+    async tryAcquire(commId, resourceId, acquireOptions) {
         const leasePath = this.leasePath(commId, resourceId);
         const guard = await this.acquireGuard(leasePath);
         if (!guard) {
@@ -310,6 +332,8 @@ export class CommLeaseArbiter {
         try {
             const existing = await this.readRecord(leasePath);
             const decision = decideContention({
+                commId,
+                resourceId,
                 self: this.self,
                 selfLastIpcServedAt: this.lastIpcServedAt(),
                 existing,
@@ -317,6 +341,7 @@ export class CommLeaseArbiter {
                 isPidAlive: this.isPidAlive,
                 stalenessMs: this.stalenessMs,
                 ipcRecencyMarginMs: this.ipcRecencyMarginMs,
+                eligible: acquireOptions?.eligible,
             });
             if (!decision.take) {
                 // Dedup: only audit a denial on a state change (first denial of a streak,
@@ -637,6 +662,17 @@ export function wrapWithLease(inner, arbiter, options = {}) {
         });
     const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
     const log = options.log ?? ((m) => console.error(m));
+    const leaseEligible = options.leaseEligible;
+    const isLeaseEligible = async () => {
+        if (!leaseEligible)
+            return true;
+        try {
+            return await leaseEligible();
+        }
+        catch {
+            return false;
+        }
+    };
     let renewTimer = null;
     let reacquireTimer = null;
     let innerStarted = false;
@@ -690,8 +726,8 @@ export function wrapWithLease(inner, arbiter, options = {}) {
         if (reacquireTimer != null)
             return;
         reacquireTimer = setIntervalFn(() => {
-            void arbiter
-                .tryAcquire(inner.id, resourceId)
+            void isLeaseEligible()
+                .then((eligible) => arbiter.tryAcquire(inner.id, resourceId, { eligible }))
                 .then(async (result) => {
                 if (!result.ok)
                     return; // still denied; keep slow-polling
@@ -742,7 +778,8 @@ export function wrapWithLease(inner, arbiter, options = {}) {
                 innerStarted = true;
                 return;
             }
-            const result = await arbiter.tryAcquire(inner.id, resource.resourceId);
+            const eligible = await isLeaseEligible();
+            const result = await arbiter.tryAcquire(inner.id, resource.resourceId, { eligible });
             if (!result.ok) {
                 holdingLease = false;
                 log(`comm ${inner.id} resource ${resource.resourceId}: another daemon owns the ` +

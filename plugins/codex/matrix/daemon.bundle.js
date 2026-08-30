@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.52";
+var DAEMON_VERSION = "0.2.53";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3803,6 +3803,10 @@ function defaultIsDirectory(p) {
 }
 function decideContention(input) {
   const { self, existing, now, isPidAlive: isPidAlive2, stalenessMs } = input;
+  if (input.eligible === false) {
+    const holder = existing ?? ineligiblePlaceholderHolder(input.commId, input.resourceId);
+    return { take: false, reason: "not-eligible-for-scope", holder };
+  }
   if (!existing) return { take: true, reason: "no-holder" };
   if (!isPidAlive2(existing.pid)) return { take: true, reason: "holder-dead" };
   if (now - existing.renewedAt > stalenessMs) return { take: true, reason: "holder-stale" };
@@ -3817,6 +3821,21 @@ function decideContention(input) {
     return { take: true, reason: "same-rank-staler-holder" };
   }
   return { take: false, reason: "held-by-same-rank-fresh", holder: existing };
+}
+function ineligiblePlaceholderHolder(commId, resourceId) {
+  return {
+    comm_id: commId,
+    resource_id: resourceId,
+    pid: -1,
+    stateRoot: "",
+    checkoutRoot: null,
+    daemonBin: null,
+    daemonVersion: "",
+    authorityRank: "worktree",
+    acquiredAt: 0,
+    renewedAt: 0,
+    lastIpcServedAt: 0
+  };
 }
 var CommLeaseArbiter = class {
   self;
@@ -3936,7 +3955,7 @@ var CommLeaseArbiter = class {
    * the existing record under a guard lock, applies {@link decideContention},
    * and writes the self record on a take. Returns a discriminated result.
    */
-  async tryAcquire(commId, resourceId) {
+  async tryAcquire(commId, resourceId, acquireOptions) {
     const leasePath = this.leasePath(commId, resourceId);
     const guard = await this.acquireGuard(leasePath);
     if (!guard) {
@@ -3946,13 +3965,16 @@ var CommLeaseArbiter = class {
     try {
       const existing = await this.readRecord(leasePath);
       const decision = decideContention({
+        commId,
+        resourceId,
         self: this.self,
         selfLastIpcServedAt: this.lastIpcServedAt(),
         existing,
         now: this.now(),
         isPidAlive: this.isPidAlive,
         stalenessMs: this.stalenessMs,
-        ipcRecencyMarginMs: this.ipcRecencyMarginMs
+        ipcRecencyMarginMs: this.ipcRecencyMarginMs,
+        eligible: acquireOptions?.eligible
       });
       if (!decision.take) {
         const denyKey = `${commId}:${resourceId}`;
@@ -4217,6 +4239,15 @@ function wrapWithLease(inner, arbiter, options = {}) {
   });
   const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
   const log = options.log ?? ((m) => console.error(m));
+  const leaseEligible = options.leaseEligible;
+  const isLeaseEligible = async () => {
+    if (!leaseEligible) return true;
+    try {
+      return await leaseEligible();
+    } catch {
+      return false;
+    }
+  };
   let renewTimer = null;
   let reacquireTimer = null;
   let innerStarted = false;
@@ -4260,7 +4291,9 @@ function wrapWithLease(inner, arbiter, options = {}) {
   const startReacquireTimer = (resourceId) => {
     if (reacquireTimer != null) return;
     reacquireTimer = setIntervalFn(() => {
-      void arbiter.tryAcquire(inner.id, resourceId).then(async (result) => {
+      void isLeaseEligible().then(
+        (eligible) => arbiter.tryAcquire(inner.id, resourceId, { eligible })
+      ).then(async (result) => {
         if (!result.ok) return;
         if (reacquireTimer != null) {
           clearIntervalFn(reacquireTimer);
@@ -4306,7 +4339,8 @@ function wrapWithLease(inner, arbiter, options = {}) {
         innerStarted = true;
         return;
       }
-      const result = await arbiter.tryAcquire(inner.id, resource.resourceId);
+      const eligible = await isLeaseEligible();
+      const result = await arbiter.tryAcquire(inner.id, resource.resourceId, { eligible });
       if (!result.ok) {
         holdingLease = false;
         log(
@@ -4365,6 +4399,70 @@ function wrapWithLease(inner, arbiter, options = {}) {
   return proxy;
 }
 
+// ../core-daemon/runtime/process-start-epoch.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+function readProcessStartEpochMs(pid, options = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === "linux") {
+      return readLinuxProcessStartEpochMs(pid, options.readProcStat);
+    }
+    if (process.platform === "darwin") {
+      return readDarwinProcessStartEpochMs(pid);
+    }
+    if (process.platform === "win32") {
+      return readWindowsProcessStartEpochMs(pid);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+function readLinuxProcessStartEpochMs(pid, readProcStat) {
+  const raw = readProcStat?.(pid) ?? (() => {
+    try {
+      return readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch {
+      return null;
+    }
+  })();
+  if (!raw) return null;
+  const closeParen = raw.lastIndexOf(")");
+  if (closeParen < 0) return null;
+  const fields = raw.slice(closeParen + 2).split(" ");
+  const startTicks = Number(fields[19]);
+  if (!Number.isFinite(startTicks)) return null;
+  const uptimeRaw = readFileSync("/proc/uptime", "utf8").split(/\s+/)[0];
+  const uptimeSec = Number(uptimeRaw);
+  if (!Number.isFinite(uptimeSec)) return null;
+  const bootMs = Date.now() - uptimeSec * 1e3;
+  const hz = 100;
+  return bootMs + startTicks / hz * 1e3;
+}
+function readDarwinProcessStartEpochMs(pid) {
+  const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8"
+  }).trim();
+  if (!out) return null;
+  const parsed = Date.parse(out);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function readWindowsProcessStartEpochMs(pid) {
+  const out = execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
+    ],
+    { encoding: "utf8" }
+  ).trim();
+  const ticks = Number(out);
+  if (!Number.isFinite(ticks)) return null;
+  return ticks / 1e4 - 621355968e5;
+}
+
 // ../core-daemon/runtime/session-owner-liveness.ts
 var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
 function defaultIsPidAlive2(pid) {
@@ -4378,9 +4476,15 @@ function defaultIsPidAlive2(pid) {
 function classifySessionOwnerProcess(session, options = {}) {
   const pid = session.lease_owner_process_pid;
   const registeredAt = session.lease_owner_process_registered_at;
+  const startTime = session.lease_owner_process_start_time;
   if (pid == null || registeredAt == null) return "no_owner";
   const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
   if (!isPidAlive2(pid)) return "dead";
+  if (startTime != null) {
+    const readStart = options.readProcessStartEpochMs ?? readProcessStartEpochMs;
+    const currentStart = readStart(pid);
+    if (currentStart != null && currentStart !== startTime) return "dead";
+  }
   const now = options.now ?? Date.now;
   const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
   if (now() - registeredAt > recencyMs) return "stale";
@@ -6647,6 +6751,17 @@ var registrationActivationMigration = {
     await ctx.exec(sql);
   }
 };
+var sessionOwnerProcessStartTimeMigration = {
+  version: 15,
+  description: "AGE-101: process start epoch for pid+start-time owner liveness",
+  async up(ctx) {
+    const sql = await readFile5(
+      join3(schemaDir, "015_session_owner_process_start_time.sql"),
+      "utf8"
+    );
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -6662,7 +6777,8 @@ async function runStorageMigrations(db) {
     sessionDaemonOwnerMigration,
     sessionLabelScopeMigration,
     curlInboundIdempotencyMigration,
-    registrationActivationMigration
+    registrationActivationMigration,
+    sessionOwnerProcessStartTimeMigration
   ]);
 }
 
@@ -7180,12 +7296,12 @@ var SqliteStorage = class _SqliteStorage {
           schema_version, session_id, agent, project, created_at,
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
           lease_owner_process_pid, lease_owner_process_label,
-          lease_owner_process_registered_at,
+          lease_owner_process_registered_at, lease_owner_process_start_time,
           lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
           lease_owner_daemon_state_root, lease_owner_daemon_bin,
           lease_owner_daemon_authority_rank,
           most_recent_inbound_conversation_id, account_label_scope, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -7203,6 +7319,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.lease_owner_process_pid,
       rec.lease_owner_process_label,
       rec.lease_owner_process_registered_at,
+      rec.lease_owner_process_start_time ?? null,
       rec.lease_owner_daemon_discovery_root,
       rec.lease_owner_daemon_checkout_root,
       rec.lease_owner_daemon_state_root,
@@ -7214,6 +7331,11 @@ var SqliteStorage = class _SqliteStorage {
     );
   }
   async acquireSessionLease(session, connection_id, at, owner) {
+    const ownerPid = owner?.process_pid ?? null;
+    let ownerStartTime = owner?.process_start_time ?? null;
+    if (ownerPid != null && ownerStartTime == null) {
+      ownerStartTime = readProcessStartEpochMs(ownerPid);
+    }
     try {
       const result = this.db.prepare(`
           UPDATE sessions
@@ -7229,6 +7351,7 @@ var SqliteStorage = class _SqliteStorage {
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
               lease_owner_process_registered_at = ?,
+              lease_owner_process_start_time = ?,
               lease_owner_daemon_discovery_root = ?,
               lease_owner_daemon_checkout_root = ?,
               lease_owner_daemon_state_root = ?,
@@ -7239,9 +7362,10 @@ var SqliteStorage = class _SqliteStorage {
         `).run(
         connection_id,
         at,
-        owner?.process_pid ?? null,
+        ownerPid,
         owner?.process_label ?? null,
-        owner?.process_pid ? at : null,
+        ownerPid ? at : null,
+        ownerPid ? ownerStartTime : null,
         owner?.daemon?.discovery_root ?? null,
         owner?.daemon?.checkout_root ?? null,
         owner?.daemon?.state_root ?? null,
@@ -7264,6 +7388,7 @@ var SqliteStorage = class _SqliteStorage {
             lease_owner_process_pid = NULL,
             lease_owner_process_label = NULL,
             lease_owner_process_registered_at = NULL,
+            lease_owner_process_start_time = NULL,
             lease_owner_daemon_discovery_root = NULL,
             lease_owner_daemon_checkout_root = NULL,
             lease_owner_daemon_state_root = NULL,
@@ -7300,6 +7425,10 @@ var SqliteStorage = class _SqliteStorage {
             (lease_owner_process_registered_at IS NULL AND ? IS NULL)
             OR lease_owner_process_registered_at = ?
           )
+          AND (
+            (lease_owner_process_start_time IS NULL AND ? IS NULL)
+            OR lease_owner_process_start_time = ?
+          )
       `).run(
       at,
       session,
@@ -7309,7 +7438,9 @@ var SqliteStorage = class _SqliteStorage {
       observed.lease_owner_process_pid,
       observed.lease_owner_process_pid,
       observed.lease_owner_process_registered_at,
-      observed.lease_owner_process_registered_at
+      observed.lease_owner_process_registered_at,
+      observed.lease_owner_process_start_time,
+      observed.lease_owner_process_start_time
     );
     return Number(result.changes ?? 0) > 0;
   }
@@ -7699,6 +7830,7 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_process_pid: r.lease_owner_process_pid,
       lease_owner_process_label: r.lease_owner_process_label,
       lease_owner_process_registered_at: r.lease_owner_process_registered_at,
+      lease_owner_process_start_time: r.lease_owner_process_start_time,
       lease_owner_daemon_discovery_root: r.lease_owner_daemon_discovery_root,
       lease_owner_daemon_checkout_root: r.lease_owner_daemon_checkout_root,
       lease_owner_daemon_state_root: r.lease_owner_daemon_state_root,
@@ -7810,6 +7942,33 @@ var ContentAddressedBlobStore = class {
   }
 };
 
+// ../core-daemon/runtime/comm-lease-eligibility.ts
+function classifySessionDaemonOwner2(session, currentDiscoveryRoot) {
+  const stamped = session.lease_owner_daemon_discovery_root;
+  if (stamped == null || stamped.length === 0) return "missing";
+  return normalizeDaemonRootPath(stamped) === normalizeDaemonRootPath(currentDiscoveryRoot) ? "match" : "foreign";
+}
+function computeCommLeaseEligibility(input) {
+  const scopeSessions = input.sessions.filter((session) => session.status === "active");
+  const liveSessions = scopeSessions.filter((session) => input.sessionOwnerIsLive(session));
+  if (liveSessions.length === 0) return true;
+  const owningSessions = liveSessions.filter((session) => {
+    const regs = filterRegistrationsForSession(
+      [input.registration],
+      session,
+      scopeSessions,
+      input.sessionOwnerIsLive
+    );
+    return regs.length > 0;
+  });
+  if (owningSessions.length === 0) return true;
+  for (const session of owningSessions) {
+    const ownerClass = classifySessionDaemonOwner2(session, input.discoveryRoot);
+    if (ownerClass !== "match") return false;
+  }
+  return true;
+}
+
 // ../core-daemon/runtime/comm-adapter-lifecycle.ts
 function adapterMapKey(commId, accountId) {
   return `${commId}:${accountId}`;
@@ -7863,9 +8022,46 @@ async function createAdapterFromRegistration(input) {
     }
   );
   if (adapter.exclusiveResource?.() != null) {
-    return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
+    const leaseEligible = input.storage && input.discoveryRoot && input.sessionOwnerIsLive ? async () => {
+      const sessions = await input.storage.listSessions({
+        project: input.registration.project,
+        agent: input.registration.agent,
+        status: "active"
+      });
+      return computeCommLeaseEligibility({
+        registration: input.registration,
+        discoveryRoot: input.discoveryRoot,
+        sessions,
+        sessionOwnerIsLive: input.sessionOwnerIsLive
+      });
+    } : void 0;
+    return {
+      adapter: wrapWithLease(adapter, input.leaseArbiter, { leaseEligible }),
+      resolution: resolved
+    };
   }
   return { adapter, resolution: resolved };
+}
+async function removeLiveAdapter(input) {
+  const accountId = input.accountId;
+  const adapter = input.bus.unregisterComm(input.commId, accountId);
+  for (const bridge of input.bridges) {
+    bridge.detachComm?.(input.commId, accountId);
+  }
+  if (adapter) {
+    try {
+      await adapter.stop();
+    } catch (error) {
+      console.error(
+        `agents-comm-bus: failed to stop ${input.commId}/${accountId} on scope release: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  const resource = adapter?.exclusiveResource?.();
+  if (resource) {
+    await input.leaseArbiter.release(input.commId, resource.resourceId).catch(() => {
+    });
+  }
 }
 async function addAdapterForRegistration(input) {
   try {
@@ -7876,7 +8072,9 @@ async function addAdapterForRegistration(input) {
       blobs: input.blobs,
       stateRoot: input.stateRoot,
       storage: input.storage,
-      leaseArbiter: input.leaseArbiter
+      leaseArbiter: input.leaseArbiter,
+      discoveryRoot: input.discoveryRoot,
+      sessionOwnerIsLive: input.sessionOwnerIsLive
     });
     if (!adapter) {
       if (resolution.status === "invalid") {
@@ -7997,7 +8195,9 @@ async function ensureRegistrationForAccount(registration, input) {
       blobs: input.blobs,
       stateRoot: input.stateRoot,
       storage: input.storage,
-      leaseArbiter: input.leaseArbiter
+      leaseArbiter: input.leaseArbiter,
+      discoveryRoot: input.discoveryRoot,
+      sessionOwnerIsLive: input.sessionOwnerIsLive
     });
     if (result.ok) {
       if (input.agentLeaseProperties) {
@@ -8413,6 +8613,96 @@ function startIdleReaper(options) {
   };
 }
 
+// ../core-daemon/runtime/scope-release-reconcile.ts
+var DEFAULT_SCOPE_RELEASE_GRACE_MS = 3e4;
+function scopeKey(agent, project, accountLabelScope) {
+  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
+}
+function isRegistrationScopeActive(registration, activeScopes) {
+  const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
+  const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;
+  for (const key of activeScopes) {
+    if (key === legacyKey) return true;
+    if (!key.startsWith(prefix)) continue;
+    const scopeStored = key.slice(prefix.length);
+    const scope = scopeStored.length > 0 ? scopeStored : null;
+    if (filterRegistrationsByScope([registration], scope).length > 0) return true;
+  }
+  return false;
+}
+function countLiveSessionsForScope(sessions, key, sessionOwnerIsLive) {
+  let count = 0;
+  for (const session of sessions) {
+    if (session.status !== "active") continue;
+    if (scopeKey(session.agent, session.project, session.account_label_scope) !== key) continue;
+    if (!sessionOwnerIsLive(session)) continue;
+    count += 1;
+  }
+  return count;
+}
+async function reconcileLazyAdapterScopes(input) {
+  const counts = {
+    scopes_zero_live: 0,
+    scopes_released: 0,
+    adapters_removed: 0,
+    active_scopes_pruned: 0
+  };
+  const now = (input.now ?? Date.now)();
+  const graceMs = input.graceMs ?? DEFAULT_SCOPE_RELEASE_GRACE_MS;
+  const activeSessions = await input.storage.listSessions({ status: "active" });
+  for (const key of [...input.activeScopes]) {
+    const liveCount = countLiveSessionsForScope(
+      activeSessions,
+      key,
+      input.sessionOwnerIsLive
+    );
+    if (liveCount > 0) {
+      input.state.zeroLiveSince.delete(key);
+      continue;
+    }
+    counts.scopes_zero_live += 1;
+    const firstZero = input.state.zeroLiveSince.get(key);
+    if (firstZero == null) {
+      input.state.zeroLiveSince.set(key, now);
+      continue;
+    }
+    if (now - firstZero < graceMs) continue;
+    const scopeSet = /* @__PURE__ */ new Set([key]);
+    const lazyRegs = [];
+    for (const factory of input.factories) {
+      const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
+      for (const reg of regs) {
+        if (reg.activation === "eager") continue;
+        if (!isRegistrationScopeActive(reg, scopeSet)) continue;
+        lazyRegs.push(reg);
+      }
+    }
+    let removedAny = false;
+    for (const reg of lazyRegs) {
+      const commId = reg.comm;
+      const accountId = reg.bot_user_id;
+      if (!input.bus.getComm(commId, accountId)) continue;
+      await input.removeAdapter({
+        bus: input.bus,
+        bridges: input.bridges,
+        leaseArbiter: input.leaseArbiter,
+        commId,
+        accountId
+      });
+      counts.adapters_removed += 1;
+      removedAny = true;
+    }
+    if (removedAny || lazyRegs.length === 0) {
+      counts.scopes_released += 1;
+      input.state.zeroLiveSince.delete(key);
+      if (input.activeScopes.delete(key)) {
+        counts.active_scopes_pruned += 1;
+      }
+    }
+  }
+  return counts;
+}
+
 // ../core-daemon/runtime/session-end-sweep.ts
 var DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1e3;
 function sessionEndObservation(session) {
@@ -8420,7 +8710,8 @@ function sessionEndObservation(session) {
     status: session.status,
     lease_holder_connection_id: session.lease_holder_connection_id,
     lease_owner_process_pid: session.lease_owner_process_pid,
-    lease_owner_process_registered_at: session.lease_owner_process_registered_at
+    lease_owner_process_registered_at: session.lease_owner_process_registered_at,
+    lease_owner_process_start_time: session.lease_owner_process_start_time
   };
 }
 function shouldSweepEndSession(session, options = {}) {
@@ -8469,6 +8760,16 @@ async function runSessionEndSweep(input) {
   log(
     `agents-comm-bus: session end sweep: ended=${counts.ended} kept_live=${counts.kept_live} kept_stale=${counts.kept_stale} kept_no_owner_leased=${counts.kept_no_owner_leased} cas_lost=${counts.cas_lost}`
   );
+  if (input.reconcile) {
+    counts.reconcile = await reconcileLazyAdapterScopes({
+      ...input.reconcile,
+      now: input.now,
+      graceMs: input.reconcile.graceMs
+    });
+    log(
+      `agents-comm-bus: scope reconcile: zero_live=${counts.reconcile.scopes_zero_live} released=${counts.reconcile.scopes_released} adapters_removed=${counts.reconcile.adapters_removed} active_scopes_pruned=${counts.reconcile.active_scopes_pruned}`
+    );
+  }
   return counts;
 }
 function startSessionEndSweep(options) {
@@ -8487,15 +8788,20 @@ function startSessionEndSweep(options) {
   const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
   let sweepInFlight = false;
   let interval = null;
+  let earlyReconcile = false;
+  const reconcileState = options.reconcileState ?? { zeroLiveSince: /* @__PURE__ */ new Map() };
   const tick = () => {
     if (sweepInFlight) return;
     sweepInFlight = true;
+    const graceMs = earlyReconcile ? 0 : void 0;
+    earlyReconcile = false;
     void runSessionEndSweep({
       storage: options.storage,
       now: options.now,
       isPidAlive: options.isPidAlive,
       recencyMs: options.recencyMs,
-      log: options.log
+      log: options.log,
+      reconcile: options.reconcile != null ? { ...options.reconcile, state: reconcileState, graceMs } : void 0
     }).catch((error) => {
       const log = options.log ?? console.error;
       log(
@@ -8516,6 +8822,10 @@ function startSessionEndSweep(options) {
       clearTimeoutFn(initial);
       if (interval != null) clearIntervalFn(interval);
       interval = null;
+    },
+    requestEarlyReconcile() {
+      earlyReconcile = true;
+      tick();
     }
   };
 }
@@ -8673,6 +8983,8 @@ async function runDaemon(options) {
   const blobs = new ContentAddressedBlobStore(paths.root);
   const pendingInbound = [];
   const sessionOwnerIsLive = createSessionOwnerLiveness();
+  const scopeReconcileState = { zeroLiveSince: /* @__PURE__ */ new Map() };
+  let requestScopeReconcile;
   const daemonBin = env.AGENTS_COMM_BUS_BIN ?? process.argv[1] ?? null;
   const { authorityRank, checkoutRoot } = inferAuthorityRank({
     env,
@@ -8754,6 +9066,8 @@ async function runDaemon(options) {
     leaseArbiter,
     inFlight: inFlightAdapters,
     audit,
+    discoveryRoot: discoveryPaths.root,
+    sessionOwnerIsLive,
     ...options2
   });
   let eagerRetry;
@@ -8811,7 +9125,8 @@ async function runDaemon(options) {
         ensureCommsForSession: ensureCommsForSessionFn,
         daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive,
-        readHeldCommLease: (commId, resourceId) => leaseArbiter.readHeldCommLease(commId, resourceId)
+        readHeldCommLease: (commId, resourceId) => leaseArbiter.readHeldCommLease(commId, resourceId),
+        requestScopeReconcile: () => requestScopeReconcile?.()
       })
     )
   );
@@ -8892,6 +9207,8 @@ async function runDaemon(options) {
     stateRoot: paths.root,
     leaseArbiter,
     activeScopes,
+    discoveryRoot: discoveryPaths.root,
+    sessionOwnerIsLive,
     audit,
     ensureRegistrationContext: buildEnsureRegistrationContext({ scheduleEagerRetry }),
     options: reloadOptions
@@ -8990,8 +9307,21 @@ async function runDaemon(options) {
   });
   sessionEndSweepHandle = startSessionEndSweep({
     storage,
-    log: (message) => console.error(message)
+    log: (message) => console.error(message),
+    reconcile: {
+      storage,
+      bus,
+      bridges,
+      factories: commAdapterFactories,
+      activeScopes,
+      leaseArbiter,
+      sessionOwnerIsLive,
+      removeAdapter: removeLiveAdapter,
+      state: scopeReconcileState
+    },
+    reconcileState: scopeReconcileState
   });
+  requestScopeReconcile = () => sessionEndSweepHandle?.requestEarlyReconcile();
   void runBootScopeRestore({
     stateRoot: paths.root,
     discoveryRoot: discoveryPaths.root,
@@ -9104,7 +9434,7 @@ async function reloadAdapters(input) {
     const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
     for (const reg of regs) {
       const key = adapterMapKey(factory.commId, reg.bot_user_id);
-      const scopeActive = input.activeScopes != null && isRegistrationScopeActive(reg, input.activeScopes);
+      const scopeActive = input.activeScopes != null && isRegistrationScopeActive2(reg, input.activeScopes);
       const eagerStanding = reg.activation === "eager";
       if (!current.has(key) && !scopeActive && !eagerStanding) continue;
       if (!desired.has(key)) desired.set(key, { factory, registration: reg });
@@ -9121,7 +9451,9 @@ async function reloadAdapters(input) {
       blobs: input.blobs,
       stateRoot: input.stateRoot,
       storage: input.storage,
-      leaseArbiter: input.leaseArbiter
+      leaseArbiter: input.leaseArbiter,
+      discoveryRoot: input.discoveryRoot,
+      sessionOwnerIsLive: input.sessionOwnerIsLive
     });
     if (result.ok) {
       added.push({
@@ -9161,19 +9493,13 @@ async function reloadAdapters(input) {
   }
   for (const [key, entry] of current) {
     if (desired.has(key)) continue;
-    const adapter = input.bus.unregisterComm(entry.commId, entry.accountId);
-    for (const bridge of input.bridges) {
-      bridge.detachComm?.(entry.commId, entry.accountId);
-    }
-    if (adapter) {
-      try {
-        await adapter.stop();
-      } catch (error) {
-        console.error(
-          `agents-comm-bus: failed to stop ${entry.commId}/${entry.accountId} on reload: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-    }
+    await removeLiveAdapter({
+      bus: input.bus,
+      bridges: input.bridges,
+      leaseArbiter: input.leaseArbiter,
+      commId: entry.commId,
+      accountId: entry.accountId
+    });
     removed.push({ comm: entry.commId, account_id: entry.accountId });
   }
   const forceCredentialRefresh = new Set(
@@ -9191,7 +9517,9 @@ async function reloadAdapters(input) {
         blobs: input.blobs,
         stateRoot: input.stateRoot,
         storage: input.storage,
-        leaseArbiter: input.leaseArbiter
+        leaseArbiter: input.leaseArbiter,
+        discoveryRoot: input.discoveryRoot,
+        sessionOwnerIsLive: input.sessionOwnerIsLive
       });
       if (!adapter) {
         if (resolution.status === "invalid") {
@@ -9340,10 +9668,7 @@ function sameStringSet(a, b) {
   }
   return true;
 }
-function scopeKey(agent, project, accountLabelScope) {
-  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
-}
-function isRegistrationScopeActive(registration, activeScopes) {
+function isRegistrationScopeActive2(registration, activeScopes) {
   const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
   const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;
   for (const key of activeScopes) {
@@ -9499,9 +9824,15 @@ import crypto3 from "node:crypto";
 
 // ../core-daemon/runtime/agent-bridge.ts
 function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
+  const pid = ownerFromParams?.process_pid ?? null;
+  let startTime = ownerFromParams?.process_start_time ?? null;
+  if (pid != null && startTime == null) {
+    startTime = readProcessStartEpochMs(pid);
+  }
   return {
-    process_pid: ownerFromParams?.process_pid ?? null,
+    process_pid: pid,
     process_label: ownerFromParams?.process_label,
+    process_start_time: pid != null ? startTime : null,
     daemon: {
       discovery_root: daemonOwner.discoveryRoot,
       checkout_root: daemonOwner.checkoutRoot,
@@ -10080,6 +10411,7 @@ var ClaudeBridge = class {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
       lease_owner_daemon_discovery_root: null,
       lease_owner_daemon_checkout_root: null,
       lease_owner_daemon_state_root: null,
@@ -10582,9 +10914,11 @@ Reply with <b>number</b> to select`;
 function sessionLeaseOwnerFromParams(params) {
   const pid = numberParam(params.owner_process_pid);
   if (!pid) return void 0;
+  const startTime = numberParam(params.owner_process_start_time);
   return {
     process_pid: pid,
-    process_label: typeof params.owner_process_label === "string" ? params.owner_process_label : "claude"
+    process_label: typeof params.owner_process_label === "string" ? params.owner_process_label : "claude",
+    process_start_time: startTime
   };
 }
 function numberParam(value) {
@@ -11160,7 +11494,7 @@ function recordOrEmpty2(value) {
 }
 
 // ../core-daemon/bridges/codex/app-server-lifecycle.ts
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { readFile as readFile6, writeFile as writeFile3 } from "node:fs/promises";
 import os5 from "node:os";
 import path5 from "node:path";
@@ -11227,7 +11561,7 @@ var defaultProcessManager = {
         "if ($null -ne $p) { [Console]::Out.Write($p.CommandLine) }"
       ].join("; ");
       try {
-        const output = execFileSync(
+        const output = execFileSync2(
           "powershell.exe",
           ["-NoProfile", "-Command", script],
           { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -11238,7 +11572,7 @@ var defaultProcessManager = {
       }
     }
     try {
-      const output = execFileSync(
+      const output = execFileSync2(
         "ps",
         ["-p", String(pid), "-o", "command="],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -11262,7 +11596,7 @@ function Get-Children([int]$ParentPid) {
 Get-Children -ParentPid ${pid}
 `;
       try {
-        const output = execFileSync(
+        const output = execFileSync2(
           "powershell.exe",
           ["-NoProfile", "-Command", script],
           { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -11273,7 +11607,7 @@ Get-Children -ParentPid ${pid}
       }
     }
     try {
-      const output = execFileSync(
+      const output = execFileSync2(
         "pgrep",
         ["-P", String(pid)],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -11475,7 +11809,8 @@ var CodexBridge = class {
         status: "active",
         lease_holder_connection_id: null,
         lease_owner_process_pid: null,
-        lease_owner_process_registered_at: null
+        lease_owner_process_registered_at: null,
+        lease_owner_process_start_time: null
       },
       sessions,
       this.sessionOwnerIsLive
@@ -11512,6 +11847,7 @@ var CodexBridge = class {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
       lease_owner_daemon_discovery_root: null,
       lease_owner_daemon_checkout_root: null,
       lease_owner_daemon_state_root: null,
@@ -12061,6 +12397,7 @@ var CodexBridge = class {
         sessionEndObservation(latest),
         Date.now()
       );
+      this.options.requestScopeReconcile?.();
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to cleanup Codex app-server for ${session}: ${error instanceof Error ? error.message : String(error)}`
@@ -12316,7 +12653,8 @@ function sessionLeaseOwnerFromParams2(params, fallbackLabel) {
   if (!pid) return void 0;
   return {
     process_pid: pid,
-    process_label: typeof params.owner_process_label === "string" ? params.owner_process_label : fallbackLabel
+    process_label: typeof params.owner_process_label === "string" ? params.owner_process_label : fallbackLabel,
+    process_start_time: numberParam2(params.owner_process_start_time)
   };
 }
 function numberParam2(value) {
@@ -12355,7 +12693,8 @@ var CodexBridgeFactory = class {
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
       sessionOwnerIsLive: context.sessionOwnerIsLive,
-      readHeldCommLease: context.readHeldCommLease
+      readHeldCommLease: context.readHeldCommLease,
+      requestScopeReconcile: context.requestScopeReconcile
     });
   }
 };
@@ -12455,6 +12794,7 @@ var PiBridge = class {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
       lease_owner_daemon_discovery_root: null,
       lease_owner_daemon_checkout_root: null,
       lease_owner_daemon_state_root: null,
@@ -12540,6 +12880,7 @@ var PiBridge = class {
       sessionEndObservation(sess),
       Date.now()
     );
+    this.options.requestScopeReconcile?.();
     return { ok: true };
   }
 };
@@ -12556,10 +12897,12 @@ function sessionLeaseOwnerFromParams3(params) {
   const host = params.host && typeof params.host === "object" && !Array.isArray(params.host) ? params.host : null;
   const pid = numberParam3(host?.pid ?? params.owner_process_pid);
   if (!pid) return void 0;
+  const startTime = numberParam3(host?.start_time ?? params.owner_process_start_time);
   const label = typeof host?.label === "string" ? host.label : typeof params.owner_process_label === "string" ? params.owner_process_label : "pi";
   return {
     process_pid: pid,
-    process_label: label
+    process_label: label,
+    process_start_time: startTime
   };
 }
 function numberParam3(value) {
@@ -12578,7 +12921,8 @@ var PiBridgeFactory = class {
       pendingInbound: context.pendingInbound,
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
-      sessionOwnerIsLive: context.sessionOwnerIsLive
+      sessionOwnerIsLive: context.sessionOwnerIsLive,
+      requestScopeReconcile: context.requestScopeReconcile
     });
   }
 };

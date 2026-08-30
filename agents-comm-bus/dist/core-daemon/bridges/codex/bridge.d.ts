@@ -30,6 +30,7 @@ export interface CodexBridgeOptions {
     sessionOwnerIsLive?: SessionOwnerLiveness;
     /** AGE-100: on-disk comm-lock lookup for inbound wake target resolution. */
     readHeldCommLease?: ReadHeldCommLease;
+    requestScopeReconcile?: () => void;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;

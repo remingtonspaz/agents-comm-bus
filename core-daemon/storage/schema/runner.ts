@@ -171,6 +171,18 @@ export const registrationActivationMigration: Migration = {
   },
 };
 
+export const sessionOwnerProcessStartTimeMigration: Migration = {
+  version: 15,
+  description: "AGE-101: process start epoch for pid+start-time owner liveness",
+  async up(ctx) {
+    const sql = await readFile(
+      join(schemaDir, "015_session_owner_process_start_time.sql"),
+      "utf8",
+    );
+    await ctx.exec(sql);
+  },
+};
+
 export async function runStorageMigrations(db: SqliteLike): Promise<void> {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -187,5 +199,6 @@ export async function runStorageMigrations(db: SqliteLike): Promise<void> {
     sessionLabelScopeMigration,
     curlInboundIdempotencyMigration,
     registrationActivationMigration,
+    sessionOwnerProcessStartTimeMigration,
   ]);
 }

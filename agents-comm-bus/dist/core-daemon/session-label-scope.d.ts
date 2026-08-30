@@ -12,7 +12,7 @@ export declare function serializeAccountLabelScope(scope: AccountLabelScopeMap |
 export declare function parseAccountLabelScope(stored: string | null | undefined): AccountLabelScopeMap | null;
 export declare function accountLabelScopeFromParams(params: Record<string, unknown>): string | null;
 export declare function filterRegistrationsByScope(registrations: readonly AccountRegistration[], scopeStored: string | null | undefined): AccountRegistration[];
-export type SessionScopeRecord = Pick<Session, "session_id" | "project" | "agent" | "account_label_scope" | "status" | "lease_holder_connection_id" | "lease_owner_process_pid" | "lease_owner_process_registered_at">;
+export type SessionScopeRecord = Pick<Session, "session_id" | "project" | "agent" | "account_label_scope" | "status" | "lease_holder_connection_id" | "lease_owner_process_pid" | "lease_owner_process_registered_at" | "lease_owner_process_start_time">;
 /**
  * Resolve the registrations a concrete session may consume.
  *

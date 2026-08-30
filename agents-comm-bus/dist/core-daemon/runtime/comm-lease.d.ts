@@ -76,7 +76,7 @@ export type AcquireResult = {
     reason: AcquireDenyReason;
     holder: LeaseRecord;
 };
-export type AcquireDenyReason = "held-by-higher-rank" | "held-by-same-rank-fresh" | "guard-contended";
+export type AcquireDenyReason = "held-by-higher-rank" | "held-by-same-rank-fresh" | "not-eligible-for-scope" | "guard-contended";
 export type RenewResult = {
     ok: true;
     record: LeaseRecord;
@@ -130,6 +130,8 @@ export interface RankInference {
  */
 export declare function inferAuthorityRank(input: RankInferenceInput): RankInference;
 export interface DecisionInput {
+    commId: string;
+    resourceId: string;
     self: SelfIdentity;
     selfLastIpcServedAt: number;
     existing: LeaseRecord | null;
@@ -137,6 +139,8 @@ export interface DecisionInput {
     isPidAlive: (pid: number) => boolean;
     stalenessMs: number;
     ipcRecencyMarginMs: number;
+    /** AGE-101: injected discovery-root/project eligibility; default true. */
+    eligible?: boolean;
 }
 export type Decision = {
     take: true;
@@ -246,7 +250,9 @@ export declare class CommLeaseArbiter {
      * the existing record under a guard lock, applies {@link decideContention},
      * and writes the self record on a take. Returns a discriminated result.
      */
-    tryAcquire(commId: string, resourceId: string): Promise<AcquireResult>;
+    tryAcquire(commId: string, resourceId: string, acquireOptions?: {
+        eligible?: boolean;
+    }): Promise<AcquireResult>;
     /**
      * Re-write `renewedAt` + `lastIpcServedAt` — but ONLY if the on-disk record's
      * pid is still self. If a higher/equal-rank daemon reclaimed the lease in the
@@ -283,6 +289,8 @@ export interface WrapWithLeaseOptions {
     renewIntervalMs?: number;
     /** Slow re-acquire poll interval while denied (ms). */
     reacquireIntervalMs?: number;
+    /** AGE-101: live eligibility verdict before each acquire/re-acquire attempt. */
+    leaseEligible?: () => boolean | Promise<boolean>;
     /** Injected timer factory (tests). Defaults to setInterval/clearInterval. */
     setIntervalFn?: (fn: () => void, ms: number) => unknown;
     clearIntervalFn?: (handle: unknown) => void;

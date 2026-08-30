@@ -6,6 +6,7 @@ import type { AgentBridge } from "./agent-bridge.js";
 import type { EnsureRegistrationResult } from "./agent-bridge.js";
 import type { CommAdapterFactory } from "./comm-factory.js";
 import type { CommLeaseArbiter, AgentLeaseProperties } from "./comm-lease.js";
+import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
 export type EnsureRegistrationRetryClass = "permanent" | "transient";
 export type { EnsureRegistrationResult } from "./agent-bridge.js";
 export interface EnsureRegistrationContext {
@@ -22,6 +23,8 @@ export interface EnsureRegistrationContext {
     audit?: JsonlAuditStore;
     agent?: AgentId;
     agentLeaseProperties?: AgentLeaseProperties;
+    discoveryRoot?: string;
+    sessionOwnerIsLive?: SessionOwnerLiveness;
     /** AGE-97: schedule bounded retries for eager registrations on transient failure. */
     scheduleEagerRetry?: (registration_id: string) => void;
 }

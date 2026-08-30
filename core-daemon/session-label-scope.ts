@@ -121,6 +121,7 @@ export type SessionScopeRecord = Pick<
   | "lease_holder_connection_id"
   | "lease_owner_process_pid"
   | "lease_owner_process_registered_at"
+  | "lease_owner_process_start_time"
 >;
 
 function liveSessionScopeCandidates(

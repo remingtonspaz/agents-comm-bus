@@ -5,6 +5,7 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import type { AgentBridge, AgentBridgeFactory, EnsureCommsForSession, EnsureRegistrationResult } from "./runtime/agent-bridge.js";
+import type { SessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import { type EnsureRegistrationContext } from "./runtime/ensure-registration.js";
 import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
@@ -161,6 +162,8 @@ export declare function reloadAdapters(input: {
      * immediately, while rows for inactive projects stay lazy.
      */
     activeScopes?: ReadonlySet<string>;
+    discoveryRoot?: string;
+    sessionOwnerIsLive?: SessionOwnerLiveness;
     audit?: JsonlAuditStore;
     /** AGE-97: exact-registration ensure for activation flag updates. */
     ensureRegistrationContext?: EnsureRegistrationContext;

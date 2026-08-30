@@ -1,11 +1,13 @@
 import type { Session } from "agents-comm-bus-core";
 /** Match boot-scope restore's existing 24-hour owner recency window. */
 export declare const DEFAULT_SESSION_OWNER_RECENCY_MS: number;
-export type SessionOwnerRecord = Pick<Session, "lease_holder_connection_id" | "lease_owner_process_pid" | "lease_owner_process_registered_at">;
+export type SessionOwnerRecord = Pick<Session, "lease_holder_connection_id" | "lease_owner_process_pid" | "lease_owner_process_registered_at" | "lease_owner_process_start_time">;
 export type SessionOwnerProcessState = "live" | "no_owner" | "stale" | "dead";
 export interface SessionOwnerLivenessOptions {
     now?: () => number;
     isPidAlive?: (pid: number) => boolean;
+    /** Injectable process-start probe (tests); defaults to readProcessStartEpochMs. */
+    readProcessStartEpochMs?: (pid: number) => number | null;
     recencyMs?: number;
 }
 export type SessionOwnerLiveness = (session: SessionOwnerRecord) => boolean;

@@ -104,6 +104,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/015_session_owner_process_start_time.sql",
+      "artifact": "plugins/codex/telegram/015_session_owner_process_start_time.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/telegram/package.json",
       "type": "package-json"

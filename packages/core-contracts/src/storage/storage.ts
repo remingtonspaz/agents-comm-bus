@@ -47,6 +47,8 @@ export interface SessionDaemonOwner {
 export interface SessionLeaseOwner {
   process_pid: number | null;
   process_label?: string | null;
+  /** Process creation epoch (ms); stamped at lease acquire for AGE-101 liveness. */
+  process_start_time?: number | null;
   daemon?: SessionDaemonOwner;
 }
 
@@ -56,6 +58,7 @@ export interface SessionEndObservation {
   lease_holder_connection_id: string | null;
   lease_owner_process_pid: number | null;
   lease_owner_process_registered_at: number | null;
+  lease_owner_process_start_time: number | null;
 }
 
 export interface AccountTokenUpdateInput {

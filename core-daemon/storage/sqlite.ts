@@ -36,6 +36,7 @@ import type {
   SessionId,
 } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../project-path.js";
+import { readProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 import { runStorageMigrations, type SqliteLike } from "./schema/runner.js";
 
 const require = createRequire(import.meta.url);
@@ -766,12 +767,12 @@ export class SqliteStorage implements Storage {
           schema_version, session_id, agent, project, created_at,
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
           lease_owner_process_pid, lease_owner_process_label,
-          lease_owner_process_registered_at,
+          lease_owner_process_registered_at, lease_owner_process_start_time,
           lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
           lease_owner_daemon_state_root, lease_owner_daemon_bin,
           lease_owner_daemon_authority_rank,
           most_recent_inbound_conversation_id, account_label_scope, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -790,6 +791,7 @@ export class SqliteStorage implements Storage {
         rec.lease_owner_process_pid,
         rec.lease_owner_process_label,
         rec.lease_owner_process_registered_at,
+        rec.lease_owner_process_start_time ?? null,
         rec.lease_owner_daemon_discovery_root,
         rec.lease_owner_daemon_checkout_root,
         rec.lease_owner_daemon_state_root,
@@ -807,6 +809,11 @@ export class SqliteStorage implements Storage {
     at: number,
     owner?: SessionLeaseOwner,
   ): Promise<boolean> {
+    const ownerPid = owner?.process_pid ?? null;
+    let ownerStartTime = owner?.process_start_time ?? null;
+    if (ownerPid != null && ownerStartTime == null) {
+      ownerStartTime = readProcessStartEpochMs(ownerPid);
+    }
     try {
       const result = this.db
         .prepare(`
@@ -823,6 +830,7 @@ export class SqliteStorage implements Storage {
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
               lease_owner_process_registered_at = ?,
+              lease_owner_process_start_time = ?,
               lease_owner_daemon_discovery_root = ?,
               lease_owner_daemon_checkout_root = ?,
               lease_owner_daemon_state_root = ?,
@@ -834,9 +842,10 @@ export class SqliteStorage implements Storage {
         .run(
           connection_id,
           at,
-          owner?.process_pid ?? null,
+          ownerPid,
           owner?.process_label ?? null,
-          owner?.process_pid ? at : null,
+          ownerPid ? at : null,
+          ownerPid ? ownerStartTime : null,
           owner?.daemon?.discovery_root ?? null,
           owner?.daemon?.checkout_root ?? null,
           owner?.daemon?.state_root ?? null,
@@ -865,6 +874,7 @@ export class SqliteStorage implements Storage {
             lease_owner_process_pid = NULL,
             lease_owner_process_label = NULL,
             lease_owner_process_registered_at = NULL,
+            lease_owner_process_start_time = NULL,
             lease_owner_daemon_discovery_root = NULL,
             lease_owner_daemon_checkout_root = NULL,
             lease_owner_daemon_state_root = NULL,
@@ -915,6 +925,10 @@ export class SqliteStorage implements Storage {
             (lease_owner_process_registered_at IS NULL AND ? IS NULL)
             OR lease_owner_process_registered_at = ?
           )
+          AND (
+            (lease_owner_process_start_time IS NULL AND ? IS NULL)
+            OR lease_owner_process_start_time = ?
+          )
       `)
       .run(
         at,
@@ -926,6 +940,8 @@ export class SqliteStorage implements Storage {
         observed.lease_owner_process_pid,
         observed.lease_owner_process_registered_at,
         observed.lease_owner_process_registered_at,
+        observed.lease_owner_process_start_time,
+        observed.lease_owner_process_start_time,
       ) as { changes?: number };
     return Number(result.changes ?? 0) > 0;
   }
@@ -1424,6 +1440,8 @@ export class SqliteStorage implements Storage {
       lease_owner_process_label: r.lease_owner_process_label as string | null,
       lease_owner_process_registered_at:
         r.lease_owner_process_registered_at as number | null,
+      lease_owner_process_start_time:
+        r.lease_owner_process_start_time as number | null,
       lease_owner_daemon_discovery_root:
         r.lease_owner_daemon_discovery_root as string | null,
       lease_owner_daemon_checkout_root:

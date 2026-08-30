@@ -47,6 +47,7 @@ export interface PiBridgeOptions {
   daemonOwner?: DaemonSelfIdentity;
   /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
   sessionOwnerIsLive?: SessionOwnerLiveness;
+  requestScopeReconcile?: () => void;
 }
 
 export interface RegisterPiSessionResult {
@@ -174,6 +175,7 @@ export class PiBridge implements AgentBridge {
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
       lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
       lease_owner_daemon_discovery_root: null,
       lease_owner_daemon_checkout_root: null,
       lease_owner_daemon_state_root: null,
@@ -278,6 +280,7 @@ export class PiBridge implements AgentBridge {
       sessionEndObservation(sess),
       Date.now(),
     );
+    this.options.requestScopeReconcile?.();
     return { ok: true };
   }
 }
@@ -296,6 +299,7 @@ function requiredString(paramsValue: unknown, name: string): string {
 function sessionLeaseOwnerFromParams(params: Record<string, unknown>): {
   process_pid: number | null;
   process_label?: string | null;
+  process_start_time?: number | null;
 } | undefined {
   const host =
     params.host && typeof params.host === "object" && !Array.isArray(params.host)
@@ -303,6 +307,7 @@ function sessionLeaseOwnerFromParams(params: Record<string, unknown>): {
       : null;
   const pid = numberParam(host?.pid ?? params.owner_process_pid);
   if (!pid) return undefined;
+  const startTime = numberParam(host?.start_time ?? params.owner_process_start_time);
   const label =
     typeof host?.label === "string"
       ? host.label
@@ -312,6 +317,7 @@ function sessionLeaseOwnerFromParams(params: Record<string, unknown>): {
   return {
     process_pid: pid,
     process_label: label,
+    process_start_time: startTime,
   };
 }
 
@@ -333,6 +339,7 @@ export class PiBridgeFactory implements AgentBridgeFactory {
       ensureCommsForSession: context.ensureCommsForSession,
       daemonOwner: context.daemonOwner,
       sessionOwnerIsLive: context.sessionOwnerIsLive,
+      requestScopeReconcile: context.requestScopeReconcile,
     });
   }
 }

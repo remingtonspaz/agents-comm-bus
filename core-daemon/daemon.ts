@@ -49,6 +49,7 @@ import {
   appendCredentialResolutionFailedAudit,
   createAdapterFromRegistration,
   logInvalidCredentialResolution,
+  removeLiveAdapter,
   unresolvedCredentialsReason,
 } from "./runtime/comm-adapter-lifecycle.js";
 import {
@@ -68,6 +69,8 @@ import type { PendingInboundEntry } from "./runtime/pending-inbound.js";
 import { dispatchInboundToBridges } from "./runtime/dispatch-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
 import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
+import type { ScopeReleaseReconcileState } from "./runtime/scope-release-reconcile.js";
+import { scopeKey } from "./runtime/scope-release-reconcile.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import type { RetirementBlockerSnapshot } from "./runtime/agent-bridge.js";
 import {
@@ -167,6 +170,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   const blobs = new ContentAddressedBlobStore(paths.root);
   const pendingInbound: PendingInboundEntry[] = [];
   const sessionOwnerIsLive = createSessionOwnerLiveness();
+  const scopeReconcileState: ScopeReleaseReconcileState = { zeroLiveSince: new Map() };
+  let requestScopeReconcile: (() => void) | undefined;
 
   // AGE-35: cross-checkout single-consumer ownership lease. A stray daemon from
   // another git checkout/worktree must not be able to poll the same Telegram bot
@@ -278,7 +283,10 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     }
   }
   const buildEnsureRegistrationContext = (
-    options?: Pick<EnsureRegistrationContext, "agent" | "agentLeaseProperties" | "scheduleEagerRetry">,
+    options?: Pick<
+      EnsureRegistrationContext,
+      "agent" | "agentLeaseProperties" | "scheduleEagerRetry"
+    >,
   ): EnsureRegistrationContext => ({
     factories: commAdapterFactories,
     rescanFactories: rescanFactoriesForComm,
@@ -291,6 +299,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     leaseArbiter,
     inFlight: inFlightAdapters,
     audit,
+    discoveryRoot: discoveryPaths.root,
+    sessionOwnerIsLive,
     ...options,
   });
 
@@ -357,6 +367,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         sessionOwnerIsLive,
         readHeldCommLease: (commId: string, resourceId: string) =>
           leaseArbiter.readHeldCommLease(commId, resourceId),
+        requestScopeReconcile: () => requestScopeReconcile?.(),
       }),
     ),
   );
@@ -451,6 +462,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       stateRoot: paths.root,
       leaseArbiter,
       activeScopes,
+      discoveryRoot: discoveryPaths.root,
+      sessionOwnerIsLive,
       audit,
       ensureRegistrationContext: buildEnsureRegistrationContext({ scheduleEagerRetry }),
       options: reloadOptions,
@@ -561,7 +574,20 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   sessionEndSweepHandle = startSessionEndSweep({
     storage,
     log: (message) => console.error(message),
+    reconcile: {
+      storage,
+      bus,
+      bridges,
+      factories: commAdapterFactories,
+      activeScopes,
+      leaseArbiter,
+      sessionOwnerIsLive,
+      removeAdapter: removeLiveAdapter,
+      state: scopeReconcileState,
+    },
+    reconcileState: scopeReconcileState,
   });
+  requestScopeReconcile = () => sessionEndSweepHandle?.requestEarlyReconcile();
 
   // AGE-55: async boot restore — never block daemon readiness on comm bring-up.
   void runBootScopeRestore({
@@ -753,6 +779,8 @@ export async function reloadAdapters(input: {
    * immediately, while rows for inactive projects stay lazy.
    */
   activeScopes?: ReadonlySet<string>;
+  discoveryRoot?: string;
+  sessionOwnerIsLive?: SessionOwnerLiveness;
   audit?: JsonlAuditStore;
   /** AGE-97: exact-registration ensure for activation flag updates. */
   ensureRegistrationContext?: EnsureRegistrationContext;
@@ -812,6 +840,8 @@ export async function reloadAdapters(input: {
       stateRoot: input.stateRoot,
       storage: input.storage,
       leaseArbiter: input.leaseArbiter,
+      discoveryRoot: input.discoveryRoot,
+      sessionOwnerIsLive: input.sessionOwnerIsLive,
     });
     if (result.ok) {
       added.push({
@@ -853,20 +883,13 @@ export async function reloadAdapters(input: {
 
   for (const [key, entry] of current) {
     if (desired.has(key)) continue;
-    const adapter = input.bus.unregisterComm(entry.commId, entry.accountId);
-    for (const bridge of input.bridges) {
-      bridge.detachComm?.(entry.commId, entry.accountId);
-    }
-    if (adapter) {
-      try {
-        await adapter.stop();
-      } catch (error) {
-        console.error(
-          `agents-comm-bus: failed to stop ${entry.commId}/${entry.accountId} on reload: ` +
-            `${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
+    await removeLiveAdapter({
+      bus: input.bus,
+      bridges: input.bridges,
+      leaseArbiter: input.leaseArbiter,
+      commId: entry.commId,
+      accountId: entry.accountId,
+    });
     removed.push({ comm: entry.commId, account_id: entry.accountId });
   }
 
@@ -895,6 +918,8 @@ export async function reloadAdapters(input: {
         stateRoot: input.stateRoot,
         storage: input.storage,
         leaseArbiter: input.leaseArbiter,
+        discoveryRoot: input.discoveryRoot,
+        sessionOwnerIsLive: input.sessionOwnerIsLive,
       });
       if (!adapter) {
         if (resolution.status === "invalid") {
@@ -1120,15 +1145,7 @@ function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
   return true;
 }
 
-// AGE-38/AGE-72: key for the active-(project, agent[, label-scope]) set used to
-// gate reload hot-adds.
-function scopeKey(
-  agent: AgentId | string,
-  project: string,
-  accountLabelScope?: string | null,
-): string {
-  return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
-}
+// AGE-38/AGE-72: scopeKey imported from scope-release-reconcile for active-scope keys.
 
 function isRegistrationScopeActive(
   registration: AccountRegistration,

@@ -13,7 +13,7 @@ import type { AgentBridge } from "./agent-bridge.js";
 import type { EnsureRegistrationResult } from "./agent-bridge.js";
 import type { CommAdapterFactory } from "./comm-factory.js";
 import type { CommLeaseArbiter, AgentLeaseProperties } from "./comm-lease.js";
-import type { CredentialResolution } from "./credential-resolution.js";
+import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
 import {
   addAdapterForRegistration,
   adapterMapKey,
@@ -40,6 +40,8 @@ export interface EnsureRegistrationContext {
   audit?: JsonlAuditStore;
   agent?: AgentId;
   agentLeaseProperties?: AgentLeaseProperties;
+  discoveryRoot?: string;
+  sessionOwnerIsLive?: SessionOwnerLiveness;
   /** AGE-97: schedule bounded retries for eager registrations on transient failure. */
   scheduleEagerRetry?: (registration_id: string) => void;
 }
@@ -137,6 +139,8 @@ export async function ensureRegistrationForAccount(
       stateRoot: input.stateRoot,
       storage: input.storage,
       leaseArbiter: input.leaseArbiter,
+      discoveryRoot: input.discoveryRoot,
+      sessionOwnerIsLive: input.sessionOwnerIsLive,
     });
     if (result.ok) {
       if (input.agentLeaseProperties) {

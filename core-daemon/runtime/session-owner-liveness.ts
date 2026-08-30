@@ -1,5 +1,7 @@
 import type { Session } from "agents-comm-bus-core";
 
+import { readProcessStartEpochMs } from "./process-start-epoch.js";
+
 /** Match boot-scope restore's existing 24-hour owner recency window. */
 export const DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1000;
 
@@ -8,6 +10,7 @@ export type SessionOwnerRecord = Pick<
   | "lease_holder_connection_id"
   | "lease_owner_process_pid"
   | "lease_owner_process_registered_at"
+  | "lease_owner_process_start_time"
 >;
 
 export type SessionOwnerProcessState =
@@ -19,6 +22,8 @@ export type SessionOwnerProcessState =
 export interface SessionOwnerLivenessOptions {
   now?: () => number;
   isPidAlive?: (pid: number) => boolean;
+  /** Injectable process-start probe (tests); defaults to readProcessStartEpochMs. */
+  readProcessStartEpochMs?: (pid: number) => number | null;
   recencyMs?: number;
 }
 
@@ -44,12 +49,17 @@ export function classifySessionOwnerProcess(
 ): SessionOwnerProcessState {
   const pid = session.lease_owner_process_pid;
   const registeredAt = session.lease_owner_process_registered_at;
+  const startTime = session.lease_owner_process_start_time;
   if (pid == null || registeredAt == null) return "no_owner";
 
   const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
-  // TODO(AGE-55): process-start-time verification would close PID reuse inside
-  // the recency window; Node has no clean cross-platform built-in for it.
   if (!isPidAlive(pid)) return "dead";
+
+  if (startTime != null) {
+    const readStart = options.readProcessStartEpochMs ?? readProcessStartEpochMs;
+    const currentStart = readStart(pid);
+    if (currentStart != null && currentStart !== startTime) return "dead";
+  }
 
   const now = options.now ?? Date.now;
   const recencyMs =

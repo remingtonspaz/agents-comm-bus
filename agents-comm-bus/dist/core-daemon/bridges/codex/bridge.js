@@ -177,6 +177,7 @@ export class CodexBridge {
             lease_holder_connection_id: null,
             lease_owner_process_pid: null,
             lease_owner_process_registered_at: null,
+            lease_owner_process_start_time: null,
         }, sessions, this.sessionOwnerIsLive);
         const hasAppServerUrl = typeof params.app_server_url === "string" &&
             params.app_server_url.trim().length > 0;
@@ -220,6 +221,7 @@ export class CodexBridge {
             lease_owner_process_pid: null,
             lease_owner_process_label: null,
             lease_owner_process_registered_at: null,
+            lease_owner_process_start_time: null,
             lease_owner_daemon_discovery_root: null,
             lease_owner_daemon_checkout_root: null,
             lease_owner_daemon_state_root: null,
@@ -743,6 +745,7 @@ export class CodexBridge {
                 return;
             }
             await this.options.storage.endSessionIfUnchanged(session, sessionEndObservation(latest), Date.now());
+            this.options.requestScopeReconcile?.();
         }
         catch (error) {
             console.error(`agents-comm-bus: failed to cleanup Codex app-server for ${session}: ` +
@@ -1014,6 +1017,7 @@ function sessionLeaseOwnerFromParams(params, fallbackLabel) {
         process_label: typeof params.owner_process_label === "string"
             ? params.owner_process_label
             : fallbackLabel,
+        process_start_time: numberParam(params.owner_process_start_time),
     };
 }
 function numberParam(value) {
@@ -1055,6 +1059,7 @@ export class CodexBridgeFactory {
             daemonOwner: context.daemonOwner,
             sessionOwnerIsLive: context.sessionOwnerIsLive,
             readHeldCommLease: context.readHeldCommLease,
+            requestScopeReconcile: context.requestScopeReconcile,
         });
     }
 }

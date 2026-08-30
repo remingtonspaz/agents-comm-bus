@@ -1,3 +1,4 @@
+import { computeCommLeaseEligibility } from "./comm-lease-eligibility.js";
 import { wrapWithLease } from "./comm-lease.js";
 export function adapterMapKey(commId, accountId) {
     return `${commId}:${accountId}`;
@@ -48,9 +49,50 @@ export async function createAdapterFromRegistration(input) {
         storage: input.storage,
     });
     if (adapter.exclusiveResource?.() != null) {
-        return { adapter: wrapWithLease(adapter, input.leaseArbiter), resolution: resolved };
+        const leaseEligible = input.storage &&
+            input.discoveryRoot &&
+            input.sessionOwnerIsLive
+            ? async () => {
+                const sessions = await input.storage.listSessions({
+                    project: input.registration.project,
+                    agent: input.registration.agent,
+                    status: "active",
+                });
+                return computeCommLeaseEligibility({
+                    registration: input.registration,
+                    discoveryRoot: input.discoveryRoot,
+                    sessions,
+                    sessionOwnerIsLive: input.sessionOwnerIsLive,
+                });
+            }
+            : undefined;
+        return {
+            adapter: wrapWithLease(adapter, input.leaseArbiter, { leaseEligible }),
+            resolution: resolved,
+        };
     }
     return { adapter, resolution: resolved };
+}
+/** AGE-101: shared unregister → detach → stop → release lease removal path. */
+export async function removeLiveAdapter(input) {
+    const accountId = input.accountId;
+    const adapter = input.bus.unregisterComm(input.commId, accountId);
+    for (const bridge of input.bridges) {
+        bridge.detachComm?.(input.commId, accountId);
+    }
+    if (adapter) {
+        try {
+            await adapter.stop();
+        }
+        catch (error) {
+            console.error(`agents-comm-bus: failed to stop ${input.commId}/${accountId} on scope release: ` +
+                `${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    const resource = adapter?.exclusiveResource?.();
+    if (resource) {
+        await input.leaseArbiter.release(input.commId, resource.resourceId).catch(() => { });
+    }
 }
 /**
  * AGE-38 / AGE-97: construct, register, wire bridges, start, rollback on failure.
@@ -65,6 +107,8 @@ export async function addAdapterForRegistration(input) {
             stateRoot: input.stateRoot,
             storage: input.storage,
             leaseArbiter: input.leaseArbiter,
+            discoveryRoot: input.discoveryRoot,
+            sessionOwnerIsLive: input.sessionOwnerIsLive,
         });
         if (!adapter) {
             if (resolution.status === "invalid") {

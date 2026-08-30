@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.52";
+var DAEMON_VERSION = "0.2.53";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -3745,6 +3745,70 @@ function safePathSegment(value) {
 
 // ../core-daemon/storage/sqlite.ts
 import { createRequire } from "node:module";
+
+// ../core-daemon/runtime/process-start-epoch.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+function readProcessStartEpochMs(pid, options = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === "linux") {
+      return readLinuxProcessStartEpochMs(pid, options.readProcStat);
+    }
+    if (process.platform === "darwin") {
+      return readDarwinProcessStartEpochMs(pid);
+    }
+    if (process.platform === "win32") {
+      return readWindowsProcessStartEpochMs(pid);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+function readLinuxProcessStartEpochMs(pid, readProcStat) {
+  const raw = readProcStat?.(pid) ?? (() => {
+    try {
+      return readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch {
+      return null;
+    }
+  })();
+  if (!raw) return null;
+  const closeParen = raw.lastIndexOf(")");
+  if (closeParen < 0) return null;
+  const fields = raw.slice(closeParen + 2).split(" ");
+  const startTicks = Number(fields[19]);
+  if (!Number.isFinite(startTicks)) return null;
+  const uptimeRaw = readFileSync("/proc/uptime", "utf8").split(/\s+/)[0];
+  const uptimeSec = Number(uptimeRaw);
+  if (!Number.isFinite(uptimeSec)) return null;
+  const bootMs = Date.now() - uptimeSec * 1e3;
+  const hz = 100;
+  return bootMs + startTicks / hz * 1e3;
+}
+function readDarwinProcessStartEpochMs(pid) {
+  const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8"
+  }).trim();
+  if (!out) return null;
+  const parsed = Date.parse(out);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function readWindowsProcessStartEpochMs(pid) {
+  const out = execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
+    ],
+    { encoding: "utf8" }
+  ).trim();
+  const ticks = Number(out);
+  if (!Number.isFinite(ticks)) return null;
+  return ticks / 1e4 - 621355968e5;
+}
 
 // ../core-daemon/storage/schema/runner.ts
 import { readFile } from "node:fs/promises";
@@ -3884,6 +3948,17 @@ var registrationActivationMigration = {
     await ctx.exec(sql);
   }
 };
+var sessionOwnerProcessStartTimeMigration = {
+  version: 15,
+  description: "AGE-101: process start epoch for pid+start-time owner liveness",
+  async up(ctx) {
+    const sql = await readFile(
+      join(schemaDir, "015_session_owner_process_start_time.sql"),
+      "utf8"
+    );
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -3899,7 +3974,8 @@ async function runStorageMigrations(db) {
     sessionDaemonOwnerMigration,
     sessionLabelScopeMigration,
     curlInboundIdempotencyMigration,
-    registrationActivationMigration
+    registrationActivationMigration,
+    sessionOwnerProcessStartTimeMigration
   ]);
 }
 
@@ -4417,12 +4493,12 @@ var SqliteStorage = class _SqliteStorage {
           schema_version, session_id, agent, project, created_at,
           lease_holder_connection_id, lease_acquired_at, lease_released_at,
           lease_owner_process_pid, lease_owner_process_label,
-          lease_owner_process_registered_at,
+          lease_owner_process_registered_at, lease_owner_process_start_time,
           lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
           lease_owner_daemon_state_root, lease_owner_daemon_bin,
           lease_owner_daemon_authority_rank,
           most_recent_inbound_conversation_id, account_label_scope, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           agent = excluded.agent,
           project = excluded.project,
@@ -4440,6 +4516,7 @@ var SqliteStorage = class _SqliteStorage {
       rec.lease_owner_process_pid,
       rec.lease_owner_process_label,
       rec.lease_owner_process_registered_at,
+      rec.lease_owner_process_start_time ?? null,
       rec.lease_owner_daemon_discovery_root,
       rec.lease_owner_daemon_checkout_root,
       rec.lease_owner_daemon_state_root,
@@ -4451,6 +4528,11 @@ var SqliteStorage = class _SqliteStorage {
     );
   }
   async acquireSessionLease(session, connection_id, at, owner) {
+    const ownerPid = owner?.process_pid ?? null;
+    let ownerStartTime = owner?.process_start_time ?? null;
+    if (ownerPid != null && ownerStartTime == null) {
+      ownerStartTime = readProcessStartEpochMs(ownerPid);
+    }
     try {
       const result = this.db.prepare(`
           UPDATE sessions
@@ -4466,6 +4548,7 @@ var SqliteStorage = class _SqliteStorage {
               lease_owner_process_pid = ?,
               lease_owner_process_label = ?,
               lease_owner_process_registered_at = ?,
+              lease_owner_process_start_time = ?,
               lease_owner_daemon_discovery_root = ?,
               lease_owner_daemon_checkout_root = ?,
               lease_owner_daemon_state_root = ?,
@@ -4476,9 +4559,10 @@ var SqliteStorage = class _SqliteStorage {
         `).run(
         connection_id,
         at,
-        owner?.process_pid ?? null,
+        ownerPid,
         owner?.process_label ?? null,
-        owner?.process_pid ? at : null,
+        ownerPid ? at : null,
+        ownerPid ? ownerStartTime : null,
         owner?.daemon?.discovery_root ?? null,
         owner?.daemon?.checkout_root ?? null,
         owner?.daemon?.state_root ?? null,
@@ -4501,6 +4585,7 @@ var SqliteStorage = class _SqliteStorage {
             lease_owner_process_pid = NULL,
             lease_owner_process_label = NULL,
             lease_owner_process_registered_at = NULL,
+            lease_owner_process_start_time = NULL,
             lease_owner_daemon_discovery_root = NULL,
             lease_owner_daemon_checkout_root = NULL,
             lease_owner_daemon_state_root = NULL,
@@ -4537,6 +4622,10 @@ var SqliteStorage = class _SqliteStorage {
             (lease_owner_process_registered_at IS NULL AND ? IS NULL)
             OR lease_owner_process_registered_at = ?
           )
+          AND (
+            (lease_owner_process_start_time IS NULL AND ? IS NULL)
+            OR lease_owner_process_start_time = ?
+          )
       `).run(
       at,
       session,
@@ -4546,7 +4635,9 @@ var SqliteStorage = class _SqliteStorage {
       observed.lease_owner_process_pid,
       observed.lease_owner_process_pid,
       observed.lease_owner_process_registered_at,
-      observed.lease_owner_process_registered_at
+      observed.lease_owner_process_registered_at,
+      observed.lease_owner_process_start_time,
+      observed.lease_owner_process_start_time
     );
     return Number(result.changes ?? 0) > 0;
   }
@@ -4936,6 +5027,7 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_process_pid: r.lease_owner_process_pid,
       lease_owner_process_label: r.lease_owner_process_label,
       lease_owner_process_registered_at: r.lease_owner_process_registered_at,
+      lease_owner_process_start_time: r.lease_owner_process_start_time,
       lease_owner_daemon_discovery_root: r.lease_owner_daemon_discovery_root,
       lease_owner_daemon_checkout_root: r.lease_owner_daemon_checkout_root,
       lease_owner_daemon_state_root: r.lease_owner_daemon_state_root,
@@ -6163,12 +6255,12 @@ async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
 }
 
 // ../core-daemon/host-runtime/dev-config-resolver.ts
-import { readFileSync, existsSync as existsSync3 } from "node:fs";
+import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
 import path9 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 function resolveDevConfig(projectRoot, deps = {}) {
   const exists = deps.exists ?? existsSync3;
-  const readFile11 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
+  const readFile11 = deps.readFile ?? ((p) => readFileSync2(p, "utf8"));
   const markerPath = path9.join(projectRoot, DEV_MARKER_NAME);
   if (!exists(markerPath)) {
     return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
@@ -7025,7 +7117,7 @@ import { pathToFileURL } from "node:url";
 
 // ../core-daemon/migrations/legacy-readers.ts
 import { createHash as createHash2 } from "node:crypto";
-import { existsSync as existsSync5, readdirSync, readFileSync as readFileSync2, statSync } from "node:fs";
+import { existsSync as existsSync5, readdirSync, readFileSync as readFileSync3, statSync } from "node:fs";
 import { basename, join as join4, resolve } from "node:path";
 import { homedir } from "node:os";
 var TRANSITION_ONLY_MARKER = "transition-only";
@@ -7193,7 +7285,7 @@ function readOptionalObject(path13) {
 }
 function readJson(path13) {
   try {
-    return { ok: true, value: JSON.parse(readFileSync2(path13, "utf8")) };
+    return { ok: true, value: JSON.parse(readFileSync3(path13, "utf8")) };
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "invalid JSON" };
   }

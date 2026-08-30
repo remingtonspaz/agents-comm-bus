@@ -80,6 +80,7 @@ export interface CodexBridgeOptions {
   sessionOwnerIsLive?: SessionOwnerLiveness;
   /** AGE-100: on-disk comm-lock lookup for inbound wake target resolution. */
   readHeldCommLease?: ReadHeldCommLease;
+  requestScopeReconcile?: () => void;
 }
 
 export interface RegisterCodexSessionResult {
@@ -325,6 +326,7 @@ export class CodexBridge implements AgentBridge {
         lease_holder_connection_id: null,
         lease_owner_process_pid: null,
         lease_owner_process_registered_at: null,
+        lease_owner_process_start_time: null,
       },
       sessions,
       this.sessionOwnerIsLive,
@@ -378,8 +380,9 @@ export class CodexBridge implements AgentBridge {
       lease_released_at: null,
       lease_owner_process_pid: null,
       lease_owner_process_label: null,
-      lease_owner_process_registered_at: null,
-      lease_owner_daemon_discovery_root: null,
+        lease_owner_process_registered_at: null,
+        lease_owner_process_start_time: null,
+        lease_owner_daemon_discovery_root: null,
       lease_owner_daemon_checkout_root: null,
       lease_owner_daemon_state_root: null,
       lease_owner_daemon_bin: null,
@@ -1032,6 +1035,7 @@ export class CodexBridge implements AgentBridge {
         sessionEndObservation(latest),
         Date.now(),
       );
+      this.options.requestScopeReconcile?.();
     } catch (error) {
       console.error(
         `agents-comm-bus: failed to cleanup Codex app-server for ${session}: ` +
@@ -1352,6 +1356,7 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
 function sessionLeaseOwnerFromParams(params: Record<string, unknown>, fallbackLabel: string): {
   process_pid: number | null;
   process_label?: string | null;
+  process_start_time?: number | null;
 } | undefined {
   const pid = numberParam(params.owner_process_pid);
   if (!pid) return undefined;
@@ -1360,6 +1365,7 @@ function sessionLeaseOwnerFromParams(params: Record<string, unknown>, fallbackLa
     process_label: typeof params.owner_process_label === "string"
       ? params.owner_process_label
       : fallbackLabel,
+    process_start_time: numberParam(params.owner_process_start_time),
   };
 }
 
@@ -1407,6 +1413,7 @@ export class CodexBridgeFactory implements AgentBridgeFactory {
       daemonOwner: context.daemonOwner,
       sessionOwnerIsLive: context.sessionOwnerIsLive,
       readHeldCommLease: context.readHeldCommLease,
+      requestScopeReconcile: context.requestScopeReconcile,
     });
   }
 }

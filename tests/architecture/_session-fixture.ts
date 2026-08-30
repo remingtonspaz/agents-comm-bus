@@ -20,11 +20,15 @@ export const NULL_SESSION_DAEMON_OWNER: Pick<
 /** Null host-process owner metadata for sessions without a stamped pid. */
 export const NULL_SESSION_PROCESS_OWNER: Pick<
   Session,
-  "lease_owner_process_pid" | "lease_owner_process_label" | "lease_owner_process_registered_at"
+  | "lease_owner_process_pid"
+  | "lease_owner_process_label"
+  | "lease_owner_process_registered_at"
+  | "lease_owner_process_start_time"
 > = {
   lease_owner_process_pid: null,
   lease_owner_process_label: null,
   lease_owner_process_registered_at: null,
+  lease_owner_process_start_time: null,
 };
 
 const NULL_SESSION_LEASE_HOLDER: Pick<

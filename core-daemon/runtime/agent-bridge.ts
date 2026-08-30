@@ -12,6 +12,7 @@ import type {
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 
 import type { MessageBus } from "../bus.js";
+import { readProcessStartEpochMs } from "./process-start-epoch.js";
 import type { AgentLeaseProperties, ReadHeldCommLease } from "./comm-lease.js";
 export type {
   AgentLeaseProperties,
@@ -135,6 +136,8 @@ export interface AgentBridgeContext {
   sessionOwnerIsLive: SessionOwnerLiveness;
   /** AGE-100: read the on-disk comm lock when held by this daemon. */
   readHeldCommLease: ReadHeldCommLease;
+  /** AGE-101: hint explicit session exit for early lazy-scope reconcile. */
+  requestScopeReconcile?: () => void;
 }
 
 export interface AgentBridge {
@@ -231,12 +234,24 @@ export interface AgentBridgeFactory {
 
 /** Merge hook-supplied process owner with daemon-resolved identity (AGE-58). */
 export function sessionLeaseOwnerWithDaemon(
-  ownerFromParams: { process_pid: number | null; process_label?: string | null } | undefined,
+  ownerFromParams:
+    | {
+        process_pid: number | null;
+        process_label?: string | null;
+        process_start_time?: number | null;
+      }
+    | undefined,
   daemonOwner: DaemonSelfIdentity,
 ): SessionLeaseOwner {
+  const pid = ownerFromParams?.process_pid ?? null;
+  let startTime = ownerFromParams?.process_start_time ?? null;
+  if (pid != null && startTime == null) {
+    startTime = readProcessStartEpochMs(pid);
+  }
   return {
-    process_pid: ownerFromParams?.process_pid ?? null,
+    process_pid: pid,
     process_label: ownerFromParams?.process_label,
+    process_start_time: pid != null ? startTime : null,
     daemon: {
       discovery_root: daemonOwner.discoveryRoot,
       checkout_root: daemonOwner.checkoutRoot,

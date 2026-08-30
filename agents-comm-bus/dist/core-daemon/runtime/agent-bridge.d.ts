@@ -100,6 +100,8 @@ export interface AgentBridgeContext {
     sessionOwnerIsLive: SessionOwnerLiveness;
     /** AGE-100: read the on-disk comm lock when held by this daemon. */
     readHeldCommLease: ReadHeldCommLease;
+    /** AGE-101: hint explicit session exit for early lazy-scope reconcile. */
+    requestScopeReconcile?: () => void;
 }
 export interface AgentBridge {
     /** Agent id this bridge handles (e.g. `"claude"`). */
@@ -183,5 +185,6 @@ export interface AgentBridgeFactory {
 export declare function sessionLeaseOwnerWithDaemon(ownerFromParams: {
     process_pid: number | null;
     process_label?: string | null;
+    process_start_time?: number | null;
 } | undefined, daemonOwner: DaemonSelfIdentity): SessionLeaseOwner;
 //# sourceMappingURL=agent-bridge.d.ts.map

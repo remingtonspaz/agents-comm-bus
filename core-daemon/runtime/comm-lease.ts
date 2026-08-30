@@ -94,6 +94,7 @@ export type AcquireResult =
 export type AcquireDenyReason =
   | "held-by-higher-rank"
   | "held-by-same-rank-fresh"
+  | "not-eligible-for-scope"
   | "guard-contended";
 
 export type RenewResult =
@@ -246,6 +247,8 @@ function defaultIsDirectory(p: string): boolean {
 // ---------------------------------------------------------------------------
 
 export interface DecisionInput {
+  commId: string;
+  resourceId: string;
   self: SelfIdentity;
   selfLastIpcServedAt: number;
   existing: LeaseRecord | null;
@@ -253,6 +256,8 @@ export interface DecisionInput {
   isPidAlive: (pid: number) => boolean;
   stalenessMs: number;
   ipcRecencyMarginMs: number;
+  /** AGE-101: injected discovery-root/project eligibility; default true. */
+  eligible?: boolean;
 }
 
 export type Decision =
@@ -289,6 +294,15 @@ export type DecisionTakeReason =
 export function decideContention(input: DecisionInput): Decision {
   const { self, existing, now, isPidAlive, stalenessMs } = input;
 
+  // AGE-101: foreign/missing discovery-root ownership blocks acquire even when
+  // rank would win — eligibility is computed outside this module and injected.
+  if (input.eligible === false) {
+    const holder =
+      existing ??
+      ineligiblePlaceholderHolder(input.commId, input.resourceId);
+    return { take: false, reason: "not-eligible-for-scope", holder };
+  }
+
   // 1. No holder, dead holder, or stale holder → take.
   if (!existing) return { take: true, reason: "no-holder" };
   if (!isPidAlive(existing.pid)) return { take: true, reason: "holder-dead" };
@@ -315,6 +329,22 @@ export function decideContention(input: DecisionInput): Decision {
     return { take: true, reason: "same-rank-staler-holder" };
   }
   return { take: false, reason: "held-by-same-rank-fresh", holder: existing };
+}
+
+function ineligiblePlaceholderHolder(commId: string, resourceId: string): LeaseRecord {
+  return {
+    comm_id: commId,
+    resource_id: resourceId,
+    pid: -1,
+    stateRoot: "",
+    checkoutRoot: null,
+    daemonBin: null,
+    daemonVersion: "",
+    authorityRank: "worktree",
+    acquiredAt: 0,
+    renewedAt: 0,
+    lastIpcServedAt: 0,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -485,7 +515,11 @@ export class CommLeaseArbiter {
    * the existing record under a guard lock, applies {@link decideContention},
    * and writes the self record on a take. Returns a discriminated result.
    */
-  async tryAcquire(commId: string, resourceId: string): Promise<AcquireResult> {
+  async tryAcquire(
+    commId: string,
+    resourceId: string,
+    acquireOptions?: { eligible?: boolean },
+  ): Promise<AcquireResult> {
     const leasePath = this.leasePath(commId, resourceId);
     const guard = await this.acquireGuard(leasePath);
     if (!guard) {
@@ -496,6 +530,8 @@ export class CommLeaseArbiter {
     try {
       const existing = await this.readRecord(leasePath);
       const decision = decideContention({
+        commId,
+        resourceId,
         self: this.self,
         selfLastIpcServedAt: this.lastIpcServedAt(),
         existing,
@@ -503,6 +539,7 @@ export class CommLeaseArbiter {
         isPidAlive: this.isPidAlive,
         stalenessMs: this.stalenessMs,
         ipcRecencyMarginMs: this.ipcRecencyMarginMs,
+        eligible: acquireOptions?.eligible,
       });
 
       if (!decision.take) {
@@ -809,6 +846,8 @@ export interface WrapWithLeaseOptions {
   renewIntervalMs?: number;
   /** Slow re-acquire poll interval while denied (ms). */
   reacquireIntervalMs?: number;
+  /** AGE-101: live eligibility verdict before each acquire/re-acquire attempt. */
+  leaseEligible?: () => boolean | Promise<boolean>;
   /** Injected timer factory (tests). Defaults to setInterval/clearInterval. */
   setIntervalFn?: (fn: () => void, ms: number) => unknown;
   clearIntervalFn?: (handle: unknown) => void;
@@ -855,6 +894,16 @@ export function wrapWithLease(
     });
   const clearIntervalFn = options.clearIntervalFn ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
   const log = options.log ?? ((m: string) => console.error(m));
+  const leaseEligible = options.leaseEligible;
+
+  const isLeaseEligible = async (): Promise<boolean> => {
+    if (!leaseEligible) return true;
+    try {
+      return await leaseEligible();
+    } catch {
+      return false;
+    }
+  };
 
   let renewTimer: unknown = null;
   let reacquireTimer: unknown = null;
@@ -911,8 +960,10 @@ export function wrapWithLease(
   const startReacquireTimer = (resourceId: string): void => {
     if (reacquireTimer != null) return;
     reacquireTimer = setIntervalFn(() => {
-      void arbiter
-        .tryAcquire(inner.id, resourceId)
+      void isLeaseEligible()
+        .then((eligible) =>
+          arbiter.tryAcquire(inner.id, resourceId, { eligible }),
+        )
         .then(async (result) => {
           if (!result.ok) return; // still denied; keep slow-polling
           if (reacquireTimer != null) {
@@ -967,7 +1018,8 @@ export function wrapWithLease(
         innerStarted = true;
         return;
       }
-      const result = await arbiter.tryAcquire(inner.id, resource.resourceId);
+      const eligible = await isLeaseEligible();
+      const result = await arbiter.tryAcquire(inner.id, resource.resourceId, { eligible });
       if (!result.ok) {
         holdingLease = false;
         log(

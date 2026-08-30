@@ -166,6 +166,8 @@ describe("AGE-35 authority-rank inference", () => {
 
 describe("AGE-35 decideContention (pure)", () => {
   const baseArgs = {
+    commId: "fakecomm",
+    resourceId: "r1",
     now: 10_000,
     isPidAlive: () => true,
     stalenessMs: 90_000,

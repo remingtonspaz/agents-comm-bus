@@ -26,6 +26,8 @@ export interface Session {
   lease_owner_process_pid: number | null;
   lease_owner_process_label: string | null;
   lease_owner_process_registered_at: number | null;
+  /** Process creation epoch (ms) for pid+start-time owner liveness (AGE-101). */
+  lease_owner_process_start_time: number | null;
 
   // Daemon-instance identity stamped at lease acquire (AGE-58 boot-restore scoping).
   lease_owner_daemon_discovery_root: string | null;

@@ -1,4 +1,5 @@
 import { classifySessionOwnerProcess, } from "./session-owner-liveness.js";
+import { reconcileLazyAdapterScopes } from "./scope-release-reconcile.js";
 /** Default periodic sweep interval — boot-only is insufficient for long-lived daemons. */
 export const DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 export function sessionEndObservation(session) {
@@ -7,6 +8,7 @@ export function sessionEndObservation(session) {
         lease_holder_connection_id: session.lease_holder_connection_id,
         lease_owner_process_pid: session.lease_owner_process_pid,
         lease_owner_process_registered_at: session.lease_owner_process_registered_at,
+        lease_owner_process_start_time: session.lease_owner_process_start_time,
     };
 }
 /**
@@ -61,6 +63,17 @@ export async function runSessionEndSweep(input) {
     log(`agents-comm-bus: session end sweep: ended=${counts.ended} ` +
         `kept_live=${counts.kept_live} kept_stale=${counts.kept_stale} ` +
         `kept_no_owner_leased=${counts.kept_no_owner_leased} cas_lost=${counts.cas_lost}`);
+    if (input.reconcile) {
+        counts.reconcile = await reconcileLazyAdapterScopes({
+            ...input.reconcile,
+            now: input.now,
+            graceMs: input.reconcile.graceMs,
+        });
+        log(`agents-comm-bus: scope reconcile: zero_live=${counts.reconcile.scopes_zero_live} ` +
+            `released=${counts.reconcile.scopes_released} ` +
+            `adapters_removed=${counts.reconcile.adapters_removed} ` +
+            `active_scopes_pruned=${counts.reconcile.active_scopes_pruned}`);
+    }
     return counts;
 }
 export function startSessionEndSweep(options) {
@@ -81,16 +94,23 @@ export function startSessionEndSweep(options) {
     const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
     let sweepInFlight = false;
     let interval = null;
+    let earlyReconcile = false;
+    const reconcileState = options.reconcileState ?? { zeroLiveSince: new Map() };
     const tick = () => {
         if (sweepInFlight)
             return;
         sweepInFlight = true;
+        const graceMs = earlyReconcile ? 0 : undefined;
+        earlyReconcile = false;
         void runSessionEndSweep({
             storage: options.storage,
             now: options.now,
             isPidAlive: options.isPidAlive,
             recencyMs: options.recencyMs,
             log: options.log,
+            reconcile: options.reconcile != null
+                ? { ...options.reconcile, state: reconcileState, graceMs }
+                : undefined,
         })
             .catch((error) => {
             const log = options.log ?? console.error;
@@ -113,6 +133,10 @@ export function startSessionEndSweep(options) {
             if (interval != null)
                 clearIntervalFn(interval);
             interval = null;
+        },
+        requestEarlyReconcile() {
+            earlyReconcile = true;
+            tick();
         },
     };
 }

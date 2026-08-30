@@ -99,6 +99,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/015_session_owner_process_start_time.sql",
+      "artifact": "plugins/codex/curl/015_session_owner_process_start_time.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/codex/curl/package.json",
       "type": "package-json"

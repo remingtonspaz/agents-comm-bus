@@ -15,7 +15,7 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
-import { addAdapterForRegistration, adapterMapKey, appendCredentialResolutionFailedAudit, createAdapterFromRegistration, logInvalidCredentialResolution, unresolvedCredentialsReason, } from "./runtime/comm-adapter-lifecycle.js";
+import { addAdapterForRegistration, adapterMapKey, appendCredentialResolutionFailedAudit, createAdapterFromRegistration, logInvalidCredentialResolution, removeLiveAdapter, unresolvedCredentialsReason, } from "./runtime/comm-adapter-lifecycle.js";
 import { ensureRegistrationById, ensureRegistrationForAccount, reconcileEagerRegistrations, } from "./runtime/ensure-registration.js";
 import { createEagerActivationRetryScheduler, } from "./runtime/eager-activation-retry.js";
 import { createCommFactoryRegistry } from "./runtime/comm-factory-registry.js";
@@ -23,6 +23,7 @@ import { registerCommIpcMethods } from "./runtime/register-comm-ipc-methods.js";
 import { dispatchInboundToBridges } from "./runtime/dispatch-inbound.js";
 import { startIdleReaper } from "./runtime/daemon-idle-reaper.js";
 import { startSessionEndSweep } from "./runtime/session-end-sweep.js";
+import { scopeKey } from "./runtime/scope-release-reconcile.js";
 import { createSessionOwnerLiveness } from "./runtime/session-owner-liveness.js";
 import { deliveryRowFromEntry, drainAndAcknowledgePendingInbound, durableInboundKey, queueHasDurableKey, rehydratePendingInboundForScope, selectPendingInboundForDrain, } from "./runtime/durable-inbound.js";
 import { filterRegistrationsByScope, } from "./session-label-scope.js";
@@ -63,6 +64,8 @@ export async function runDaemon(options) {
     const blobs = new ContentAddressedBlobStore(paths.root);
     const pendingInbound = [];
     const sessionOwnerIsLive = createSessionOwnerLiveness();
+    const scopeReconcileState = { zeroLiveSince: new Map() };
+    let requestScopeReconcile;
     // AGE-35: cross-checkout single-consumer ownership lease. A stray daemon from
     // another git checkout/worktree must not be able to poll the same Telegram bot
     // as the canonical daemon (two getUpdates consumers → 409 outage). Build ONE
@@ -176,6 +179,8 @@ export async function runDaemon(options) {
         leaseArbiter,
         inFlight: inFlightAdapters,
         audit,
+        discoveryRoot: discoveryPaths.root,
+        sessionOwnerIsLive,
         ...options,
     });
     let eagerRetry;
@@ -232,6 +237,7 @@ export async function runDaemon(options) {
         daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive,
         readHeldCommLease: (commId, resourceId) => leaseArbiter.readHeldCommLease(commId, resourceId),
+        requestScopeReconcile: () => requestScopeReconcile?.(),
     })));
     const pendingInboundMax = 100;
     bus.setDispatchSink({
@@ -311,6 +317,8 @@ export async function runDaemon(options) {
         stateRoot: paths.root,
         leaseArbiter,
         activeScopes,
+        discoveryRoot: discoveryPaths.root,
+        sessionOwnerIsLive,
         audit,
         ensureRegistrationContext: buildEnsureRegistrationContext({ scheduleEagerRetry }),
         options: reloadOptions,
@@ -405,7 +413,20 @@ export async function runDaemon(options) {
     sessionEndSweepHandle = startSessionEndSweep({
         storage,
         log: (message) => console.error(message),
+        reconcile: {
+            storage,
+            bus,
+            bridges,
+            factories: commAdapterFactories,
+            activeScopes,
+            leaseArbiter,
+            sessionOwnerIsLive,
+            removeAdapter: removeLiveAdapter,
+            state: scopeReconcileState,
+        },
+        reconcileState: scopeReconcileState,
     });
+    requestScopeReconcile = () => sessionEndSweepHandle?.requestEarlyReconcile();
     // AGE-55: async boot restore — never block daemon readiness on comm bring-up.
     void runBootScopeRestore({
         stateRoot: paths.root,
@@ -575,6 +596,8 @@ export async function reloadAdapters(input) {
             stateRoot: input.stateRoot,
             storage: input.storage,
             leaseArbiter: input.leaseArbiter,
+            discoveryRoot: input.discoveryRoot,
+            sessionOwnerIsLive: input.sessionOwnerIsLive,
         });
         if (result.ok) {
             added.push({
@@ -613,19 +636,13 @@ export async function reloadAdapters(input) {
     for (const [key, entry] of current) {
         if (desired.has(key))
             continue;
-        const adapter = input.bus.unregisterComm(entry.commId, entry.accountId);
-        for (const bridge of input.bridges) {
-            bridge.detachComm?.(entry.commId, entry.accountId);
-        }
-        if (adapter) {
-            try {
-                await adapter.stop();
-            }
-            catch (error) {
-                console.error(`agents-comm-bus: failed to stop ${entry.commId}/${entry.accountId} on reload: ` +
-                    `${error instanceof Error ? error.message : String(error)}`);
-            }
-        }
+        await removeLiveAdapter({
+            bus: input.bus,
+            bridges: input.bridges,
+            leaseArbiter: input.leaseArbiter,
+            commId: entry.commId,
+            accountId: entry.accountId,
+        });
         removed.push({ comm: entry.commId, account_id: entry.accountId });
     }
     const forceCredentialRefresh = new Set(input.options?.forceCredentialRefresh?.map((target) => adapterMapKey(target.comm, target.accountId)) ?? []);
@@ -649,6 +666,8 @@ export async function reloadAdapters(input) {
                 stateRoot: input.stateRoot,
                 storage: input.storage,
                 leaseArbiter: input.leaseArbiter,
+                discoveryRoot: input.discoveryRoot,
+                sessionOwnerIsLive: input.sessionOwnerIsLive,
             });
             if (!adapter) {
                 if (resolution.status === "invalid") {
@@ -835,11 +854,7 @@ function sameStringSet(a, b) {
     }
     return true;
 }
-// AGE-38/AGE-72: key for the active-(project, agent[, label-scope]) set used to
-// gate reload hot-adds.
-function scopeKey(agent, project, accountLabelScope) {
-    return `${agent}:${normalizeProjectPath(project)}:${accountLabelScope ?? ""}`;
-}
+// AGE-38/AGE-72: scopeKey imported from scope-release-reconcile for active-scope keys.
 function isRegistrationScopeActive(registration, activeScopes) {
     const prefix = `${registration.agent}:${normalizeProjectPath(registration.project)}:`;
     const legacyKey = `${registration.agent}:${normalizeProjectPath(registration.project)}`;

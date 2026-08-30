@@ -20,6 +20,7 @@ export interface PiBridgeOptions {
     daemonOwner?: DaemonSelfIdentity;
     /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
     sessionOwnerIsLive?: SessionOwnerLiveness;
+    requestScopeReconcile?: () => void;
 }
 export interface RegisterPiSessionResult {
     ok: boolean;

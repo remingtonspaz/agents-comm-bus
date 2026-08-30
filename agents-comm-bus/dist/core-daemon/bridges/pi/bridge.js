@@ -103,6 +103,7 @@ export class PiBridge {
             lease_owner_process_pid: null,
             lease_owner_process_label: null,
             lease_owner_process_registered_at: null,
+            lease_owner_process_start_time: null,
             lease_owner_daemon_discovery_root: null,
             lease_owner_daemon_checkout_root: null,
             lease_owner_daemon_state_root: null,
@@ -180,6 +181,7 @@ export class PiBridge {
         }
         // Terminal Pi unregister — CAS end preserves owner stamps for forensics.
         await this.options.storage.endSessionIfUnchanged(session, sessionEndObservation(sess), Date.now());
+        this.options.requestScopeReconcile?.();
         return { ok: true };
     }
 }
@@ -199,6 +201,7 @@ function sessionLeaseOwnerFromParams(params) {
     const pid = numberParam(host?.pid ?? params.owner_process_pid);
     if (!pid)
         return undefined;
+    const startTime = numberParam(host?.start_time ?? params.owner_process_start_time);
     const label = typeof host?.label === "string"
         ? host.label
         : typeof params.owner_process_label === "string"
@@ -207,6 +210,7 @@ function sessionLeaseOwnerFromParams(params) {
     return {
         process_pid: pid,
         process_label: label,
+        process_start_time: startTime,
     };
 }
 function numberParam(value) {
@@ -226,6 +230,7 @@ export class PiBridgeFactory {
             ensureCommsForSession: context.ensureCommsForSession,
             daemonOwner: context.daemonOwner,
             sessionOwnerIsLive: context.sessionOwnerIsLive,
+            requestScopeReconcile: context.requestScopeReconcile,
         });
     }
 }
