@@ -165,6 +165,10 @@ export interface CommLeaseSweepRecoveryInput {
   factories?: readonly CommAdapterFactory[];
 }
 
+export function isCommLeaseRecoveryAllowed(recoveryAllowed?: () => boolean): boolean {
+  return recoveryAllowed?.() ?? true;
+}
+
 async function recoverAfterLeaseDeletion(
   comm_id: string,
   resource_id: string,
@@ -219,6 +223,8 @@ export async function runCommLeaseSweep(input: {
   afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
   /** Test hook: invoked after guard release, before recovery. */
   beforeRecovery?: (leasePath: string) => void | Promise<void>;
+  /** When false, post-delete nudge/ensure is skipped (scheduler stop / daemon retirement). */
+  recoveryAllowed?: () => boolean;
 }): Promise<CommLeaseSweepCounts> {
   const counts: CommLeaseSweepCounts = {
     examined: 0,
@@ -351,6 +357,9 @@ export async function runCommLeaseSweep(input: {
         if (input.beforeRecovery) {
           await input.beforeRecovery(leasePath);
         }
+        if (!isCommLeaseRecoveryAllowed(input.recoveryAllowed)) {
+          continue;
+        }
         const recovered = await recoverAfterLeaseDeletion(
           reaped.comm_id,
           reaped.resource_id,
@@ -394,6 +403,7 @@ export function startCommLeaseSweep(options: {
   sweepHold?: () => Promise<void>;
   afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
   beforeRecovery?: (leasePath: string) => void | Promise<void>;
+  recoveryAllowed?: () => boolean;
   setIntervalFn?: (fn: () => void, ms: number) => unknown;
   clearIntervalFn?: (handle: unknown) => void;
   /** Run one sweep immediately on start (daemon boot one-shot). */
@@ -435,6 +445,7 @@ export function startCommLeaseSweep(options: {
       sweepHold: options.sweepHold,
       afterGuardAcquired: options.afterGuardAcquired,
       beforeRecovery: options.beforeRecovery,
+      recoveryAllowed: options.recoveryAllowed ?? (() => !stopped),
     })
       .catch(async (error) => {
         const log = options.log ?? console.error;

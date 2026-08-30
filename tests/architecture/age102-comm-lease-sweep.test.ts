@@ -31,6 +31,7 @@ import {
   classifyCommLeaseOwner,
   commLeaseLockRoot,
   DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS,
+  isCommLeaseRecoveryAllowed,
   publishCommLeaseSweepHandle,
   runCommLeaseDaemonBootstrap,
   runCommLeaseSweep,
@@ -1394,5 +1395,164 @@ describe("AGE-102 fix-round-2: sweep failure handling (real path)", () => {
       ),
     );
     handle.stop();
+  });
+});
+
+describe("AGE-102 final shutdown fix: wrapper stop awaits reacquire (real path)", () => {
+  it("stop remains pending while inner.start is in flight and releases lease after", async () => {
+    const home = await makeTempDir("acb-age102-stop-await-start-");
+    const alive = new Set<number>([300]);
+    const holderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 300, authorityRank: "main-dev" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    await holderArb.tryAcquire("fakecomm", "stop-await-start-bot");
+
+    const contenderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 301, authorityRank: "worktree" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    const timers = makeTimers();
+    let releaseStart: (() => void) | undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let innerStartCount = 0;
+    let innerStopCount = 0;
+    const inner = {
+      id: "fakecomm" as CommId,
+      accountId: "stop-await-start-bot" as AccountId,
+      allowedSenderIds: [] as readonly string[],
+      exclusiveResource() {
+        return { resourceId: "stop-await-start-bot" };
+      },
+      async start() {
+        innerStartCount += 1;
+        await startGate;
+      },
+      async stop() {
+        innerStopCount += 1;
+      },
+      onInbound() {},
+      onConnectionState() {},
+      async send(): Promise<never> {
+        throw new Error("not used");
+      },
+      reportPressure() {
+        return { backlog: 0, rateLimited: false };
+      },
+      classifyFailure() {
+        return "transient" as const;
+      },
+    };
+    const wrapped = wrapWithLease(inner as unknown as CommAdapter, contenderArb, {
+      setIntervalFn: timers.setIntervalFn,
+      clearIntervalFn: timers.clearIntervalFn,
+      reacquireIntervalMs: 60_000,
+      log: () => {},
+    });
+    await wrapped.start();
+    await holderArb.release("fakecomm", "stop-await-start-bot");
+    assert.equal(nudgeLeaseReacquire("fakecomm", "stop-await-start-bot"), true);
+    await waitFor(() => innerStartCount === 1);
+
+    let stopResolved = false;
+    const stopPromise = wrapped.stop().then(() => {
+      stopResolved = true;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(stopResolved, false, "stop must await in-flight inner.start()");
+    assert.equal(contenderArb.heldLeaseCount(), 1, "lease must stay held until reacquire completes");
+    assert.equal(timers.count(), 0, "timers cleared on stop");
+
+    releaseStart!();
+    await stopPromise;
+    assert.equal(stopResolved, true);
+    assert.equal(contenderArb.heldLeaseCount(), 0);
+    assert.equal(innerStopCount, 1);
+    assert.equal(timers.count(), 0);
+  });
+});
+
+describe("AGE-102 final shutdown fix: recovery stopped fence (real path)", () => {
+  it("isCommLeaseRecoveryAllowed fails closed when predicate is false", () => {
+    assert.equal(isCommLeaseRecoveryAllowed(() => false), false);
+    assert.equal(isCommLeaseRecoveryAllowed(() => true), true);
+    assert.equal(isCommLeaseRecoveryAllowed(), true);
+  });
+
+  it("recoveryAllowed false skips post-delete ensure (boot seam)", async () => {
+    const dir = await makeTempDir("acb-age102-boot-recovery-fence-");
+    const harness = await makeHarness(dir);
+    const home = await makeTempDir("acb-age102-boot-recovery-fence-home-");
+    const reg = registration({ bot_user_id: "boot-fence-bot", activation: "eager" });
+    await harness.storage.putAccountRegistration(reg);
+    await writeLeaseFile(
+      home,
+      leaseRecord({ comm_id: TELEGRAM, resource_id: "boot-fence-bot", pid: 1 }),
+    );
+    const factory = new RecordingFactory();
+    const arb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: process.pid }),
+      lastIpcServedAt: () => Date.now(),
+      homeDir: home,
+      isPidAlive: () => false,
+    });
+
+    const counts = await runCommLeaseSweep({
+      homeDir: home,
+      isPidAlive: () => false,
+      recoveryAllowed: () => false,
+      recovery: makeRecoveryInput(harness, dir, factory, arb),
+    });
+    assert.equal(counts.reaped, 1);
+    assert.equal(counts.recovered, 0);
+    assert.equal(harness.bus.listComms().length, 0);
+    await harness.storage.close();
+  });
+
+  it("stopping scheduler after deletion suppresses recovery", async () => {
+    const dir = await makeTempDir("acb-age102-scheduler-recovery-fence-");
+    const harness = await makeHarness(dir);
+    const home = await makeTempDir("acb-age102-scheduler-recovery-fence-home-");
+    const reg = registration({ bot_user_id: "sched-fence-bot", activation: "eager" });
+    await harness.storage.putAccountRegistration(reg);
+    await writeLeaseFile(
+      home,
+      leaseRecord({ comm_id: TELEGRAM, resource_id: "sched-fence-bot", pid: 1 }),
+    );
+    const factory = new RecordingFactory();
+    const recoveryGate = makeSweepHoldGate();
+    let atRecovery = false;
+    const handle = startCommLeaseSweep({
+      homeDir: home,
+      runOnStart: true,
+      isPidAlive: () => false,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      beforeRecovery: async () => {
+        atRecovery = true;
+        await recoveryGate.hold();
+      },
+      recovery: makeRecoveryInput(harness, dir, factory, new CommLeaseArbiter({
+        self: selfIdentity({ pid: process.pid }),
+        lastIpcServedAt: () => Date.now(),
+        homeDir: home,
+        isPidAlive: () => false,
+      })),
+    });
+    await waitFor(() => atRecovery);
+    assert.ok(!existsSync(commLeasePath(TELEGRAM, "sched-fence-bot", home)), "lease deleted before recovery");
+    handle.stop();
+    recoveryGate.release();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(harness.bus.listComms().length, 0, "recovery must not start adapter after scheduler stop");
+    await harness.storage.close();
   });
 });

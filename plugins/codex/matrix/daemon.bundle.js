@@ -3174,7 +3174,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open5() {
+          ws.once("open", function open6() {
             duplex._final(callback);
           });
           return;
@@ -3195,7 +3195,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open5() {
+          ws.once("open", function open6() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -3649,16 +3649,16 @@ var require_websocket_server = __commonJS({
 });
 
 // ../core-daemon/serve.ts
-import path7 from "node:path";
+import path8 from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 
 // ../core-daemon/daemon.ts
-import { mkdir as mkdir6 } from "node:fs/promises";
-import os3 from "node:os";
+import { mkdir as mkdir7 } from "node:fs/promises";
+import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.56";
+var DAEMON_VERSION = "0.2.59";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3730,6 +3730,102 @@ import { constants, existsSync, statSync } from "node:fs";
 import { open, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os2 from "node:os";
 import path3 from "node:path";
+
+// ../core-daemon/runtime/process-start-epoch.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+function readProcessStartIdentity(pid, options = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (options.readProcStat && options.readBootId) {
+      return readLinuxProcessStartIdentity(pid, options);
+    }
+    if (process.platform === "linux") {
+      return readLinuxProcessStartIdentity(pid, options);
+    }
+    if (process.platform === "darwin") {
+      return readDarwinProcessStartEpochMs(pid);
+    }
+    if (process.platform === "win32") {
+      return readWindowsProcessStartEpochMs(pid);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+function readProcessStartEpochMs(pid, options = {}) {
+  return readProcessStartIdentity(pid, options);
+}
+function compareProcessStartIdentity(stored, pid, options = {}) {
+  if (stored == null) return "inconclusive";
+  const current = readProcessStartIdentity(pid, options);
+  if (current == null) return "inconclusive";
+  return current === stored ? "match" : "mismatch";
+}
+function fnv1a32(input) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+function readLinuxBootId(options) {
+  if (options.readBootId) return options.readBootId();
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+function readLinuxStartTicks(pid, readProcStat) {
+  const raw = readProcStat?.(pid) ?? (() => {
+    try {
+      return readFileSync(`/proc/${pid}/stat`, "utf8");
+    } catch {
+      return null;
+    }
+  })();
+  if (!raw) return null;
+  const closeParen = raw.lastIndexOf(")");
+  if (closeParen < 0) return null;
+  const fields = raw.slice(closeParen + 2).split(" ");
+  const startTicks = Number(fields[19]);
+  return Number.isFinite(startTicks) ? startTicks : null;
+}
+function readLinuxProcessStartIdentity(pid, options) {
+  const bootId = readLinuxBootId(options);
+  const startTicks = readLinuxStartTicks(pid, options.readProcStat);
+  if (!bootId || startTicks == null) return null;
+  return fnv1a32(`${bootId}:${startTicks}`);
+}
+function readDarwinProcessStartEpochMs(pid) {
+  const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8"
+  }).trim();
+  if (!out) return null;
+  const parsed = Date.parse(out);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function readWindowsProcessStartEpochMs(pid) {
+  const out = execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-Command",
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
+    ],
+    // windowsHide: a console-less daemon spawning powershell.exe without it
+    // allocates a visible console window per probe (one flash per liveness check).
+    { encoding: "utf8", windowsHide: true }
+  ).trim();
+  const ticks = Number(out);
+  if (!Number.isFinite(ticks)) return null;
+  return ticks / 1e4 - 621355968e5;
+}
+
+// ../core-daemon/runtime/comm-lease.ts
 var DEFAULT_STALENESS_MS = 9e4;
 var DEFAULT_IPC_RECENCY_MARGIN_MS = 3e4;
 var AUTHORITY_RANK_ORDER = {
@@ -3846,6 +3942,7 @@ var CommLeaseArbiter = class {
   stalenessMs;
   ipcRecencyMarginMs;
   onAudit;
+  readProcessStartIdentity;
   /**
    * Per-resource signature of the last `comm_lease_denied` we actually audited,
    * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
@@ -3871,6 +3968,7 @@ var CommLeaseArbiter = class {
     this.stalenessMs = options.stalenessMs ?? DEFAULT_STALENESS_MS;
     this.ipcRecencyMarginMs = options.ipcRecencyMarginMs ?? DEFAULT_IPC_RECENCY_MARGIN_MS;
     this.onAudit = options.onAudit;
+    this.readProcessStartIdentity = options.readProcessStartIdentity ?? readProcessStartIdentity;
   }
   get authorityRank() {
     return this.self.authorityRank;
@@ -4056,6 +4154,7 @@ var CommLeaseArbiter = class {
         ...existing,
         renewedAt: this.now(),
         lastIpcServedAt: this.lastIpcServedAt(),
+        process_start_time: this.processStartTimeForRecord(existing),
         agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing)
       };
       await this.writeRecord(leasePath, renewed);
@@ -4106,8 +4205,20 @@ var CommLeaseArbiter = class {
       acquiredAt: existing && existing.pid === this.self.pid ? existing.acquiredAt : now,
       renewedAt: now,
       lastIpcServedAt: this.lastIpcServedAt(),
+      process_start_time: this.processStartTimeForRecord(existing),
       agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing)
     };
+  }
+  /**
+   * Stamp native process-start identity only when the OS probe succeeds.
+   * Preserves an existing self-held stamp; never writes uptime fallback.
+   */
+  processStartTimeForRecord(existing) {
+    if (existing && existing.pid === this.self.pid && existing.process_start_time != null) {
+      return existing.process_start_time;
+    }
+    const identity = this.readProcessStartIdentity(this.self.pid);
+    return identity ?? void 0;
   }
   /**
    * Stamp agent properties from the locally desired map. A lease reclaimed from
@@ -4229,6 +4340,16 @@ function isAlreadyExistsError(error) {
 }
 var DEFAULT_RENEW_INTERVAL_MS = 1e4;
 var DEFAULT_REACQUIRE_INTERVAL_MS = 6e4;
+var leaseReacquireNudges = /* @__PURE__ */ new Map();
+function leaseResourceKey(commId, resourceId) {
+  return `${commId}:${resourceId}`;
+}
+function nudgeLeaseReacquire(commId, resourceId) {
+  const nudge = leaseReacquireNudges.get(leaseResourceKey(commId, resourceId));
+  if (!nudge) return false;
+  nudge();
+  return true;
+}
 function wrapWithLease(inner, arbiter, options = {}) {
   const renewIntervalMs = options.renewIntervalMs ?? DEFAULT_RENEW_INTERVAL_MS;
   const reacquireIntervalMs = options.reacquireIntervalMs ?? DEFAULT_REACQUIRE_INTERVAL_MS;
@@ -4252,6 +4373,10 @@ function wrapWithLease(inner, arbiter, options = {}) {
   let reacquireTimer = null;
   let innerStarted = false;
   let holdingLease = false;
+  let stopped = false;
+  let reacquireInFlight = false;
+  let pendingReacquire = false;
+  let reacquireTask = null;
   const resource = inner.exclusiveResource?.() ?? null;
   const clearTimers = () => {
     if (renewTimer != null) {
@@ -4264,7 +4389,7 @@ function wrapWithLease(inner, arbiter, options = {}) {
     }
   };
   const startRenewTimer = (resourceId) => {
-    if (renewTimer != null) return;
+    if (stopped || renewTimer != null) return;
     renewTimer = setIntervalFn(() => {
       void arbiter.renew(inner.id, resourceId).then(async (result) => {
         if (result.ok) return;
@@ -4289,38 +4414,106 @@ function wrapWithLease(inner, arbiter, options = {}) {
     }, renewIntervalMs);
   };
   const startReacquireTimer = (resourceId) => {
-    if (reacquireTimer != null) return;
+    if (stopped || reacquireTimer != null) return;
     reacquireTimer = setIntervalFn(() => {
-      void isLeaseEligible().then(
-        (eligible) => arbiter.tryAcquire(inner.id, resourceId, { eligible })
-      ).then(async (result) => {
-        if (!result.ok) return;
-        if (reacquireTimer != null) {
-          clearIntervalFn(reacquireTimer);
-          reacquireTimer = null;
-        }
-        holdingLease = true;
-        log(
-          `comm ${inner.id} resource ${resourceId}: acquired the poll lease on re-acquire; starting this consumer.`
-        );
-        try {
-          await inner.start();
-          innerStarted = true;
-          startRenewTimer(resourceId);
-        } catch (error) {
-          innerStarted = false;
-          holdingLease = false;
-          log(
-            `comm ${inner.id} resource ${resourceId}: inner.start() failed after re-acquire: ${error instanceof Error ? error.message : String(error)}; releasing lease.`
-          );
-          await arbiter.release(inner.id, resourceId).catch(() => {
-          });
-          startReacquireTimer(resourceId);
-        }
-      }).catch(() => {
-      });
+      scheduleReacquireAttempt(resourceId);
     }, reacquireIntervalMs);
   };
+  const trackReacquireTask = (task) => {
+    reacquireTask = task;
+    void task.finally(() => {
+      if (reacquireTask === task) reacquireTask = null;
+    });
+  };
+  const scheduleReacquireAttempt = (resourceId) => {
+    if (stopped || holdingLease || innerStarted) return;
+    if (reacquireInFlight) {
+      pendingReacquire = true;
+      return;
+    }
+    trackReacquireTask(runReacquireAttempt(resourceId));
+  };
+  const runReacquireAttempt = async (resourceId) => {
+    if (stopped || holdingLease || innerStarted) return;
+    if (reacquireInFlight) {
+      pendingReacquire = true;
+      return;
+    }
+    reacquireInFlight = true;
+    try {
+      const eligible = await isLeaseEligible();
+      if (stopped) return;
+      const result = await arbiter.tryAcquire(inner.id, resourceId, { eligible });
+      if (stopped) {
+        if (result.ok) await arbiter.release(inner.id, resourceId).catch(() => {
+        });
+        return;
+      }
+      if (!result.ok) {
+        startReacquireTimer(resourceId);
+        return;
+      }
+      if (reacquireTimer != null) {
+        clearIntervalFn(reacquireTimer);
+        reacquireTimer = null;
+      }
+      holdingLease = true;
+      if (stopped) {
+        holdingLease = false;
+        await arbiter.release(inner.id, resourceId).catch(() => {
+        });
+        return;
+      }
+      log(
+        `comm ${inner.id} resource ${resourceId}: acquired the poll lease on re-acquire; starting this consumer.`
+      );
+      try {
+        await inner.start();
+        if (stopped) {
+          innerStarted = false;
+          holdingLease = false;
+          await inner.stop().catch(() => {
+          });
+          await arbiter.release(inner.id, resourceId).catch(() => {
+          });
+          return;
+        }
+        innerStarted = true;
+        startRenewTimer(resourceId);
+      } catch (error) {
+        innerStarted = false;
+        holdingLease = false;
+        log(
+          `comm ${inner.id} resource ${resourceId}: inner.start() failed after re-acquire: ${error instanceof Error ? error.message : String(error)}; releasing lease.`
+        );
+        await arbiter.release(inner.id, resourceId).catch(() => {
+        });
+        if (!stopped) startReacquireTimer(resourceId);
+      }
+    } catch {
+      if (!stopped) startReacquireTimer(resourceId);
+    } finally {
+      reacquireInFlight = false;
+      if (!stopped && pendingReacquire && !holdingLease && !innerStarted) {
+        pendingReacquire = false;
+        scheduleReacquireAttempt(resourceId);
+      } else {
+        pendingReacquire = false;
+      }
+    }
+  };
+  const nudgeReacquire = () => {
+    if (stopped || !resource) return;
+    if (holdingLease || innerStarted) return;
+    if (reacquireTimer != null) {
+      clearIntervalFn(reacquireTimer);
+      reacquireTimer = null;
+    }
+    scheduleReacquireAttempt(resource.resourceId);
+  };
+  if (resource) {
+    leaseReacquireNudges.set(leaseResourceKey(inner.id, resource.resourceId), nudgeReacquire);
+  }
   const proxy = {
     get id() {
       return inner.id;
@@ -4365,7 +4558,15 @@ function wrapWithLease(inner, arbiter, options = {}) {
       }
     },
     async stop() {
+      stopped = true;
       clearTimers();
+      if (resource) {
+        leaseReacquireNudges.delete(leaseResourceKey(inner.id, resource.resourceId));
+      }
+      if (reacquireTask) {
+        await reacquireTask.catch(() => {
+        });
+      }
       try {
         if (innerStarted) await inner.stop();
       } finally {
@@ -4397,100 +4598,6 @@ function wrapWithLease(inner, arbiter, options = {}) {
     editMessage: inner.editMessage ? (chatNativeId, messageNativeId, text, opts) => inner.editMessage(chatNativeId, messageNativeId, text, opts) : void 0
   };
   return proxy;
-}
-
-// ../core-daemon/runtime/process-start-epoch.ts
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-function readProcessStartIdentity(pid, options = {}) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  try {
-    if (options.readProcStat && options.readBootId) {
-      return readLinuxProcessStartIdentity(pid, options);
-    }
-    if (process.platform === "linux") {
-      return readLinuxProcessStartIdentity(pid, options);
-    }
-    if (process.platform === "darwin") {
-      return readDarwinProcessStartEpochMs(pid);
-    }
-    if (process.platform === "win32") {
-      return readWindowsProcessStartEpochMs(pid);
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-function readProcessStartEpochMs(pid, options = {}) {
-  return readProcessStartIdentity(pid, options);
-}
-function compareProcessStartIdentity(stored, pid, options = {}) {
-  if (stored == null) return "inconclusive";
-  const current = readProcessStartIdentity(pid, options);
-  if (current == null) return "inconclusive";
-  return current === stored ? "match" : "mismatch";
-}
-function fnv1a32(input) {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-function readLinuxBootId(options) {
-  if (options.readBootId) return options.readBootId();
-  try {
-    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-  } catch {
-    return null;
-  }
-}
-function readLinuxStartTicks(pid, readProcStat) {
-  const raw = readProcStat?.(pid) ?? (() => {
-    try {
-      return readFileSync(`/proc/${pid}/stat`, "utf8");
-    } catch {
-      return null;
-    }
-  })();
-  if (!raw) return null;
-  const closeParen = raw.lastIndexOf(")");
-  if (closeParen < 0) return null;
-  const fields = raw.slice(closeParen + 2).split(" ");
-  const startTicks = Number(fields[19]);
-  return Number.isFinite(startTicks) ? startTicks : null;
-}
-function readLinuxProcessStartIdentity(pid, options) {
-  const bootId = readLinuxBootId(options);
-  const startTicks = readLinuxStartTicks(pid, options.readProcStat);
-  if (!bootId || startTicks == null) return null;
-  return fnv1a32(`${bootId}:${startTicks}`);
-}
-function readDarwinProcessStartEpochMs(pid) {
-  const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-    encoding: "utf8"
-  }).trim();
-  if (!out) return null;
-  const parsed = Date.parse(out);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-function readWindowsProcessStartEpochMs(pid) {
-  const out = execFileSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-Command",
-      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
-    ],
-    // windowsHide: a console-less daemon spawning powershell.exe without it
-    // allocates a visible console window per probe (one flash per liveness check).
-    { encoding: "utf8", windowsHide: true }
-  ).trim();
-  const ticks = Number(out);
-  if (!Number.isFinite(ticks)) return null;
-  return ticks / 1e4 - 621355968e5;
 }
 
 // ../core-daemon/runtime/session-owner-liveness.ts
@@ -5010,8 +5117,8 @@ import { createInterface } from "node:readline/promises";
 
 // ../core-daemon/storage/jsonl.ts
 import { open as open2 } from "node:fs/promises";
-async function appendJsonLine(path8, value) {
-  const handle = await open2(path8, "a");
+async function appendJsonLine(path9, value) {
+  const handle = await open2(path9, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -5031,18 +5138,18 @@ var JsonlAuditStore = class {
   }
   root;
   async append(event) {
-    const path8 = this.pathFor(event.timestamp);
-    await mkdir2(dirname(path8), { recursive: true });
-    await appendJsonLine(path8, event);
+    const path9 = this.pathFor(event.timestamp);
+    await mkdir2(dirname(path9), { recursive: true });
+    await appendJsonLine(path9, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
   async hasInboundReceived(conversation_id, message, auditTimestamp) {
-    const path8 = this.pathFor(auditTimestamp ?? Date.now());
+    const path9 = this.pathFor(auditTimestamp ?? Date.now());
     try {
       const lines = createInterface({
-        input: createReadStream(path8, { encoding: "utf8" }),
+        input: createReadStream(path9, { encoding: "utf8" }),
         crlfDelay: Infinity
       });
       for await (const line of lines) {
@@ -5236,9 +5343,9 @@ async function writeDaemonDiscoveryFiles(input) {
 import { access } from "node:fs/promises";
 import { join as join2 } from "node:path";
 var DEFAULT_BOOT_RESTORE_RECENCY_MS = DEFAULT_SESSION_OWNER_RECENCY_MS;
-async function defaultPathExists(path8) {
+async function defaultPathExists(path9) {
   try {
-    await access(path8);
+    await access(path9);
     return true;
   } catch {
     return false;
@@ -6212,13 +6319,13 @@ var MessageBus = class {
       return this.resolveQueryForCurlRecovery(plannedId, decision, curlRecovery);
     }
     if (!message.text) return false;
-    const open5 = await this.options.storage.listOpenQueriesByConversation(
+    const open6 = await this.options.storage.listOpenQueriesByConversation(
       conversation.conversation_id
     );
-    if (open5.length === 0) return false;
+    if (open6.length === 0) return false;
     const chat = chatRefFromConversation(conversation);
     if (message.reply_to) {
-      const target = open5.find((q) => q.source_message_id === message.reply_to);
+      const target = open6.find((q) => q.source_message_id === message.reply_to);
       if (target) {
         const decision = decisionFromMessage(target, message, chat, this.now());
         if (!decision) return false;
@@ -6229,7 +6336,7 @@ var MessageBus = class {
         );
       }
     }
-    const candidates = open5.map((q) => ({
+    const candidates = open6.map((q) => ({
       query: q,
       decision: decisionFromMessage(q, message, chat, this.now())
     })).filter((entry) => entry.decision !== null);
@@ -6347,17 +6454,17 @@ var MessageBus = class {
     return resolved;
   }
   async resolveQueryFromCallback(input) {
-    const open5 = await this.options.storage.getOpenQueryById(input.queryId);
-    if (!open5) {
+    const open6 = await this.options.storage.getOpenQueryById(input.queryId);
+    if (!open6) {
       const existing = await this.options.storage.getQuery(input.queryId);
       return { kind: existing ? "already_resolved" : "unknown_query" };
     }
     if (input.value === "other") {
       const ok = await this.options.storage.updateQueryKind(input.queryId, "freetext");
       if (!ok) return { kind: "already_resolved" };
-      return { kind: "awaiting_freetext", query: open5 };
+      return { kind: "awaiting_freetext", query: open6 };
     }
-    const decision = decisionFromCallbackValue(open5, input.value, input.fromId, input.chat, this.now());
+    const decision = decisionFromCallbackValue(open6, input.value, input.fromId, input.chat, this.now());
     if (!decision) return { kind: "invalid_value", value: input.value };
     const stored = await this.options.storage.resolveQuery(
       input.queryId,
@@ -6372,12 +6479,12 @@ var MessageBus = class {
     await this.options.audit.append({
       timestamp: this.now(),
       kind: "query_resolved",
-      agent: open5.agent,
-      session: open5.session,
+      agent: open6.agent,
+      session: open6.session,
       detail: { query_id: input.queryId, decision: decision.decision, via: "callback" }
     });
-    await this.notifyResolveSinks(open5, decision, input.queryId);
-    return { kind: "resolved", decision, query: open5 };
+    await this.notifyResolveSinks(open6, decision, input.queryId);
+    return { kind: "resolved", decision, query: open6 };
   }
   async listConversations(filter) {
     return this.options.storage.listConversations({
@@ -6842,8 +6949,8 @@ var SqliteStorage = class _SqliteStorage {
     this.db = db;
   }
   db;
-  static async open(path8) {
-    const db = new DatabaseSync(path8);
+  static async open(path9) {
+    const db = new DatabaseSync(path9);
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
     await runStorageMigrations(db);
@@ -7887,8 +7994,8 @@ function isSqliteUniqueViolation(error) {
   const sqliteError = error;
   return sqliteError.code === "SQLITE_CONSTRAINT_UNIQUE" || sqliteError.code === "SQLITE_CONSTRAINT_PRIMARYKEY" || sqliteError.errcode === 2067 || sqliteError.errcode === 1555;
 }
-async function openSqliteStorage(path8) {
-  return SqliteStorage.open(path8);
+async function openSqliteStorage(path9) {
+  return SqliteStorage.open(path9);
 }
 function isConstraintError(error) {
   const sqliteError = error;
@@ -7909,20 +8016,20 @@ var JsonlTranscriptStore = class {
   }
   root;
   async append(entry) {
-    const path8 = this.pathFor(entry.conversation_id);
-    await mkdir4(dirname3(path8), { recursive: true });
-    await appendJsonLine(path8, entry);
+    const path9 = this.pathFor(entry.conversation_id);
+    await mkdir4(dirname3(path9), { recursive: true });
+    await appendJsonLine(path9, entry);
   }
   async *read(conversation_id, opts = {}) {
-    const path8 = this.pathFor(conversation_id);
+    const path9 = this.pathFor(conversation_id);
     try {
-      await stat2(path8);
+      await stat2(path9);
     } catch {
       return;
     }
     let yielded = 0;
     const lines = createInterface2({
-      input: createReadStream2(path8, { encoding: "utf8" }),
+      input: createReadStream2(path9, { encoding: "utf8" }),
       crlfDelay: Infinity
     });
     for await (const line of lines) {
@@ -7953,11 +8060,11 @@ var ContentAddressedBlobStore = class {
   async put(content, mime) {
     const hash = createHash("sha256").update(content).digest("hex");
     const ref = { hash, size: content.byteLength, mime };
-    const path8 = this.pathFor(ref);
+    const path9 = this.pathFor(ref);
     await mkdir5(join5(this.root, "blobs", hash.slice(0, 2)), { recursive: true });
     let handle;
     try {
-      handle = await open4(path8, "wx");
+      handle = await open4(path9, "wx");
       await handle.writeFile(content);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
@@ -8983,6 +9090,339 @@ function startSessionEndSweep(options) {
   };
 }
 
+// ../core-daemon/runtime/comm-lease-sweep.ts
+import { constants as constants2, existsSync as existsSync2 } from "node:fs";
+import { mkdir as mkdir6, open as open5, readdir, readFile as readFile6, rm as rm4, stat as stat4 } from "node:fs/promises";
+import os3 from "node:os";
+import path4 from "node:path";
+var DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS = 60 * 60 * 1e3;
+function classifyCommLeaseOwner(record, options = {}) {
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
+  if (!Number.isInteger(record.pid) || record.pid <= 0 || !isPidAlive2(record.pid)) {
+    return "definitely_dead";
+  }
+  if (record.process_start_time != null) {
+    const compare = options.readProcessStartEpochMs ? (() => {
+      const current = options.readProcessStartEpochMs(record.pid);
+      if (current == null) return "inconclusive";
+      return current === record.process_start_time ? "match" : "mismatch";
+    })() : compareProcessStartIdentity(record.process_start_time, record.pid, options);
+    if (compare === "mismatch") return "definitely_dead";
+  }
+  return "retain";
+}
+function commLeaseLockRoot(homeDir = os3.homedir()) {
+  return path4.join(homeDir, `.${DAEMON_NAME}`, "comm-locks");
+}
+function isAlreadyExistsError2(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+function parseLeaseRecord(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.pid !== "number" || typeof parsed.comm_id !== "string") return null;
+    if (typeof parsed.resource_id !== "string") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function acquireSweepGuard(leasePath, selfPid, now, isPidAlive2, stalenessMs) {
+  const guardPath = `${leasePath}.guard`;
+  await mkdir6(path4.dirname(guardPath), { recursive: true });
+  const token = `${selfPid}:${now()}`;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open5(guardPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
+      await handle.writeFile(`${token}
+`, "utf8");
+      await handle.close();
+      return token;
+    } catch (error) {
+      if (!isAlreadyExistsError2(error)) throw error;
+      if (attempt === 0 && await guardIsStale(guardPath, selfPid, now, isPidAlive2, stalenessMs)) {
+        await rm4(guardPath, { force: true });
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+async function guardIsStale(guardPath, selfPid, now, isPidAlive2, stalenessMs) {
+  try {
+    const raw = (await readFile6(guardPath, "utf8")).trim();
+    const pid = Number(raw.split(":")[0]);
+    if (!Number.isInteger(pid) || pid <= 0) return true;
+    if (pid === selfPid) return true;
+    return !isPidAlive2(pid);
+  } catch {
+    try {
+      const info = await stat4(guardPath);
+      return now() - info.mtimeMs > stalenessMs;
+    } catch {
+      return false;
+    }
+  }
+}
+async function releaseSweepGuard(leasePath, token) {
+  const guardPath = `${leasePath}.guard`;
+  try {
+    const current = (await readFile6(guardPath, "utf8")).trim();
+    if (current === token) {
+      await rm4(guardPath, { force: true });
+    }
+  } catch {
+  }
+}
+function isCommLeaseRecoveryAllowed(recoveryAllowed) {
+  return recoveryAllowed?.() ?? true;
+}
+async function recoverAfterLeaseDeletion(comm_id, resource_id, input) {
+  if (nudgeLeaseReacquire(comm_id, resource_id)) {
+    return true;
+  }
+  const registrations = await input.storage.listAccountRegistrations({
+    comm: comm_id
+  });
+  const registration = registrations.find((row) => row.bot_user_id === resource_id);
+  if (!registration || !await isRegistrationDesiredForRecovery(registration, input)) {
+    return false;
+  }
+  await ensureRegistrationForAccount(registration, input.ensure);
+  return true;
+}
+async function isRegistrationDesiredForRecovery(registration, input) {
+  if (registration.activation === "eager") return true;
+  if (!input.discoveryRoot || !input.sessionOwnerIsLive || !input.factories?.length) {
+    return false;
+  }
+  const desired = await buildGlobalDesiredRegistrationIds({
+    storage: input.storage,
+    factories: [...input.factories],
+    discoveryRoot: input.discoveryRoot,
+    sessionOwnerIsLive: input.sessionOwnerIsLive
+  });
+  return desired.has(registration.registration_id);
+}
+async function runCommLeaseSweep(input) {
+  const counts = {
+    examined: 0,
+    retained: 0,
+    reaped: 0,
+    cas_lost: 0,
+    guard_contended: 0,
+    malformed: 0,
+    recovered: 0
+  };
+  const homeDir = input.homeDir ?? os3.homedir();
+  const selfPid = input.selfPid ?? process.pid;
+  const now = input.now ?? Date.now;
+  const isPidAlive2 = input.isPidAlive ?? input.ownerLivenessOptions?.isPidAlive ?? defaultIsPidAlive2;
+  const livenessOptions = {
+    ...input.ownerLivenessOptions,
+    isPidAlive: isPidAlive2
+  };
+  const stalenessMs = input.stalenessMs ?? 9e4;
+  const root = commLeaseLockRoot(homeDir);
+  if (!existsSync2(root)) {
+    return counts;
+  }
+  let commDirs;
+  try {
+    commDirs = await readdir(root);
+  } catch (error) {
+    throw new Error(
+      `comm lease sweep: unreadable lock root ${root}: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  for (const commId of commDirs) {
+    const commDir = path4.join(root, commId);
+    let entries;
+    try {
+      const info = await stat4(commDir);
+      if (!info.isDirectory()) continue;
+      entries = await readdir(commDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith(".json") || entry.endsWith(".json.guard")) continue;
+      if (entry.endsWith(".guard")) continue;
+      const leasePath = path4.join(commDir, entry);
+      counts.examined += 1;
+      let snapshot;
+      try {
+        snapshot = await readFile6(leasePath, "utf8");
+      } catch {
+        counts.malformed += 1;
+        continue;
+      }
+      const record = parseLeaseRecord(snapshot);
+      if (!record) {
+        counts.malformed += 1;
+        continue;
+      }
+      if (classifyCommLeaseOwner(record, livenessOptions) !== "definitely_dead") {
+        counts.retained += 1;
+        continue;
+      }
+      const guard = await acquireSweepGuard(leasePath, selfPid, now, isPidAlive2, stalenessMs);
+      if (!guard) {
+        counts.guard_contended += 1;
+        continue;
+      }
+      let reaped = null;
+      try {
+        if (input.afterGuardAcquired) {
+          await input.afterGuardAcquired(leasePath, snapshot);
+        }
+        let reread;
+        try {
+          reread = await readFile6(leasePath, "utf8");
+        } catch {
+          counts.cas_lost += 1;
+          continue;
+        }
+        if (reread !== snapshot) {
+          counts.cas_lost += 1;
+          continue;
+        }
+        const current = parseLeaseRecord(reread);
+        if (!current || classifyCommLeaseOwner(current, livenessOptions) !== "definitely_dead") {
+          counts.cas_lost += 1;
+          continue;
+        }
+        await rm4(leasePath, { force: true });
+        counts.reaped += 1;
+        await input.audit?.append({
+          timestamp: now(),
+          kind: "comm_lease_reaped",
+          detail: {
+            comm_id: current.comm_id,
+            resource_id: current.resource_id,
+            holder_pid: current.pid,
+            holder_rank: current.authorityRank,
+            process_start_time: current.process_start_time ?? null
+          }
+        }).catch(() => {
+        });
+        reaped = {
+          comm_id: current.comm_id,
+          resource_id: current.resource_id
+        };
+      } finally {
+        await releaseSweepGuard(leasePath, guard);
+      }
+      if (reaped && input.recovery) {
+        if (input.beforeRecovery) {
+          await input.beforeRecovery(leasePath);
+        }
+        if (!isCommLeaseRecoveryAllowed(input.recoveryAllowed)) {
+          continue;
+        }
+        const recovered = await recoverAfterLeaseDeletion(
+          reaped.comm_id,
+          reaped.resource_id,
+          input.recovery
+        ).catch(() => false);
+        if (recovered) counts.recovered += 1;
+      }
+    }
+  }
+  if (input.sweepHold) {
+    await input.sweepHold();
+  }
+  const log = input.log ?? (() => {
+  });
+  log(
+    `agents-comm-bus: comm lease sweep: examined=${counts.examined} retained=${counts.retained} reaped=${counts.reaped} cas_lost=${counts.cas_lost} guard_contended=${counts.guard_contended} malformed=${counts.malformed} recovered=${counts.recovered}`
+  );
+  return counts;
+}
+function startCommLeaseSweep(options) {
+  const intervalMs = options.intervalMs ?? DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS;
+  const setIntervalFn = options.setIntervalFn ?? ((fn, ms) => {
+    const handle = setInterval(fn, ms);
+    handle.unref?.();
+    return handle;
+  });
+  const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
+  let sweepInFlight = false;
+  let pendingTick = false;
+  let stopped = false;
+  let interval = null;
+  const tick = () => {
+    if (stopped) return;
+    if (sweepInFlight) {
+      pendingTick = true;
+      return;
+    }
+    sweepInFlight = true;
+    void runCommLeaseSweep({
+      homeDir: options.homeDir,
+      selfPid: options.selfPid,
+      now: options.now,
+      isPidAlive: options.isPidAlive,
+      ownerLivenessOptions: options.ownerLivenessOptions,
+      stalenessMs: options.stalenessMs,
+      log: options.log,
+      audit: options.audit,
+      recovery: options.recovery,
+      sweepHold: options.sweepHold,
+      afterGuardAcquired: options.afterGuardAcquired,
+      beforeRecovery: options.beforeRecovery,
+      recoveryAllowed: options.recoveryAllowed ?? (() => !stopped)
+    }).catch(async (error) => {
+      const log = options.log ?? console.error;
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`agents-comm-bus: comm lease sweep failed: ${reason}`);
+      await options.audit?.append({
+        timestamp: (options.now ?? Date.now)(),
+        kind: "comm_lease_sweep_failed",
+        detail: { phase: "periodic", reason }
+      }).catch(() => {
+      });
+    }).finally(() => {
+      sweepInFlight = false;
+      if (!stopped && pendingTick) {
+        pendingTick = false;
+        tick();
+      }
+    });
+  };
+  if (options.runOnStart !== false) {
+    tick();
+  }
+  interval = setIntervalFn(tick, intervalMs);
+  return {
+    stop() {
+      stopped = true;
+      if (interval != null) clearIntervalFn(interval);
+      interval = null;
+    }
+  };
+}
+async function runCommLeaseDaemonBootstrap(input) {
+  let periodic = null;
+  try {
+    await input.bootSweep();
+    periodic = input.startPeriodicSweep();
+  } catch (error) {
+    await input.onBootSweepFailed(error);
+  }
+  await input.bootRestore();
+  await input.eagerReconcile();
+  return periodic;
+}
+function publishCommLeaseSweepHandle(input) {
+  if (input.retiring) {
+    input.incoming?.stop();
+    return { current: input.current, stoppedIncoming: input.incoming != null };
+  }
+  return { current: input.incoming, stoppedIncoming: false };
+}
+
 // ../core-daemon/runtime/durable-inbound.ts
 function durableInboundKey(entry) {
   return deliveryKey(
@@ -9128,8 +9568,8 @@ async function runDaemon(options) {
     console.log(JSON.stringify({ ...paths, discovery: discoveryPaths }, null, 2));
     return;
   }
-  await mkdir6(paths.root, { recursive: true });
-  await mkdir6(discoveryPaths.root, { recursive: true });
+  await mkdir7(paths.root, { recursive: true });
+  await mkdir7(discoveryPaths.root, { recursive: true });
   const storage = await openSqliteStorage(paths.database);
   const transcripts = new JsonlTranscriptStore(paths.root);
   const audit = new JsonlAuditStore(paths.root);
@@ -9165,7 +9605,7 @@ async function runDaemon(options) {
     }
   });
   console.error(
-    `agents-comm-bus ${DAEMON_VERSION} starting: stateRoot=${paths.root} discoveryRoot=${discoveryPaths.root} checkoutRoot=${checkoutRoot ?? "?"} daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} home=${os3.homedir()}`
+    `agents-comm-bus ${DAEMON_VERSION} starting: stateRoot=${paths.root} discoveryRoot=${discoveryPaths.root} checkoutRoot=${checkoutRoot ?? "?"} daemonBin=${daemonBin ?? "?"} authorityRank=${authorityRank} pid=${process.pid} home=${os4.homedir()}`
   );
   const comms = [];
   const bus = new MessageBus({
@@ -9412,7 +9852,10 @@ async function runDaemon(options) {
   let pidWatchdogHandle = null;
   let idleReaperHandle = null;
   let sessionEndSweepHandle = null;
+  let commLeaseSweepHandle = null;
+  let daemonRetiring = false;
   const runDaemonRetirement = async (reason, recordAudit) => {
+    daemonRetiring = true;
     await retireDaemon({
       reason,
       port: server.port,
@@ -9423,6 +9866,8 @@ async function runDaemon(options) {
         pidWatchdogHandle?.stop();
         idleReaperHandle?.stop();
         sessionEndSweepHandle?.stop();
+        commLeaseSweepHandle?.stop();
+        commLeaseSweepHandle = null;
         eagerRetry?.stopAll();
       },
       stopBus: () => bestEffortWithTimeout(
@@ -9478,16 +9923,58 @@ async function runDaemon(options) {
     reconcileState: scopeReconcileState
   });
   requestScopeReconcile = () => sessionEndSweepHandle?.requestEarlyReconcile();
-  void runBootScopeRestore({
-    stateRoot: paths.root,
+  const commLeaseSweepRecovery = {
+    storage,
+    ensure: buildEnsureRegistrationContext({ scheduleEagerRetry }),
+    audit,
     discoveryRoot: discoveryPaths.root,
-    storage,
-    ensureCommsForSession: ensureCommsForSessionFn,
-    audit
-  });
-  void reconcileEagerRegistrations({
-    storage,
-    ensure: buildEnsureRegistrationContext({ scheduleEagerRetry })
+    sessionOwnerIsLive,
+    factories: commAdapterFactories
+  };
+  void runCommLeaseDaemonBootstrap({
+    bootSweep: () => runCommLeaseSweep({
+      log: (message) => console.error(message),
+      audit,
+      recovery: commLeaseSweepRecovery,
+      recoveryAllowed: () => !daemonRetiring
+    }).then(() => {
+    }),
+    startPeriodicSweep: () => startCommLeaseSweep({
+      runOnStart: false,
+      log: (message) => console.error(message),
+      audit,
+      recovery: commLeaseSweepRecovery
+    }),
+    bootRestore: () => runBootScopeRestore({
+      stateRoot: paths.root,
+      discoveryRoot: discoveryPaths.root,
+      storage,
+      ensureCommsForSession: ensureCommsForSessionFn,
+      audit
+    }).then(() => {
+    }),
+    eagerReconcile: () => reconcileEagerRegistrations({
+      storage,
+      ensure: buildEnsureRegistrationContext({ scheduleEagerRetry })
+    }).then(() => {
+    }),
+    onBootSweepFailed: async (error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`agents-comm-bus: boot comm lease sweep failed: ${reason}`);
+      await audit.append({
+        timestamp: Date.now(),
+        kind: "comm_lease_sweep_failed",
+        detail: { phase: "boot", reason }
+      }).catch(() => {
+      });
+    }
+  }).then((handle) => {
+    const published = publishCommLeaseSweepHandle({
+      retiring: daemonRetiring,
+      current: commLeaseSweepHandle,
+      incoming: handle
+    });
+    commLeaseSweepHandle = published.current;
   });
   console.error(`agents-comm-bus ${DAEMON_VERSION} listening on ${server.url}`);
 }
@@ -10003,9 +10490,9 @@ function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
 
 // ../core-daemon/bridges/claude/wake.ts
 import crypto2 from "node:crypto";
-import { mkdir as mkdir7, writeFile as writeFile2 } from "node:fs/promises";
-import os4 from "node:os";
-import path4 from "node:path";
+import { mkdir as mkdir8, writeFile as writeFile2 } from "node:fs/promises";
+import os5 from "node:os";
+import path5 from "node:path";
 function hashProjectKey(projectPath) {
   let hash = 2166136261;
   for (let i = 0; i < projectPath.length; i += 1) {
@@ -10014,9 +10501,9 @@ function hashProjectKey(projectPath) {
   }
   return hash.toString(16).padStart(8, "0");
 }
-function claudeWakeDirForProject(projectPath, homeDir = os4.homedir(), accountLabelScope = null) {
+function claudeWakeDirForProject(projectPath, homeDir = os5.homedir(), accountLabelScope = null) {
   const canonical = normalizeProjectPath(projectPath);
-  const basename = path4.basename(canonical) || "project";
+  const basename = path5.basename(canonical) || "project";
   const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
   let canonicalScope;
   try {
@@ -10029,7 +10516,7 @@ function claudeWakeDirForProject(projectPath, homeDir = os4.homedir(), accountLa
     );
     canonicalScope = `__invalid__:${accountLabelScope}`;
   }
-  return path4.join(
+  return path5.join(
     homeDir,
     ".agents-comm-bus",
     "claude-wake",
@@ -10038,8 +10525,8 @@ function claudeWakeDirForProject(projectPath, homeDir = os4.homedir(), accountLa
   );
 }
 async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
-  await mkdir7(wakeDir, { recursive: true });
-  await writeFile2(path4.join(wakeDir, "trigger-enter"), `${now()}
+  await mkdir8(wakeDir, { recursive: true });
+  await writeFile2(path5.join(wakeDir, "trigger-enter"), `${now()}
 `, "utf8");
 }
 var WAKE_SEED_MAX_CHARS = 2e3;
@@ -10056,13 +10543,13 @@ function buildWakeSeed(input) {
   return sanitizeWakeSeed(`${comm} message from ${sender}: ${body}`);
 }
 async function writeClaudeWakeSeed(wakeDir, text) {
-  await mkdir7(wakeDir, { recursive: true });
-  await writeFile2(path4.join(wakeDir, "wake-seed.txt"), text, "utf8");
+  await mkdir8(wakeDir, { recursive: true });
+  await writeFile2(path5.join(wakeDir, "wake-seed.txt"), text, "utf8");
 }
 async function writeClaudeWakeResponse(wakeDir, payload) {
-  await mkdir7(wakeDir, { recursive: true });
+  await mkdir8(wakeDir, { recursive: true });
   await writeFile2(
-    path4.join(wakeDir, "permission-response.json"),
+    path5.join(wakeDir, "permission-response.json"),
     JSON.stringify(payload),
     "utf8"
   );
@@ -10095,7 +10582,7 @@ var ClaudeWakeRegistry = class {
       project,
       wakeDir: input.wakeDir ?? claudeWakeDirForProject(
         project,
-        os4.homedir(),
+        os5.homedir(),
         input.account_label_scope ?? null
       ),
       registeredAt: this.now(),
@@ -11653,9 +12140,9 @@ function recordOrEmpty2(value) {
 
 // ../core-daemon/bridges/codex/app-server-lifecycle.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { readFile as readFile6, writeFile as writeFile3 } from "node:fs/promises";
-import os5 from "node:os";
-import path5 from "node:path";
+import { readFile as readFile7, writeFile as writeFile3 } from "node:fs/promises";
+import os6 from "node:os";
+import path6 from "node:path";
 var DEFAULT_STOPPED_BY = "codex-bridge-lease-release";
 async function cleanupManagedCodexAppServer(session, options = {}) {
   const statePath = managedCodexAppServerStatePath(session, options.stateRoot);
@@ -11690,12 +12177,12 @@ async function killTree(processManager, pid) {
   }
   return processManager.kill(pid);
 }
-function managedCodexAppServerStatePath(session, stateRoot2 = path5.join(os5.homedir(), ".agents-comm-bus", "codex-bootstrapper")) {
-  return path5.join(stateRoot2, "sessions", `${session}.json`);
+function managedCodexAppServerStatePath(session, stateRoot2 = path6.join(os6.homedir(), ".agents-comm-bus", "codex-bootstrapper")) {
+  return path6.join(stateRoot2, "sessions", `${session}.json`);
 }
 async function readManagedAppServerState(statePath) {
   try {
-    return JSON.parse(await readFile6(statePath, "utf8"));
+    return JSON.parse(await readFile7(statePath, "utf8"));
   } catch {
     return null;
   }
@@ -13086,8 +13573,8 @@ var PiBridgeFactory = class {
 };
 
 // ../core-daemon/runtime/comm-adapter-loader.ts
-import { readdir, stat as stat4 } from "node:fs/promises";
-import path6 from "node:path";
+import { readdir as readdir2, stat as stat5 } from "node:fs/promises";
+import path7 from "node:path";
 import { pathToFileURL } from "node:url";
 function defaultOnError({ modulePath, error }) {
   const message = error instanceof Error ? error.message : String(error);
@@ -13097,7 +13584,7 @@ async function loadCommAdapterFactories(options) {
   const onError = options.onError ?? defaultOnError;
   let entries;
   try {
-    entries = await readdir(options.adaptersDir);
+    entries = await readdir2(options.adaptersDir);
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -13125,16 +13612,16 @@ async function loadCommAdapterFactories(options) {
   return factories;
 }
 async function resolveAdapterModulePath(adaptersDir, entry) {
-  const entryPath = path6.join(adaptersDir, entry);
+  const entryPath = path7.join(adaptersDir, entry);
   if (entry.endsWith(".js")) return entryPath;
   try {
-    if (!(await stat4(entryPath)).isDirectory()) return null;
+    if (!(await stat5(entryPath)).isDirectory()) return null;
   } catch {
     return null;
   }
-  const factoryPath = path6.join(entryPath, "factory.js");
+  const factoryPath = path7.join(entryPath, "factory.js");
   try {
-    if ((await stat4(factoryPath)).isFile()) return factoryPath;
+    if ((await stat5(factoryPath)).isFile()) return factoryPath;
   } catch {
     return null;
   }
@@ -13186,12 +13673,12 @@ async function startConfiguredDaemon() {
 }
 function resolveAdaptersDir(stateRoot2, env) {
   if (env.AGENTS_COMM_BUS_ADAPTERS_DIR) {
-    return path7.resolve(env.AGENTS_COMM_BUS_ADAPTERS_DIR);
+    return path8.resolve(env.AGENTS_COMM_BUS_ADAPTERS_DIR);
   }
   if (env.AGENTS_COMM_BUS_BIN) {
-    return path7.resolve(path7.dirname(env.AGENTS_COMM_BUS_BIN), "..", "adapters");
+    return path8.resolve(path8.dirname(env.AGENTS_COMM_BUS_BIN), "..", "adapters");
   }
-  return path7.join(stateRoot2, "adapters");
+  return path8.join(stateRoot2, "adapters");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL2(process.argv[1]).href) {
   startConfiguredDaemon().catch((error) => {

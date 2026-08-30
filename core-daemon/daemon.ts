@@ -614,6 +614,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         log: (message) => console.error(message),
         audit,
         recovery: commLeaseSweepRecovery,
+        recoveryAllowed: () => !daemonRetiring,
       }).then(() => {}),
     startPeriodicSweep: () =>
       startCommLeaseSweep({

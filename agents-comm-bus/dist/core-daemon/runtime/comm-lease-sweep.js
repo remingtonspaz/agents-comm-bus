@@ -110,6 +110,9 @@ async function releaseSweepGuard(leasePath, token) {
         // best-effort
     }
 }
+export function isCommLeaseRecoveryAllowed(recoveryAllowed) {
+    return recoveryAllowed?.() ?? true;
+}
 async function recoverAfterLeaseDeletion(comm_id, resource_id, input) {
     if (nudgeLeaseReacquire(comm_id, resource_id)) {
         return true;
@@ -259,6 +262,9 @@ export async function runCommLeaseSweep(input) {
                 if (input.beforeRecovery) {
                     await input.beforeRecovery(leasePath);
                 }
+                if (!isCommLeaseRecoveryAllowed(input.recoveryAllowed)) {
+                    continue;
+                }
                 const recovered = await recoverAfterLeaseDeletion(reaped.comm_id, reaped.resource_id, input.recovery).catch(() => false);
                 if (recovered)
                     counts.recovered += 1;
@@ -309,6 +315,7 @@ export function startCommLeaseSweep(options) {
             sweepHold: options.sweepHold,
             afterGuardAcquired: options.afterGuardAcquired,
             beforeRecovery: options.beforeRecovery,
+            recoveryAllowed: options.recoveryAllowed ?? (() => !stopped),
         })
             .catch(async (error) => {
             const log = options.log ?? console.error;

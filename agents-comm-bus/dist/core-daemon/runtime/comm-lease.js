@@ -711,6 +711,7 @@ export function wrapWithLease(inner, arbiter, options = {}) {
     let stopped = false;
     let reacquireInFlight = false;
     let pendingReacquire = false;
+    let reacquireTask = null;
     const resource = inner.exclusiveResource?.() ?? null;
     const clearTimers = () => {
         if (renewTimer != null) {
@@ -763,6 +764,13 @@ export function wrapWithLease(inner, arbiter, options = {}) {
             scheduleReacquireAttempt(resourceId);
         }, reacquireIntervalMs);
     };
+    const trackReacquireTask = (task) => {
+        reacquireTask = task;
+        void task.finally(() => {
+            if (reacquireTask === task)
+                reacquireTask = null;
+        });
+    };
     const scheduleReacquireAttempt = (resourceId) => {
         if (stopped || holdingLease || innerStarted)
             return;
@@ -770,7 +778,7 @@ export function wrapWithLease(inner, arbiter, options = {}) {
             pendingReacquire = true;
             return;
         }
-        void runReacquireAttempt(resourceId);
+        trackReacquireTask(runReacquireAttempt(resourceId));
     };
     const runReacquireAttempt = async (resourceId) => {
         if (stopped || holdingLease || innerStarted)
@@ -911,6 +919,9 @@ export function wrapWithLease(inner, arbiter, options = {}) {
             clearTimers();
             if (resource) {
                 leaseReacquireNudges.delete(leaseResourceKey(inner.id, resource.resourceId));
+            }
+            if (reacquireTask) {
+                await reacquireTask.catch(() => { });
             }
             try {
                 if (innerStarted)

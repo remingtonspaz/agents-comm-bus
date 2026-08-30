@@ -450,6 +450,7 @@ export async function runDaemon(options) {
             log: (message) => console.error(message),
             audit,
             recovery: commLeaseSweepRecovery,
+            recoveryAllowed: () => !daemonRetiring,
         }).then(() => { }),
         startPeriodicSweep: () => startCommLeaseSweep({
             runOnStart: false,

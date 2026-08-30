@@ -950,6 +950,7 @@ export function wrapWithLease(
   let stopped = false;
   let reacquireInFlight = false;
   let pendingReacquire = false;
+  let reacquireTask: Promise<void> | null = null;
 
   const resource = inner.exclusiveResource?.() ?? null;
 
@@ -1005,13 +1006,20 @@ export function wrapWithLease(
     }, reacquireIntervalMs);
   };
 
+  const trackReacquireTask = (task: Promise<void>): void => {
+    reacquireTask = task;
+    void task.finally(() => {
+      if (reacquireTask === task) reacquireTask = null;
+    });
+  };
+
   const scheduleReacquireAttempt = (resourceId: string): void => {
     if (stopped || holdingLease || innerStarted) return;
     if (reacquireInFlight) {
       pendingReacquire = true;
       return;
     }
-    void runReacquireAttempt(resourceId);
+    trackReacquireTask(runReacquireAttempt(resourceId));
   };
 
   const runReacquireAttempt = async (resourceId: string): Promise<void> => {
@@ -1152,6 +1160,9 @@ export function wrapWithLease(
       clearTimers();
       if (resource) {
         leaseReacquireNudges.delete(leaseResourceKey(inner.id, resource.resourceId));
+      }
+      if (reacquireTask) {
+        await reacquireTask.catch(() => {});
       }
       try {
         if (innerStarted) await inner.stop();

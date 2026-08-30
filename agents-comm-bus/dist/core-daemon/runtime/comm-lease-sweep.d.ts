@@ -35,6 +35,7 @@ export interface CommLeaseSweepRecoveryInput {
     sessionOwnerIsLive?: SessionOwnerLiveness;
     factories?: readonly CommAdapterFactory[];
 }
+export declare function isCommLeaseRecoveryAllowed(recoveryAllowed?: () => boolean): boolean;
 export declare function runCommLeaseSweep(input: {
     homeDir?: string;
     selfPid?: number;
@@ -51,6 +52,8 @@ export declare function runCommLeaseSweep(input: {
     afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
     /** Test hook: invoked after guard release, before recovery. */
     beforeRecovery?: (leasePath: string) => void | Promise<void>;
+    /** When false, post-delete nudge/ensure is skipped (scheduler stop / daemon retirement). */
+    recoveryAllowed?: () => boolean;
 }): Promise<CommLeaseSweepCounts>;
 export interface CommLeaseSweepHandle {
     stop(): void;
@@ -69,6 +72,7 @@ export declare function startCommLeaseSweep(options: {
     sweepHold?: () => Promise<void>;
     afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
     beforeRecovery?: (leasePath: string) => void | Promise<void>;
+    recoveryAllowed?: () => boolean;
     setIntervalFn?: (fn: () => void, ms: number) => unknown;
     clearIntervalFn?: (handle: unknown) => void;
     /** Run one sweep immediately on start (daemon boot one-shot). */
