@@ -1,4 +1,4 @@
-import { processStartIdentityMatches, } from "./process-start-epoch.js";
+import { compareProcessStartIdentity, } from "./process-start-epoch.js";
 /** Match boot-scope restore's existing 24-hour owner recency window. */
 export const DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1000;
 export function defaultIsPidAlive(pid) {
@@ -31,10 +31,15 @@ export function classifySessionOwnerProcess(session, options = {}) {
             readProcUptime: options.readProcUptime,
             readClockTicksPerSec: options.readClockTicksPerSec,
         };
-        const matches = options.readProcessStartEpochMs
-            ? options.readProcessStartEpochMs(pid) === startTime
-            : processStartIdentityMatches(startTime, pid, identityOptions);
-        if (!matches)
+        const compare = options.readProcessStartEpochMs
+            ? (() => {
+                const current = options.readProcessStartEpochMs(pid);
+                if (current == null)
+                    return "inconclusive";
+                return current === startTime ? "match" : "mismatch";
+            })()
+            : compareProcessStartIdentity(startTime, pid, identityOptions);
+        if (compare === "mismatch")
             return "dead";
     }
     const now = options.now ?? Date.now;

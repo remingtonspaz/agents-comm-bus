@@ -32,8 +32,19 @@ export function readProcessStartEpochMs(pid, options = {}) {
     return readProcessStartIdentity(pid, options);
 }
 export function processStartIdentityMatches(stored, pid, options = {}) {
+    return compareProcessStartIdentity(stored, pid, options) === "match";
+}
+/**
+ * Compare stored process-start identity to the live pid probe.
+ * Inconclusive when either side is unavailable — callers must not treat that as dead.
+ */
+export function compareProcessStartIdentity(stored, pid, options = {}) {
+    if (stored == null)
+        return "inconclusive";
     const current = readProcessStartIdentity(pid, options);
-    return current != null && current === stored;
+    if (current == null)
+        return "inconclusive";
+    return current === stored ? "match" : "mismatch";
 }
 function fnv1a32(input) {
     let hash = 0x811c9dc5;

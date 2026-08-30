@@ -50,8 +50,25 @@ export function processStartIdentityMatches(
   pid: number,
   options: ProcessStartIdentityOptions = {},
 ): boolean {
+  return compareProcessStartIdentity(stored, pid, options) === "match";
+}
+
+/** Definite mismatch vs inconclusive (probe unavailable / no stored identity). */
+export type ProcessStartIdentityCompare = "match" | "mismatch" | "inconclusive";
+
+/**
+ * Compare stored process-start identity to the live pid probe.
+ * Inconclusive when either side is unavailable — callers must not treat that as dead.
+ */
+export function compareProcessStartIdentity(
+  stored: number | null | undefined,
+  pid: number,
+  options: ProcessStartIdentityOptions = {},
+): ProcessStartIdentityCompare {
+  if (stored == null) return "inconclusive";
   const current = readProcessStartIdentity(pid, options);
-  return current != null && current === stored;
+  if (current == null) return "inconclusive";
+  return current === stored ? "match" : "mismatch";
 }
 
 function fnv1a32(input: string): number {

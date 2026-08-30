@@ -1,8 +1,7 @@
 import type { Session } from "agents-comm-bus-core";
 
 import {
-  processStartIdentityMatches,
-  readProcessStartEpochMs,
+  compareProcessStartIdentity,
   type ProcessStartIdentityOptions,
 } from "./process-start-epoch.js";
 
@@ -66,10 +65,14 @@ export function classifySessionOwnerProcess(
       readProcUptime: options.readProcUptime,
       readClockTicksPerSec: options.readClockTicksPerSec,
     };
-    const matches = options.readProcessStartEpochMs
-      ? options.readProcessStartEpochMs(pid) === startTime
-      : processStartIdentityMatches(startTime, pid, identityOptions);
-    if (!matches) return "dead";
+    const compare = options.readProcessStartEpochMs
+      ? (() => {
+          const current = options.readProcessStartEpochMs!(pid);
+          if (current == null) return "inconclusive" as const;
+          return current === startTime ? "match" : "mismatch";
+        })()
+      : compareProcessStartIdentity(startTime, pid, identityOptions);
+    if (compare === "mismatch") return "dead";
   }
 
   const now = options.now ?? Date.now;

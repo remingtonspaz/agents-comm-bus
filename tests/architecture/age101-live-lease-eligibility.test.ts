@@ -44,6 +44,7 @@ import {
 } from "../../core-daemon/session-label-scope.js";
 import type { CommAdapterFactory } from "../../core-daemon/runtime/comm-factory.js";
 import {
+  compareProcessStartIdentity,
   processStartIdentityMatches,
   readProcessStartIdentity,
   currentProcessStartEpochMs,
@@ -334,7 +335,7 @@ describe("AGE-101 ensureCommsForSession wires eligibility (real path)", () => {
 });
 
 describe("AGE-101 pid+start-time liveness", () => {
-  it("classifies reused pid with mismatched start-time as dead", () => {
+  it("definite mismatch is dead", () => {
     const state = classifySessionOwnerProcess(
       {
         lease_holder_connection_id: null,
@@ -349,6 +350,43 @@ describe("AGE-101 pid+start-time liveness", () => {
       },
     );
     assert.equal(state, "dead");
+  });
+
+  it("null probe is inconclusive — NOT dead within recency (fail-safe)", () => {
+    const state = classifySessionOwnerProcess(
+      {
+        lease_holder_connection_id: null,
+        lease_owner_process_pid: 99,
+        lease_owner_process_registered_at: 1_000,
+        lease_owner_process_start_time: 100,
+      },
+      {
+        isPidAlive: () => true,
+        readProcessStartEpochMs: () => null,
+        now: () => 2_000,
+      },
+    );
+    assert.equal(state, "live");
+    assert.equal(compareProcessStartIdentity(100, 99, {}), "inconclusive");
+  });
+
+  it("definite match is live", () => {
+    assert.equal(
+      classifySessionOwnerProcess(
+        {
+          lease_holder_connection_id: null,
+          lease_owner_process_pid: 99,
+          lease_owner_process_registered_at: 1_000,
+          lease_owner_process_start_time: 100,
+        },
+        {
+          isPidAlive: () => true,
+          readProcessStartEpochMs: () => 100,
+          now: () => 2_000,
+        },
+      ),
+      "live",
+    );
   });
 
   it("stable linux identity: repeat-read same pid stays LIVE (injectable stat/boot_id)", () => {
@@ -553,19 +591,24 @@ describe("AGE-101 lazy scope release via startSessionEndSweep (real path)", () =
   });
 
   it("foreign-root live same-scope session does NOT retain local lazy adapter", async () => {
+    // Mutation guard: flipping isSessionLocalLiveOwner to treat foreign stamps as local
+    // in scope-release-reconcile.ts MUST red this test (adapter retained). The foreign
+    // session must survive the row-ender so discovery-root filtering is what releases.
     const dir = await makeTempDir("acb-age101-foreign-retain-");
     const harness = await makeHarness(dir);
     const factory = new RecordingFactory();
     const reg = registration({ bot_user_id: "foreign-retain-bot" });
     await harness.storage.putAccountRegistration(reg);
+    const storedStart = 500;
+    const foreignSessionId = "s-foreign-live" as SessionId;
     await harness.storage.upsertSession(
       sessionFixture({
-        session_id: "s-foreign-live" as SessionId,
+        session_id: foreignSessionId,
         agent: CLAUDE,
         project: reg.project,
         lease_owner_process_pid: 42,
         lease_owner_process_registered_at: 1_000,
-        lease_owner_process_start_time: 500,
+        lease_owner_process_start_time: storedStart,
         lease_owner_daemon_discovery_root: FOREIGN_ROOT,
       }),
     );
@@ -582,13 +625,18 @@ describe("AGE-101 lazy scope release via startSessionEndSweep (real path)", () =
     const sessionOwnerIsLive = createSessionOwnerLiveness({
       now: () => 2_000,
       isPidAlive: () => true,
-      readProcessStartEpochMs: () => 500,
+      readProcessStartEpochMs: () => storedStart,
     });
 
     const handle = startSessionEndSweep({
       storage: harness.storage,
       runOnStart: false,
       isPidAlive: () => true,
+      ownerLivenessOptions: {
+        isPidAlive: () => true,
+        readProcessStartEpochMs: () => null,
+        now: () => 2_000,
+      },
       intervalMs: 60_000,
       setIntervalFn: () => null,
       setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
@@ -606,7 +654,17 @@ describe("AGE-101 lazy scope release via startSessionEndSweep (real path)", () =
     handle.requestEarlyReconcile();
     await new Promise((r) => setTimeout(r, 100));
 
-    assert.equal(harness.bus.listComms().length, 0, "foreign owner does not count as local live");
+    const stillActive = await harness.storage.getSession(foreignSessionId);
+    assert.equal(
+      stillActive?.status,
+      "active",
+      "live foreign session survives inconclusive row-ender",
+    );
+    assert.equal(
+      harness.bus.listComms().length,
+      0,
+      "foreign owner does not count as local live",
+    );
     handle.stop();
     await harness.storage.close();
   });
@@ -840,6 +898,185 @@ describe("AGE-101 lazy scope release via startSessionEndSweep (real path)", () =
     assert.equal(counts.reconcile.adapters_removed, 1);
     assert.equal(harness.bus.listComms().length, 0);
 
+    await harness.storage.close();
+  });
+});
+
+function makeSweepHoldGate(): { hold: () => Promise<void>; release: () => void } {
+  let release!: () => void;
+  let armed = true;
+  const hold = () => {
+    if (!armed) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      release = () => {
+        armed = false;
+        resolve();
+      };
+    });
+  };
+  return { hold, release: () => release() };
+}
+
+describe("AGE-101 session-end-sweep replay + stop fence (real path)", () => {
+  it("hint during in-flight sweep replays and releases", async () => {
+    const dir = await makeTempDir("acb-age101-replay-hint-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "replay-hint-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const gate = makeSweepHoldGate();
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: true,
+      sweepHold: gate.hold,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => false,
+      ),
+      reconcileState,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(harness.bus.listComms().length, 1, "in-flight sweep has not released yet");
+
+    handle.requestEarlyReconcile();
+    gate.release();
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(harness.bus.listComms().length, 0, "replay after hint releases adapter");
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("grace-expiry during in-flight sweep replays and releases", async () => {
+    const dir = await makeTempDir("acb-age101-replay-grace-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "replay-grace-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const timers = makeFakeTimers();
+    const clock = { t: 5_000 };
+    let sweepPass = 0;
+    const gate = makeSweepHoldGate();
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: true,
+      now: () => clock.t,
+      sweepHold: async () => {
+        sweepPass += 1;
+        if (sweepPass >= 2) await gate.hold();
+      },
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => false,
+      ),
+      reconcileState,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(harness.bus.listComms().length, 1);
+
+    clock.t += DEFAULT_SCOPE_RELEASE_GRACE_MS;
+    for (const item of timers.pending.filter(
+      (p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS,
+    )) {
+      item.fn();
+    }
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(harness.bus.listComms().length, 1, "grace tick blocked in-flight");
+
+    gate.release();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.equal(harness.bus.listComms().length, 0, "replay after grace releases adapter");
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("stop during in-flight sweep does not schedule timers or replay", async () => {
+    const dir = await makeTempDir("acb-age101-stop-fence-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "stop-fence-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const timers = makeFakeTimers();
+    const gate = makeSweepHoldGate();
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: true,
+      sweepHold: gate.hold,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => false,
+      ),
+      reconcileState,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    handle.stop();
+    handle.requestEarlyReconcile();
+    gate.release();
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(
+      timers.pending.filter((p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS).length,
+      0,
+      "stop fence blocks grace scheduling after stop",
+    );
+    assert.equal(harness.bus.listComms().length, 1, "adapter not released after stop");
     await harness.storage.close();
   });
 });

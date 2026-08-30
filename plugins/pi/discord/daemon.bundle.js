@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.54";
+var DAEMON_VERSION = "0.2.55";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4425,9 +4425,11 @@ function readProcessStartIdentity(pid, options = {}) {
 function readProcessStartEpochMs(pid, options = {}) {
   return readProcessStartIdentity(pid, options);
 }
-function processStartIdentityMatches(stored, pid, options = {}) {
+function compareProcessStartIdentity(stored, pid, options = {}) {
+  if (stored == null) return "inconclusive";
   const current = readProcessStartIdentity(pid, options);
-  return current != null && current === stored;
+  if (current == null) return "inconclusive";
+  return current === stored ? "match" : "mismatch";
 }
 function fnv1a32(input) {
   let hash = 2166136261;
@@ -4513,8 +4515,12 @@ function classifySessionOwnerProcess(session, options = {}) {
       readProcUptime: options.readProcUptime,
       readClockTicksPerSec: options.readClockTicksPerSec
     };
-    const matches = options.readProcessStartEpochMs ? options.readProcessStartEpochMs(pid) === startTime : processStartIdentityMatches(startTime, pid, identityOptions);
-    if (!matches) return "dead";
+    const compare = options.readProcessStartEpochMs ? (() => {
+      const current = options.readProcessStartEpochMs(pid);
+      if (current == null) return "inconclusive";
+      return current === startTime ? "match" : "mismatch";
+    })() : compareProcessStartIdentity(startTime, pid, identityOptions);
+    if (compare === "mismatch") return "dead";
   }
   const now = options.now ?? Date.now;
   const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
@@ -8821,9 +8827,14 @@ async function runSessionEndSweep(input) {
     cas_lost: 0
   };
   const livenessOptions = {
-    now: input.now,
-    isPidAlive: input.isPidAlive,
-    recencyMs: input.recencyMs
+    now: input.now ?? input.ownerLivenessOptions?.now,
+    isPidAlive: input.isPidAlive ?? input.ownerLivenessOptions?.isPidAlive,
+    recencyMs: input.recencyMs ?? input.ownerLivenessOptions?.recencyMs,
+    readProcessStartEpochMs: input.ownerLivenessOptions?.readProcessStartEpochMs,
+    readProcStat: input.ownerLivenessOptions?.readProcStat,
+    readBootId: input.ownerLivenessOptions?.readBootId,
+    readProcUptime: input.ownerLivenessOptions?.readProcUptime,
+    readClockTicksPerSec: input.ownerLivenessOptions?.readClockTicksPerSec
   };
   const at = (input.now ?? Date.now)();
   const sessions = await input.storage.listSessions({ status: "active" });
@@ -8844,6 +8855,9 @@ async function runSessionEndSweep(input) {
     );
     if (ended) counts.ended += 1;
     else counts.cas_lost += 1;
+  }
+  if (input.sweepHold) {
+    await input.sweepHold();
   }
   const log = input.log ?? (() => {
   });
@@ -8877,6 +8891,8 @@ function startSessionEndSweep(options) {
   });
   const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
   let sweepInFlight = false;
+  let pendingTick = false;
+  let stopped = false;
   let interval = null;
   let earlyReconcile = false;
   const reconcileState = options.reconcileState ?? {
@@ -8894,15 +8910,21 @@ function startSessionEndSweep(options) {
     }
   };
   const scheduleGraceExpiry = (key, delayMs) => {
+    if (stopped) return;
     cancelGraceExpiry(key);
     const handle = setTimeoutFn(() => {
+      if (stopped) return;
       reconcileState.graceTimers.delete(key);
       tick();
     }, delayMs);
     reconcileState.graceTimers.set(key, handle);
   };
   const tick = () => {
-    if (sweepInFlight) return;
+    if (stopped) return;
+    if (sweepInFlight) {
+      pendingTick = true;
+      return;
+    }
     sweepInFlight = true;
     const graceMs = earlyReconcile ? 0 : void 0;
     earlyReconcile = false;
@@ -8911,6 +8933,8 @@ function startSessionEndSweep(options) {
       now: options.now,
       isPidAlive: options.isPidAlive,
       recencyMs: options.recencyMs,
+      ownerLivenessOptions: options.ownerLivenessOptions,
+      sweepHold: options.sweepHold,
       log: options.log,
       reconcile: options.reconcile != null ? {
         ...options.reconcile,
@@ -8926,16 +8950,22 @@ function startSessionEndSweep(options) {
       );
     }).finally(() => {
       sweepInFlight = false;
+      if (!stopped && pendingTick) {
+        pendingTick = false;
+        tick();
+      }
     });
   };
   if (options.runOnStart !== false) {
     tick();
   }
   const initial = setTimeoutFn(() => {
+    if (stopped) return;
     interval = setIntervalFn(tick, intervalMs);
   }, intervalMs);
   return {
     stop() {
+      stopped = true;
       clearTimeoutFn(initial);
       if (interval != null) clearIntervalFn(interval);
       interval = null;

@@ -24,7 +24,11 @@ export declare function runSessionEndSweep(input: {
     now?: () => number;
     isPidAlive?: (pid: number) => boolean;
     recencyMs?: number;
+    /** Row-ender classification injectables (start-probe, recency, pid liveness). */
+    ownerLivenessOptions?: SessionOwnerLivenessOptions;
     log?: (message: string) => void;
+    /** Test hook: hold the sweep in-flight until released (session-end pass only). */
+    sweepHold?: () => Promise<void>;
     /** AGE-101: lazy adapter scope reconciliation after session-end pass. */
     reconcile?: Omit<SessionScopeReconcileInput, "now">;
 }): Promise<SessionEndSweepCounts>;
@@ -39,7 +43,9 @@ export declare function startSessionEndSweep(options: {
     now?: () => number;
     isPidAlive?: (pid: number) => boolean;
     recencyMs?: number;
+    ownerLivenessOptions?: SessionOwnerLivenessOptions;
     log?: (message: string) => void;
+    sweepHold?: () => Promise<void>;
     reconcile?: Omit<SessionScopeReconcileInput, "now" | "graceMs" | "scheduleGraceExpiry" | "cancelGraceExpiry">;
     reconcileState?: ScopeReleaseReconcileState;
     setIntervalFn?: (fn: () => void, ms: number) => unknown;

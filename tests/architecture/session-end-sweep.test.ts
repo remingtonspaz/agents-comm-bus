@@ -592,13 +592,20 @@ describe("AGE-82 session end sweep", () => {
 
     releaseFirst?.();
     await firstSweepGate;
-    // Let the sweep's finally-block clear the in-flight flag before the next tick.
+    // Let the sweep's finally-block clear the in-flight flag and run any pending replay.
     await new Promise((resolve) => setImmediate(resolve));
 
-    // A later tick, with nothing in flight, must start the next pass.
+    assert.equal(
+      sweepCalls,
+      2,
+      "overlapped tick during in-flight must replay after the first sweep completes",
+    );
+    assert.equal(maxInFlight, 1);
+
+    // A later tick, with nothing in flight and no pending replay, must start another pass.
     clock.advance(50);
     await Promise.resolve();
-    assert.equal(sweepCalls, 2, "a tick after the sweep finished must run");
+    assert.equal(sweepCalls, 3, "a tick after replay finished must run");
     assert.equal(maxInFlight, 1);
     sweep.stop();
   });

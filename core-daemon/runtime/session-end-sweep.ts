@@ -58,7 +58,11 @@ export async function runSessionEndSweep(input: {
   now?: () => number;
   isPidAlive?: (pid: number) => boolean;
   recencyMs?: number;
+  /** Row-ender classification injectables (start-probe, recency, pid liveness). */
+  ownerLivenessOptions?: SessionOwnerLivenessOptions;
   log?: (message: string) => void;
+  /** Test hook: hold the sweep in-flight until released (session-end pass only). */
+  sweepHold?: () => Promise<void>;
   /** AGE-101: lazy adapter scope reconciliation after session-end pass. */
   reconcile?: Omit<SessionScopeReconcileInput, "now">;
 }): Promise<SessionEndSweepCounts> {
@@ -70,9 +74,14 @@ export async function runSessionEndSweep(input: {
     cas_lost: 0,
   };
   const livenessOptions: SessionOwnerLivenessOptions = {
-    now: input.now,
-    isPidAlive: input.isPidAlive,
-    recencyMs: input.recencyMs,
+    now: input.now ?? input.ownerLivenessOptions?.now,
+    isPidAlive: input.isPidAlive ?? input.ownerLivenessOptions?.isPidAlive,
+    recencyMs: input.recencyMs ?? input.ownerLivenessOptions?.recencyMs,
+    readProcessStartEpochMs: input.ownerLivenessOptions?.readProcessStartEpochMs,
+    readProcStat: input.ownerLivenessOptions?.readProcStat,
+    readBootId: input.ownerLivenessOptions?.readBootId,
+    readProcUptime: input.ownerLivenessOptions?.readProcUptime,
+    readClockTicksPerSec: input.ownerLivenessOptions?.readClockTicksPerSec,
   };
   const at = (input.now ?? Date.now)();
   const sessions = await input.storage.listSessions({ status: "active" });
@@ -98,6 +107,10 @@ export async function runSessionEndSweep(input: {
     );
     if (ended) counts.ended += 1;
     else counts.cas_lost += 1;
+  }
+
+  if (input.sweepHold) {
+    await input.sweepHold();
   }
 
   const log = input.log ?? (() => {});
@@ -136,7 +149,9 @@ export function startSessionEndSweep(options: {
   now?: () => number;
   isPidAlive?: (pid: number) => boolean;
   recencyMs?: number;
+  ownerLivenessOptions?: SessionOwnerLivenessOptions;
   log?: (message: string) => void;
+  sweepHold?: () => Promise<void>;
   reconcile?: Omit<
     SessionScopeReconcileInput,
     "now" | "graceMs" | "scheduleGraceExpiry" | "cancelGraceExpiry"
@@ -170,6 +185,8 @@ export function startSessionEndSweep(options: {
     options.clearTimeoutFn ?? ((h: unknown) => clearTimeout(h as NodeJS.Timeout));
 
   let sweepInFlight = false;
+  let pendingTick = false;
+  let stopped = false;
   let interval: unknown = null;
   let earlyReconcile = false;
   const reconcileState: ScopeReleaseReconcileState = options.reconcileState ?? {
@@ -189,8 +206,10 @@ export function startSessionEndSweep(options: {
   };
 
   const scheduleGraceExpiry = (key: string, delayMs: number): void => {
+    if (stopped) return;
     cancelGraceExpiry(key);
     const handle = setTimeoutFn(() => {
+      if (stopped) return;
       reconcileState.graceTimers!.delete(key);
       tick();
     }, delayMs);
@@ -198,7 +217,11 @@ export function startSessionEndSweep(options: {
   };
 
   const tick = (): void => {
-    if (sweepInFlight) return;
+    if (stopped) return;
+    if (sweepInFlight) {
+      pendingTick = true;
+      return;
+    }
     sweepInFlight = true;
     const graceMs = earlyReconcile ? 0 : undefined;
     earlyReconcile = false;
@@ -207,6 +230,8 @@ export function startSessionEndSweep(options: {
       now: options.now,
       isPidAlive: options.isPidAlive,
       recencyMs: options.recencyMs,
+      ownerLivenessOptions: options.ownerLivenessOptions,
+      sweepHold: options.sweepHold,
       log: options.log,
       reconcile:
         options.reconcile != null
@@ -228,6 +253,10 @@ export function startSessionEndSweep(options: {
       })
       .finally(() => {
         sweepInFlight = false;
+        if (!stopped && pendingTick) {
+          pendingTick = false;
+          tick();
+        }
       });
   };
 
@@ -236,11 +265,13 @@ export function startSessionEndSweep(options: {
   }
 
   const initial = setTimeoutFn(() => {
+    if (stopped) return;
     interval = setIntervalFn(tick, intervalMs);
   }, intervalMs);
 
   return {
     stop() {
+      stopped = true;
       clearTimeoutFn(initial);
       if (interval != null) clearIntervalFn(interval);
       interval = null;

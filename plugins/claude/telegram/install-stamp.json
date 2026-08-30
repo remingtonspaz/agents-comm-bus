@@ -3,7 +3,7 @@
   "agent": "claude",
   "comm": "telegram",
   "plugin_version": "0.1.12",
-  "daemon_bundle_version": "0.2.54",
+  "daemon_bundle_version": "0.2.55",
   "adapter_bundle_version": "0.1.5",
   "adapter_bundle_versions": {
     "telegram": "0.1.5"
