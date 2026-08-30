@@ -29,14 +29,25 @@ import {
   createSessionOwnerLiveness,
 } from "../../core-daemon/runtime/session-owner-liveness.js";
 import {
-  reconcileLazyAdapterScopes,
   scopeKey,
   DEFAULT_SCOPE_RELEASE_GRACE_MS,
 } from "../../core-daemon/runtime/scope-release-reconcile.js";
 import { removeLiveAdapter } from "../../core-daemon/runtime/comm-adapter-lifecycle.js";
-import { runSessionEndSweep } from "../../core-daemon/runtime/session-end-sweep.js";
+import {
+  runSessionEndSweep,
+  startSessionEndSweep,
+} from "../../core-daemon/runtime/session-end-sweep.js";
+import { ensureCommsForSession } from "../../core-daemon/daemon.js";
 import { sessionFixture } from "./_session-fixture.js";
+import {
+  serializeAccountLabelScope,
+} from "../../core-daemon/session-label-scope.js";
 import type { CommAdapterFactory } from "../../core-daemon/runtime/comm-factory.js";
+import {
+  processStartIdentityMatches,
+  readProcessStartIdentity,
+  currentProcessStartEpochMs,
+} from "../../core-daemon/runtime/process-start-epoch.js";
 
 registerTempDirCleanup();
 
@@ -83,7 +94,7 @@ function registration(
     project: "D:/proj/a",
     agent: CLAUDE,
     comm: TELEGRAM,
-    account_label: "main",
+    account_label: over.account_label ?? "main",
     bot_user_id: over.bot_user_id,
     bot_username: null,
     credentials_ref: "file:/tmp/token.json",
@@ -138,6 +149,68 @@ class RecordingFactory implements CommAdapterFactory {
     this.adapters.set(String(accountId), adapter);
     return adapter;
   }
+}
+
+function makeHarness(dir: string) {
+  const storage = openSqliteStorage(path.join(dir, "db.sqlite"));
+  const transcripts = new JsonlTranscriptStore(dir);
+  const audit = new JsonlAuditStore(dir);
+  const blobs = new ContentAddressedBlobStore(dir);
+  return storage.then((s) => {
+    const bus = new MessageBus({
+      project: "D:/proj/a",
+      storage: s,
+      transcripts,
+      audit,
+      blobs,
+      comms: [],
+    });
+    return { storage: s, transcripts, audit, blobs, bus };
+  });
+}
+
+function makeFakeTimers() {
+  const pending: Array<{ fn: () => void; ms: number; id: number }> = [];
+  let nextId = 1;
+  return {
+    pending,
+    setTimeoutFn(fn: () => void, ms: number) {
+      const id = nextId++;
+      pending.push({ fn, ms, id });
+      return { id };
+    },
+    clearTimeoutFn(handle: { id: number }) {
+      const idx = pending.findIndex((p) => p.id === handle.id);
+      if (idx >= 0) pending.splice(idx, 1);
+    },
+    fireAll() {
+      const batch = [...pending];
+      pending.length = 0;
+      for (const item of batch) item.fn();
+    },
+  };
+}
+
+function reconcileSweepInput(
+  harness: Awaited<ReturnType<typeof makeHarness>>,
+  factory: RecordingFactory,
+  activeScopes: Set<string>,
+  reconcileState: { zeroLiveSince: Map<string, number>; graceTimers?: Map<string, unknown> },
+  leaseArbiter: CommLeaseArbiter,
+  sessionOwnerIsLive: () => boolean,
+) {
+  return {
+    storage: harness.storage,
+    bus: harness.bus,
+    bridges: [],
+    factories: [factory],
+    activeScopes,
+    leaseArbiter,
+    sessionOwnerIsLive,
+    removeAdapter: removeLiveAdapter,
+    state: reconcileState,
+    discoveryRoot: OUR_ROOT,
+  };
 }
 
 describe("AGE-101 live lease eligibility (pure)", () => {
@@ -203,6 +276,63 @@ describe("AGE-101 live lease eligibility (pure)", () => {
   });
 });
 
+describe("AGE-101 ensureCommsForSession wires eligibility (real path)", () => {
+  it("foreign-discovery-root live owner blocks adapter start on ensure path", async () => {
+    const dir = await makeTempDir("acb-age101-ensure-foreign-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "blocked-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    await harness.storage.upsertSession(
+      sessionFixture({
+        session_id: "s-foreign" as SessionId,
+        agent: CLAUDE,
+        project: reg.project,
+        lease_owner_process_pid: 42,
+        lease_owner_process_registered_at: 1_000,
+        lease_owner_process_start_time: 500,
+        lease_owner_daemon_discovery_root: FOREIGN_ROOT,
+      }),
+    );
+    const sessionOwnerIsLive = createSessionOwnerLiveness({
+      now: () => 2_000,
+      isPidAlive: () => true,
+      readProcessStartEpochMs: () => 500,
+    });
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity({ authorityRank: "main-dev" }),
+      lastIpcServedAt: () => 10_000,
+      homeDir: dir,
+    });
+
+    await ensureCommsForSession({
+      project: reg.project,
+      agent: CLAUDE,
+      factories: [factory],
+      bus: harness.bus,
+      bridges: [],
+      storage: harness.storage,
+      env: {},
+      blobs: harness.blobs,
+      stateRoot: dir,
+      leaseArbiter,
+      inFlight: new Set<string>(),
+      discoveryRoot: OUR_ROOT,
+      sessionOwnerIsLive,
+    });
+
+    const adapter = factory.adapters.get("blocked-bot");
+    assert.ok(adapter, "adapter constructed and registered");
+    assert.equal(adapter!.startCount, 0, "lease eligibility blocks inner.start()");
+    assert.ok(
+      harness.bus.getComm(TELEGRAM, "blocked-bot" as AccountId),
+      "wrapped adapter remains on bus without starting consumer",
+    );
+
+    await harness.storage.close();
+  });
+});
+
 describe("AGE-101 pid+start-time liveness", () => {
   it("classifies reused pid with mismatched start-time as dead", () => {
     const state = classifySessionOwnerProcess(
@@ -221,211 +351,495 @@ describe("AGE-101 pid+start-time liveness", () => {
     assert.equal(state, "dead");
   });
 
-  it("mutation: same start-time mismatch classified live would fail", () => {
-    const state = classifySessionOwnerProcess(
-      {
-        lease_holder_connection_id: null,
-        lease_owner_process_pid: 99,
-        lease_owner_process_registered_at: 1_000,
-        lease_owner_process_start_time: 100,
-      },
-      {
-        isPidAlive: () => true,
-        readProcessStartEpochMs: () => 200,
-        now: () => 2_000,
-      },
-    );
-    assert.notEqual(state, "live");
+  it("stable linux identity: repeat-read same pid stays LIVE (injectable stat/boot_id)", () => {
+    const statLine = "(42) R 0 1 42 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 123456";
+    const readProcStat = () => statLine;
+    const readBootId = () => "fixed-boot-id";
+    const identity = readProcessStartIdentity(42, { readProcStat, readBootId });
+    assert.ok(identity != null);
+    const session = {
+      lease_holder_connection_id: null,
+      lease_owner_process_pid: 42,
+      lease_owner_process_registered_at: 1_000,
+      lease_owner_process_start_time: identity,
+    };
+    const opts = {
+      isPidAlive: () => true,
+      readProcStat,
+      readBootId,
+      now: () => 2_000,
+    };
+    assert.equal(classifySessionOwnerProcess(session, opts), "live");
+    assert.equal(classifySessionOwnerProcess(session, opts), "live");
+    assert.equal(processStartIdentityMatches(identity!, 42, opts), true);
   });
 });
 
-describe("AGE-101 lazy scope release reconcile", () => {
-  it("releases lazy adapters after grace when scope has zero live sessions", async () => {
-    const dir = await makeTempDir("acb-age101-release-");
-    const storage = await openSqliteStorage(path.join(dir, "db.sqlite"));
-    const transcripts = new JsonlTranscriptStore(dir);
-    const audit = new JsonlAuditStore(dir);
-    const blobs = new ContentAddressedBlobStore(dir);
-    const bus = new MessageBus({
-      project: "D:/proj/a",
-      storage,
-      transcripts,
-      audit,
-      blobs,
-      comms: [],
-    });
+describe("AGE-101 lazy scope release via startSessionEndSweep (real path)", () => {
+  it("explicit exit hint releases on first pass (graceMs=0)", async () => {
+    const dir = await makeTempDir("acb-age101-hint-");
+    const harness = await makeHarness(dir);
     const factory = new RecordingFactory();
-    const reg = registration({ bot_user_id: "lazy-bot" });
-    await storage.putAccountRegistration(reg);
+    const reg = registration({ bot_user_id: "hint-bot" });
+    await harness.storage.putAccountRegistration(reg);
     const adapter = factory.create({}, reg.bot_user_id as AccountId);
-    bus.registerComm(adapter);
-    await adapter.start();
-
-    const activeScopes = new Set([
-      scopeKey(CLAUDE, reg.project, null),
-    ]);
-    const state = { zeroLiveSince: new Map<string, number>() };
-    const now = { t: 5_000 };
-    const leaseArbiter = new CommLeaseArbiter({
-      self: selfIdentity(),
-      lastIpcServedAt: () => now.t,
-    });
-
-    const counts0 = await reconcileLazyAdapterScopes({
-      storage,
-      bus,
-      bridges: [],
-      factories: [factory],
-      activeScopes,
-      leaseArbiter,
-      sessionOwnerIsLive: () => false,
-      removeAdapter: removeLiveAdapter,
-      state,
-      graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
-      now: () => now.t,
-    });
-    assert.equal(counts0.adapters_removed, 0);
-    assert.equal(bus.listComms().length, 1);
-
-    now.t += DEFAULT_SCOPE_RELEASE_GRACE_MS;
-    const counts1 = await reconcileLazyAdapterScopes({
-      storage,
-      bus,
-      bridges: [],
-      factories: [factory],
-      activeScopes,
-      leaseArbiter,
-      sessionOwnerIsLive: () => false,
-      removeAdapter: removeLiveAdapter,
-      state,
-      graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
-      now: () => now.t,
-    });
-    assert.equal(counts1.adapters_removed, 1);
-    assert.equal(bus.listComms().length, 0);
-    assert.equal(activeScopes.size, 0);
-
-    await storage.close();
-  });
-
-  it("does NOT release eager registration at zero live sessions (AGE-97)", async () => {
-    const dir = await makeTempDir("acb-age101-eager-");
-    const storage = await openSqliteStorage(path.join(dir, "db.sqlite"));
-    const transcripts = new JsonlTranscriptStore(dir);
-    const audit = new JsonlAuditStore(dir);
-    const blobs = new ContentAddressedBlobStore(dir);
-    const bus = new MessageBus({
-      project: "D:/proj/a",
-      storage,
-      transcripts,
-      audit,
-      blobs,
-      comms: [],
-    });
-    const factory = new RecordingFactory();
-    const reg = registration({ bot_user_id: "eager-bot", activation: "eager" });
-    await storage.putAccountRegistration(reg);
-    const adapter = factory.create({}, reg.bot_user_id as AccountId);
-    bus.registerComm(adapter);
-    await adapter.start();
-
-    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
-    const state = { zeroLiveSince: new Map<string, number>() };
-    const now = { t: 5_000 };
-    const leaseArbiter = new CommLeaseArbiter({
-      self: selfIdentity(),
-      lastIpcServedAt: () => now.t,
-    });
-
-    // First call records zeroLiveSince (grace not yet elapsed).
-    await reconcileLazyAdapterScopes({
-      storage,
-      bus,
-      bridges: [],
-      factories: [factory],
-      activeScopes,
-      leaseArbiter,
-      sessionOwnerIsLive: () => false,
-      removeAdapter: removeLiveAdapter,
-      state,
-      graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
-      now: () => now.t,
-    });
-    // After grace the release path IS reached — the eager-skip must protect it.
-    now.t += DEFAULT_SCOPE_RELEASE_GRACE_MS;
-    const counts = await reconcileLazyAdapterScopes({
-      storage,
-      bus,
-      bridges: [],
-      factories: [factory],
-      activeScopes,
-      leaseArbiter,
-      sessionOwnerIsLive: () => false,
-      removeAdapter: removeLiveAdapter,
-      state,
-      graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
-      now: () => now.t,
-    });
-    assert.equal(counts.adapters_removed, 0, "eager adapter must NOT be released");
-    assert.equal(bus.listComms().length, 1, "eager adapter stays live at zero sessions");
-
-    await storage.close();
-  });
-
-  it("runSessionEndSweep reconciles via extended sweep without explicit exit hint", async () => {
-    const dir = await makeTempDir("acb-age101-sweep-");
-    const storage = await openSqliteStorage(path.join(dir, "db.sqlite"));
-    const transcripts = new JsonlTranscriptStore(dir);
-    const audit = new JsonlAuditStore(dir);
-    const blobs = new ContentAddressedBlobStore(dir);
-    const bus = new MessageBus({
-      project: "D:/proj/a",
-      storage,
-      transcripts,
-      audit,
-      blobs,
-      comms: [],
-    });
-    const factory = new RecordingFactory();
-    const reg = registration({ bot_user_id: "sweep-bot" });
-    await storage.putAccountRegistration(reg);
-    const adapter = factory.create({}, reg.bot_user_id as AccountId);
-    bus.registerComm(adapter);
+    harness.bus.registerComm(adapter);
     await adapter.start();
 
     const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
     const reconcileState = { zeroLiveSince: new Map<string, number>() };
-    const now = { t: 1_000 };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const timers = makeFakeTimers();
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: false,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => false,
+      ),
+      reconcileState,
+    });
+
+    handle.requestEarlyReconcile();
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.equal(harness.bus.listComms().length, 0);
+    assert.equal(activeScopes.size, 0);
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("grace-window scope releases when scheduled timer fires", async () => {
+    const dir = await makeTempDir("acb-age101-grace-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "grace-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const timers = makeFakeTimers();
+    const clock = { t: 5_000 };
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: true,
+      isPidAlive: () => true,
+      now: () => clock.t,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => false,
+      ),
+      reconcileState,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.equal(harness.bus.listComms().length, 1, "first pass schedules grace");
+    const graceTimers = timers.pending.filter(
+      (p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS,
+    );
+    assert.equal(graceTimers.length, 1);
+
+    clock.t += DEFAULT_SCOPE_RELEASE_GRACE_MS;
+    for (const item of timers.pending.filter(
+      (p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS,
+    )) {
+      item.fn();
+    }
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.equal(harness.bus.listComms().length, 0);
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("returning live local session cancels pending grace release", async () => {
+    const dir = await makeTempDir("acb-age101-cancel-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "cancel-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const timers = makeFakeTimers();
+    let live = false;
+    const clock = { t: 5_000 };
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: true,
+      isPidAlive: () => true,
+      now: () => clock.t,
+      intervalMs: 60_000,
+      setIntervalFn: (fn) => {
+        fn();
+        return null;
+      },
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => live,
+      ),
+      reconcileState,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(
+      timers.pending.filter((p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS).length,
+      1,
+    );
+
+    live = true;
+    await harness.storage.upsertSession(
+      sessionFixture({
+        session_id: "s-cancel-live" as SessionId,
+        agent: CLAUDE,
+        project: reg.project,
+        lease_holder_connection_id: "conn-live",
+      }),
+    );
+    const intervalBootstrap = timers.pending.find((p) => p.ms === 60_000);
+    intervalBootstrap?.fn();
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.equal(
+      timers.pending.filter((p) => p.ms === DEFAULT_SCOPE_RELEASE_GRACE_MS).length,
+      0,
+      "grace timer cancelled",
+    );
+    assert.equal(harness.bus.listComms().length, 1);
+
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("foreign-root live same-scope session does NOT retain local lazy adapter", async () => {
+    const dir = await makeTempDir("acb-age101-foreign-retain-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "foreign-retain-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    await harness.storage.upsertSession(
+      sessionFixture({
+        session_id: "s-foreign-live" as SessionId,
+        agent: CLAUDE,
+        project: reg.project,
+        lease_owner_process_pid: 42,
+        lease_owner_process_registered_at: 1_000,
+        lease_owner_process_start_time: 500,
+        lease_owner_daemon_discovery_root: FOREIGN_ROOT,
+      }),
+    );
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const sessionOwnerIsLive = createSessionOwnerLiveness({
+      now: () => 2_000,
+      isPidAlive: () => true,
+      readProcessStartEpochMs: () => 500,
+    });
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: false,
+      isPidAlive: () => true,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        sessionOwnerIsLive,
+      ),
+      reconcileState,
+    });
+
+    handle.requestEarlyReconcile();
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(harness.bus.listComms().length, 0, "foreign owner does not count as local live");
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("missing-stamp local live session retains adapter (conservative)", async () => {
+    const dir = await makeTempDir("acb-age101-missing-stamp-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "missing-stamp-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const livePid = process.pid;
+    const liveStart =
+      readProcessStartIdentity(livePid) ?? currentProcessStartEpochMs();
+    await harness.storage.upsertSession(
+      sessionFixture({
+        session_id: "s-missing-stamp" as SessionId,
+        agent: CLAUDE,
+        project: reg.project,
+        lease_owner_process_pid: livePid,
+        lease_owner_process_registered_at: 1_000,
+        lease_owner_process_start_time: liveStart,
+        lease_owner_daemon_discovery_root: null,
+      }),
+    );
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const sessionOwnerIsLive = createSessionOwnerLiveness({
+      now: () => 2_000,
+      isPidAlive: (pid) => pid === livePid,
+      readProcessStartEpochMs: () => liveStart,
+    });
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: false,
+      isPidAlive: (pid) => pid === livePid,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        sessionOwnerIsLive,
+      ),
+      reconcileState,
+    });
+
+    handle.requestEarlyReconcile();
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(harness.bus.listComms().length, 1, "null stamp treated as local — retain");
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("labeled sibling scope retains adapter when unscoped scope exits", async () => {
+    const dir = await makeTempDir("acb-age101-sibling-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const labeledScope = serializeAccountLabelScope({ telegram: "subagent" })!;
+    const unscopedReg = registration({ bot_user_id: "unscoped-bot", account_label: "main" });
+    const labeledReg = registration({
+      bot_user_id: "labeled-bot",
+      account_label: "subagent",
+    });
+    await harness.storage.putAccountRegistration(unscopedReg);
+    await harness.storage.putAccountRegistration(labeledReg);
+
+    const unscopedAdapter = factory.create({}, unscopedReg.bot_user_id as AccountId);
+    const labeledAdapter = factory.create({}, labeledReg.bot_user_id as AccountId);
+    harness.bus.registerComm(unscopedAdapter);
+    harness.bus.registerComm(labeledAdapter);
+    await unscopedAdapter.start();
+    await labeledAdapter.start();
+
+    await harness.storage.upsertSession(
+      sessionFixture({
+        session_id: "s-labeled" as SessionId,
+        agent: CLAUDE,
+        project: unscopedReg.project,
+        account_label_scope: labeledScope,
+        lease_owner_process_pid: 42,
+        lease_owner_process_registered_at: 1_000,
+        lease_owner_process_start_time: 500,
+        lease_owner_daemon_discovery_root: OUR_ROOT,
+      }),
+    );
+
+    const activeScopes = new Set([
+      scopeKey(CLAUDE, unscopedReg.project, null),
+      scopeKey(CLAUDE, unscopedReg.project, labeledScope),
+    ]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+    const sessionOwnerIsLive = createSessionOwnerLiveness({
+      now: () => 2_000,
+      isPidAlive: () => true,
+      readProcessStartEpochMs: () => 500,
+    });
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: false,
+      isPidAlive: () => true,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        sessionOwnerIsLive,
+      ),
+      reconcileState,
+    });
+
+    handle.requestEarlyReconcile();
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(
+      harness.bus.getComm(TELEGRAM, "labeled-bot" as AccountId) != null,
+      true,
+      "labeled registration retained for live labeled scope",
+    );
+    assert.equal(
+      harness.bus.getComm(TELEGRAM, "unscoped-bot" as AccountId),
+      null,
+      "unscoped registration removed when only labeled scope is live",
+    );
+
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("eager registration survives zero local sessions", async () => {
+    const dir = await makeTempDir("acb-age101-eager-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "eager-bot", activation: "eager" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const leaseArbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1_000,
+    });
+
+    const handle = startSessionEndSweep({
+      storage: harness.storage,
+      runOnStart: false,
+      intervalMs: 60_000,
+      setIntervalFn: () => null,
+      setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
+      reconcile: reconcileSweepInput(
+        harness,
+        factory,
+        activeScopes,
+        reconcileState,
+        leaseArbiter,
+        () => false,
+      ),
+      reconcileState,
+    });
+
+    handle.requestEarlyReconcile();
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert.equal(harness.bus.listComms().length, 1);
+    handle.stop();
+    await harness.storage.close();
+  });
+
+  it("runSessionEndSweep with pre-elapsed grace releases via sweep path", async () => {
+    const dir = await makeTempDir("acb-age101-sweep-");
+    const harness = await makeHarness(dir);
+    const factory = new RecordingFactory();
+    const reg = registration({ bot_user_id: "sweep-bot" });
+    await harness.storage.putAccountRegistration(reg);
+    const adapter = factory.create({}, reg.bot_user_id as AccountId);
+    harness.bus.registerComm(adapter);
+    await adapter.start();
+
+    const activeScopes = new Set([scopeKey(CLAUDE, reg.project, null)]);
+    const reconcileState = { zeroLiveSince: new Map<string, number>() };
+    const now = { t: DEFAULT_SCOPE_RELEASE_GRACE_MS + 1 };
     const leaseArbiter = new CommLeaseArbiter({
       self: selfIdentity(),
       lastIpcServedAt: () => now.t,
     });
 
     reconcileState.zeroLiveSince.set(scopeKey(CLAUDE, reg.project, null), 0);
-    now.t = DEFAULT_SCOPE_RELEASE_GRACE_MS + 1;
 
     const counts = await runSessionEndSweep({
-      storage,
+      storage: harness.storage,
       now: () => now.t,
       isPidAlive: () => false,
       reconcile: {
-        storage,
-        bus,
-        bridges: [],
-        factories: [factory],
-        activeScopes,
-        leaseArbiter,
-        sessionOwnerIsLive: () => false,
-        removeAdapter: removeLiveAdapter,
-        state: reconcileState,
+        ...reconcileSweepInput(
+          harness,
+          factory,
+          activeScopes,
+          reconcileState,
+          leaseArbiter,
+          () => false,
+        ),
         graceMs: DEFAULT_SCOPE_RELEASE_GRACE_MS,
       },
     });
 
     assert.ok(counts.reconcile);
     assert.equal(counts.reconcile.adapters_removed, 1);
-    assert.equal(bus.listComms().length, 0);
+    assert.equal(harness.bus.listComms().length, 0);
 
-    await storage.close();
+    await harness.storage.close();
   });
 });

@@ -1,9 +1,10 @@
 import type { Session } from "agents-comm-bus-core";
+import { type ProcessStartIdentityOptions } from "./process-start-epoch.js";
 /** Match boot-scope restore's existing 24-hour owner recency window. */
 export declare const DEFAULT_SESSION_OWNER_RECENCY_MS: number;
 export type SessionOwnerRecord = Pick<Session, "lease_holder_connection_id" | "lease_owner_process_pid" | "lease_owner_process_registered_at" | "lease_owner_process_start_time">;
 export type SessionOwnerProcessState = "live" | "no_owner" | "stale" | "dead";
-export interface SessionOwnerLivenessOptions {
+export interface SessionOwnerLivenessOptions extends ProcessStartIdentityOptions {
     now?: () => number;
     isPidAlive?: (pid: number) => boolean;
     /** Injectable process-start probe (tests); defaults to readProcessStartEpochMs. */

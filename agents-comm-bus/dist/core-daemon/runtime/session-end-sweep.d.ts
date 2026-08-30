@@ -26,9 +26,7 @@ export declare function runSessionEndSweep(input: {
     recencyMs?: number;
     log?: (message: string) => void;
     /** AGE-101: lazy adapter scope reconciliation after session-end pass. */
-    reconcile?: Omit<SessionScopeReconcileInput, "now"> & {
-        graceMs?: number;
-    };
+    reconcile?: Omit<SessionScopeReconcileInput, "now">;
 }): Promise<SessionEndSweepCounts>;
 export interface SessionEndSweepHandle {
     stop(): void;
@@ -42,7 +40,7 @@ export declare function startSessionEndSweep(options: {
     isPidAlive?: (pid: number) => boolean;
     recencyMs?: number;
     log?: (message: string) => void;
-    reconcile?: Omit<SessionScopeReconcileInput, "now" | "graceMs">;
+    reconcile?: Omit<SessionScopeReconcileInput, "now" | "graceMs" | "scheduleGraceExpiry" | "cancelGraceExpiry">;
     reconcileState?: ScopeReleaseReconcileState;
     setIntervalFn?: (fn: () => void, ms: number) => unknown;
     clearIntervalFn?: (handle: unknown) => void;

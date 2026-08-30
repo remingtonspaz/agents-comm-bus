@@ -93,6 +93,9 @@ export declare function ensureCommsForSession(input: {
     leaseArbiter: CommLeaseArbiter;
     inFlight: Set<string>;
     audit?: JsonlAuditStore;
+    /** AGE-101: discovery-root eligibility for live lease acquire on lazy ensure. */
+    discoveryRoot?: string;
+    sessionOwnerIsLive?: SessionOwnerLiveness;
 }): Promise<{
     outcomes: EnsureRegistrationResult[];
 }>;

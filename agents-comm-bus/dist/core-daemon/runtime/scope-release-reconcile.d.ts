@@ -15,11 +15,12 @@ export interface ScopeReleaseReconcileCounts {
 }
 export interface ScopeReleaseReconcileState {
     zeroLiveSince: Map<string, number>;
+    graceTimers?: Map<string, unknown>;
 }
 export declare function scopeKey(agent: AgentId | string, project: string, accountLabelScope?: string | null): string;
 /**
  * AGE-101: reconcile lazy adapters when durable live-session truth shows zero
- * owners for an active scope. Reuses the reload removal path via removeLiveAdapter.
+ * local owners for an active scope. Reuses the reload removal path via removeLiveAdapter.
  */
 export declare function reconcileLazyAdapterScopes(input: {
     storage: Storage;
@@ -31,8 +32,11 @@ export declare function reconcileLazyAdapterScopes(input: {
     sessionOwnerIsLive: SessionOwnerLiveness;
     removeAdapter: typeof removeLiveAdapter;
     state: ScopeReleaseReconcileState;
+    discoveryRoot: string;
     graceMs?: number;
     now?: () => number;
+    scheduleGraceExpiry?: (key: string, delayMs: number) => void;
+    cancelGraceExpiry?: (key: string) => void;
 }): Promise<ScopeReleaseReconcileCounts>;
 export declare function liveAdapterKeys(bus: MessageBus): Set<string>;
 //# sourceMappingURL=scope-release-reconcile.d.ts.map

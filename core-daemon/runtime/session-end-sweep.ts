@@ -60,9 +60,7 @@ export async function runSessionEndSweep(input: {
   recencyMs?: number;
   log?: (message: string) => void;
   /** AGE-101: lazy adapter scope reconciliation after session-end pass. */
-  reconcile?: Omit<SessionScopeReconcileInput, "now"> & {
-    graceMs?: number;
-  };
+  reconcile?: Omit<SessionScopeReconcileInput, "now">;
 }): Promise<SessionEndSweepCounts> {
   const counts: SessionEndSweepCounts = {
     ended: 0,
@@ -139,7 +137,10 @@ export function startSessionEndSweep(options: {
   isPidAlive?: (pid: number) => boolean;
   recencyMs?: number;
   log?: (message: string) => void;
-  reconcile?: Omit<SessionScopeReconcileInput, "now" | "graceMs">;
+  reconcile?: Omit<
+    SessionScopeReconcileInput,
+    "now" | "graceMs" | "scheduleGraceExpiry" | "cancelGraceExpiry"
+  >;
   reconcileState?: ScopeReleaseReconcileState;
   setIntervalFn?: (fn: () => void, ms: number) => unknown;
   clearIntervalFn?: (handle: unknown) => void;
@@ -171,7 +172,30 @@ export function startSessionEndSweep(options: {
   let sweepInFlight = false;
   let interval: unknown = null;
   let earlyReconcile = false;
-  const reconcileState = options.reconcileState ?? { zeroLiveSince: new Map() };
+  const reconcileState: ScopeReleaseReconcileState = options.reconcileState ?? {
+    zeroLiveSince: new Map(),
+    graceTimers: new Map(),
+  };
+  if (!reconcileState.graceTimers) {
+    reconcileState.graceTimers = new Map();
+  }
+
+  const cancelGraceExpiry = (key: string): void => {
+    const handle = reconcileState.graceTimers!.get(key);
+    if (handle != null) {
+      clearTimeoutFn(handle);
+      reconcileState.graceTimers!.delete(key);
+    }
+  };
+
+  const scheduleGraceExpiry = (key: string, delayMs: number): void => {
+    cancelGraceExpiry(key);
+    const handle = setTimeoutFn(() => {
+      reconcileState.graceTimers!.delete(key);
+      tick();
+    }, delayMs);
+    reconcileState.graceTimers!.set(key, handle);
+  };
 
   const tick = (): void => {
     if (sweepInFlight) return;
@@ -186,7 +210,13 @@ export function startSessionEndSweep(options: {
       log: options.log,
       reconcile:
         options.reconcile != null
-          ? { ...options.reconcile, state: reconcileState, graceMs }
+          ? {
+              ...options.reconcile,
+              state: reconcileState,
+              graceMs,
+              scheduleGraceExpiry,
+              cancelGraceExpiry,
+            }
           : undefined,
     })
       .catch((error) => {
@@ -214,6 +244,9 @@ export function startSessionEndSweep(options: {
       clearTimeoutFn(initial);
       if (interval != null) clearIntervalFn(interval);
       interval = null;
+      for (const key of reconcileState.graceTimers!.keys()) {
+        cancelGraceExpiry(key);
+      }
     },
     requestEarlyReconcile() {
       earlyReconcile = true;

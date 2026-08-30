@@ -9,6 +9,7 @@ import type {
 
 import type { MessageBus } from "../bus.js";
 import { normalizeProjectPath } from "../project-path.js";
+import { normalizeDaemonRootPath } from "../paths.js";
 import { filterRegistrationsByScope } from "../session-label-scope.js";
 import type { AgentBridge } from "./agent-bridge.js";
 import type { CommAdapterFactory } from "./comm-factory.js";
@@ -28,6 +29,7 @@ export interface ScopeReleaseReconcileCounts {
 
 export interface ScopeReleaseReconcileState {
   zeroLiveSince: Map<string, number>;
+  graceTimers?: Map<string, unknown>;
 }
 
 export function scopeKey(
@@ -54,24 +56,108 @@ function isRegistrationScopeActive(
   return false;
 }
 
-function countLiveSessionsForScope(
+/**
+ * Whether an active session counts as a live LOCAL owner for scope release.
+ * Missing daemon-owner stamps are treated conservatively as local (retain adapter)
+ * so a row whose stamp lands moments after register is not over-released.
+ */
+function isSessionLocalLiveOwner(
+  session: Session,
+  discoveryRoot: string,
+  sessionOwnerIsLive: SessionOwnerLiveness,
+): boolean {
+  if (session.status !== "active") return false;
+  if (!sessionOwnerIsLive(session)) return false;
+  const stamped = session.lease_owner_daemon_discovery_root;
+  if (stamped == null || stamped.length === 0) return true;
+  return (
+    normalizeDaemonRootPath(stamped) === normalizeDaemonRootPath(discoveryRoot)
+  );
+}
+
+function countLocalLiveSessionsForScope(
   sessions: readonly Session[],
   key: string,
+  discoveryRoot: string,
   sessionOwnerIsLive: SessionOwnerLiveness,
 ): number {
   let count = 0;
   for (const session of sessions) {
-    if (session.status !== "active") continue;
-    if (scopeKey(session.agent, session.project, session.account_label_scope) !== key) continue;
-    if (!sessionOwnerIsLive(session)) continue;
+    if (scopeKey(session.agent, session.project, session.account_label_scope) !== key) {
+      continue;
+    }
+    if (!isSessionLocalLiveOwner(session, discoveryRoot, sessionOwnerIsLive)) continue;
     count += 1;
   }
   return count;
 }
 
+async function listAllRegistrations(
+  storage: Storage,
+  factories: CommAdapterFactory[],
+): Promise<AccountRegistration[]> {
+  const all: AccountRegistration[] = [];
+  for (const factory of factories) {
+    const regs = await storage.listAccountRegistrations({ comm: factory.commId });
+    all.push(...regs);
+  }
+  return all;
+}
+
+/**
+ * Union of lazy+eager registrations desired by every live LOCAL session scope
+ * plus all eager standing registrations.
+ */
+async function buildGlobalDesiredRegistrationIds(input: {
+  storage: Storage;
+  factories: CommAdapterFactory[];
+  discoveryRoot: string;
+  sessionOwnerIsLive: SessionOwnerLiveness;
+  allRegistrations?: AccountRegistration[];
+  activeSessions?: readonly Session[];
+}): Promise<Set<string>> {
+  const allRegistrations =
+    input.allRegistrations ?? await listAllRegistrations(input.storage, input.factories);
+  const activeSessions =
+    input.activeSessions ??
+    (await input.storage.listSessions({ status: "active" }));
+
+  const desired = new Set<string>();
+  for (const reg of allRegistrations) {
+    if (reg.activation === "eager") {
+      desired.add(reg.registration_id);
+    }
+  }
+
+  for (const session of activeSessions) {
+    if (
+      !isSessionLocalLiveOwner(
+        session,
+        input.discoveryRoot,
+        input.sessionOwnerIsLive,
+      )
+    ) {
+      continue;
+    }
+    const projectRegs = allRegistrations.filter(
+      (reg) =>
+        reg.agent === session.agent &&
+        normalizeProjectPath(reg.project) === normalizeProjectPath(session.project),
+    );
+    const scoped = filterRegistrationsByScope(
+      projectRegs,
+      session.account_label_scope,
+    );
+    for (const reg of scoped) {
+      desired.add(reg.registration_id);
+    }
+  }
+  return desired;
+}
+
 /**
  * AGE-101: reconcile lazy adapters when durable live-session truth shows zero
- * owners for an active scope. Reuses the reload removal path via removeLiveAdapter.
+ * local owners for an active scope. Reuses the reload removal path via removeLiveAdapter.
  */
 export async function reconcileLazyAdapterScopes(input: {
   storage: Storage;
@@ -83,8 +169,11 @@ export async function reconcileLazyAdapterScopes(input: {
   sessionOwnerIsLive: SessionOwnerLiveness;
   removeAdapter: typeof removeLiveAdapter;
   state: ScopeReleaseReconcileState;
+  discoveryRoot: string;
   graceMs?: number;
   now?: () => number;
+  scheduleGraceExpiry?: (key: string, delayMs: number) => void;
+  cancelGraceExpiry?: (key: string) => void;
 }): Promise<ScopeReleaseReconcileCounts> {
   const counts: ScopeReleaseReconcileCounts = {
     scopes_zero_live: 0,
@@ -95,59 +184,79 @@ export async function reconcileLazyAdapterScopes(input: {
   const now = (input.now ?? Date.now)();
   const graceMs = input.graceMs ?? DEFAULT_SCOPE_RELEASE_GRACE_MS;
   const activeSessions = await input.storage.listSessions({ status: "active" });
+  const allRegistrations = await listAllRegistrations(input.storage, input.factories);
+  const scopesReady = new Set<string>();
 
   for (const key of [...input.activeScopes]) {
-    const liveCount = countLiveSessionsForScope(
+    const liveCount = countLocalLiveSessionsForScope(
       activeSessions,
       key,
+      input.discoveryRoot,
       input.sessionOwnerIsLive,
     );
     if (liveCount > 0) {
       input.state.zeroLiveSince.delete(key);
+      input.cancelGraceExpiry?.(key);
       continue;
     }
 
     counts.scopes_zero_live += 1;
+
+    if (graceMs === 0) {
+      scopesReady.add(key);
+      input.state.zeroLiveSince.delete(key);
+      input.cancelGraceExpiry?.(key);
+      continue;
+    }
+
     const firstZero = input.state.zeroLiveSince.get(key);
     if (firstZero == null) {
       input.state.zeroLiveSince.set(key, now);
+      input.scheduleGraceExpiry?.(key, graceMs);
       continue;
     }
     if (now - firstZero < graceMs) continue;
 
-    const scopeSet = new Set<string>([key]);
-    const lazyRegs: AccountRegistration[] = [];
-    for (const factory of input.factories) {
-      const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
-      for (const reg of regs) {
-        if (reg.activation === "eager") continue;
-        if (!isRegistrationScopeActive(reg, scopeSet)) continue;
-        lazyRegs.push(reg);
-      }
-    }
+    scopesReady.add(key);
+    input.state.zeroLiveSince.delete(key);
+    input.cancelGraceExpiry?.(key);
+  }
 
-    let removedAny = false;
-    for (const reg of lazyRegs) {
-      const commId = reg.comm as CommId;
-      const accountId = reg.bot_user_id as AccountId;
-      if (!input.bus.getComm(commId, accountId)) continue;
-      await input.removeAdapter({
-        bus: input.bus,
-        bridges: input.bridges,
-        leaseArbiter: input.leaseArbiter,
-        commId,
-        accountId,
-      });
-      counts.adapters_removed += 1;
-      removedAny = true;
-    }
+  if (scopesReady.size === 0) return counts;
 
-    if (removedAny || lazyRegs.length === 0) {
-      counts.scopes_released += 1;
-      input.state.zeroLiveSince.delete(key);
-      if (input.activeScopes.delete(key)) {
-        counts.active_scopes_pruned += 1;
-      }
+  const desiredRegistrationIds = await buildGlobalDesiredRegistrationIds({
+    storage: input.storage,
+    factories: input.factories,
+    discoveryRoot: input.discoveryRoot,
+    sessionOwnerIsLive: input.sessionOwnerIsLive,
+    allRegistrations,
+    activeSessions,
+  });
+
+  const lazyRegs = allRegistrations.filter((reg) => reg.activation !== "eager");
+
+  for (const reg of lazyRegs) {
+    if (desiredRegistrationIds.has(reg.registration_id)) continue;
+    if (!isRegistrationScopeActive(reg, scopesReady)) continue;
+
+    const commId = reg.comm as CommId;
+    const accountId = reg.bot_user_id as AccountId;
+    if (!input.bus.getComm(commId, accountId)) continue;
+
+    await input.removeAdapter({
+      bus: input.bus,
+      bridges: input.bridges,
+      leaseArbiter: input.leaseArbiter,
+      commId,
+      accountId,
+    });
+    counts.adapters_removed += 1;
+  }
+
+  for (const key of scopesReady) {
+    counts.scopes_released += 1;
+    if (input.activeScopes.delete(key)) {
+      counts.active_scopes_pruned += 1;
     }
   }
 

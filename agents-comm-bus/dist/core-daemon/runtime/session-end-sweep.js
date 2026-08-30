@@ -95,7 +95,28 @@ export function startSessionEndSweep(options) {
     let sweepInFlight = false;
     let interval = null;
     let earlyReconcile = false;
-    const reconcileState = options.reconcileState ?? { zeroLiveSince: new Map() };
+    const reconcileState = options.reconcileState ?? {
+        zeroLiveSince: new Map(),
+        graceTimers: new Map(),
+    };
+    if (!reconcileState.graceTimers) {
+        reconcileState.graceTimers = new Map();
+    }
+    const cancelGraceExpiry = (key) => {
+        const handle = reconcileState.graceTimers.get(key);
+        if (handle != null) {
+            clearTimeoutFn(handle);
+            reconcileState.graceTimers.delete(key);
+        }
+    };
+    const scheduleGraceExpiry = (key, delayMs) => {
+        cancelGraceExpiry(key);
+        const handle = setTimeoutFn(() => {
+            reconcileState.graceTimers.delete(key);
+            tick();
+        }, delayMs);
+        reconcileState.graceTimers.set(key, handle);
+    };
     const tick = () => {
         if (sweepInFlight)
             return;
@@ -109,7 +130,13 @@ export function startSessionEndSweep(options) {
             recencyMs: options.recencyMs,
             log: options.log,
             reconcile: options.reconcile != null
-                ? { ...options.reconcile, state: reconcileState, graceMs }
+                ? {
+                    ...options.reconcile,
+                    state: reconcileState,
+                    graceMs,
+                    scheduleGraceExpiry,
+                    cancelGraceExpiry,
+                }
                 : undefined,
         })
             .catch((error) => {
@@ -133,6 +160,9 @@ export function startSessionEndSweep(options) {
             if (interval != null)
                 clearIntervalFn(interval);
             interval = null;
+            for (const key of reconcileState.graceTimers.keys()) {
+                cancelGraceExpiry(key);
+            }
         },
         requestEarlyReconcile() {
             earlyReconcile = true;

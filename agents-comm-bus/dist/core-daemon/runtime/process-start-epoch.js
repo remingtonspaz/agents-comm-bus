@@ -1,15 +1,19 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 /**
- * Best-effort process creation epoch (ms). Used for AGE-101 pid+start-time
- * liveness; returns null when the platform cannot resolve the stamp.
+ * Stable per-process identity for liveness (stored on session rows).
+ * Linux: FNV hash of boot_id + starttime ticks (no Date.now drift).
+ * Windows/Darwin: stable epoch ms from OS APIs.
  */
-export function readProcessStartEpochMs(pid, options = {}) {
+export function readProcessStartIdentity(pid, options = {}) {
     if (!Number.isInteger(pid) || pid <= 0)
         return null;
     try {
+        if (options.readProcStat && options.readBootId) {
+            return readLinuxProcessStartIdentity(pid, options);
+        }
         if (process.platform === "linux") {
-            return readLinuxProcessStartEpochMs(pid, options.readProcStat);
+            return readLinuxProcessStartIdentity(pid, options);
         }
         if (process.platform === "darwin") {
             return readDarwinProcessStartEpochMs(pid);
@@ -23,7 +27,33 @@ export function readProcessStartEpochMs(pid, options = {}) {
     }
     return null;
 }
-function readLinuxProcessStartEpochMs(pid, readProcStat) {
+/** @deprecated alias — use readProcessStartIdentity */
+export function readProcessStartEpochMs(pid, options = {}) {
+    return readProcessStartIdentity(pid, options);
+}
+export function processStartIdentityMatches(stored, pid, options = {}) {
+    const current = readProcessStartIdentity(pid, options);
+    return current != null && current === stored;
+}
+function fnv1a32(input) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < input.length; i += 1) {
+        hash ^= input.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return hash >>> 0;
+}
+function readLinuxBootId(options) {
+    if (options.readBootId)
+        return options.readBootId();
+    try {
+        return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    }
+    catch {
+        return null;
+    }
+}
+function readLinuxStartTicks(pid, readProcStat) {
     const raw = readProcStat?.(pid) ??
         (() => {
             try {
@@ -40,15 +70,14 @@ function readLinuxProcessStartEpochMs(pid, readProcStat) {
         return null;
     const fields = raw.slice(closeParen + 2).split(" ");
     const startTicks = Number(fields[19]);
-    if (!Number.isFinite(startTicks))
+    return Number.isFinite(startTicks) ? startTicks : null;
+}
+function readLinuxProcessStartIdentity(pid, options) {
+    const bootId = readLinuxBootId(options);
+    const startTicks = readLinuxStartTicks(pid, options.readProcStat);
+    if (!bootId || startTicks == null)
         return null;
-    const uptimeRaw = readFileSync("/proc/uptime", "utf8").split(/\s+/)[0];
-    const uptimeSec = Number(uptimeRaw);
-    if (!Number.isFinite(uptimeSec))
-        return null;
-    const bootMs = Date.now() - uptimeSec * 1000;
-    const hz = 100;
-    return bootMs + (startTicks / hz) * 1000;
+    return fnv1a32(`${bootId}:${startTicks}`);
 }
 function readDarwinProcessStartEpochMs(pid) {
     const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
@@ -72,10 +101,9 @@ function readWindowsProcessStartEpochMs(pid) {
 }
 /** Boot epoch for the current process — stable for this process lifetime. */
 export function currentProcessStartEpochMs() {
-    const fromOs = readProcessStartEpochMs(process.pid);
+    const fromOs = readProcessStartIdentity(process.pid);
     if (fromOs != null)
         return fromOs;
-    // Fallback when OS lookup fails: monotonic anchor tied to this pid's lifetime.
     return Date.now() - Math.round(process.uptime() * 1000);
 }
 //# sourceMappingURL=process-start-epoch.js.map

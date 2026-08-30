@@ -1,6 +1,10 @@
 import type { Session } from "agents-comm-bus-core";
 
-import { readProcessStartEpochMs } from "./process-start-epoch.js";
+import {
+  processStartIdentityMatches,
+  readProcessStartEpochMs,
+  type ProcessStartIdentityOptions,
+} from "./process-start-epoch.js";
 
 /** Match boot-scope restore's existing 24-hour owner recency window. */
 export const DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1000;
@@ -19,7 +23,7 @@ export type SessionOwnerProcessState =
   | "stale"
   | "dead";
 
-export interface SessionOwnerLivenessOptions {
+export interface SessionOwnerLivenessOptions extends ProcessStartIdentityOptions {
   now?: () => number;
   isPidAlive?: (pid: number) => boolean;
   /** Injectable process-start probe (tests); defaults to readProcessStartEpochMs. */
@@ -56,9 +60,16 @@ export function classifySessionOwnerProcess(
   if (!isPidAlive(pid)) return "dead";
 
   if (startTime != null) {
-    const readStart = options.readProcessStartEpochMs ?? readProcessStartEpochMs;
-    const currentStart = readStart(pid);
-    if (currentStart != null && currentStart !== startTime) return "dead";
+    const identityOptions: ProcessStartIdentityOptions = {
+      readProcStat: options.readProcStat,
+      readBootId: options.readBootId,
+      readProcUptime: options.readProcUptime,
+      readClockTicksPerSec: options.readClockTicksPerSec,
+    };
+    const matches = options.readProcessStartEpochMs
+      ? options.readProcessStartEpochMs(pid) === startTime
+      : processStartIdentityMatches(startTime, pid, identityOptions);
+    if (!matches) return "dead";
   }
 
   const now = options.now ?? Date.now;

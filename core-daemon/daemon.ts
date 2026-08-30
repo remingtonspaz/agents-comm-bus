@@ -338,6 +338,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       leaseArbiter,
       inFlight: inFlightAdapters,
       audit,
+      discoveryRoot: discoveryPaths.root,
+      sessionOwnerIsLive,
     });
     return outcomes;
   };
@@ -584,6 +586,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       sessionOwnerIsLive,
       removeAdapter: removeLiveAdapter,
       state: scopeReconcileState,
+      discoveryRoot: discoveryPaths.root,
     },
     reconcileState: scopeReconcileState,
   });
@@ -668,6 +671,9 @@ export async function ensureCommsForSession(input: {
   leaseArbiter: CommLeaseArbiter;
   inFlight: Set<string>;
   audit?: JsonlAuditStore;
+  /** AGE-101: discovery-root eligibility for live lease acquire on lazy ensure. */
+  discoveryRoot?: string;
+  sessionOwnerIsLive?: SessionOwnerLiveness;
 }): Promise<{ outcomes: EnsureRegistrationResult[] }> {
   const project = normalizeProjectPath(input.project);
   const accountLabelScope = input.accountLabelScope ?? null;
@@ -722,6 +728,8 @@ export async function ensureCommsForSession(input: {
         audit: input.audit,
         agent: input.agent,
         agentLeaseProperties: input.agentLeaseProperties,
+        discoveryRoot: input.discoveryRoot,
+        sessionOwnerIsLive: input.sessionOwnerIsLive,
       }),
     );
   }

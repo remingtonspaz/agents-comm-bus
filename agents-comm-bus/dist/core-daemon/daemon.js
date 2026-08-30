@@ -212,6 +212,8 @@ export async function runDaemon(options) {
             leaseArbiter,
             inFlight: inFlightAdapters,
             audit,
+            discoveryRoot: discoveryPaths.root,
+            sessionOwnerIsLive,
         });
         return outcomes;
     };
@@ -423,6 +425,7 @@ export async function runDaemon(options) {
             sessionOwnerIsLive,
             removeAdapter: removeLiveAdapter,
             state: scopeReconcileState,
+            discoveryRoot: discoveryPaths.root,
         },
         reconcileState: scopeReconcileState,
     });
@@ -526,6 +529,8 @@ export async function ensureCommsForSession(input) {
             audit: input.audit,
             agent: input.agent,
             agentLeaseProperties: input.agentLeaseProperties,
+            discoveryRoot: input.discoveryRoot,
+            sessionOwnerIsLive: input.sessionOwnerIsLive,
         }));
     }
     return { outcomes };

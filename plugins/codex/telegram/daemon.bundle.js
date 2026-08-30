@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.53";
+var DAEMON_VERSION = "0.2.54";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4402,11 +4402,14 @@ function wrapWithLease(inner, arbiter, options = {}) {
 // ../core-daemon/runtime/process-start-epoch.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-function readProcessStartEpochMs(pid, options = {}) {
+function readProcessStartIdentity(pid, options = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
+    if (options.readProcStat && options.readBootId) {
+      return readLinuxProcessStartIdentity(pid, options);
+    }
     if (process.platform === "linux") {
-      return readLinuxProcessStartEpochMs(pid, options.readProcStat);
+      return readLinuxProcessStartIdentity(pid, options);
     }
     if (process.platform === "darwin") {
       return readDarwinProcessStartEpochMs(pid);
@@ -4419,7 +4422,30 @@ function readProcessStartEpochMs(pid, options = {}) {
   }
   return null;
 }
-function readLinuxProcessStartEpochMs(pid, readProcStat) {
+function readProcessStartEpochMs(pid, options = {}) {
+  return readProcessStartIdentity(pid, options);
+}
+function processStartIdentityMatches(stored, pid, options = {}) {
+  const current = readProcessStartIdentity(pid, options);
+  return current != null && current === stored;
+}
+function fnv1a32(input) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+function readLinuxBootId(options) {
+  if (options.readBootId) return options.readBootId();
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+function readLinuxStartTicks(pid, readProcStat) {
   const raw = readProcStat?.(pid) ?? (() => {
     try {
       return readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -4432,13 +4458,13 @@ function readLinuxProcessStartEpochMs(pid, readProcStat) {
   if (closeParen < 0) return null;
   const fields = raw.slice(closeParen + 2).split(" ");
   const startTicks = Number(fields[19]);
-  if (!Number.isFinite(startTicks)) return null;
-  const uptimeRaw = readFileSync("/proc/uptime", "utf8").split(/\s+/)[0];
-  const uptimeSec = Number(uptimeRaw);
-  if (!Number.isFinite(uptimeSec)) return null;
-  const bootMs = Date.now() - uptimeSec * 1e3;
-  const hz = 100;
-  return bootMs + startTicks / hz * 1e3;
+  return Number.isFinite(startTicks) ? startTicks : null;
+}
+function readLinuxProcessStartIdentity(pid, options) {
+  const bootId = readLinuxBootId(options);
+  const startTicks = readLinuxStartTicks(pid, options.readProcStat);
+  if (!bootId || startTicks == null) return null;
+  return fnv1a32(`${bootId}:${startTicks}`);
 }
 function readDarwinProcessStartEpochMs(pid) {
   const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
@@ -4481,9 +4507,14 @@ function classifySessionOwnerProcess(session, options = {}) {
   const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive2;
   if (!isPidAlive2(pid)) return "dead";
   if (startTime != null) {
-    const readStart = options.readProcessStartEpochMs ?? readProcessStartEpochMs;
-    const currentStart = readStart(pid);
-    if (currentStart != null && currentStart !== startTime) return "dead";
+    const identityOptions = {
+      readProcStat: options.readProcStat,
+      readBootId: options.readBootId,
+      readProcUptime: options.readProcUptime,
+      readClockTicksPerSec: options.readClockTicksPerSec
+    };
+    const matches = options.readProcessStartEpochMs ? options.readProcessStartEpochMs(pid) === startTime : processStartIdentityMatches(startTime, pid, identityOptions);
+    if (!matches) return "dead";
   }
   const now = options.now ?? Date.now;
   const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;
@@ -8630,15 +8661,61 @@ function isRegistrationScopeActive(registration, activeScopes) {
   }
   return false;
 }
-function countLiveSessionsForScope(sessions, key, sessionOwnerIsLive) {
+function isSessionLocalLiveOwner(session, discoveryRoot2, sessionOwnerIsLive) {
+  if (session.status !== "active") return false;
+  if (!sessionOwnerIsLive(session)) return false;
+  const stamped = session.lease_owner_daemon_discovery_root;
+  if (stamped == null || stamped.length === 0) return true;
+  return normalizeDaemonRootPath(stamped) === normalizeDaemonRootPath(discoveryRoot2);
+}
+function countLocalLiveSessionsForScope(sessions, key, discoveryRoot2, sessionOwnerIsLive) {
   let count = 0;
   for (const session of sessions) {
-    if (session.status !== "active") continue;
-    if (scopeKey(session.agent, session.project, session.account_label_scope) !== key) continue;
-    if (!sessionOwnerIsLive(session)) continue;
+    if (scopeKey(session.agent, session.project, session.account_label_scope) !== key) {
+      continue;
+    }
+    if (!isSessionLocalLiveOwner(session, discoveryRoot2, sessionOwnerIsLive)) continue;
     count += 1;
   }
   return count;
+}
+async function listAllRegistrations(storage, factories) {
+  const all = [];
+  for (const factory of factories) {
+    const regs = await storage.listAccountRegistrations({ comm: factory.commId });
+    all.push(...regs);
+  }
+  return all;
+}
+async function buildGlobalDesiredRegistrationIds(input) {
+  const allRegistrations = input.allRegistrations ?? await listAllRegistrations(input.storage, input.factories);
+  const activeSessions = input.activeSessions ?? await input.storage.listSessions({ status: "active" });
+  const desired = /* @__PURE__ */ new Set();
+  for (const reg of allRegistrations) {
+    if (reg.activation === "eager") {
+      desired.add(reg.registration_id);
+    }
+  }
+  for (const session of activeSessions) {
+    if (!isSessionLocalLiveOwner(
+      session,
+      input.discoveryRoot,
+      input.sessionOwnerIsLive
+    )) {
+      continue;
+    }
+    const projectRegs = allRegistrations.filter(
+      (reg) => reg.agent === session.agent && normalizeProjectPath(reg.project) === normalizeProjectPath(session.project)
+    );
+    const scoped = filterRegistrationsByScope(
+      projectRegs,
+      session.account_label_scope
+    );
+    for (const reg of scoped) {
+      desired.add(reg.registration_id);
+    }
+  }
+  return desired;
 }
 async function reconcileLazyAdapterScopes(input) {
   const counts = {
@@ -8650,54 +8727,67 @@ async function reconcileLazyAdapterScopes(input) {
   const now = (input.now ?? Date.now)();
   const graceMs = input.graceMs ?? DEFAULT_SCOPE_RELEASE_GRACE_MS;
   const activeSessions = await input.storage.listSessions({ status: "active" });
+  const allRegistrations = await listAllRegistrations(input.storage, input.factories);
+  const scopesReady = /* @__PURE__ */ new Set();
   for (const key of [...input.activeScopes]) {
-    const liveCount = countLiveSessionsForScope(
+    const liveCount = countLocalLiveSessionsForScope(
       activeSessions,
       key,
+      input.discoveryRoot,
       input.sessionOwnerIsLive
     );
     if (liveCount > 0) {
       input.state.zeroLiveSince.delete(key);
+      input.cancelGraceExpiry?.(key);
       continue;
     }
     counts.scopes_zero_live += 1;
+    if (graceMs === 0) {
+      scopesReady.add(key);
+      input.state.zeroLiveSince.delete(key);
+      input.cancelGraceExpiry?.(key);
+      continue;
+    }
     const firstZero = input.state.zeroLiveSince.get(key);
     if (firstZero == null) {
       input.state.zeroLiveSince.set(key, now);
+      input.scheduleGraceExpiry?.(key, graceMs);
       continue;
     }
     if (now - firstZero < graceMs) continue;
-    const scopeSet = /* @__PURE__ */ new Set([key]);
-    const lazyRegs = [];
-    for (const factory of input.factories) {
-      const regs = await input.storage.listAccountRegistrations({ comm: factory.commId });
-      for (const reg of regs) {
-        if (reg.activation === "eager") continue;
-        if (!isRegistrationScopeActive(reg, scopeSet)) continue;
-        lazyRegs.push(reg);
-      }
-    }
-    let removedAny = false;
-    for (const reg of lazyRegs) {
-      const commId = reg.comm;
-      const accountId = reg.bot_user_id;
-      if (!input.bus.getComm(commId, accountId)) continue;
-      await input.removeAdapter({
-        bus: input.bus,
-        bridges: input.bridges,
-        leaseArbiter: input.leaseArbiter,
-        commId,
-        accountId
-      });
-      counts.adapters_removed += 1;
-      removedAny = true;
-    }
-    if (removedAny || lazyRegs.length === 0) {
-      counts.scopes_released += 1;
-      input.state.zeroLiveSince.delete(key);
-      if (input.activeScopes.delete(key)) {
-        counts.active_scopes_pruned += 1;
-      }
+    scopesReady.add(key);
+    input.state.zeroLiveSince.delete(key);
+    input.cancelGraceExpiry?.(key);
+  }
+  if (scopesReady.size === 0) return counts;
+  const desiredRegistrationIds = await buildGlobalDesiredRegistrationIds({
+    storage: input.storage,
+    factories: input.factories,
+    discoveryRoot: input.discoveryRoot,
+    sessionOwnerIsLive: input.sessionOwnerIsLive,
+    allRegistrations,
+    activeSessions
+  });
+  const lazyRegs = allRegistrations.filter((reg) => reg.activation !== "eager");
+  for (const reg of lazyRegs) {
+    if (desiredRegistrationIds.has(reg.registration_id)) continue;
+    if (!isRegistrationScopeActive(reg, scopesReady)) continue;
+    const commId = reg.comm;
+    const accountId = reg.bot_user_id;
+    if (!input.bus.getComm(commId, accountId)) continue;
+    await input.removeAdapter({
+      bus: input.bus,
+      bridges: input.bridges,
+      leaseArbiter: input.leaseArbiter,
+      commId,
+      accountId
+    });
+    counts.adapters_removed += 1;
+  }
+  for (const key of scopesReady) {
+    counts.scopes_released += 1;
+    if (input.activeScopes.delete(key)) {
+      counts.active_scopes_pruned += 1;
     }
   }
   return counts;
@@ -8789,7 +8879,28 @@ function startSessionEndSweep(options) {
   let sweepInFlight = false;
   let interval = null;
   let earlyReconcile = false;
-  const reconcileState = options.reconcileState ?? { zeroLiveSince: /* @__PURE__ */ new Map() };
+  const reconcileState = options.reconcileState ?? {
+    zeroLiveSince: /* @__PURE__ */ new Map(),
+    graceTimers: /* @__PURE__ */ new Map()
+  };
+  if (!reconcileState.graceTimers) {
+    reconcileState.graceTimers = /* @__PURE__ */ new Map();
+  }
+  const cancelGraceExpiry = (key) => {
+    const handle = reconcileState.graceTimers.get(key);
+    if (handle != null) {
+      clearTimeoutFn(handle);
+      reconcileState.graceTimers.delete(key);
+    }
+  };
+  const scheduleGraceExpiry = (key, delayMs) => {
+    cancelGraceExpiry(key);
+    const handle = setTimeoutFn(() => {
+      reconcileState.graceTimers.delete(key);
+      tick();
+    }, delayMs);
+    reconcileState.graceTimers.set(key, handle);
+  };
   const tick = () => {
     if (sweepInFlight) return;
     sweepInFlight = true;
@@ -8801,7 +8912,13 @@ function startSessionEndSweep(options) {
       isPidAlive: options.isPidAlive,
       recencyMs: options.recencyMs,
       log: options.log,
-      reconcile: options.reconcile != null ? { ...options.reconcile, state: reconcileState, graceMs } : void 0
+      reconcile: options.reconcile != null ? {
+        ...options.reconcile,
+        state: reconcileState,
+        graceMs,
+        scheduleGraceExpiry,
+        cancelGraceExpiry
+      } : void 0
     }).catch((error) => {
       const log = options.log ?? console.error;
       log(
@@ -8822,6 +8939,9 @@ function startSessionEndSweep(options) {
       clearTimeoutFn(initial);
       if (interval != null) clearIntervalFn(interval);
       interval = null;
+      for (const key of reconcileState.graceTimers.keys()) {
+        cancelGraceExpiry(key);
+      }
     },
     requestEarlyReconcile() {
       earlyReconcile = true;
@@ -9098,7 +9218,9 @@ async function runDaemon(options) {
       stateRoot: paths.root,
       leaseArbiter,
       inFlight: inFlightAdapters,
-      audit
+      audit,
+      discoveryRoot: discoveryPaths.root,
+      sessionOwnerIsLive
     });
     return outcomes;
   };
@@ -9317,7 +9439,8 @@ async function runDaemon(options) {
       leaseArbiter,
       sessionOwnerIsLive,
       removeAdapter: removeLiveAdapter,
-      state: scopeReconcileState
+      state: scopeReconcileState,
+      discoveryRoot: discoveryPaths.root
     },
     reconcileState: scopeReconcileState
   });
@@ -9409,7 +9532,9 @@ async function ensureCommsForSession(input) {
         inFlight: input.inFlight,
         audit: input.audit,
         agent: input.agent,
-        agentLeaseProperties: input.agentLeaseProperties
+        agentLeaseProperties: input.agentLeaseProperties,
+        discoveryRoot: input.discoveryRoot,
+        sessionOwnerIsLive: input.sessionOwnerIsLive
       })
     );
   }

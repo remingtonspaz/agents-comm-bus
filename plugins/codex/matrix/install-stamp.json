@@ -3,7 +3,7 @@
   "agent": "codex",
   "comm": "matrix",
   "plugin_version": "0.1.12",
-  "daemon_bundle_version": "0.2.53",
+  "daemon_bundle_version": "0.2.54",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
     "matrix": "0.2.6"
