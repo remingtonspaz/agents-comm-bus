@@ -190,6 +190,8 @@ export interface CommLeaseArbiterOptions {
     ipcRecencyMarginMs?: number;
     /** Audit hook for loud reclaim/deny events. Best-effort; never throws. */
     onAudit?: (event: CommLeaseAuditEvent) => void;
+    /** AGE-102: native-only process-start stamp; null omits identity (tests inject). */
+    readProcessStartIdentity?: (pid: number) => number | null;
 }
 export interface CommLeaseAuditEvent {
     kind: "comm_lease_acquired" | "comm_lease_reclaimed" | "comm_lease_denied" | "comm_lease_lost" | "comm_lease_released";
@@ -206,6 +208,7 @@ export declare class CommLeaseArbiter {
     private readonly stalenessMs;
     private readonly ipcRecencyMarginMs;
     private readonly onAudit?;
+    private readonly readProcessStartIdentity;
     /**
      * Per-resource signature of the last `comm_lease_denied` we actually audited,
      * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
@@ -267,6 +270,11 @@ export declare class CommLeaseArbiter {
     private leasePath;
     private leaseKey;
     private buildRecord;
+    /**
+     * Stamp native process-start identity only when the OS probe succeeds.
+     * Preserves an existing self-held stamp; never writes uptime fallback.
+     */
+    private processStartTimeForRecord;
     /**
      * Stamp agent properties from the locally desired map. A lease reclaimed from
      * another holder must never inherit the prior holder's properties.

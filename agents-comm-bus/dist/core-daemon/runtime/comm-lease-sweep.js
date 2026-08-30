@@ -199,6 +199,7 @@ export async function runCommLeaseSweep(input) {
                 counts.guard_contended += 1;
                 continue;
             }
+            let reaped = null;
             try {
                 if (input.afterGuardAcquired) {
                     await input.afterGuardAcquired(leasePath, snapshot);
@@ -235,14 +236,21 @@ export async function runCommLeaseSweep(input) {
                     },
                 })
                     .catch(() => { });
-                if (input.recovery) {
-                    const recovered = await recoverAfterLeaseDeletion(current.comm_id, current.resource_id, input.recovery).catch(() => false);
-                    if (recovered)
-                        counts.recovered += 1;
-                }
+                reaped = {
+                    comm_id: current.comm_id,
+                    resource_id: current.resource_id,
+                };
             }
             finally {
                 await releaseSweepGuard(leasePath, guard);
+            }
+            if (reaped && input.recovery) {
+                if (input.beforeRecovery) {
+                    await input.beforeRecovery(leasePath);
+                }
+                const recovered = await recoverAfterLeaseDeletion(reaped.comm_id, reaped.resource_id, input.recovery).catch(() => false);
+                if (recovered)
+                    counts.recovered += 1;
             }
         }
     }
@@ -265,13 +273,6 @@ export function startCommLeaseSweep(options) {
             return handle;
         });
     const clearIntervalFn = options.clearIntervalFn ?? ((h) => clearInterval(h));
-    const setTimeoutFn = options.setTimeoutFn ??
-        ((fn, ms) => {
-            const handle = setTimeout(fn, ms);
-            handle.unref?.();
-            return handle;
-        });
-    const clearTimeoutFn = options.clearTimeoutFn ?? ((h) => clearTimeout(h));
     let sweepInFlight = false;
     let pendingTick = false;
     let stopped = false;
@@ -296,6 +297,7 @@ export function startCommLeaseSweep(options) {
             recovery: options.recovery,
             sweepHold: options.sweepHold,
             afterGuardAcquired: options.afterGuardAcquired,
+            beforeRecovery: options.beforeRecovery,
         })
             .catch((error) => {
             const log = options.log ?? console.error;
@@ -313,15 +315,10 @@ export function startCommLeaseSweep(options) {
     if (options.runOnStart !== false) {
         tick();
     }
-    const initial = setTimeoutFn(() => {
-        if (stopped)
-            return;
-        interval = setIntervalFn(tick, intervalMs);
-    }, intervalMs);
+    interval = setIntervalFn(tick, intervalMs);
     return {
         stop() {
             stopped = true;
-            clearTimeoutFn(initial);
             if (interval != null)
                 clearIntervalFn(interval);
             interval = null;
@@ -343,4 +340,22 @@ export function commLeaseIdsFromPath(leasePath, homeDir = os.homedir()) {
     };
 }
 export { commLeasePath };
+/**
+ * AGE-102: ordered daemon bootstrap — boot sweep, optional periodic start,
+ * then boot restore and eager reconcile. Periodic starts only after a
+ * successful boot sweep; restore/eager always run fail-safe.
+ */
+export async function runCommLeaseDaemonBootstrap(input) {
+    let periodic = null;
+    try {
+        await input.bootSweep();
+        periodic = input.startPeriodicSweep();
+    }
+    catch (error) {
+        await input.onBootSweepFailed(error);
+    }
+    await input.bootRestore();
+    await input.eagerReconcile();
+    return periodic;
+}
 //# sourceMappingURL=comm-lease-sweep.js.map

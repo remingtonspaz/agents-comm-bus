@@ -31,6 +31,7 @@ import {
   classifyCommLeaseOwner,
   commLeaseLockRoot,
   DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS,
+  runCommLeaseDaemonBootstrap,
   runCommLeaseSweep,
   startCommLeaseSweep,
 } from "../../core-daemon/runtime/comm-lease-sweep.js";
@@ -700,7 +701,6 @@ describe("AGE-102 comm lease sweep scheduler (real path)", () => {
       isPidAlive: () => false,
       intervalMs: DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS,
       setIntervalFn: () => null,
-      setTimeoutFn: (fn, ms) => setTimeout(fn, ms),
       sweepHold: async () => {
         sweepCount += 1;
         await gate.hold();
@@ -718,7 +718,6 @@ describe("AGE-102 comm lease sweep scheduler (real path)", () => {
     await writeLeaseFile(home, leaseRecord({ pid: 1, resource_id: "replay-a" }));
     const gate = makeSweepHoldGate();
     let sweepCount = 0;
-    let installInterval: (() => void) | null = null;
     let intervalTick: (() => void) | null = null;
     const handle = startCommLeaseSweep({
       homeDir: home,
@@ -729,38 +728,308 @@ describe("AGE-102 comm lease sweep scheduler (real path)", () => {
         intervalTick = fn as () => void;
         return null;
       },
-      setTimeoutFn: (fn, ms) => {
-        if (ms === 60_000) installInterval = fn as () => void;
-        return null;
-      },
       sweepHold: async () => {
         sweepCount += 1;
         if (sweepCount === 1) await gate.hold();
       },
     });
     await waitFor(() => sweepCount === 1);
-    installInterval?.();
-    assert.ok(intervalTick, "interval tick captured");
+    assert.ok(intervalTick, "interval tick captured immediately on scheduler start");
     intervalTick!();
     gate.release();
     await waitFor(() => sweepCount >= 2);
     handle.stop();
   });
 
-  it("stamps process_start_time on acquire", async () => {
+  it("installs periodic interval immediately at 1x intervalMs", async () => {
+    const home = await makeTempDir("acb-age102-interval-");
+    let intervalMsUsed: number | null = null;
+    let tickCaptured = false;
+    const handle = startCommLeaseSweep({
+      homeDir: home,
+      runOnStart: false,
+      intervalMs: 5_000,
+      setIntervalFn: (fn, ms) => {
+        intervalMsUsed = ms;
+        tickCaptured = true;
+        return 1;
+      },
+    });
+    assert.equal(intervalMsUsed, 5_000);
+    assert.equal(tickCaptured, true);
+    handle.stop();
+  });
+
+  it("stamps native process_start_time on acquire when probe succeeds", async () => {
     const home = await makeTempDir("acb-age102-stamp-");
+    const nativeIdentity = 4242;
     const arb = new CommLeaseArbiter({
       self: selfIdentity({ pid: 501 }),
       lastIpcServedAt: () => 0,
       homeDir: home,
       isPidAlive: () => true,
       now: () => 0,
+      readProcessStartIdentity: () => nativeIdentity,
     });
     const result = await arb.tryAcquire("telegram", "stamp-bot");
     assert.equal(result.ok, true);
     const raw = await readFile(commLeasePath("telegram", "stamp-bot", home), "utf8");
     const parsed = JSON.parse(raw) as LeaseRecord;
-    assert.equal(typeof parsed.process_start_time, "number");
+    assert.equal(parsed.process_start_time, nativeIdentity);
+  });
+
+  it("omits process_start_time when native probe returns null", async () => {
+    const home = await makeTempDir("acb-age102-no-stamp-");
+    const arb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 502 }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: () => true,
+      now: () => 0,
+      readProcessStartIdentity: () => null,
+    });
+    const result = await arb.tryAcquire("telegram", "no-stamp-bot");
+    assert.equal(result.ok, true);
+    const raw = await readFile(commLeasePath("telegram", "no-stamp-bot", home), "utf8");
+    const parsed = JSON.parse(raw) as LeaseRecord;
+    assert.equal(parsed.process_start_time, undefined);
+  });
+});
+
+describe("AGE-102 fix-round: daemon bootstrap ordering (real path)", () => {
+  it("runs boot sweep before periodic, restore, and eager reconcile", async () => {
+    const events: string[] = [];
+    let sweepDone = false;
+    await runCommLeaseDaemonBootstrap({
+      bootSweep: async () => {
+        events.push("sweep-start");
+        await new Promise((r) => setTimeout(r, 10));
+        sweepDone = true;
+        events.push("sweep-end");
+      },
+      startPeriodicSweep: () => {
+        events.push("periodic");
+        assert.equal(sweepDone, true, "periodic must start only after boot sweep");
+        return { stop() {} };
+      },
+      bootRestore: async () => {
+        events.push("restore");
+        assert.equal(sweepDone, true, "restore must run after boot sweep");
+      },
+      eagerReconcile: async () => {
+        events.push("eager");
+      },
+      onBootSweepFailed: async () => {
+        events.push("sweep-failed");
+      },
+    });
+    assert.deepEqual(events, ["sweep-start", "sweep-end", "periodic", "restore", "eager"]);
+  });
+
+  it("skips periodic but still runs restore/eager when boot sweep fails", async () => {
+    const events: string[] = [];
+    const periodic = await runCommLeaseDaemonBootstrap({
+      bootSweep: async () => {
+        events.push("sweep");
+        throw new Error("boot sweep boom");
+      },
+      startPeriodicSweep: () => {
+        events.push("periodic");
+        return { stop() {} };
+      },
+      bootRestore: async () => {
+        events.push("restore");
+      },
+      eagerReconcile: async () => {
+        events.push("eager");
+      },
+      onBootSweepFailed: async () => {
+        events.push("sweep-failed");
+      },
+    });
+    assert.equal(periodic, null);
+    assert.deepEqual(events, ["sweep", "sweep-failed", "restore", "eager"]);
+  });
+});
+
+describe("AGE-102 fix-round: guard released before recovery (real path)", () => {
+  it("recovery observes guard absent and acquire succeeds without contention", async () => {
+    const dir = await makeTempDir("acb-age102-guard-release-");
+    const harness = await makeHarness(dir);
+    const home = await makeTempDir("acb-age102-guard-release-home-");
+    const reg = registration({ bot_user_id: "guard-bot", activation: "eager" });
+    await harness.storage.putAccountRegistration(reg);
+    const leasePath = await writeLeaseFile(
+      home,
+      leaseRecord({ comm_id: TELEGRAM, resource_id: "guard-bot", pid: 1 }),
+    );
+    const guardPath = `${leasePath}.guard`;
+
+    const arb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: process.pid }),
+      lastIpcServedAt: () => Date.now(),
+      homeDir: home,
+      isPidAlive: () => false,
+    });
+    const factory = new RecordingFactory();
+    let guardAbsent = false;
+    let acquireOk = false;
+
+    await runCommLeaseSweep({
+      homeDir: home,
+      isPidAlive: () => false,
+      beforeRecovery: async (pathOnDisk) => {
+        assert.equal(pathOnDisk, leasePath);
+        guardAbsent = !existsSync(guardPath);
+        const result = await arb.tryAcquire(TELEGRAM, "guard-bot");
+        acquireOk = result.ok;
+      },
+      recovery: {
+        storage: harness.storage,
+        activeScopes: new Set(),
+        ensure: {
+          factories: [factory],
+          bus: harness.bus,
+          bridges: [],
+          storage: harness.storage,
+          env: process.env,
+          blobs: harness.blobs,
+          stateRoot: dir,
+          leaseArbiter: arb,
+          inFlight: new Set(),
+        },
+      },
+    });
+
+    assert.equal(guardAbsent, true);
+    assert.equal(acquireOk, true);
+    assert.equal(existsSync(commLeasePath(TELEGRAM, "guard-bot", home)), true);
+    await harness.storage.close();
+  });
+});
+
+describe("AGE-102 fix-round: nudge slow-poll restoration (real path)", () => {
+  it("reinstalls slow poll after eligibility-denied nudge", async () => {
+    const home = await makeTempDir("acb-age102-nudge-deny-");
+    const alive = new Set<number>([300]);
+    const holderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 300, authorityRank: "main-dev" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    await holderArb.tryAcquire("fakecomm", "deny-nudge-bot");
+
+    const contenderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 310, authorityRank: "worktree" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    const timers = makeTimers();
+    const inner = {
+      id: "fakecomm" as CommId,
+      accountId: "deny-nudge-bot" as AccountId,
+      allowedSenderIds: [] as readonly string[],
+      startCount: 0,
+      stopCount: 0,
+      exclusiveResource: () => ({ resourceId: "deny-nudge-bot" }),
+      async start() {
+        this.startCount += 1;
+      },
+      async stop() {
+        this.stopCount += 1;
+      },
+      onInbound() {},
+      onConnectionState() {},
+      async send(): Promise<never> {
+        throw new Error("not used");
+      },
+      reportPressure() {
+        return { backlog: 0, rateLimited: false };
+      },
+      classifyFailure() {
+        return "transient" as const;
+      },
+    };
+    const wrapped = wrapWithLease(inner as unknown as CommAdapter, contenderArb, {
+      leaseEligible: async () => false,
+      setIntervalFn: timers.setIntervalFn,
+      clearIntervalFn: timers.clearIntervalFn,
+      reacquireIntervalMs: 60_000,
+      log: () => {},
+    });
+    await wrapped.start();
+    assert.equal(timers.count(), 1);
+    assert.equal(nudgeLeaseReacquire("fakecomm", "deny-nudge-bot"), true);
+    await waitFor(() => timers.count() === 1);
+    assert.equal(inner.startCount, 0);
+    await wrapped.stop();
+  });
+
+  it("reinstalls slow poll after tryAcquire error on nudge", async () => {
+    const home = await makeTempDir("acb-age102-nudge-error-");
+    const alive = new Set<number>([300]);
+    const holderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 300, authorityRank: "main-dev" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    await holderArb.tryAcquire("fakecomm", "error-nudge-bot");
+
+    const contenderArb = new CommLeaseArbiter({
+      self: selfIdentity({ pid: 320, authorityRank: "worktree" }),
+      lastIpcServedAt: () => 0,
+      homeDir: home,
+      isPidAlive: (pid) => alive.has(pid),
+      now: () => 0,
+    });
+    const timers = makeTimers();
+    const inner = {
+      id: "fakecomm" as CommId,
+      accountId: "error-nudge-bot" as AccountId,
+      allowedSenderIds: [] as readonly string[],
+      startCount: 0,
+      stopCount: 0,
+      exclusiveResource: () => ({ resourceId: "error-nudge-bot" }),
+      async start() {
+        this.startCount += 1;
+      },
+      async stop() {
+        this.stopCount += 1;
+      },
+      onInbound() {},
+      onConnectionState() {},
+      async send(): Promise<never> {
+        throw new Error("not used");
+      },
+      reportPressure() {
+        return { backlog: 0, rateLimited: false };
+      },
+      classifyFailure() {
+        return "transient" as const;
+      },
+    };
+    const wrapped = wrapWithLease(inner as unknown as CommAdapter, contenderArb, {
+      setIntervalFn: timers.setIntervalFn,
+      clearIntervalFn: timers.clearIntervalFn,
+      reacquireIntervalMs: 60_000,
+      log: () => {},
+    });
+    await wrapped.start();
+    assert.equal(timers.count(), 1, "denied start arms slow poll");
+
+    contenderArb.tryAcquire = async () => {
+      throw new Error("acquire blew up");
+    };
+    assert.equal(nudgeLeaseReacquire("fakecomm", "error-nudge-bot"), true);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(timers.count(), 1, "slow poll must be reinstalled after errored nudge");
+    await wrapped.stop();
   });
 });
 

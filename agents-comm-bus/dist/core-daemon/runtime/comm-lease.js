@@ -3,7 +3,7 @@ import { open, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DAEMON_NAME } from "../config.js";
-import { currentProcessStartEpochMs } from "./process-start-epoch.js";
+import { readProcessStartIdentity } from "./process-start-epoch.js";
 /**
  * AGE-35: single-consumer comm-resource ownership lease.
  *
@@ -205,6 +205,7 @@ export class CommLeaseArbiter {
     stalenessMs;
     ipcRecencyMarginMs;
     onAudit;
+    readProcessStartIdentity;
     /**
      * Per-resource signature of the last `comm_lease_denied` we actually audited,
      * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
@@ -230,6 +231,7 @@ export class CommLeaseArbiter {
         this.stalenessMs = options.stalenessMs ?? DEFAULT_STALENESS_MS;
         this.ipcRecencyMarginMs = options.ipcRecencyMarginMs ?? DEFAULT_IPC_RECENCY_MARGIN_MS;
         this.onAudit = options.onAudit;
+        this.readProcessStartIdentity = options.readProcessStartIdentity ?? readProcessStartIdentity;
     }
     get authorityRank() {
         return this.self.authorityRank;
@@ -432,7 +434,7 @@ export class CommLeaseArbiter {
                 ...existing,
                 renewedAt: this.now(),
                 lastIpcServedAt: this.lastIpcServedAt(),
-                process_start_time: existing.process_start_time ?? currentProcessStartEpochMs(),
+                process_start_time: this.processStartTimeForRecord(existing),
                 agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing),
             };
             await this.writeRecord(leasePath, renewed);
@@ -486,11 +488,20 @@ export class CommLeaseArbiter {
             acquiredAt: existing && existing.pid === this.self.pid ? existing.acquiredAt : now,
             renewedAt: now,
             lastIpcServedAt: this.lastIpcServedAt(),
-            process_start_time: existing && existing.pid === this.self.pid
-                ? (existing.process_start_time ?? currentProcessStartEpochMs())
-                : currentProcessStartEpochMs(),
+            process_start_time: this.processStartTimeForRecord(existing),
             agentProperties: this.agentPropertiesForRecord(commId, resourceId, existing),
         };
+    }
+    /**
+     * Stamp native process-start identity only when the OS probe succeeds.
+     * Preserves an existing self-held stamp; never writes uptime fallback.
+     */
+    processStartTimeForRecord(existing) {
+        if (existing && existing.pid === this.self.pid && existing.process_start_time != null) {
+            return existing.process_start_time;
+        }
+        const identity = this.readProcessStartIdentity(this.self.pid);
+        return identity ?? undefined;
     }
     /**
      * Stamp agent properties from the locally desired map. A lease reclaimed from
@@ -750,29 +761,36 @@ export function wrapWithLease(inner, arbiter, options = {}) {
         }, reacquireIntervalMs);
     };
     const attemptReacquire = async (resourceId) => {
-        const eligible = await isLeaseEligible();
-        const result = await arbiter.tryAcquire(inner.id, resourceId, { eligible });
-        if (!result.ok)
-            return; // still denied; keep slow-polling
-        if (reacquireTimer != null) {
-            clearIntervalFn(reacquireTimer);
-            reacquireTimer = null;
-        }
-        holdingLease = true;
-        log(`comm ${inner.id} resource ${resourceId}: acquired the poll lease ` +
-            `on re-acquire; starting this consumer.`);
         try {
-            await inner.start();
-            innerStarted = true;
-            startRenewTimer(resourceId);
+            const eligible = await isLeaseEligible();
+            const result = await arbiter.tryAcquire(inner.id, resourceId, { eligible });
+            if (!result.ok) {
+                startReacquireTimer(resourceId);
+                return;
+            }
+            if (reacquireTimer != null) {
+                clearIntervalFn(reacquireTimer);
+                reacquireTimer = null;
+            }
+            holdingLease = true;
+            log(`comm ${inner.id} resource ${resourceId}: acquired the poll lease ` +
+                `on re-acquire; starting this consumer.`);
+            try {
+                await inner.start();
+                innerStarted = true;
+                startRenewTimer(resourceId);
+            }
+            catch (error) {
+                innerStarted = false;
+                holdingLease = false;
+                log(`comm ${inner.id} resource ${resourceId}: inner.start() failed after ` +
+                    `re-acquire: ${error instanceof Error ? error.message : String(error)}; ` +
+                    `releasing lease.`);
+                await arbiter.release(inner.id, resourceId).catch(() => { });
+                startReacquireTimer(resourceId);
+            }
         }
-        catch (error) {
-            innerStarted = false;
-            holdingLease = false;
-            log(`comm ${inner.id} resource ${resourceId}: inner.start() failed after ` +
-                `re-acquire: ${error instanceof Error ? error.message : String(error)}; ` +
-                `releasing lease.`);
-            await arbiter.release(inner.id, resourceId).catch(() => { });
+        catch {
             startReacquireTimer(resourceId);
         }
     };

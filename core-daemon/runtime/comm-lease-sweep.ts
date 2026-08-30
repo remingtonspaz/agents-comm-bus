@@ -207,6 +207,8 @@ export async function runCommLeaseSweep(input: {
   sweepHold?: () => Promise<void>;
   /** Test hook: invoked after guard acquire, before guarded re-read. */
   afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
+  /** Test hook: invoked after guard release, before recovery. */
+  beforeRecovery?: (leasePath: string) => void | Promise<void>;
 }): Promise<CommLeaseSweepCounts> {
   const counts: CommLeaseSweepCounts = {
     examined: 0,
@@ -282,6 +284,7 @@ export async function runCommLeaseSweep(input: {
         continue;
       }
 
+      let reaped: { comm_id: string; resource_id: string } | null = null;
       try {
         if (input.afterGuardAcquired) {
           await input.afterGuardAcquired(leasePath, snapshot);
@@ -323,16 +326,24 @@ export async function runCommLeaseSweep(input: {
           })
           .catch(() => {});
 
-        if (input.recovery) {
-          const recovered = await recoverAfterLeaseDeletion(
-            current.comm_id,
-            current.resource_id,
-            input.recovery,
-          ).catch(() => false);
-          if (recovered) counts.recovered += 1;
-        }
+        reaped = {
+          comm_id: current.comm_id,
+          resource_id: current.resource_id,
+        };
       } finally {
         await releaseSweepGuard(leasePath, guard);
+      }
+
+      if (reaped && input.recovery) {
+        if (input.beforeRecovery) {
+          await input.beforeRecovery(leasePath);
+        }
+        const recovered = await recoverAfterLeaseDeletion(
+          reaped.comm_id,
+          reaped.resource_id,
+          input.recovery,
+        ).catch(() => false);
+        if (recovered) counts.recovered += 1;
       }
     }
   }
@@ -369,10 +380,9 @@ export function startCommLeaseSweep(options: {
   recovery?: CommLeaseSweepRecoveryInput;
   sweepHold?: () => Promise<void>;
   afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
+  beforeRecovery?: (leasePath: string) => void | Promise<void>;
   setIntervalFn?: (fn: () => void, ms: number) => unknown;
   clearIntervalFn?: (handle: unknown) => void;
-  setTimeoutFn?: (fn: () => void, ms: number) => unknown;
-  clearTimeoutFn?: (handle: unknown) => void;
   /** Run one sweep immediately on start (daemon boot one-shot). */
   runOnStart?: boolean;
 }): CommLeaseSweepHandle {
@@ -386,15 +396,6 @@ export function startCommLeaseSweep(options: {
     });
   const clearIntervalFn =
     options.clearIntervalFn ?? ((h: unknown) => clearInterval(h as NodeJS.Timeout));
-  const setTimeoutFn =
-    options.setTimeoutFn ??
-    ((fn: () => void, ms: number) => {
-      const handle = setTimeout(fn, ms);
-      handle.unref?.();
-      return handle;
-    });
-  const clearTimeoutFn =
-    options.clearTimeoutFn ?? ((h: unknown) => clearTimeout(h as NodeJS.Timeout));
 
   let sweepInFlight = false;
   let pendingTick = false;
@@ -420,6 +421,7 @@ export function startCommLeaseSweep(options: {
       recovery: options.recovery,
       sweepHold: options.sweepHold,
       afterGuardAcquired: options.afterGuardAcquired,
+      beforeRecovery: options.beforeRecovery,
     })
       .catch((error) => {
         const log = options.log ?? console.error;
@@ -441,15 +443,11 @@ export function startCommLeaseSweep(options: {
     tick();
   }
 
-  const initial = setTimeoutFn(() => {
-    if (stopped) return;
-    interval = setIntervalFn(tick, intervalMs);
-  }, intervalMs);
+  interval = setIntervalFn(tick, intervalMs);
 
   return {
     stop() {
       stopped = true;
-      clearTimeoutFn(initial);
       if (interval != null) clearIntervalFn(interval);
       interval = null;
     },
@@ -473,3 +471,27 @@ export function commLeaseIdsFromPath(
 }
 
 export { commLeasePath };
+
+/**
+ * AGE-102: ordered daemon bootstrap — boot sweep, optional periodic start,
+ * then boot restore and eager reconcile. Periodic starts only after a
+ * successful boot sweep; restore/eager always run fail-safe.
+ */
+export async function runCommLeaseDaemonBootstrap(input: {
+  bootSweep: () => Promise<void>;
+  startPeriodicSweep: () => CommLeaseSweepHandle;
+  bootRestore: () => Promise<void>;
+  eagerReconcile: () => Promise<void>;
+  onBootSweepFailed: (error: unknown) => Promise<void>;
+}): Promise<CommLeaseSweepHandle | null> {
+  let periodic: CommLeaseSweepHandle | null = null;
+  try {
+    await input.bootSweep();
+    periodic = input.startPeriodicSweep();
+  } catch (error) {
+    await input.onBootSweepFailed(error);
+  }
+  await input.bootRestore();
+  await input.eagerReconcile();
+  return periodic;
+}

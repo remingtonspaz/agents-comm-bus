@@ -45,6 +45,8 @@ export declare function runCommLeaseSweep(input: {
     sweepHold?: () => Promise<void>;
     /** Test hook: invoked after guard acquire, before guarded re-read. */
     afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
+    /** Test hook: invoked after guard release, before recovery. */
+    beforeRecovery?: (leasePath: string) => void | Promise<void>;
 }): Promise<CommLeaseSweepCounts>;
 export interface CommLeaseSweepHandle {
     stop(): void;
@@ -62,10 +64,9 @@ export declare function startCommLeaseSweep(options: {
     recovery?: CommLeaseSweepRecoveryInput;
     sweepHold?: () => Promise<void>;
     afterGuardAcquired?: (leasePath: string, snapshot: string) => void | Promise<void>;
+    beforeRecovery?: (leasePath: string) => void | Promise<void>;
     setIntervalFn?: (fn: () => void, ms: number) => unknown;
     clearIntervalFn?: (handle: unknown) => void;
-    setTimeoutFn?: (fn: () => void, ms: number) => unknown;
-    clearTimeoutFn?: (handle: unknown) => void;
     /** Run one sweep immediately on start (daemon boot one-shot). */
     runOnStart?: boolean;
 }): CommLeaseSweepHandle;
@@ -75,4 +76,16 @@ export declare function commLeaseIdsFromPath(leasePath: string, homeDir?: string
     resource_id: string;
 } | null;
 export { commLeasePath };
+/**
+ * AGE-102: ordered daemon bootstrap — boot sweep, optional periodic start,
+ * then boot restore and eager reconcile. Periodic starts only after a
+ * successful boot sweep; restore/eager always run fail-safe.
+ */
+export declare function runCommLeaseDaemonBootstrap(input: {
+    bootSweep: () => Promise<void>;
+    startPeriodicSweep: () => CommLeaseSweepHandle;
+    bootRestore: () => Promise<void>;
+    eagerReconcile: () => Promise<void>;
+    onBootSweepFailed: (error: unknown) => Promise<void>;
+}): Promise<CommLeaseSweepHandle | null>;
 //# sourceMappingURL=comm-lease-sweep.d.ts.map
