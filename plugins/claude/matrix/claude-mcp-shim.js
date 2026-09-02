@@ -24843,7 +24843,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.55";
+var DAEMON_VERSION = "0.2.56";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -26514,7 +26514,7 @@ function installShutdownHandlers(close) {
 }
 
 // claude/hooks/wake-support.js
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os3 from "node:os";
 import path12 from "node:path";
@@ -26695,8 +26695,9 @@ function writeWatcherMeta(wakeDir, meta2) {
 }
 function defaultReadProcessCommandLine(pid) {
   try {
-    const out = execSync(
-      `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`,
+    const out = execFileSync(
+      "powershell",
+      ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`],
       { encoding: "utf-8", windowsHide: true, timeout: 5e3 }
     );
     return String(out).trim();
@@ -26773,8 +26774,9 @@ function readProcessChainViaCim(startPid, log2 = () => {
   const encoded = Buffer.from(psScript, "utf16le").toString("base64");
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const result = execSync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+      const result = execFileSync(
+        "powershell",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
         { encoding: "utf-8", windowsHide: true, timeout: 8e3 }
       );
       const chain = result.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
@@ -26793,8 +26795,9 @@ function readProcessChainViaCim(startPid, log2 = () => {
 }
 function resolveMainWindowHandle(pid) {
   try {
-    const result = execSync(
-      `powershell -NoProfile -Command "(Get-Process -Id ${pid}).MainWindowHandle.ToInt64()"`,
+    const result = execFileSync(
+      "powershell",
+      ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).MainWindowHandle.ToInt64()`],
       { encoding: "utf-8", windowsHide: true, timeout: 5e3 }
     );
     const hwnd = Number.parseInt(result.trim(), 10);
@@ -26956,7 +26959,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     const command = buildStartProcessCommand(watcherScript, watcherArgs);
     log2(`Spawning watcher via Start-Process: ${command}`);
     const spawnWatcher = options.spawnWatcher ?? ((spawnCommand) => {
-      const stdout = execSync(`powershell -NoProfile -Command "${spawnCommand}"`, {
+      const stdout = execFileSync("powershell", ["-NoProfile", "-Command", spawnCommand], {
         encoding: "utf-8",
         windowsHide: true,
         timeout: 1e4

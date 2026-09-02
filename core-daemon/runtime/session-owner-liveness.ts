@@ -73,8 +73,16 @@ export function classifySessionOwnerProcess(
         })()
       : compareProcessStartIdentity(startTime, pid, identityOptions);
     if (compare === "mismatch") return "dead";
+    // Identity confirmed: the exact process that registered is still running.
+    // Recency was only ever a pid-reuse proxy; with a start-time match it adds
+    // nothing and would mark an idle-but-alive owner "stale", which the live
+    // scope-release path then treated as gone (adapters stopped under a
+    // running Claude session that had not submitted a prompt for 24h).
+    if (compare === "match") return "live";
   }
 
+  // No start-time identity (legacy rows) or an inconclusive probe: keep the
+  // recency window as the pid-reuse guard.
   const now = options.now ?? Date.now;
   const recencyMs =
     options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;

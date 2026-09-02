@@ -452,6 +452,43 @@ describe("AGE-82 session end sweep", () => {
     });
   });
 
+  it("treats an owner with a matching start-time identity as live regardless of age (no 24h staleness)", () => {
+    // Regression: a Claude session idle >24h (no re-register) was classified
+    // "stale" → not live → scope-release stopped its adapters under a running
+    // claude.exe. With identity confirmed, recency must not apply.
+    const registeredAt = 1_000;
+    const startTime = 777_777;
+    const idleAlive = sessionFixture({
+      session_id: "idle-alive" as SessionId,
+      agent: "claude",
+      project: PROJECT,
+      lease_owner_process_pid: 49_292,
+      lease_owner_process_registered_at: registeredAt,
+      lease_owner_process_start_time: startTime,
+    });
+    const options = {
+      now: () => registeredAt + DEFAULT_SESSION_OWNER_RECENCY_MS * 3,
+      isPidAlive: () => true,
+      readProcessStartEpochMs: () => startTime,
+    };
+    assert.equal(classifySessionOwnerProcess(idleAlive, options), "live");
+    assert.equal(createSessionOwnerLiveness(options)(idleAlive), true);
+    assert.equal(shouldSweepEndSession(idleAlive, options), false);
+
+    // Contrast 1: no stored identity keeps the recency guard (legacy rows).
+    const legacy = sessionFixture({ ...idleAlive, lease_owner_process_start_time: null });
+    assert.equal(classifySessionOwnerProcess(legacy, options), "stale");
+    assert.equal(createSessionOwnerLiveness(options)(legacy), false);
+
+    // Contrast 2: a start-time mismatch (pid reuse) is dead, never live.
+    const reused = { ...options, readProcessStartEpochMs: () => startTime + 1 };
+    assert.equal(classifySessionOwnerProcess(idleAlive, reused), "dead");
+
+    // Contrast 3: an inconclusive probe (null) falls back to the recency guard.
+    const inconclusive = { ...options, readProcessStartEpochMs: () => null };
+    assert.equal(classifySessionOwnerProcess(idleAlive, inconclusive), "stale");
+  });
+
   it("keeps classifier routing unchanged — stale and dead owners remain non-live", () => {
     const registeredAt = 1_000;
     const livePid = 6_732;

@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -94,8 +94,12 @@ function writeWatcherMeta(wakeDir, meta) {
 // now belongs to an unrelated process). Injectable for tests.
 function defaultReadProcessCommandLine(pid) {
   try {
-    const out = execSync(
-      `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`,
+    // execFileSync (direct powershell.exe spawn, no cmd.exe shell) so
+    // windowsHide/CREATE_NO_WINDOW actually suppresses the console — execSync's
+    // shell wrapper leaks a visible powershell window flash on every call.
+    const out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`],
       { encoding: 'utf-8', windowsHide: true, timeout: 5_000 },
     );
     return String(out).trim();
@@ -224,8 +228,9 @@ function readProcessChainViaCim(startPid, log = () => {}) {
   const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const result = execSync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+      const result = execFileSync(
+        'powershell',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
         { encoding: 'utf-8', windowsHide: true, timeout: 8000 },
       );
       const chain = result
@@ -250,8 +255,9 @@ function readProcessChainViaCim(startPid, log = () => {}) {
 
 function resolveMainWindowHandle(pid) {
   try {
-    const result = execSync(
-      `powershell -NoProfile -Command "(Get-Process -Id ${pid}).MainWindowHandle.ToInt64()"`,
+    const result = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', `(Get-Process -Id ${pid}).MainWindowHandle.ToInt64()`],
       { encoding: 'utf-8', windowsHide: true, timeout: 5000 },
     );
     const hwnd = Number.parseInt(result.trim(), 10);
@@ -448,7 +454,7 @@ export function ensureClaudeWakeWatcher(options = {}) {
     const spawnWatcher =
       options.spawnWatcher ??
       ((spawnCommand) => {
-        const stdout = execSync(`powershell -NoProfile -Command "${spawnCommand}"`, {
+        const stdout = execFileSync('powershell', ['-NoProfile', '-Command', spawnCommand], {
           encoding: 'utf-8',
           windowsHide: true,
           timeout: 10_000,

@@ -137,7 +137,9 @@ function readWindowsProcessStartEpochMs(pid: number): number | null {
       "-Command",
       `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
     ],
-    { encoding: "utf8" },
+    // windowsHide: a console-less daemon spawning powershell.exe without it
+    // allocates a visible console window per probe (one flash per liveness check).
+    { encoding: "utf8", windowsHide: true },
   ).trim();
   const ticks = Number(out);
   if (!Number.isFinite(ticks)) return null;

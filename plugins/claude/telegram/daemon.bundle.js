@@ -3658,7 +3658,7 @@ import os3 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.55";
+var DAEMON_VERSION = "0.2.56";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -4484,7 +4484,9 @@ function readWindowsProcessStartEpochMs(pid) {
       "-Command",
       `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
     ],
-    { encoding: "utf8" }
+    // windowsHide: a console-less daemon spawning powershell.exe without it
+    // allocates a visible console window per probe (one flash per liveness check).
+    { encoding: "utf8", windowsHide: true }
   ).trim();
   const ticks = Number(out);
   if (!Number.isFinite(ticks)) return null;
@@ -4521,6 +4523,7 @@ function classifySessionOwnerProcess(session, options = {}) {
       return current === startTime ? "match" : "mismatch";
     })() : compareProcessStartIdentity(startTime, pid, identityOptions);
     if (compare === "mismatch") return "dead";
+    if (compare === "match") return "live";
   }
   const now = options.now ?? Date.now;
   const recencyMs = options.recencyMs ?? DEFAULT_SESSION_OWNER_RECENCY_MS;

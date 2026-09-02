@@ -3,7 +3,7 @@
   "agent": "pi",
   "comm": "discord",
   "plugin_version": "0.1.3",
-  "daemon_bundle_version": "0.2.55",
+  "daemon_bundle_version": "0.2.56",
   "adapter_bundle_version": "0.1.3",
   "adapter_bundle_versions": {
     "discord": "0.1.3"
