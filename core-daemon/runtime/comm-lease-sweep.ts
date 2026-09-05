@@ -132,7 +132,10 @@ async function guardIsStale(
     const raw = (await readFile(guardPath, "utf8")).trim();
     const pid = Number(raw.split(":")[0]);
     if (!Number.isInteger(pid) || pid <= 0) return true;
-    if (pid === selfPid) return true;
+    // The lease arbiter and sweeper share this guard inside one daemon.
+    // A same-process guard may therefore be actively protecting an acquire;
+    // treating it as stale would let the sweeper delete the freshly won lease.
+    if (pid === selfPid) return false;
     return !isPidAlive(pid);
   } catch {
     try {

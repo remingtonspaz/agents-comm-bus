@@ -431,6 +431,28 @@ describe("AGE-102 runCommLeaseSweep (real path)", () => {
     assert.ok(!existsSync(commLeasePath("telegram", "race-bot", home)));
   });
 
+  it("treats a live same-process guard as contended", async () => {
+    const home = await makeTempDir("acb-age102-same-process-guard-");
+    const leasePath = await writeLeaseFile(
+      home,
+      leaseRecord({ pid: 9999, resource_id: "guarded-bot" }),
+    );
+    const guardPath = `${leasePath}.guard`;
+    await writeFile(guardPath, `${process.pid}:1234\n`, "utf8");
+
+    const counts = await runCommLeaseSweep({
+      homeDir: home,
+      selfPid: process.pid,
+      now: () => 1234,
+      isPidAlive: (pid) => pid === process.pid,
+    });
+
+    assert.equal(counts.guard_contended, 1);
+    assert.equal(counts.reaped, 0);
+    assert.ok(existsSync(leasePath));
+    assert.ok(existsSync(guardPath));
+  });
+
   it("ignores malformed JSON and .guard files safely", async () => {
     const home = await makeTempDir("acb-age102-malformed-");
     const commDir = path.join(commLeaseLockRoot(home), "telegram");

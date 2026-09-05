@@ -3658,7 +3658,7 @@ import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.59";
+var DAEMON_VERSION = "0.2.60";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -9154,7 +9154,7 @@ async function guardIsStale(guardPath, selfPid, now, isPidAlive2, stalenessMs) {
     const raw = (await readFile6(guardPath, "utf8")).trim();
     const pid = Number(raw.split(":")[0]);
     if (!Number.isInteger(pid) || pid <= 0) return true;
-    if (pid === selfPid) return true;
+    if (pid === selfPid) return false;
     return !isPidAlive2(pid);
   } catch {
     try {
