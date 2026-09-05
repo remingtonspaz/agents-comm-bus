@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -519,6 +520,60 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
     assert.equal(await readFile(foreignPath, "utf8"), before);
   });
 
+  it("treats a live same-pid guard held in-process as contended during persist", async () => {
+    const home = await tempHome();
+    let releaseFirst!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const arbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1,
+      homeDir: home,
+      isPidAlive: () => true,
+      now: () => 1,
+      testPersistUnderGuard: async () => {
+        await blocked;
+      },
+    });
+    assert.equal((await arbiter.tryAcquire("telegram", BOT)).ok, true);
+
+    const leasePath = commLeasePath("telegram", BOT, home);
+    const firstProps = codexLeaseProps(PROBE_URL, "thread-first");
+    const secondProps = codexLeaseProps("ws://127.0.0.1:4501", "thread-second");
+
+    const first = arbiter.persistAgentPropertiesIfHeld("telegram", BOT, firstProps);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (existsSync(`${leasePath}.guard`)) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(existsSync(`${leasePath}.guard`), true);
+
+    const second = await arbiter.persistAgentPropertiesIfHeld("telegram", BOT, secondProps);
+    assert.deepEqual(second, { ok: false, reason: "guard-contended" });
+    assert.equal(existsSync(`${leasePath}.guard`), true);
+
+    releaseFirst();
+    assert.deepEqual(await first, { ok: true });
+    const onDisk = JSON.parse(await readFile(leasePath, "utf8")) as LeaseRecord;
+    assert.deepEqual(onDisk.agentProperties, firstProps);
+    assert.notDeepEqual(onDisk.agentProperties, secondProps);
+  });
+
+  it("reclaims a same-pid guard leftover not tracked by this arbiter instance", async () => {
+    const home = await tempHome();
+    const arbiter = await seedHeldLease(home, undefined);
+    const leasePath = commLeasePath("telegram", BOT, home);
+    await writeFile(`${leasePath}.guard`, `${DAEMON_PID}:999\n`, "utf8");
+
+    const props = codexLeaseProps(PROBE_URL, PROBE_THREAD);
+    const result = await arbiter.persistAgentPropertiesIfHeld("telegram", BOT, props);
+    assert.deepEqual(result, { ok: true });
+    const onDisk = JSON.parse(await readFile(leasePath, "utf8")) as LeaseRecord;
+    assert.deepEqual(onDisk.agentProperties, props);
+    assert.equal(existsSync(`${leasePath}.guard`), false);
+  });
+
   it("wakes with a single cwd match and persists lock props before turn/start", async () => {
     const home = await tempHome();
     const arbiter = await seedHeldLease(home, undefined);
@@ -895,7 +950,7 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
       [4501, { kind: "reject" }],
       [4502, { kind: "reject" }],
     ]);
-    const { bridge, pendingInbound, factoryUrls } = await buildBridge({ home, arbiter, behaviors });
+    const { bridge, pendingInbound, probeMetrics } = await buildBridge({ home, arbiter, behaviors });
     const conv = conversation();
 
     pendingInbound.push({ message: message(), conversation: conv });
@@ -909,12 +964,7 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
       bridge.onInboundConversation({ ...conv, conversation_id: "conv-2" as ConversationId }),
     ]);
 
-    const scannedProbePorts = new Set(
-      factoryUrls
-        .map((url) => Number(new URL(url).port))
-        .filter((port) => port >= PROBE_RANGE.min && port <= PROBE_RANGE.max),
-    );
-    assert.equal(scannedProbePorts.size, PROBE_RANGE.max - PROBE_RANGE.min + 1);
+    assert.equal(probeMetrics.threadListCalls, PROBE_RANGE.max - PROBE_RANGE.min + 1);
   });
 
   it("auto-recovers version-skew locks missing agentProperties via cwd probe", async () => {

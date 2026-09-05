@@ -359,124 +359,115 @@ export class CodexBridge implements AgentBridge {
       return;
     }
 
-    const probe = await this.joinCwdProbe(
-      `${conversation.comm}:${conversation.bot_user_id}:${project}`,
-      project,
-    );
-    if (!probe.ok) {
-      const detail = {
-        reason: probe.reason,
-        repair_required: true,
-        pending_count: pendingForSession.length,
-        probe_scanned: probe.scanned,
-        probe_matches: probe.matches,
-        probe_ports: probe.ports,
-        comm: conversation.comm,
-        bot_user_id: conversation.bot_user_id,
-      };
-      await this.auditWake("agent_wake_failed", conversation, session, detail);
-      await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
-      console.error(
-        `agents-comm-bus: inbound Codex cwd probe failed for ${conversation.conversation_id}: ${probe.reason}`,
-      );
-      return;
-    }
+    const probeKey = `${conversation.comm}:${conversation.bot_user_id}:${project}`;
+    this.cwdProbeJoiners.set(probeKey, (this.cwdProbeJoiners.get(probeKey) ?? 0) + 1);
+    let probePromise: Promise<CodexWakeTargetProbeResult> | undefined;
+    try {
+      probePromise = this.getOrCreateCwdProbe(probeKey, project);
+      const probe = await probePromise;
+      if (!probe.ok) {
+        const detail = {
+          reason: probe.reason,
+          repair_required: true,
+          pending_count: pendingForSession.length,
+          probe_scanned: probe.scanned,
+          probe_matches: probe.matches,
+          probe_ports: probe.ports,
+          comm: conversation.comm,
+          bot_user_id: conversation.bot_user_id,
+        };
+        await this.auditWake("agent_wake_failed", conversation, session, detail);
+        await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
+        console.error(
+          `agents-comm-bus: inbound Codex cwd probe failed for ${conversation.conversation_id}: ${probe.reason}`,
+        );
+        return;
+      }
 
-    const persist = this.options.persistHeldCommLeaseAgentProperties;
-    if (!persist) {
-      await this.auditProbePersistFailure(
+      const persist = this.options.persistHeldCommLeaseAgentProperties;
+      if (!persist) {
+        await this.auditProbePersistFailure(
+          conversation,
+          session,
+          pendingForSession.length,
+          "unavailable",
+        );
+        return;
+      }
+
+      const leaseProps = codexAgentLeaseProperties(probe.appServerUrl, probe.threadId);
+      if (!leaseProps) {
+        await this.auditProbePersistFailure(
+          conversation,
+          session,
+          pendingForSession.length,
+          "invalid-probe-result",
+        );
+        return;
+      }
+
+      const persisted = await persist(conversation.comm, conversation.bot_user_id, leaseProps);
+      if (!persisted.ok) {
+        await this.auditProbePersistFailure(
+          conversation,
+          session,
+          pendingForSession.length,
+          persisted.reason,
+        );
+        return;
+      }
+
+      const probePort = Number(new URL(probe.appServerUrl).port);
+      await this.wakeWithResolvedTarget(
         conversation,
         session,
-        pendingForSession.length,
-        "unavailable",
+        pendingForSession,
+        project,
+        probe.appServerUrl,
+        probe.threadId,
+        "cwd_probe",
+        {
+          probe_scanned: probe.scanned,
+          probe_port: probePort,
+        },
       );
-      return;
+    } finally {
+      const remaining = (this.cwdProbeJoiners.get(probeKey) ?? 1) - 1;
+      if (remaining <= 0) {
+        this.cwdProbeJoiners.delete(probeKey);
+        queueMicrotask(() => {
+          if ((this.cwdProbeJoiners.get(probeKey) ?? 0) === 0
+            && probePromise
+            && this.inFlightCwdProbes.get(probeKey) === probePromise) {
+            this.inFlightCwdProbes.delete(probeKey);
+          }
+        });
+      } else {
+        this.cwdProbeJoiners.set(probeKey, remaining);
+      }
     }
-
-    const leaseProps = codexAgentLeaseProperties(probe.appServerUrl, probe.threadId);
-    if (!leaseProps) {
-      await this.auditProbePersistFailure(
-        conversation,
-        session,
-        pendingForSession.length,
-        "invalid-probe-result",
-      );
-      return;
-    }
-
-    const persisted = await persist(conversation.comm, conversation.bot_user_id, leaseProps);
-    if (!persisted.ok) {
-      await this.auditProbePersistFailure(
-        conversation,
-        session,
-        pendingForSession.length,
-        persisted.reason,
-      );
-      return;
-    }
-
-    const probePort = Number(new URL(probe.appServerUrl).port);
-    await this.wakeWithResolvedTarget(
-      conversation,
-      session,
-      pendingForSession,
-      project,
-      probe.appServerUrl,
-      probe.threadId,
-      "cwd_probe",
-      {
-        probe_scanned: probe.scanned,
-        probe_port: probePort,
-      },
-    );
   }
 
-  private joinCwdProbe(
+  private getOrCreateCwdProbe(
     key: string,
     project: string,
   ): Promise<CodexWakeTargetProbeResult> {
     let probe = this.inFlightCwdProbes.get(key);
-    if (!probe) {
-      const portRange = this.options.codexPortRange ?? {
-        min: DEFAULT_CODEX_PROBE_PORT_MIN,
-        max: DEFAULT_CODEX_PROBE_PORT_MAX,
-      };
-      probe = probeCodexWakeTargetByCwd({
-        project,
-        portRange,
-        clientFactory: this.appServerClientFactory,
-        perProbeTimeoutMs: this.options.codexProbeTimeoutMs ?? DEFAULT_CODEX_PROBE_TIMEOUT_MS,
-        concurrency: this.options.codexProbeConcurrency ?? DEFAULT_CODEX_PROBE_CONCURRENCY,
-      });
-      this.inFlightCwdProbes.set(key, probe);
-      this.cwdProbeJoiners.set(key, 0);
-      void probe.finally(() => {
-        queueMicrotask(() => {
-          if ((this.cwdProbeJoiners.get(key) ?? 0) > 0) return;
-          if (this.inFlightCwdProbes.get(key) === probe) {
-            this.inFlightCwdProbes.delete(key);
-            this.cwdProbeJoiners.delete(key);
-          }
-        });
-      });
-    }
+    if (probe) return probe;
 
-    this.cwdProbeJoiners.set(key, (this.cwdProbeJoiners.get(key) ?? 0) + 1);
-    return probe.finally(() => {
-      const remaining = (this.cwdProbeJoiners.get(key) ?? 1) - 1;
-      if (remaining <= 0) {
-        this.cwdProbeJoiners.delete(key);
-        queueMicrotask(() => {
-          if ((this.cwdProbeJoiners.get(key) ?? 0) === 0) {
-            if (this.inFlightCwdProbes.get(key) === probe) {
-              this.inFlightCwdProbes.delete(key);
-            }
-          }
-        });
-      } else {
-        this.cwdProbeJoiners.set(key, remaining);
-      }
+    const portRange = this.options.codexPortRange ?? {
+      min: DEFAULT_CODEX_PROBE_PORT_MIN,
+      max: DEFAULT_CODEX_PROBE_PORT_MAX,
+    };
+    probe = probeCodexWakeTargetByCwd({
+      project,
+      portRange,
+      clientFactory: this.appServerClientFactory,
+      perProbeTimeoutMs: this.options.codexProbeTimeoutMs ?? DEFAULT_CODEX_PROBE_TIMEOUT_MS,
+      concurrency: this.options.codexProbeConcurrency ?? DEFAULT_CODEX_PROBE_CONCURRENCY,
     });
+    this.inFlightCwdProbes.set(key, probe);
+    return probe;
   }
 
   private async auditProbePersistFailure(

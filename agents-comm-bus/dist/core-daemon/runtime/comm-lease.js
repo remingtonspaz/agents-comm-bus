@@ -206,6 +206,9 @@ export class CommLeaseArbiter {
     ipcRecencyMarginMs;
     onAudit;
     readProcessStartIdentity;
+    testPersistUnderGuard;
+    /** Guard paths currently held by this arbiter instance (in-process ownership). */
+    heldGuards = new Set();
     /**
      * Per-resource signature of the last `comm_lease_denied` we actually audited,
      * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
@@ -232,6 +235,7 @@ export class CommLeaseArbiter {
         this.ipcRecencyMarginMs = options.ipcRecencyMarginMs ?? DEFAULT_IPC_RECENCY_MARGIN_MS;
         this.onAudit = options.onAudit;
         this.readProcessStartIdentity = options.readProcessStartIdentity ?? readProcessStartIdentity;
+        this.testPersistUnderGuard = options.testPersistUnderGuard;
     }
     get authorityRank() {
         return this.self.authorityRank;
@@ -292,6 +296,9 @@ export class CommLeaseArbiter {
                 lastIpcServedAt: this.lastIpcServedAt(),
                 agentProperties,
             };
+            if (this.testPersistUnderGuard) {
+                await this.testPersistUnderGuard(leasePath);
+            }
             await this.writeRecord(leasePath, updated);
             return { ok: true };
         }
@@ -580,6 +587,7 @@ export class CommLeaseArbiter {
                 const handle = await open(guardPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
                 await handle.writeFile(`${token}\n`, "utf8");
                 await handle.close();
+                this.heldGuards.add(guardPath);
                 return token;
             }
             catch (error) {
@@ -601,8 +609,11 @@ export class CommLeaseArbiter {
             const pid = Number(raw.split(":")[0]);
             if (!Number.isInteger(pid) || pid <= 0)
                 return true;
-            if (pid === this.self.pid)
-                return true; // our own leftover guard
+            if (pid === this.self.pid) {
+                // AGE-103: same-pid guard is contended when held in-process; only reclaim
+                // genuine leftovers from a failed release in this process.
+                return !this.heldGuards.has(guardPath);
+            }
             return !this.isPidAlive(pid);
         }
         catch {
@@ -627,6 +638,9 @@ export class CommLeaseArbiter {
         }
         catch {
             // Best-effort: a stale-guard reclaim on the next acquire handles leftovers.
+        }
+        finally {
+            this.heldGuards.delete(guardPath);
         }
     }
     audit(event) {

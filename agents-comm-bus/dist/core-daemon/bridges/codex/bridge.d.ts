@@ -87,7 +87,7 @@ export declare class CodexBridge implements AgentBridge {
     onInboundConversation(conversation: Conversation): Promise<void>;
     private wakeWithResolvedTarget;
     private tryProbeFallbackWake;
-    private joinCwdProbe;
+    private getOrCreateCwdProbe;
     private auditProbePersistFailure;
     private auditProbeTargetValidationFailure;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {

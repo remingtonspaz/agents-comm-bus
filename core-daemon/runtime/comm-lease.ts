@@ -382,6 +382,8 @@ export interface CommLeaseArbiterOptions {
   onAudit?: (event: CommLeaseAuditEvent) => void;
   /** AGE-102: native-only process-start stamp; null omits identity (tests inject). */
   readProcessStartIdentity?: (pid: number) => number | null;
+  /** Test-only: pause while persistAgentPropertiesIfHeld holds the guard. */
+  testPersistUnderGuard?: (leasePath: string) => Promise<void>;
 }
 
 export interface CommLeaseAuditEvent {
@@ -406,6 +408,9 @@ export class CommLeaseArbiter {
   private readonly ipcRecencyMarginMs: number;
   private readonly onAudit?: (event: CommLeaseAuditEvent) => void;
   private readonly readProcessStartIdentity: (pid: number) => number | null;
+  private readonly testPersistUnderGuard?: (leasePath: string) => Promise<void>;
+  /** Guard paths currently held by this arbiter instance (in-process ownership). */
+  private readonly heldGuards = new Set<string>();
 
   /**
    * Per-resource signature of the last `comm_lease_denied` we actually audited,
@@ -434,6 +439,7 @@ export class CommLeaseArbiter {
     this.ipcRecencyMarginMs = options.ipcRecencyMarginMs ?? DEFAULT_IPC_RECENCY_MARGIN_MS;
     this.onAudit = options.onAudit;
     this.readProcessStartIdentity = options.readProcessStartIdentity ?? readProcessStartIdentity;
+    this.testPersistUnderGuard = options.testPersistUnderGuard;
   }
 
   get authorityRank(): AuthorityRank {
@@ -508,6 +514,9 @@ export class CommLeaseArbiter {
         lastIpcServedAt: this.lastIpcServedAt(),
         agentProperties,
       };
+      if (this.testPersistUnderGuard) {
+        await this.testPersistUnderGuard(leasePath);
+      }
       await this.writeRecord(leasePath, updated);
       return { ok: true };
     } finally {
@@ -812,6 +821,7 @@ export class CommLeaseArbiter {
         const handle = await open(guardPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
         await handle.writeFile(`${token}\n`, "utf8");
         await handle.close();
+        this.heldGuards.add(guardPath);
         return token;
       } catch (error) {
         if (!isAlreadyExistsError(error)) throw error;
@@ -831,7 +841,11 @@ export class CommLeaseArbiter {
       const raw = (await readFile(guardPath, "utf8")).trim();
       const pid = Number(raw.split(":")[0]);
       if (!Number.isInteger(pid) || pid <= 0) return true;
-      if (pid === this.self.pid) return true; // our own leftover guard
+      if (pid === this.self.pid) {
+        // AGE-103: same-pid guard is contended when held in-process; only reclaim
+        // genuine leftovers from a failed release in this process.
+        return !this.heldGuards.has(guardPath);
+      }
       return !this.isPidAlive(pid);
     } catch {
       // If we can't read it, fall back to mtime: a guard older than the staleness
@@ -854,6 +868,8 @@ export class CommLeaseArbiter {
       }
     } catch {
       // Best-effort: a stale-guard reclaim on the next acquire handles leftovers.
+    } finally {
+      this.heldGuards.delete(guardPath);
     }
   }
 
