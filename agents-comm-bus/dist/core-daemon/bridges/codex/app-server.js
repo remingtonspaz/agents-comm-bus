@@ -278,6 +278,25 @@ function threadStatusType(value) {
 export function isLiveThreadStatus(statusType) {
     return statusType === "active" || statusType === "idle";
 }
+/** Live threads on an app-server whose cwd matches the expected project path. */
+export function liveThreadsMatchingProject(listResult, expectedProject) {
+    const normalizedExpected = normalizeProjectPath(expectedProject);
+    const matches = [];
+    for (const entry of listedThreads(listResult)) {
+        const threadId = threadIdFrom(entry);
+        if (!threadId)
+            continue;
+        if (!isLiveThreadStatus(threadStatusType(entry)))
+            continue;
+        const cwd = threadCwd(entry);
+        if (!cwd)
+            continue;
+        if (normalizeProjectPath(cwd) !== normalizedExpected)
+            continue;
+        matches.push({ threadId, cwd });
+    }
+    return matches;
+}
 function turnIdFrom(value) {
     if (typeof value === "string" && value.length > 0)
         return value;

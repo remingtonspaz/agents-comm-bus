@@ -21,6 +21,21 @@ import { ClaudeBridgeFactory } from "./bridges/claude/bridge.js";
 import { CodexBridgeFactory } from "./bridges/codex/bridge.js";
 import { PiBridgeFactory } from "./bridges/pi/bridge.js";
 import { loadCommAdapterFactories } from "./runtime/comm-adapter-loader.js";
+const DEFAULT_CODEX_PROBE_PORT_RANGE = { min: 4500, max: 4600 };
+function parseCodexPortRangeFromEnv(env = process.env) {
+    const raw = env.AGENTS_COMM_BUS_CODEX_PORT_RANGE?.trim();
+    if (!raw)
+        return DEFAULT_CODEX_PROBE_PORT_RANGE;
+    const match = /^(\d+)-(\d+)$/.exec(raw);
+    if (!match)
+        return DEFAULT_CODEX_PROBE_PORT_RANGE;
+    const min = Number(match[1]);
+    const max = Number(match[2]);
+    if (!Number.isInteger(min) || !Number.isInteger(max) || min <= 0 || max < min) {
+        return DEFAULT_CODEX_PROBE_PORT_RANGE;
+    }
+    return { min, max };
+}
 export async function startConfiguredDaemon() {
     process.title = `${DAEMON_NAME} daemon`;
     const paths = resolveStatePaths({ stateRoot: process.env.AGENTS_COMM_BUS_STATE_ROOT });
@@ -32,7 +47,7 @@ export async function startConfiguredDaemon() {
         loadCommAdapterFactories: () => loadCommAdapterFactories({ adaptersDir }),
         agentBridgeFactories: [
             new ClaudeBridgeFactory(),
-            new CodexBridgeFactory(),
+            new CodexBridgeFactory({ codexPortRange: parseCodexPortRangeFromEnv() }),
             new PiBridgeFactory(),
         ],
     });

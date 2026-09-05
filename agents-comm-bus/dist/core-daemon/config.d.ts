@@ -1,5 +1,5 @@
 export declare const DAEMON_NAME = "agents-comm-bus";
-export declare const DAEMON_VERSION = "0.2.60";
+export declare const DAEMON_VERSION = "0.2.61";
 export declare const IPC_PROTOCOL_VERSION = "1.2.0";
 export declare const IPC_HOST = "127.0.0.1";
 export declare const DEFAULT_BOOTSTRAP_TIMEOUT_MS = 20000;

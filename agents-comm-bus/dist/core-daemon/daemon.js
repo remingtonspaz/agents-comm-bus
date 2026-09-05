@@ -240,6 +240,7 @@ export async function runDaemon(options) {
         daemonOwner: daemonSelfIdentity,
         sessionOwnerIsLive,
         readHeldCommLease: (commId, resourceId) => leaseArbiter.readHeldCommLease(commId, resourceId),
+        persistHeldCommLeaseAgentProperties: (commId, resourceId, agentProperties) => leaseArbiter.persistAgentPropertiesIfHeld(commId, resourceId, agentProperties),
         requestScopeReconcile: () => requestScopeReconcile?.(),
     })));
     const pendingInboundMax = 100;

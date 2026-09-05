@@ -370,6 +370,8 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
         sessionOwnerIsLive,
         readHeldCommLease: (commId: string, resourceId: string) =>
           leaseArbiter.readHeldCommLease(commId, resourceId),
+        persistHeldCommLeaseAgentProperties: (commId, resourceId, agentProperties) =>
+          leaseArbiter.persistAgentPropertiesIfHeld(commId, resourceId, agentProperties),
         requestScopeReconcile: () => requestScopeReconcile?.(),
       }),
     ),

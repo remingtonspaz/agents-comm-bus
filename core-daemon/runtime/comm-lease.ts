@@ -122,6 +122,16 @@ export type ReadHeldCommLease = (
   resourceId: string,
 ) => Promise<HeldCommLeaseLookupResult>;
 
+export type PersistHeldCommLeaseAgentPropertiesResult =
+  | { ok: true }
+  | { ok: false; reason: "not-held" | "guard-contended" };
+
+export type PersistHeldCommLeaseAgentProperties = (
+  commId: string,
+  resourceId: string,
+  agentProperties: AgentLeaseProperties,
+) => Promise<PersistHeldCommLeaseAgentPropertiesResult>;
+
 // ---------------------------------------------------------------------------
 // Pure helpers (path + rank inference) — unit-testable, no I/O of their own.
 // ---------------------------------------------------------------------------
@@ -469,19 +479,37 @@ export class CommLeaseArbiter {
   async syncAgentProperties(commId: string, resourceId: string): Promise<void> {
     const desired = this.desiredAgentProperties.get(this.leaseKey(commId, resourceId));
     if (!desired) return;
+    await this.persistAgentPropertiesIfHeld(commId, resourceId, desired);
+  }
+
+  /**
+   * Set desired agent properties and synchronously rewrite the self-held lock
+   * record under the guard. Never self-claims an unheld lock.
+   */
+  async persistAgentPropertiesIfHeld(
+    commId: string,
+    resourceId: string,
+    agentProperties: AgentLeaseProperties,
+  ): Promise<PersistHeldCommLeaseAgentPropertiesResult> {
+    this.setDesiredAgentProperties(commId, resourceId, agentProperties);
     const leasePath = this.leasePath(commId, resourceId);
     const guard = await this.acquireGuard(leasePath);
-    if (!guard) return;
+    if (!guard) {
+      return { ok: false, reason: "guard-contended" };
+    }
     try {
       const existing = await this.readRecord(leasePath);
-      if (!existing || existing.pid !== this.self.pid) return;
+      if (!existing || existing.pid !== this.self.pid) {
+        return { ok: false, reason: "not-held" };
+      }
       const updated: LeaseRecord = {
         ...existing,
         renewedAt: this.now(),
         lastIpcServedAt: this.lastIpcServedAt(),
-        agentProperties: desired,
+        agentProperties,
       };
       await this.writeRecord(leasePath, updated);
+      return { ok: true };
     } finally {
       await this.releaseGuard(leasePath, guard);
     }

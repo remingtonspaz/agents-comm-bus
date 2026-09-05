@@ -312,7 +312,7 @@ describe("AGE-100 Codex inbound comm-lock wake target", () => {
     assert.equal(attempt?.detail?.wake_target_source, "comm_lease");
   });
 
-  it("fails closed when comm lock has no codex agentProperties and retains pending inbound", async () => {
+  it("fails closed with probe_no_match when comm lock has no codex agentProperties", async () => {
     const home = await tempHome();
     const arbiter = await seedHeldLease(home, undefined);
     const onDisk = JSON.parse(
@@ -329,8 +329,11 @@ describe("AGE-100 Codex inbound comm-lock wake target", () => {
       bus: {} as never,
       audit,
       pendingInbound,
+      codexPortRange: { min: 4500, max: 4500 },
       appServerClientFactory: () => client,
       readHeldCommLease: (commId, resourceId) => arbiter.readHeldCommLease(commId, resourceId),
+      persistHeldCommLeaseAgentProperties: (commId, resourceId, props) =>
+        arbiter.persistAgentPropertiesIfHeld(commId, resourceId, props),
       sessionOwnerCheckIntervalMs: 2_147_483_647,
     });
 
@@ -346,14 +349,12 @@ describe("AGE-100 Codex inbound comm-lock wake target", () => {
     pendingInbound.push({ message: message(), conversation: conv });
     await bridge.onInboundConversation(conv);
 
-    assert.equal(client.listThreadsCalls, 0);
     assert.equal(client.steerTurnCalls, 0);
     assert.equal(client.startTurnCalls, 0);
     assert.equal(pendingInbound.length, 1);
-    assert.ok(audit.events.some((event) => event.kind === "agent_wake_failed"));
     assert.ok(audit.events.some((event) => event.kind === "agent_wake_target_invalid"));
     const invalid = audit.events.find((event) => event.kind === "agent_wake_target_invalid");
-    assert.equal(invalid?.detail?.reason, "comm_lease_missing_codex_target");
+    assert.equal(invalid?.detail?.reason, "probe_no_match");
     assert.equal(invalid?.detail?.repair_required, true);
     assert.equal(audit.events.some((event) => event.kind === "agent_wake_attempt"), false);
   });

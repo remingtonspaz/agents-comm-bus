@@ -1,6 +1,6 @@
 import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
-import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, ReadHeldCommLease, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
+import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, PersistHeldCommLeaseAgentProperties, ReadHeldCommLease, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
@@ -30,6 +30,15 @@ export interface CodexBridgeOptions {
     sessionOwnerIsLive?: SessionOwnerLiveness;
     /** AGE-100: on-disk comm-lock lookup for inbound wake target resolution. */
     readHeldCommLease?: ReadHeldCommLease;
+    /** AGE-103: persist discovered wake targets onto a self-held comm lock. */
+    persistHeldCommLeaseAgentProperties?: PersistHeldCommLeaseAgentProperties;
+    /** AGE-103: loopback port scan range for cwd-probe fallback (default 4500..4600). */
+    codexPortRange?: {
+        min: number;
+        max: number;
+    };
+    codexProbeTimeoutMs?: number;
+    codexProbeConcurrency?: number;
     requestScopeReconcile?: () => void;
 }
 export interface RegisterCodexSessionResult {
@@ -65,6 +74,10 @@ export declare class CodexBridge implements AgentBridge {
     private pendingManagedCleanups;
     private inFlightManagedCleanups;
     private readonly sessionOwnerIsLive;
+    private readonly appServerClientFactory;
+    /** AGE-103: single-flight cwd probe keyed by comm+bot+project. */
+    private readonly inFlightCwdProbes;
+    private readonly cwdProbeJoiners;
     constructor(options: CodexBridgeOptions);
     attach(comms: CommAdapter[]): void;
     attachComm(comm: CommAdapter): void;
@@ -72,6 +85,10 @@ export declare class CodexBridge implements AgentBridge {
     invalidateRegistrationCaches(): void;
     getRetirementBlockers(): RetirementBlockerSnapshot | null;
     onInboundConversation(conversation: Conversation): Promise<void>;
+    private wakeWithResolvedTarget;
+    private tryProbeFallbackWake;
+    private joinCwdProbe;
+    private auditProbePersistFailure;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {
             once(event: "close", handler: () => void): void;
@@ -121,8 +138,18 @@ export declare class CodexBridge implements AgentBridge {
     private ownedAccountKeys;
     private removePendingInbound;
 }
+export interface CodexBridgeFactoryOptions {
+    codexPortRange?: {
+        min: number;
+        max: number;
+    };
+    codexProbeTimeoutMs?: number;
+    codexProbeConcurrency?: number;
+}
 export declare class CodexBridgeFactory implements AgentBridgeFactory {
+    private readonly factoryOptions;
     readonly agentId: AgentId;
+    constructor(factoryOptions?: CodexBridgeFactoryOptions);
     create(context: AgentBridgeContext): AgentBridge;
 }
 //# sourceMappingURL=bridge.d.ts.map

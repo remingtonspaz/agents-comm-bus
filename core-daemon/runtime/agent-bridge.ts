@@ -13,10 +13,16 @@ import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 
 import type { MessageBus } from "../bus.js";
 import { readProcessStartEpochMs } from "./process-start-epoch.js";
-import type { AgentLeaseProperties, ReadHeldCommLease } from "./comm-lease.js";
+import type {
+  AgentLeaseProperties,
+  PersistHeldCommLeaseAgentProperties,
+  ReadHeldCommLease,
+} from "./comm-lease.js";
 export type {
   AgentLeaseProperties,
   HeldCommLeaseLookupResult,
+  PersistHeldCommLeaseAgentProperties,
+  PersistHeldCommLeaseAgentPropertiesResult,
   ReadHeldCommLease,
 } from "./comm-lease.js";
 import type { IpcMethodHandler } from "./ipc-method.js";
@@ -136,6 +142,8 @@ export interface AgentBridgeContext {
   sessionOwnerIsLive: SessionOwnerLiveness;
   /** AGE-100: read the on-disk comm lock when held by this daemon. */
   readHeldCommLease: ReadHeldCommLease;
+  /** AGE-103: persist agent properties onto a self-held comm lock. */
+  persistHeldCommLeaseAgentProperties: PersistHeldCommLeaseAgentProperties;
   /** AGE-101: hint explicit session exit for early lazy-scope reconcile. */
   requestScopeReconcile?: () => void;
 }

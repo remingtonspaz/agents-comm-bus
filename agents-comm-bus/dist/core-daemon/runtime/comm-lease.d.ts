@@ -98,6 +98,13 @@ export type HeldCommLeaseLookupResult = {
     reason: "missing-record" | "unreadable" | "not-held-by-self";
 };
 export type ReadHeldCommLease = (commId: string, resourceId: string) => Promise<HeldCommLeaseLookupResult>;
+export type PersistHeldCommLeaseAgentPropertiesResult = {
+    ok: true;
+} | {
+    ok: false;
+    reason: "not-held" | "guard-contended";
+};
+export type PersistHeldCommLeaseAgentProperties = (commId: string, resourceId: string, agentProperties: AgentLeaseProperties) => Promise<PersistHeldCommLeaseAgentPropertiesResult>;
 /**
  * FIXED, homedir-anchored lease path. Deliberately bypasses resolveStatePaths /
  * AGENTS_COMM_BUS_ROOT: the whole point is that every checkout and every state
@@ -245,6 +252,11 @@ export declare class CommLeaseArbiter {
      * No-op when this arbiter does not currently hold the lease.
      */
     syncAgentProperties(commId: string, resourceId: string): Promise<void>;
+    /**
+     * Set desired agent properties and synchronously rewrite the self-held lock
+     * record under the guard. Never self-claims an unheld lock.
+     */
+    persistAgentPropertiesIfHeld(commId: string, resourceId: string, agentProperties: AgentLeaseProperties): Promise<PersistHeldCommLeaseAgentPropertiesResult>;
     /**
      * Read the on-disk comm-resource lease when this arbiter's pid is the holder.
      * Does not acquire or mutate the lease.

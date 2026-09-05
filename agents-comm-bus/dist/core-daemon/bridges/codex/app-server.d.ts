@@ -63,4 +63,9 @@ export declare class WebSocketCodexAppServerClient implements CodexAppServerClie
     private activeTurn;
 }
 export declare function isLiveThreadStatus(statusType: string | null): boolean;
+/** Live threads on an app-server whose cwd matches the expected project path. */
+export declare function liveThreadsMatchingProject(listResult: unknown, expectedProject: string): Array<{
+    threadId: string;
+    cwd: string;
+}>;
 //# sourceMappingURL=app-server.d.ts.map

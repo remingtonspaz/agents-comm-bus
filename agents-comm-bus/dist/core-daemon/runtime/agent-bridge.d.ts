@@ -1,8 +1,8 @@
 import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Message, SessionId, Storage } from "agents-comm-bus-core";
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
-import type { AgentLeaseProperties, ReadHeldCommLease } from "./comm-lease.js";
-export type { AgentLeaseProperties, HeldCommLeaseLookupResult, ReadHeldCommLease, } from "./comm-lease.js";
+import type { AgentLeaseProperties, PersistHeldCommLeaseAgentProperties, ReadHeldCommLease } from "./comm-lease.js";
+export type { AgentLeaseProperties, HeldCommLeaseLookupResult, PersistHeldCommLeaseAgentProperties, PersistHeldCommLeaseAgentPropertiesResult, ReadHeldCommLease, } from "./comm-lease.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
 import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
 /** Daemon-local retirement blockers: stable reason key → count (AGE-36). */
@@ -100,6 +100,8 @@ export interface AgentBridgeContext {
     sessionOwnerIsLive: SessionOwnerLiveness;
     /** AGE-100: read the on-disk comm lock when held by this daemon. */
     readHeldCommLease: ReadHeldCommLease;
+    /** AGE-103: persist agent properties onto a self-held comm lock. */
+    persistHeldCommLeaseAgentProperties: PersistHeldCommLeaseAgentProperties;
     /** AGE-101: hint explicit session exit for early lazy-scope reconcile. */
     requestScopeReconcile?: () => void;
 }
