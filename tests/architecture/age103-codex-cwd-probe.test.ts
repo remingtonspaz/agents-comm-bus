@@ -424,10 +424,12 @@ async function buildBridge(input: {
   audit: RecordingAuditStore;
   pendingInbound: PendingInboundEntry[];
   factoryUrls: string[];
+  probeMetrics: { threadListCalls: number };
 }> {
   const audit = input.audit ?? new RecordingAuditStore();
   const pendingInbound = input.pendingInbound ?? [];
   const factoryUrls: string[] = [];
+  const probeMetrics = { threadListCalls: 0 };
   const bridge = new CodexBridge({
     storage: new RecordingStorage([registration()]) as Storage,
     bus: {} as never,
@@ -438,7 +440,13 @@ async function buildBridge(input: {
     codexProbeConcurrency: 3,
     appServerClientFactory: (url) => {
       factoryUrls.push(url);
-      return createFakeClient(url, input.behaviors, input.hooks ?? {});
+      const client = createFakeClient(url, input.behaviors, input.hooks ?? {});
+      const baseCall = client.call.bind(client);
+      client.call = async (method, params, options) => {
+        if (method === "thread/list") probeMetrics.threadListCalls += 1;
+        return baseCall(method, params, options);
+      };
+      return client;
     },
     readHeldCommLease: (commId, resourceId) =>
       input.arbiter.readHeldCommLease(commId, resourceId),
@@ -455,7 +463,7 @@ async function buildBridge(input: {
     thread_id: "unused-registration-thread",
   });
 
-  return { bridge, audit, pendingInbound, factoryUrls };
+  return { bridge, audit, pendingInbound, factoryUrls, probeMetrics };
 }
 
 describe("AGE-103 Codex cwd-probe fallback", () => {
@@ -562,10 +570,60 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
     await bridge.onInboundConversation(conv);
 
     assert.equal(pendingInbound.length, 1);
+    assert.ok(audit.events.some((event) => event.kind === "agent_wake_failed"));
     const invalid = audit.events.find((event) => event.kind === "agent_wake_target_invalid");
     assert.equal(invalid?.detail?.reason, "probe_no_match");
     assert.equal(invalid?.detail?.probe_scanned, 3);
     assert.equal(audit.events.some((event) => event.kind === "agent_wake_attempt"), false);
+  });
+
+  it("does not re-probe when a cwd_probe wake target fails validation after a single scan", async () => {
+    const home = await tempHome();
+    const arbiter = await seedHeldLease(home, undefined);
+    const behaviors = new Map<number, PortBehavior>([
+      [4500, {
+        kind: "custom",
+        listThreads: async () => ({
+          data: [threadEntry(PROBE_THREAD, PROJECT, "active")],
+        }),
+        validateRecordedTarget: async (target) => ({
+          ok: false as const,
+          reason: "recorded-thread-not-live" as const,
+          threadId: target.threadId,
+        }),
+        steerRecordedTarget: async (target) => ({
+          ok: false as const,
+          reason: "recorded-thread-not-live" as const,
+          threadId: target.threadId,
+        }),
+        wakeRecordedTarget: async (target) => ({
+          ok: false as const,
+          reason: "recorded-thread-not-live" as const,
+          threadId: target.threadId,
+        }),
+      }],
+      [4501, { kind: "reject" }],
+      [4502, { kind: "threads", threads: [] }],
+    ]);
+    const { bridge, audit, pendingInbound, probeMetrics } = await buildBridge({
+      home,
+      arbiter,
+      behaviors,
+    });
+
+    const conv = conversation();
+    pendingInbound.push({ message: message(), conversation: conv });
+    await bridge.onInboundConversation(conv);
+
+    assert.equal(probeMetrics.threadListCalls, PROBE_RANGE.max - PROBE_RANGE.min + 1);
+    assert.equal(audit.events.some((event) => event.kind === "agent_wake_succeeded"), false);
+    assert.equal(pendingInbound.length, 1);
+    const invalid = audit.events.find((event) => event.kind === "agent_wake_target_invalid");
+    assert.equal(invalid?.detail?.reason, "probe_target_validation_failed:recorded-thread-not-live");
+    assert.equal(invalid?.detail?.repair_required, true);
+    assert.ok(audit.events.some((event) => event.kind === "agent_wake_failed"));
+    const attempt = audit.events.find((event) => event.kind === "agent_wake_attempt");
+    assert.equal(attempt?.detail?.wake_target_source, "cwd_probe");
   });
 
   it("fails closed with probe_ambiguous when two ports match the same cwd", async () => {
@@ -583,6 +641,7 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
     await bridge.onInboundConversation(conv);
 
     assert.equal(pendingInbound.length, 1);
+    assert.ok(audit.events.some((event) => event.kind === "agent_wake_failed"));
     const invalid = audit.events.find((event) => event.kind === "agent_wake_target_invalid");
     assert.equal(invalid?.detail?.reason, "probe_ambiguous");
     assert.equal(invalid?.detail?.probe_matches, 2);

@@ -89,6 +89,7 @@ export declare class CodexBridge implements AgentBridge {
     private tryProbeFallbackWake;
     private joinCwdProbe;
     private auditProbePersistFailure;
+    private auditProbeTargetValidationFailure;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {
             once(event: "close", handler: () => void): void;

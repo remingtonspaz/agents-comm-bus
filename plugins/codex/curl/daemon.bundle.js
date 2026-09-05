@@ -12508,6 +12508,15 @@ var CodexBridge = class {
         return;
       }
       if (isCodexWakeTargetValidationFailure(result.reason)) {
+        if (wakeTargetSource === "cwd_probe") {
+          await this.auditProbeTargetValidationFailure(
+            conversation,
+            session,
+            result.reason,
+            pendingForSession.length
+          );
+          return;
+        }
         await this.tryProbeFallbackWake(
           conversation,
           session,
@@ -12543,7 +12552,7 @@ var CodexBridge = class {
       project
     );
     if (!probe.ok) {
-      await this.auditWake("agent_wake_target_invalid", conversation, session, {
+      const detail = {
         reason: probe.reason,
         repair_required: true,
         pending_count: pendingForSession.length,
@@ -12552,7 +12561,9 @@ var CodexBridge = class {
         probe_ports: probe.ports,
         comm: conversation.comm,
         bot_user_id: conversation.bot_user_id
-      });
+      };
+      await this.auditWake("agent_wake_failed", conversation, session, detail);
+      await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
       console.error(
         `agents-comm-bus: inbound Codex cwd probe failed for ${conversation.conversation_id}: ${probe.reason}`
       );
@@ -12658,6 +12669,20 @@ var CodexBridge = class {
     await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
     console.error(
       `agents-comm-bus: inbound Codex probe persist failed for ${conversation.conversation_id}: ${reason}`
+    );
+  }
+  async auditProbeTargetValidationFailure(conversation, session, reason, pendingCount) {
+    const detail = {
+      reason: `probe_target_validation_failed:${reason}`,
+      repair_required: true,
+      pending_count: pendingCount,
+      comm: conversation.comm,
+      bot_user_id: conversation.bot_user_id ?? void 0
+    };
+    await this.auditWake("agent_wake_failed", conversation, session, detail);
+    await this.auditWake("agent_wake_target_invalid", conversation, session, detail);
+    console.error(
+      `agents-comm-bus: inbound Codex probe target failed validation for ${conversation.conversation_id}: ${reason}`
     );
   }
   async handleIpcMethod(method, params, ctx) {

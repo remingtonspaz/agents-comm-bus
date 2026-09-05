@@ -352,6 +352,7 @@ describe("AGE-100 Codex inbound comm-lock wake target", () => {
     assert.equal(client.steerTurnCalls, 0);
     assert.equal(client.startTurnCalls, 0);
     assert.equal(pendingInbound.length, 1);
+    assert.ok(audit.events.some((event) => event.kind === "agent_wake_failed"));
     assert.ok(audit.events.some((event) => event.kind === "agent_wake_target_invalid"));
     const invalid = audit.events.find((event) => event.kind === "agent_wake_target_invalid");
     assert.equal(invalid?.detail?.reason, "probe_no_match");
