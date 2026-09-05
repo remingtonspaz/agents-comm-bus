@@ -56,6 +56,43 @@ async function linkWorkspacePackage(layout: string, name: string): Promise<void>
   cpSync(src, dest, { recursive: true });
 }
 
+/**
+ * P9: stop the daemon that the isolated installed-consumer probe legitimately
+ * starts under its throwaway state root, but only after the daemon on that
+ * port proves it is that pid AND that state root: a pid read from disk alone
+ * does not exclude pid reuse.
+ */
+async function stopIsolatedDaemon(isoState: string): Promise<void> {
+  const pidFile = path.join(isoState, "daemon.pid");
+  const portFile = path.join(isoState, "port");
+  if (!existsSync(pidFile) || !existsSync(portFile)) return;
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  const port = Number(readFileSync(portFile, "utf8").trim());
+  if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(port) || port <= 0) return;
+  const { connectIpc } = await import("../../core-daemon/ipc/client.js");
+  let ipc: Awaited<ReturnType<typeof connectIpc>>;
+  try {
+    ipc = await connectIpc({ port, timeoutMs: 3_000, clientVersion: "age88-probe", metadata: {} });
+  } catch {
+    return; // nothing answering on that port: nothing of ours to stop
+  }
+  try {
+    const meta = (ipc.hello as { metadata?: { pid?: number; stateRoot?: string } }).metadata ?? {};
+    const sameRoot =
+      typeof meta.stateRoot === "string" &&
+      path.resolve(meta.stateRoot).toLowerCase() === path.resolve(isoState).toLowerCase();
+    if (meta.pid === pid && sameRoot) {
+      try {
+        process.kill(pid);
+      } catch {
+        // already gone
+      }
+    }
+  } finally {
+    ipc.close();
+  }
+}
+
 function initGitRepo(repoDir: string): void {
   execFileSync("git", ["init"], { cwd: repoDir });
   execFileSync("git", ["config", "user.email", "age88-probe@test"], { cwd: repoDir });
@@ -456,13 +493,65 @@ describe("AGE-88 Pi release sync guard", () => {
 
       const curlIndex = path.join(installedCurl, "extensions", "curl", "index.ts");
       const probePath = path.join(probeRoot, "probe-installed-curl.mts");
+      // P9: the installed extension runs entryEnsures for real: a central install
+      // plus ensureDaemon. Confine it to a throwaway home so this suite can never
+      // write ~/.agents-comm-bus or probe the operator daemons. Containment is
+      // the isolated child environment plus the child's own pre-flight
+      // assertions; the real-home before/after check below is only an alarm.
+      const isoHome = await tempDir("acb-age88-iso-home-");
+      const isoState = path.join(isoHome, ".agents-comm-bus");
+      const childEnv: NodeJS.ProcessEnv = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith("AGENTS_COMM_BUS_")),
+      );
+      Object.assign(childEnv, {
+        HOME: isoHome,
+        USERPROFILE: isoHome,
+        AGENTS_COMM_BUS_ROOT: isoState,
+        AGENTS_COMM_BUS_STATE_ROOT: isoState,
+        AGENTS_COMM_BUS_DISCOVERY_ROOT: isoState,
+      });
       await writeFile(
         probePath,
-        `const extension = (await import(${JSON.stringify(pathToFileURL(curlIndex).href)})).default;\nif (typeof extension !== "function") process.exit(2);\nawait extension();\nconsole.log("OK");\n`,
+        [
+          `import os from "node:os";`,
+          `import path from "node:path";`,
+          `const isoHome = ${JSON.stringify(isoHome)};`,
+          `const under = (p) => path.resolve(String(p)).toLowerCase().startsWith(path.resolve(isoHome).toLowerCase());`,
+          `if (!under(os.homedir())) { console.error("homedir not isolated: " + os.homedir()); process.exit(3); }`,
+          `for (const k of ["AGENTS_COMM_BUS_ROOT", "AGENTS_COMM_BUS_STATE_ROOT", "AGENTS_COMM_BUS_DISCOVERY_ROOT"]) {`,
+          `  if (!process.env[k] || !under(process.env[k])) { console.error(k + " not isolated: " + process.env[k]); process.exit(4); }`,
+          `}`,
+          `if (process.env.AGENTS_COMM_BUS_BIN) { console.error("AGENTS_COMM_BUS_BIN leaked into the probe"); process.exit(5); }`,
+          `const extension = (await import(${JSON.stringify(pathToFileURL(curlIndex).href)})).default;`,
+          `if (typeof extension !== "function") process.exit(2);`,
+          `await extension();`,
+          `console.log("OK");`,
+          "",
+        ].join("\n"),
       );
       const tsxBin = path.join(monorepoRoot, "node_modules", "tsx", "dist", "cli.mjs");
-      const { stdout } = await run(process.execPath, [tsxBin, probePath], { cwd: probeRoot });
+      const realVersionFile = path.join(os.homedir(), ".agents-comm-bus", "bin", "version.json");
+      const realVersionBefore = existsSync(realVersionFile)
+        ? readFileSync(realVersionFile, "utf8")
+        : null;
+      let stdout: string;
+      try {
+        ({ stdout } = await run(process.execPath, [tsxBin, probePath], {
+          cwd: probeRoot,
+          env: childEnv,
+        }));
+      } finally {
+        await stopIsolatedDaemon(isoState);
+      }
       assert.equal(stdout.trim(), "OK");
+      const realVersionAfter = existsSync(realVersionFile)
+        ? readFileSync(realVersionFile, "utf8")
+        : null;
+      assert.equal(
+        realVersionAfter,
+        realVersionBefore,
+        "the isolated probe must never touch the real central install",
+      );
     } finally {
       await writeFile(pkgPath, originalPkgText);
     }
