@@ -207,8 +207,6 @@ export class CommLeaseArbiter {
     onAudit;
     readProcessStartIdentity;
     testPersistUnderGuard;
-    /** Guard paths currently held by this arbiter instance (in-process ownership). */
-    heldGuards = new Set();
     /**
      * Per-resource signature of the last `comm_lease_denied` we actually audited,
      * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
@@ -587,7 +585,6 @@ export class CommLeaseArbiter {
                 const handle = await open(guardPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
                 await handle.writeFile(`${token}\n`, "utf8");
                 await handle.close();
-                this.heldGuards.add(guardPath);
                 return token;
             }
             catch (error) {
@@ -610,9 +607,8 @@ export class CommLeaseArbiter {
             if (!Number.isInteger(pid) || pid <= 0)
                 return true;
             if (pid === this.self.pid) {
-                // AGE-103: same-pid guard is contended when held in-process; only reclaim
-                // genuine leftovers from a failed release in this process.
-                return !this.heldGuards.has(guardPath);
+                // Same-process guard may be held by the sweeper or an in-flight acquire.
+                return false;
             }
             return !this.isPidAlive(pid);
         }
@@ -638,9 +634,6 @@ export class CommLeaseArbiter {
         }
         catch {
             // Best-effort: a stale-guard reclaim on the next acquire handles leftovers.
-        }
-        finally {
-            this.heldGuards.delete(guardPath);
         }
     }
     audit(event) {

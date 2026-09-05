@@ -199,7 +199,10 @@ export interface CommLeaseArbiterOptions {
     onAudit?: (event: CommLeaseAuditEvent) => void;
     /** AGE-102: native-only process-start stamp; null omits identity (tests inject). */
     readProcessStartIdentity?: (pid: number) => number | null;
-    /** Test-only: pause while persistAgentPropertiesIfHeld holds the guard. */
+    /**
+     * Test-only: invoked after persistAgentPropertiesIfHeld acquires the guard,
+     * before writing the lease record. Resolve the returned promise to release.
+     */
     testPersistUnderGuard?: (leasePath: string) => Promise<void>;
 }
 export interface CommLeaseAuditEvent {
@@ -219,8 +222,6 @@ export declare class CommLeaseArbiter {
     private readonly onAudit?;
     private readonly readProcessStartIdentity;
     private readonly testPersistUnderGuard?;
-    /** Guard paths currently held by this arbiter instance (in-process ownership). */
-    private readonly heldGuards;
     /**
      * Per-resource signature of the last `comm_lease_denied` we actually audited,
      * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow

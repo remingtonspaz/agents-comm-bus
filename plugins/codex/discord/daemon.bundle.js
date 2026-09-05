@@ -3944,8 +3944,6 @@ var CommLeaseArbiter = class {
   onAudit;
   readProcessStartIdentity;
   testPersistUnderGuard;
-  /** Guard paths currently held by this arbiter instance (in-process ownership). */
-  heldGuards = /* @__PURE__ */ new Set();
   /**
    * Per-resource signature of the last `comm_lease_denied` we actually audited,
    * keyed by `${commId}:${resourceId}` → `${reason}:${holderPid}`. The slow
@@ -4301,7 +4299,6 @@ var CommLeaseArbiter = class {
         await handle.writeFile(`${token}
 `, "utf8");
         await handle.close();
-        this.heldGuards.add(guardPath);
         return token;
       } catch (error) {
         if (!isAlreadyExistsError(error)) throw error;
@@ -4320,7 +4317,7 @@ var CommLeaseArbiter = class {
       const pid = Number(raw.split(":")[0]);
       if (!Number.isInteger(pid) || pid <= 0) return true;
       if (pid === this.self.pid) {
-        return !this.heldGuards.has(guardPath);
+        return false;
       }
       return !this.isPidAlive(pid);
     } catch {
@@ -4340,8 +4337,6 @@ var CommLeaseArbiter = class {
         await rm(guardPath, { force: true });
       }
     } catch {
-    } finally {
-      this.heldGuards.delete(guardPath);
     }
   }
   audit(event) {

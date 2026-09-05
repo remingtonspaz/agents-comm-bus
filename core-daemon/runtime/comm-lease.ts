@@ -382,7 +382,10 @@ export interface CommLeaseArbiterOptions {
   onAudit?: (event: CommLeaseAuditEvent) => void;
   /** AGE-102: native-only process-start stamp; null omits identity (tests inject). */
   readProcessStartIdentity?: (pid: number) => number | null;
-  /** Test-only: pause while persistAgentPropertiesIfHeld holds the guard. */
+  /**
+   * Test-only: invoked after persistAgentPropertiesIfHeld acquires the guard,
+   * before writing the lease record. Resolve the returned promise to release.
+   */
   testPersistUnderGuard?: (leasePath: string) => Promise<void>;
 }
 
@@ -409,8 +412,6 @@ export class CommLeaseArbiter {
   private readonly onAudit?: (event: CommLeaseAuditEvent) => void;
   private readonly readProcessStartIdentity: (pid: number) => number | null;
   private readonly testPersistUnderGuard?: (leasePath: string) => Promise<void>;
-  /** Guard paths currently held by this arbiter instance (in-process ownership). */
-  private readonly heldGuards = new Set<string>();
 
   /**
    * Per-resource signature of the last `comm_lease_denied` we actually audited,
@@ -821,7 +822,6 @@ export class CommLeaseArbiter {
         const handle = await open(guardPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
         await handle.writeFile(`${token}\n`, "utf8");
         await handle.close();
-        this.heldGuards.add(guardPath);
         return token;
       } catch (error) {
         if (!isAlreadyExistsError(error)) throw error;
@@ -842,9 +842,8 @@ export class CommLeaseArbiter {
       const pid = Number(raw.split(":")[0]);
       if (!Number.isInteger(pid) || pid <= 0) return true;
       if (pid === this.self.pid) {
-        // AGE-103: same-pid guard is contended when held in-process; only reclaim
-        // genuine leftovers from a failed release in this process.
-        return !this.heldGuards.has(guardPath);
+        // Same-process guard may be held by the sweeper or an in-flight acquire.
+        return false;
       }
       return !this.isPidAlive(pid);
     } catch {
@@ -868,8 +867,6 @@ export class CommLeaseArbiter {
       }
     } catch {
       // Best-effort: a stale-guard reclaim on the next acquire handles leftovers.
-    } finally {
-      this.heldGuards.delete(guardPath);
     }
   }
 

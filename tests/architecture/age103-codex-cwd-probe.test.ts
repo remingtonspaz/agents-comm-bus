@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, mkdir, utimes } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,10 +11,12 @@ import { liveThreadsMatchingProject } from "../../core-daemon/bridges/codex/app-
 import {
   CommLeaseArbiter,
   commLeasePath,
+  DEFAULT_STALENESS_MS,
   type AgentLeaseProperties,
   type LeaseRecord,
   type SelfIdentity,
 } from "../../core-daemon/runtime/comm-lease.js";
+import { runCommLeaseSweep } from "../../core-daemon/runtime/comm-lease-sweep.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import type { PendingInboundEntry } from "../../core-daemon/runtime/pending-inbound.js";
 import type {
@@ -520,12 +522,108 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
     assert.equal(await readFile(foreignPath, "utf8"), before);
   });
 
+  it("treats a fresh same-pid guard not held by anyone as contended during persist", async () => {
+    const home = await tempHome();
+    const arbiter = await seedHeldLease(home, undefined);
+    const leasePath = commLeasePath("telegram", BOT, home);
+    const guardPath = `${leasePath}.guard`;
+    await writeFile(guardPath, `${DAEMON_PID}:999\n`, "utf8");
+
+    const leaseBefore = await readFile(leasePath, "utf8");
+    const guardBefore = await readFile(guardPath, "utf8");
+    const props = codexLeaseProps(PROBE_URL, PROBE_THREAD);
+    const result = await arbiter.persistAgentPropertiesIfHeld("telegram", BOT, props);
+    assert.deepEqual(result, { ok: false, reason: "guard-contended" });
+    assert.equal(await readFile(leasePath, "utf8"), leaseBefore);
+    assert.equal(await readFile(guardPath, "utf8"), guardBefore);
+  });
+
+  it("treats a sweeper-held same-pid guard as contended when arbiter tries acquire", async () => {
+    const home = await tempHome();
+    const deadPid = 88003;
+    const leasePath = commLeasePath("telegram", BOT, home);
+    const record: LeaseRecord = {
+      comm_id: "telegram",
+      resource_id: BOT,
+      pid: deadPid,
+      stateRoot: "/dead",
+      checkoutRoot: null,
+      daemonBin: null,
+      daemonVersion: "0.0.0",
+      authorityRank: "worktree",
+      acquiredAt: 1,
+      renewedAt: 1,
+      lastIpcServedAt: 1,
+    };
+    await mkdir(path.dirname(leasePath), { recursive: true });
+    await writeFile(leasePath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+
+    const arbiter = new CommLeaseArbiter({
+      self: selfIdentity({ pid: process.pid }),
+      lastIpcServedAt: () => 1,
+      homeDir: home,
+      isPidAlive: (pid) => pid === process.pid,
+      now: () => Date.now(),
+    });
+
+    const counts = await runCommLeaseSweep({
+      homeDir: home,
+      selfPid: process.pid,
+      isPidAlive: () => false,
+      afterGuardAcquired: async (pathOnDisk, snapshot) => {
+        assert.equal(pathOnDisk, leasePath);
+        assert.equal(await readFile(pathOnDisk, "utf8"), snapshot);
+        const denied = await arbiter.tryAcquire("telegram", BOT);
+        assert.equal(denied.ok, false);
+        if (denied.ok) throw new Error("expected guard-contended denial");
+        assert.equal(denied.reason, "guard-contended");
+        assert.equal(await readFile(pathOnDisk, "utf8"), snapshot);
+      },
+    });
+
+    assert.equal(counts.reaped, 1);
+    assert.equal(existsSync(leasePath), false);
+  });
+
+  it("retains an aged same-pid guard as contended during persist", async () => {
+    const home = await tempHome();
+    const nowMs = DEFAULT_STALENESS_MS + 10_000;
+    const arbiter = new CommLeaseArbiter({
+      self: selfIdentity(),
+      lastIpcServedAt: () => 1,
+      homeDir: home,
+      isPidAlive: () => true,
+      now: () => nowMs,
+      stalenessMs: DEFAULT_STALENESS_MS,
+    });
+    arbiter.setDesiredAgentProperties("telegram", BOT, codexLeaseProps(PROBE_URL, PROBE_THREAD));
+    assert.equal((await arbiter.tryAcquire("telegram", BOT)).ok, true);
+
+    const leasePath = commLeasePath("telegram", BOT, home);
+    const guardPath = `${leasePath}.guard`;
+    await writeFile(guardPath, `${DAEMON_PID}:999\n`, "utf8");
+    await utimes(guardPath, 0, 0);
+
+    const leaseBefore = await readFile(leasePath, "utf8");
+    const guardBefore = await readFile(guardPath, "utf8");
+    const props = codexLeaseProps(PROBE_URL, "thread-aged");
+    const result = await arbiter.persistAgentPropertiesIfHeld("telegram", BOT, props);
+    assert.deepEqual(result, { ok: false, reason: "guard-contended" });
+    assert.equal(await readFile(leasePath, "utf8"), leaseBefore);
+    assert.equal(await readFile(guardPath, "utf8"), guardBefore);
+  });
+
   it("treats a live same-pid guard held in-process as contended during persist", async () => {
     const home = await tempHome();
-    let releaseFirst!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
+    let releaseLatch!: () => void;
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredResolve = resolve;
     });
+    const blocked = new Promise<void>((resolve) => {
+      releaseLatch = resolve;
+    });
+
     const arbiter = new CommLeaseArbiter({
       self: selfIdentity(),
       lastIpcServedAt: () => 1,
@@ -533,6 +631,7 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
       isPidAlive: () => true,
       now: () => 1,
       testPersistUnderGuard: async () => {
+        enteredResolve();
         await blocked;
       },
     });
@@ -543,35 +642,33 @@ describe("AGE-103 Codex cwd-probe fallback", () => {
     const secondProps = codexLeaseProps("ws://127.0.0.1:4501", "thread-second");
 
     const first = arbiter.persistAgentPropertiesIfHeld("telegram", BOT, firstProps);
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (existsSync(`${leasePath}.guard`)) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    await entered;
+
+    try {
+      const secondPromise = arbiter.persistAgentPropertiesIfHeld("telegram", BOT, secondProps);
+      const outcome = await Promise.race([
+        secondPromise.then((result) => ({ kind: "result" as const, result })),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          setTimeout(() => resolve({ kind: "timeout" }), 2000);
+        }),
+      ]);
+      assert.notEqual(
+        outcome.kind,
+        "timeout",
+        "second persist hung instead of returning guard-contended",
+      );
+      if (outcome.kind === "result") {
+        assert.deepEqual(outcome.result, { ok: false, reason: "guard-contended" });
+      }
+      assert.equal(existsSync(`${leasePath}.guard`), true);
+    } finally {
+      releaseLatch();
     }
-    assert.equal(existsSync(`${leasePath}.guard`), true);
 
-    const second = await arbiter.persistAgentPropertiesIfHeld("telegram", BOT, secondProps);
-    assert.deepEqual(second, { ok: false, reason: "guard-contended" });
-    assert.equal(existsSync(`${leasePath}.guard`), true);
-
-    releaseFirst();
     assert.deepEqual(await first, { ok: true });
     const onDisk = JSON.parse(await readFile(leasePath, "utf8")) as LeaseRecord;
     assert.deepEqual(onDisk.agentProperties, firstProps);
     assert.notDeepEqual(onDisk.agentProperties, secondProps);
-  });
-
-  it("reclaims a same-pid guard leftover not tracked by this arbiter instance", async () => {
-    const home = await tempHome();
-    const arbiter = await seedHeldLease(home, undefined);
-    const leasePath = commLeasePath("telegram", BOT, home);
-    await writeFile(`${leasePath}.guard`, `${DAEMON_PID}:999\n`, "utf8");
-
-    const props = codexLeaseProps(PROBE_URL, PROBE_THREAD);
-    const result = await arbiter.persistAgentPropertiesIfHeld("telegram", BOT, props);
-    assert.deepEqual(result, { ok: true });
-    const onDisk = JSON.parse(await readFile(leasePath, "utf8")) as LeaseRecord;
-    assert.deepEqual(onDisk.agentProperties, props);
-    assert.equal(existsSync(`${leasePath}.guard`), false);
   });
 
   it("wakes with a single cwd match and persists lock props before turn/start", async () => {
