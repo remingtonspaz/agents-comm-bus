@@ -965,27 +965,34 @@ test("AGE-108 (s): dead reclaim recovery preserves a successor reclaim token pub
     { maxWaitMs: 5_000, isPidAlive: () => false, beforeQuarantine },
   );
   await new Promise(resolve => setTimeout(resolve, 50));
-  const expectedY = await readDiscoveryReclaimRaw(discoveryRoot);
-  assert.ok(expectedY);
-  startSampler();
-  releaseReclaim2?.();
-  const reclaimBResult = await reclaimB;
-  assert.equal(reclaimBResult.ok, false);
-  if (!reclaimBResult.ok) assert.equal(reclaimBResult.reason, "guard_contended");
-  sampling = false;
-  await samplerDone;
-  assert.equal(
-    reclaimSamples.filter(raw => raw !== expectedY).length,
-    0,
-    "owner.lock.reclaim must equal the successor reclaim token at every sample",
-  );
-  releaseQuarantine?.();
-  const reclaimAResult = await reclaimA;
-  assert.equal(reclaimAResult.ok, true);
-
-  const reclaimY = parseDiscoveryGuardToken(expectedY);
-  assert.ok(reclaimY);
-  assert.equal(reclaimY.pid, 71_004);
+  // Cleanup in finally: a failing assertion must fail the test, not leave the
+  // sampler loop or the paused reclaimer A alive and hang the runner.
+  try {
+    const expectedY = await readDiscoveryReclaimRaw(discoveryRoot);
+    assert.ok(expectedY);
+    startSampler();
+    releaseReclaim2?.();
+    const reclaimBResult = await reclaimB;
+    assert.equal(reclaimBResult.ok, false, "delayed reclaimer B must not take the guard");
+    if (!reclaimBResult.ok) assert.equal(reclaimBResult.reason, "guard_contended");
+    sampling = false;
+    await samplerDone;
+    assert.equal(
+      reclaimSamples.filter(raw => raw !== expectedY).length,
+      0,
+      "owner.lock.reclaim must equal the successor reclaim token at every sample",
+    );
+    const reclaimY = parseDiscoveryGuardToken(expectedY);
+    assert.ok(reclaimY);
+    assert.equal(reclaimY.pid, 71_004);
+  } finally {
+    sampling = false;
+    await samplerDone;
+    releaseReclaim2?.();
+    releaseQuarantine?.();
+    const reclaimAResult = await reclaimA;
+    assert.equal(reclaimAResult.ok, true);
+  }
 });
 
 test("AGE-108 (t): dead owner.lock.reclaim2 yields guard_contended without auto-reap", async () => {
@@ -1019,7 +1026,26 @@ test("AGE-108 (u): same-pid overlapping guards exclude via nonce and exclusive t
   const now = () => nowValue;
   let concurrent = 0;
   let maxConcurrent = 0;
-  let holderBytes: string | null = null;
+  // One-shot barrier inside the publish step: both attempts sit between
+  // temp-write and link at the same instant, with the same pid and pinned clock.
+  let arrived = 0;
+  let barrierOpen = false;
+  const waiters: Array<() => void> = [];
+  const beforeGuardLink = async () => {
+    if (barrierOpen) return;
+    arrived += 1;
+    if (arrived >= 2) {
+      // Both attempts are parked between temp-write and link: with exclusive,
+      // nonce-named temps there must be exactly two distinct temp files on disk.
+      // A shared pid+ms temp name (the mutation) leaves exactly one.
+      const temps = (await readdir(discoveryRoot)).filter(name => name.includes(".tmp."));
+      barrierOpen = true;
+      for (const release of waiters) release();
+      assert.equal(temps.length, 2, `each publish attempt must own its own exclusive temp file (saw: ${temps.join(", ")})`);
+      return;
+    }
+    await new Promise<void>(resolve => waiters.push(resolve));
+  };
 
   const runGuard = async (startedAt: number) =>
     withDiscoveryGuard(
@@ -1028,19 +1054,21 @@ test("AGE-108 (u): same-pid overlapping guards exclude via nonce and exclusive t
       async () => {
         concurrent += 1;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
-        holderBytes = await readDiscoveryGuardRaw(discoveryRoot);
+        const holderBytes = await readDiscoveryGuardRaw(discoveryRoot);
         assert.ok(holderBytes && holderBytes.length > 0);
+        const holderToken = parseDiscoveryGuardToken(holderBytes);
+        assert.ok(holderToken, "holder must read a complete token");
+        assert.equal(holderToken.startedAt, startedAt, "owner.lock must hold the HOLDER's own token");
         await new Promise(resolve => setTimeout(resolve, 40));
         const during = await readDiscoveryGuardRaw(discoveryRoot);
         assert.equal(during, holderBytes, "owner.lock bytes must stay complete and unchanged for the holder");
         concurrent -= 1;
         return startedAt;
       },
-      { maxWaitMs: 500, now, isPidAlive: () => true },
+      { maxWaitMs: 1_000, now, isPidAlive: () => true, beforeGuardLink },
     );
 
   const first = runGuard(1);
-  await new Promise(resolve => setTimeout(resolve, 5));
   const second = runGuard(2);
   const [r1, r2] = await Promise.all([first, second]);
   assert.equal(maxConcurrent, 1, "guard callbacks must not overlap");
