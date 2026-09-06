@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import ts from "typescript";
 
 import { ensureDaemon, daemonStderrLogPath, writeDaemonDiscoveryFiles } from "../../core-daemon/bootstrap/ensure-daemon.js";
 import {
@@ -33,13 +34,93 @@ function daemonHello(): DaemonHello {
   };
 }
 
+const createdRoots: string[] = [];
+
 async function tempStateRoot(): Promise<string> {
-  return mkdtemp(path.join(os.tmpdir(), "agents-comm-bus-test-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "agents-comm-bus-test-"));
+  createdRoots.push(root);
+  return root;
 }
+
+// Every spawn is a fake: no daemon teardown is needed or permitted. PID files
+// in these fixtures deliberately name this runner or unrelated fake processes.
+after(async () => {
+  for (const root of createdRoots) {
+    assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith("agents-comm-bus-test-"));
+    await rm(root, { recursive: true, force: true });
+  }
+  const remaining = new Set(await readdir(os.tmpdir()));
+  assert.deepEqual(createdRoots.filter(root => remaining.has(path.basename(root))), [],
+    "this run must leave zero owned temp roots; historical roots are not ours");
+});
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+describe("bootstrap fixture containment", () => {
+  it("every ensure call explicitly supplies an isolated env and a fake spawn", async () => {
+    const source = await readFile(new URL(import.meta.url), "utf8");
+    const ast = ts.createSourceFile("bootstrap-race.test.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let calls = 0;
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "ensureDaemon") {
+        calls += 1;
+        const options = node.arguments[0];
+        assert.ok(options && ts.isObjectLiteralExpression(options), "ensure options must be inspectable inline");
+        assert.ok(!options.properties.some(ts.isSpreadAssignment), "spread options could override containment");
+        const env = options.properties.find(p => p.name && ts.isIdentifier(p.name) && p.name.text === "env");
+        assert.ok(env && ts.isPropertyAssignment(env) && ts.isObjectLiteralExpression(env.initializer),
+          `line ${ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1}: explicit env object required`);
+        assert.ok(!env.initializer.properties.some(ts.isSpreadAssignment), "env must not inherit ambient keys");
+        const spawn = options.properties.find(p => p.name && ts.isIdentifier(p.name) && p.name.text === "spawnDaemon");
+        assert.ok(spawn, "fake spawnDaemon is mandatory even on expected no-spawn paths");
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+    assert.ok(calls >= 19, "guard must inspect the actual fixture calls");
+  });
+
+  it("ambient poisoned discovery/bin cannot escape an explicitly isolated fake-spawn case", async () => {
+    const stateRoot = await tempStateRoot();
+    const sentinel = path.join(stateRoot, "sentinel-discovery");
+    const sentinelBin = path.join(stateRoot, "sentinel-bin", "daemon.js");
+    await mkdir(sentinel);
+    await mkdir(path.dirname(sentinelBin));
+    await writeFile(sentinelBin, 'throw new Error("SENTINEL MUST NEVER EXECUTE");\n');
+    const saved = { bin: process.env.AGENTS_COMM_BUS_BIN, discovery: process.env.AGENTS_COMM_BUS_DISCOVERY_ROOT };
+    process.env.AGENTS_COMM_BUS_BIN = sentinelBin;
+    process.env.AGENTS_COMM_BUS_DISCOVERY_ROOT = sentinel;
+    let spawns = 0;
+    try {
+      await ensureDaemon({
+        stateRoot,
+        env: {},
+        log: () => {},
+        spawnDaemon: async (paths, discovery) => {
+          spawns += 1;
+          // Check BEFORE any discovery write, including under the env mutation.
+          assert.equal(paths.root, stateRoot);
+          assert.equal(discovery.root, stateRoot, "ambient discovery poison escaped isolation");
+          await writeFile(discovery.portFile, "41140");
+        },
+        probeDaemon: async () => daemonHello(),
+        timeoutMs: 1000,
+        retryMs: 5,
+      });
+      assert.equal(spawns, 1, "the spawn path must actually be exercised");
+      assert.deepEqual(await readdir(sentinel), []);
+      assert.deepEqual(await readdir(path.dirname(sentinelBin)), ["daemon.js"]);
+    } finally {
+      if (saved.bin === undefined) delete process.env.AGENTS_COMM_BUS_BIN;
+      else process.env.AGENTS_COMM_BUS_BIN = saved.bin;
+      if (saved.discovery === undefined) delete process.env.AGENTS_COMM_BUS_DISCOVERY_ROOT;
+      else process.env.AGENTS_COMM_BUS_DISCOVERY_ROOT = saved.discovery;
+    }
+  });
+});
 
 describe("agents-comm-bus path layout", () => {
   it("resolves canonical durable paths under ~/.agents-comm-bus", () => {
@@ -105,7 +186,7 @@ describe("ensureDaemon", () => {
     await writeFile(daemonStderrLogPath(stateRoot), `${oldPrefix}${recentLine}\n`, "utf8");
 
     await assert.rejects(
-      ensureDaemon({
+      ensureDaemon({ env: {},
         stateRoot,
         probeDaemon: async () => {
           throw new Error("daemon not ready");
@@ -130,7 +211,7 @@ describe("ensureDaemon", () => {
     await mkdir(paths.root, { recursive: true });
 
     await assert.rejects(
-      ensureDaemon({
+      ensureDaemon({ env: {},
         stateRoot,
         probeDaemon: async () => {
           throw new Error("daemon not ready");
@@ -155,7 +236,7 @@ describe("ensureDaemon", () => {
     await writeFile(daemonStderrLogPath(stateRoot), "", "utf8");
 
     await assert.rejects(
-      ensureDaemon({
+      ensureDaemon({ env: {},
         stateRoot,
         probeDaemon: async () => {
           throw new Error("daemon not ready");
@@ -190,8 +271,8 @@ describe("ensureDaemon", () => {
     };
 
     const [a, b] = await Promise.all([
-      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 1_000, retryMs: 5 }),
-      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 1_000, retryMs: 5 }),
+      ensureDaemon({ env: {}, stateRoot, spawnDaemon, probeDaemon, timeoutMs: 1_000, retryMs: 5 }),
+      ensureDaemon({ env: {}, stateRoot, spawnDaemon, probeDaemon, timeoutMs: 1_000, retryMs: 5 }),
     ]);
 
     assert.equal(spawnCount, 1);
@@ -219,9 +300,9 @@ describe("ensureDaemon", () => {
     };
 
     const [a, b, c] = await Promise.all([
-      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
-      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
-      ensureDaemon({ stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
+      ensureDaemon({ env: {}, stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
+      ensureDaemon({ env: {}, stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
+      ensureDaemon({ env: {}, stateRoot, spawnDaemon, probeDaemon, timeoutMs: 2_000, retryMs: 5 }),
     ]);
 
     assert.equal(spawnCount, 1);
@@ -242,7 +323,7 @@ describe("ensureDaemon", () => {
     let spawned = false;
     const port = 41_112;
 
-    const result = await ensureDaemon({
+    const result = await ensureDaemon({ env: {},
       stateRoot,
       isPidAlive: () => false,
       probeDaemon: async (candidatePort) => {
@@ -279,7 +360,7 @@ describe("ensureDaemon", () => {
 
     let terminated = false;
     let spawned = false;
-    const result = await ensureDaemon({
+    const result = await ensureDaemon({ env: {},
       stateRoot,
       discoveryRoot: devDiscovery,
       isPidAlive: () => true,
@@ -326,7 +407,7 @@ describe("ensureDaemon", () => {
     let terminated = false;
     let spawned = false;
 
-    const result = await ensureDaemon({
+    const result = await ensureDaemon({ env: {},
       stateRoot,
       isPidAlive: () => true,
       terminateDaemon: () => {
@@ -361,7 +442,7 @@ describe("ensureDaemon", () => {
     let spawned = false;
     const newPort = 41_118;
 
-    const result = await ensureDaemon({
+    const result = await ensureDaemon({ env: {},
       stateRoot,
       isPidAlive: (pid) => pid === 12_345 && oldPidAlive,
       terminateDaemon: (pid) => {
@@ -401,7 +482,7 @@ describe("ensureDaemon", () => {
     await writeFile(prodPaths.portFile, "41133\n", "utf8");
 
     let terminated = false;
-    const result = await ensureDaemon({
+    const result = await ensureDaemon({ env: {},
       stateRoot,
       discoveryRoot: devDiscovery,
       isPidAlive: () => true,
@@ -525,7 +606,7 @@ describe("ensureDaemon", () => {
 
     let terminated = false;
     await assert.rejects(
-      ensureDaemon({
+      ensureDaemon({ env: {}, spawnDaemon: () => assert.fail("unexpected daemon spawn"),
         stateRoot,
         isPidAlive: () => true,
         terminateDaemon: () => {
@@ -550,7 +631,7 @@ describe("ensureDaemon", () => {
     await writeFile(paths.portFile, "41119\n", "utf8");
 
     await assert.rejects(
-      ensureDaemon({
+      ensureDaemon({ env: {}, spawnDaemon: () => assert.fail("unexpected daemon spawn"),
         stateRoot,
         probeDaemon: async (candidatePort) => {
           assert.equal(candidatePort, 41_119);
@@ -730,7 +811,7 @@ describe("spawn lock", () => {
     await writeFile(paths.spawnLock, `${liveToken}\n`, "utf8");
 
     await assert.rejects(
-      ensureDaemon({
+      ensureDaemon({ env: {},
         stateRoot,
         isPidAlive: () => true,
         probeDaemon: async () => daemonHello(),
