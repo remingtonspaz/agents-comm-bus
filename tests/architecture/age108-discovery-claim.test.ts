@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { constants } from "node:fs";
 import { after, test } from "node:test";
-import { access, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
@@ -105,6 +105,9 @@ test("AGE-108 (a): concurrent claims elect exactly one winner without torn disco
         pid: claimant.pid,
         port: claimant.port,
         startedAt: 1_700_000_000_000 + claimant.pid,
+        // Yield inside the publish step so the reader loop samples during it:
+        // a non-atomic publish (create then write) exposes an empty owner.json.
+        beforePublish: async () => { await new Promise(resolve => setTimeout(resolve, 30)); },
         isPidAlive: () => true,
         probeDaemon: async () => hello(stateRoot, winnerPid),
       }),
@@ -745,6 +748,15 @@ test("AGE-108 (o): guard token race elects exactly one holder", async () => {
   const acquired = new Promise<void>(resolve => {
     guardAcquired = resolve;
   });
+  const guardSamples: string[] = [];
+  let sampling = true;
+  const sampler = (async () => {
+    while (sampling) {
+      const raw = await readDiscoveryGuardRaw(discoveryRoot);
+      if (raw !== null) guardSamples.push(raw);
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+  })();
   const holder = withDiscoveryGuard(
     discoveryRoot,
     { pid: 67_001, startedAt: 1 },
@@ -755,9 +767,20 @@ test("AGE-108 (o): guard token race elects exactly one holder", async () => {
       });
       return "held";
     },
-    { maxWaitMs: 2_000, isPidAlive: () => true },
+    {
+      maxWaitMs: 2_000,
+      isPidAlive: () => true,
+      // Pause inside the token publish: a create-then-write publish would leave an
+      // empty owner.lock visible to the sampler during this window.
+      beforeGuardLink: async () => { await new Promise(resolve => setTimeout(resolve, 40)); },
+    },
   );
   await acquired;
+  sampling = false;
+  await sampler;
+  assert.ok(guardSamples.length >= 0);
+  assert.equal(guardSamples.filter(raw => raw.length === 0 || parseDiscoveryGuardToken(raw) === undefined).length, 0,
+    "owner.lock must never be observed empty or unparsable while being published");
   const waiter = await withDiscoveryGuard(
     discoveryRoot,
     { pid: 67_002, startedAt: 2 },
@@ -776,6 +799,8 @@ test("AGE-108 (p): unparsable owner.lock is never stolen and yields guard_conten
   const discoveryRoot = path.join(stateRoot, "discovery");
   await mkdir(discoveryRoot, { recursive: true });
   await writeFile(discoveryGuardFile(discoveryRoot), "");
+  const old = new Date(Date.now() - 10 * 60_000);
+  await utimes(discoveryGuardFile(discoveryRoot), old, old);
   const result = await withDiscoveryGuard(
     discoveryRoot,
     { pid: 68_001, startedAt: 1 },
