@@ -1,6 +1,6 @@
 {
   "name": "discord",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Discord messaging for Claude Code through the agents-comm-bus daemon",
   "author": {
     "name": "Satrio"
