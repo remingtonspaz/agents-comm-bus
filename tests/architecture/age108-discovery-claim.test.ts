@@ -7,7 +7,7 @@ import path from "node:path";
 import { WebSocketServer } from "ws";
 
 import { removeDiscoveryFilesIfOwned } from "../../core-daemon/bootstrap/daemon-retirement.js";
-import { ensureDaemon } from "../../core-daemon/bootstrap/ensure-daemon.js";
+import { ensureDaemon, cleanupStalePidAndPort } from "../../core-daemon/bootstrap/ensure-daemon.js";
 import {
   claimDiscovery,
   discoveryClaimIdentityMatches,
@@ -1190,4 +1190,235 @@ test("AGE-108 (w): post-termination cleanup leaves a successor claim intact", as
   assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8"), successorOwnerBytes);
   assert.equal(await readFile(path.join(discoveryRoot, "daemon.pid"), "utf8"), successorPidBytes);
   assert.equal(await readFile(path.join(discoveryRoot, "port"), "utf8"), successorPortBytes);
+});
+
+test("AGE-108 (x): nonce-only claim replacement cancels terminateDaemon", async () => {
+  const stateRoot = await tempRoot("age108-x-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 75_010;
+  const port = 41_040;
+  const original: DiscoveryClaim = {
+    pid: claimPid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_040,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    nonce: "original-nonce-x",
+  };
+  const originalBytes = `${JSON.stringify(original)}\n`;
+  await writeFile(discoveryOwnerFile(discoveryRoot), originalBytes);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${claimPid}\n`);
+  await writeFile(path.join(discoveryRoot, "port"), `${port}\n`);
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  const terminated: number[] = [];
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 1_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid,
+    probeDaemon: async () => {
+      const nonceChanged: DiscoveryClaim = { ...original, nonce: "replacement-nonce-x" };
+      await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(nonceChanged)}\n`);
+      return {
+        ...hello(stateRoot, claimPid),
+        protocolVersion: olderMajor,
+        metadata: { pid: claimPid, stateRoot },
+      };
+    },
+    terminateDaemon: pid => {
+      terminated.push(pid);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+  assert.deepEqual(terminated, []);
+  const rows = await audits(stateRoot);
+  assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
+  assert.equal(
+    rows.find(row => row.kind === "daemon_terminate_skipped_identity_unknown")?.detail.reason,
+    "claim_changed",
+  );
+});
+
+test("AGE-108 (y): nonce-only replacement during terminate leaves files intact", async () => {
+  const stateRoot = await tempRoot("age108-y-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 76_010;
+  const port = 41_041;
+  const original: DiscoveryClaim = {
+    pid: claimPid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_041,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    nonce: "original-nonce-y",
+  };
+  const ownerBytes = `${JSON.stringify(original)}\n`;
+  const pidBytes = `${claimPid}\n`;
+  const portBytes = `${port}\n`;
+  await writeFile(discoveryOwnerFile(discoveryRoot), ownerBytes);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), pidBytes);
+  await writeFile(path.join(discoveryRoot, "port"), portBytes);
+
+  const replaced: DiscoveryClaim = { ...original, nonce: "replacement-nonce-y" };
+  const replacedOwnerBytes = `${JSON.stringify(replaced)}\n`;
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  let claimMarkedDead = false;
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 2_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid && !claimMarkedDead,
+    probeDaemon: async () => ({
+      ...hello(stateRoot, claimPid),
+      protocolVersion: olderMajor,
+      metadata: { pid: claimPid, stateRoot },
+    }),
+    terminateDaemon: async () => {
+      claimMarkedDead = true;
+      await writeFile(discoveryOwnerFile(discoveryRoot), replacedOwnerBytes);
+      await writeFile(path.join(discoveryRoot, "daemon.pid"), pidBytes);
+      await writeFile(path.join(discoveryRoot, "port"), portBytes);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+
+  assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8"), replacedOwnerBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "daemon.pid"), "utf8"), pidBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "port"), "utf8"), portBytes);
+});
+
+test("AGE-108 (z1): legacy tuple change between probe and terminate cancels kill", async () => {
+  const stateRoot = await tempRoot("age108-z1-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 77_010;
+  const port = 41_042;
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${claimPid}\n`);
+  await writeFile(path.join(discoveryRoot, "port"), `${port}\n`);
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  const terminated: number[] = [];
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 1_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid,
+    probeDaemon: async () => {
+      await writeFile(path.join(discoveryRoot, "daemon.pid"), `${claimPid + 1}\n`);
+      return {
+        ...hello(stateRoot, claimPid),
+        protocolVersion: olderMajor,
+        metadata: { pid: claimPid, stateRoot },
+      };
+    },
+    terminateDaemon: pid => {
+      terminated.push(pid);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+  assert.deepEqual(terminated, []);
+  const rows = await audits(stateRoot);
+  assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
+  assert.equal(
+    rows.find(row => row.kind === "daemon_terminate_skipped_identity_unknown")?.detail.reason,
+    "legacy_changed",
+  );
+});
+
+test("AGE-108 (z2): successor owner.json during legacy terminate leaves derived files intact", async () => {
+  const stateRoot = await tempRoot("age108-z2-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 78_010;
+  const port = 41_043;
+  const pidBytes = `${claimPid}\n`;
+  const portBytes = `${port}\n`;
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), pidBytes);
+  await writeFile(path.join(discoveryRoot, "port"), portBytes);
+
+  const successor: DiscoveryClaim = {
+    pid: 78_011,
+    port: 41_044,
+    stateRoot,
+    startedAt: 1_700_000_000_043,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    nonce: "successor-z2",
+  };
+  const successorOwnerBytes = `${JSON.stringify(successor)}\n`;
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  let claimMarkedDead = false;
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 2_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid && !claimMarkedDead,
+    probeDaemon: async () => ({
+      ...hello(stateRoot, claimPid),
+      protocolVersion: olderMajor,
+      metadata: { pid: claimPid, stateRoot },
+    }),
+    terminateDaemon: async () => {
+      claimMarkedDead = true;
+      await writeFile(discoveryOwnerFile(discoveryRoot), successorOwnerBytes);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+
+  assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8"), successorOwnerBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "daemon.pid"), "utf8"), pidBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "port"), "utf8"), portBytes);
+});
+
+test("AGE-108 (z3): cleanupStalePidAndPort skips when owner.json is authoritative", async () => {
+  const stateRoot = await tempRoot("age108-z3-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const livePid = 79_010;
+  const deadPid = 79_011;
+  const port = 41_045;
+  const owner: DiscoveryClaim = {
+    pid: livePid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_045,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    nonce: "owner-z3",
+  };
+  const ownerBytes = `${JSON.stringify(owner)}\n`;
+  const pidBytes = `${deadPid}\n`;
+  const portBytes = `${port}\n`;
+  await writeFile(discoveryOwnerFile(discoveryRoot), ownerBytes);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), pidBytes);
+  await writeFile(path.join(discoveryRoot, "port"), portBytes);
+
+  await cleanupStalePidAndPort({
+    stateRoot,
+    discoveryRoot,
+    pidFile: path.join(discoveryRoot, "daemon.pid"),
+    portFile: path.join(discoveryRoot, "port"),
+    isPidAlive: pid => pid === livePid,
+  });
+
+  assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8"), ownerBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "daemon.pid"), "utf8"), pidBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "port"), "utf8"), portBytes);
+  const rows = await audits(stateRoot);
+  assert.equal(rows.filter(row => row.kind === "discovery_stale_cleanup").length, 0);
 });

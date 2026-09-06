@@ -7,15 +7,12 @@ import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_M
 import { resolveDiscoveryPaths, normalizeDaemonRootPath, resolveStatePaths, } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
 import { defaultSpawnLockStaleTimeoutMs, removeStaleSpawnLock, tryAcquireSpawnLock, } from "./spawn-lock.js";
-import { readDiscoveryClaim, discoveryOwnerFile, writeDaemonDiscoveryFiles, } from "./discovery-claim.js";
+import { readDiscoveryClaim, readDiscoveryClaimRaw, discoveryOwnerFile, writeDaemonDiscoveryFiles, } from "./discovery-claim.js";
 import { withDiscoveryGuard } from "./discovery-guard.js";
 import { currentProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 export { writeDaemonDiscoveryFiles };
 function claimToIncumbentIdentity(claim) {
     return { pid: claim.pid, port: claim.port, startedAt: claim.startedAt };
-}
-function incumbentIdentityMatches(a, b) {
-    return a.pid === b.pid && a.port === b.port && a.startedAt === b.startedAt;
 }
 export async function ensureDaemon(options = {}) {
     const env = options.env ?? process.env;
@@ -74,7 +71,8 @@ export async function ensureDaemon(options = {}) {
         }
     };
     const probeDiscovery = async () => {
-        const claim = await readDiscoveryClaim(discoveryPaths.root);
+        const claimRead = await readDiscoveryClaimRaw(discoveryPaths.root);
+        const claim = claimRead?.claim;
         const incumbent = claim
             ? claimToIncumbentIdentity(claim)
             : { pid: await readPidFile(discoveryPaths.pidFile) };
@@ -121,7 +119,13 @@ export async function ensureDaemon(options = {}) {
                     }
                     foreignRoot = undefined;
                 }
-                return { port: claim.port, hello, incumbent, decisionClaim: claim };
+                return {
+                    port: claim.port,
+                    hello,
+                    incumbent,
+                    decisionClaim: claim,
+                    decisionClaimRaw: claimRead?.raw,
+                };
             }
             catch (error) {
                 const pid = claim.pid;
@@ -208,6 +212,7 @@ export async function ensureDaemon(options = {}) {
             helloPid: existing.hello.metadata?.pid,
             incumbent: existing.incumbent,
             decisionClaim: existing.decisionClaim,
+            decisionClaimRaw: existing.decisionClaimRaw,
             terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
             isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
             retryMs,
@@ -233,6 +238,7 @@ export async function ensureDaemon(options = {}) {
     if (foreignRoot === undefined)
         await cleanupStalePidAndPort({
             stateRoot: paths.root,
+            discoveryRoot: discoveryPaths.root,
             pidFile: discoveryPaths.pidFile,
             portFile: discoveryPaths.portFile,
             isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
@@ -284,6 +290,7 @@ export async function ensureDaemon(options = {}) {
         if (foreignRoot === undefined)
             await cleanupStalePidAndPort({
                 stateRoot: paths.root,
+                discoveryRoot: discoveryPaths.root,
                 pidFile: discoveryPaths.pidFile,
                 portFile: discoveryPaths.portFile,
                 isPidAlive,
@@ -369,6 +376,7 @@ function compatibleDiscoveryResult(found, clientProtocolVersion) {
 async function terminateMismatchedDaemon(input) {
     const decisionIncumbent = input.incumbent;
     const decisionClaim = input.decisionClaim;
+    const decisionClaimRaw = input.decisionClaimRaw;
     let terminatePid = input.helloPid;
     if (terminatePid === undefined || !Number.isInteger(terminatePid) || terminatePid <= 0) {
         if (!decisionClaim) {
@@ -400,9 +408,9 @@ async function terminateMismatchedDaemon(input) {
         }
         return false;
     }
-    const reread = await readDiscoveryClaim(input.paths.root);
-    if (decisionClaim) {
-        if (!reread || !incumbentIdentityMatches(claimToIncumbentIdentity(reread), decisionIncumbent)) {
+    if (decisionClaim && decisionClaimRaw !== undefined) {
+        const reread = await readDiscoveryClaimRaw(input.paths.root);
+        if (!reread || reread.raw !== decisionClaimRaw) {
             if (!input.auditedTerminateSkipped()) {
                 input.markTerminateSkippedAudited();
                 await input.audit.append({
@@ -415,16 +423,19 @@ async function terminateMismatchedDaemon(input) {
         }
     }
     else {
-        const currentIncumbent = reread
-            ? claimToIncumbentIdentity(reread)
-            : decisionIncumbent;
-        if (!incumbentIdentityMatches(currentIncumbent, decisionIncumbent)) {
+        const ownerPresent = await readDiscoveryClaim(input.paths.root);
+        const legacyPid = await readPidFile(input.paths.pidFile);
+        const legacyPort = await readPortFile(input.paths.portFile);
+        const decisionPid = decisionIncumbent.pid ?? terminatePid;
+        if (ownerPresent !== undefined ||
+            legacyPid !== decisionPid ||
+            legacyPort !== input.livePort) {
             if (!input.auditedTerminateSkipped()) {
                 input.markTerminateSkippedAudited();
                 await input.audit.append({
                     timestamp: Date.now(),
                     kind: "daemon_terminate_skipped_identity_unknown",
-                    detail: { port: input.livePort, reason: "claim_changed" },
+                    detail: { port: input.livePort, reason: "legacy_changed" },
                 }).catch(() => { });
             }
             return false;
@@ -439,9 +450,9 @@ async function terminateMismatchedDaemon(input) {
             `${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
     }
     const guardedCleanup = await withDiscoveryGuard(input.paths.root, { pid: process.pid, startedAt: currentProcessStartEpochMs() }, async () => {
-        if (decisionClaim) {
-            const owner = await readDiscoveryClaim(input.paths.root);
-            if (!owner || !incumbentIdentityMatches(claimToIncumbentIdentity(owner), decisionIncumbent)) {
+        if (decisionClaim && decisionClaimRaw !== undefined) {
+            const reread = await readDiscoveryClaimRaw(input.paths.root);
+            if (!reread || reread.raw !== decisionClaimRaw) {
                 return;
             }
             await rm(discoveryOwnerFile(input.paths.root), { force: true });
@@ -449,11 +460,17 @@ async function terminateMismatchedDaemon(input) {
             await rm(input.paths.portFile, { force: true });
             return;
         }
-        const legacyPid = await readPidFile(input.paths.pidFile);
-        if (legacyPid === terminatePid) {
-            await rm(input.paths.pidFile, { force: true });
-            await rm(input.paths.portFile, { force: true });
+        const ownerPresent = await readDiscoveryClaim(input.paths.root);
+        if (ownerPresent !== undefined) {
+            return;
         }
+        const legacyPid = await readPidFile(input.paths.pidFile);
+        const legacyPort = await readPortFile(input.paths.portFile);
+        if (legacyPid !== terminatePid || legacyPort !== input.livePort) {
+            return;
+        }
+        await rm(input.paths.pidFile, { force: true });
+        await rm(input.paths.portFile, { force: true });
     }, { isPidAlive: input.isPidAlive });
     if (!guardedCleanup.ok) {
         // Best-effort: a successor may hold the guard; leave discovery files intact.
@@ -502,19 +519,32 @@ export function daemonSpawnStdio(stateRoot) {
     const logFd = openSync(daemonStderrLogPath(stateRoot), "a");
     return ["ignore", logFd, logFd];
 }
-async function cleanupStalePidAndPort(input) {
-    const pid = await readPidFile(input.pidFile);
-    if (pid !== undefined && !input.isPidAlive(pid)) {
-        await rm(input.pidFile, { force: true });
-        await rm(input.portFile, { force: true });
-        const audit = new JsonlAuditStore(input.stateRoot);
-        await audit
-            .append({
-            timestamp: Date.now(),
-            kind: "discovery_stale_cleanup",
-            detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile },
-        })
-            .catch(() => { });
+export async function cleanupStalePidAndPort(input) {
+    const owner = await readDiscoveryClaim(input.discoveryRoot);
+    if (owner !== undefined) {
+        return;
+    }
+    const guarded = await withDiscoveryGuard(input.discoveryRoot, { pid: process.pid, startedAt: currentProcessStartEpochMs() }, async () => {
+        const ownerInGuard = await readDiscoveryClaim(input.discoveryRoot);
+        if (ownerInGuard !== undefined) {
+            return;
+        }
+        const pid = await readPidFile(input.pidFile);
+        if (pid !== undefined && !input.isPidAlive(pid)) {
+            await rm(input.pidFile, { force: true });
+            await rm(input.portFile, { force: true });
+            const audit = new JsonlAuditStore(input.stateRoot);
+            await audit
+                .append({
+                timestamp: Date.now(),
+                kind: "discovery_stale_cleanup",
+                detail: { stale_pid: pid, pid_file: input.pidFile, port_file: input.portFile },
+            })
+                .catch(() => { });
+        }
+    }, { isPidAlive: input.isPidAlive });
+    if (!guarded.ok) {
+        // guard_contended: skip cleanup rather than racing a successor.
     }
 }
 async function readPortFile(portFile) {

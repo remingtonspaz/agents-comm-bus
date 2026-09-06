@@ -60,6 +60,10 @@ export interface WriteDaemonDiscoveryFilesInput {
 }
 export declare function discoveryOwnerFile(discoveryRoot: string): string;
 export declare function readDiscoveryClaim(discoveryRoot: string): Promise<DiscoveryClaim | undefined>;
+export declare function readDiscoveryClaimRaw(discoveryRoot: string): Promise<{
+    raw: string;
+    claim: DiscoveryClaim;
+} | undefined>;
 export declare function parseDiscoveryClaim(raw: string): DiscoveryClaim | undefined;
 export declare function discoveryClaimIdentityMatches(claim: DiscoveryClaim, selfPid: number, selfStartedAt: number | null): boolean;
 export declare function claimDiscovery(input: ClaimDiscoveryInput): Promise<ClaimDiscoveryResult>;

@@ -24,4 +24,11 @@ export declare function ensureDaemon(options?: EnsureDaemonOptions): Promise<Ens
 export declare function daemonStderrLogPath(stateRoot: string): string;
 /** Spawn stdio for a detached daemon child: stdout+stderr share an append log fd. */
 export declare function daemonSpawnStdio(stateRoot: string): ["ignore", number, number];
+export declare function cleanupStalePidAndPort(input: {
+    stateRoot: string;
+    discoveryRoot: string;
+    pidFile: string;
+    portFile: string;
+    isPidAlive: (pid: number) => boolean;
+}): Promise<void>;
 //# sourceMappingURL=ensure-daemon.d.ts.map

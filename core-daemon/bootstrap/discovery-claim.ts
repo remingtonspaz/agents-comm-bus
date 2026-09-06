@@ -79,10 +79,19 @@ export function discoveryOwnerFile(discoveryRoot: string): string {
 }
 
 export async function readDiscoveryClaim(discoveryRoot: string): Promise<DiscoveryClaim | undefined> {
+  const read = await readDiscoveryClaimRaw(discoveryRoot);
+  return read?.claim;
+}
+
+export async function readDiscoveryClaimRaw(
+  discoveryRoot: string,
+): Promise<{ raw: string; claim: DiscoveryClaim } | undefined> {
   try {
     const raw = await readFile(discoveryOwnerFile(discoveryRoot), "utf8");
     if (raw.length === 0) return undefined;
-    return parseDiscoveryClaim(raw);
+    const claim = parseDiscoveryClaim(raw);
+    if (!claim) return undefined;
+    return { raw, claim };
   } catch {
     return undefined;
   }
@@ -116,12 +125,14 @@ export function parseDiscoveryClaim(raw: string): DiscoveryClaim | undefined {
     if (startedAt === undefined && parsed.startedAt !== null && parsed.startedAt !== undefined) {
       return undefined;
     }
+    const nonce = typeof parsed.nonce === "string" ? parsed.nonce : undefined;
     return {
       pid: parsed.pid,
       port: parsed.port,
       stateRoot: parsed.stateRoot,
       startedAt: startedAt ?? null,
       protocolVersion: parsed.protocolVersion,
+      ...(nonce !== undefined ? { nonce } : {}),
     };
   } catch {
     return undefined;
@@ -153,6 +164,7 @@ export async function claimDiscovery(input: ClaimDiscoveryInput): Promise<ClaimD
     stateRoot: input.stateRoot,
     startedAt: selfStartedAt,
     protocolVersion: input.protocolVersion ?? IPC_PROTOCOL_VERSION,
+    nonce: randomUUID(),
   };
   const isPidAlive = input.isPidAlive ?? defaultIsPidAlive;
   const probe = input.probeDaemon ?? ((port: number) => defaultProbeDaemon({ port }));

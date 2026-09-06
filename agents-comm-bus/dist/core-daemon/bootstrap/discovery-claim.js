@@ -21,11 +21,18 @@ export function discoveryOwnerFile(discoveryRoot) {
     return path.join(discoveryRoot, OWNER_FILE);
 }
 export async function readDiscoveryClaim(discoveryRoot) {
+    const read = await readDiscoveryClaimRaw(discoveryRoot);
+    return read?.claim;
+}
+export async function readDiscoveryClaimRaw(discoveryRoot) {
     try {
         const raw = await readFile(discoveryOwnerFile(discoveryRoot), "utf8");
         if (raw.length === 0)
             return undefined;
-        return parseDiscoveryClaim(raw);
+        const claim = parseDiscoveryClaim(raw);
+        if (!claim)
+            return undefined;
+        return { raw, claim };
     }
     catch {
         return undefined;
@@ -57,12 +64,14 @@ export function parseDiscoveryClaim(raw) {
         if (startedAt === undefined && parsed.startedAt !== null && parsed.startedAt !== undefined) {
             return undefined;
         }
+        const nonce = typeof parsed.nonce === "string" ? parsed.nonce : undefined;
         return {
             pid: parsed.pid,
             port: parsed.port,
             stateRoot: parsed.stateRoot,
             startedAt: startedAt ?? null,
             protocolVersion: parsed.protocolVersion,
+            ...(nonce !== undefined ? { nonce } : {}),
         };
     }
     catch {
@@ -90,6 +99,7 @@ export async function claimDiscovery(input) {
         stateRoot: input.stateRoot,
         startedAt: selfStartedAt,
         protocolVersion: input.protocolVersion ?? IPC_PROTOCOL_VERSION,
+        nonce: randomUUID(),
     };
     const isPidAlive = input.isPidAlive ?? defaultIsPidAlive;
     const probe = input.probeDaemon ?? ((port) => defaultProbeDaemon({ port }));

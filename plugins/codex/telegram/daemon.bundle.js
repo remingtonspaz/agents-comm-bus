@@ -5645,10 +5645,16 @@ function discoveryOwnerFile(discoveryRoot2) {
   return path5.join(discoveryRoot2, OWNER_FILE);
 }
 async function readDiscoveryClaim(discoveryRoot2) {
+  const read = await readDiscoveryClaimRaw(discoveryRoot2);
+  return read?.claim;
+}
+async function readDiscoveryClaimRaw(discoveryRoot2) {
   try {
     const raw = await readFile3(discoveryOwnerFile(discoveryRoot2), "utf8");
     if (raw.length === 0) return void 0;
-    return parseDiscoveryClaim(raw);
+    const claim = parseDiscoveryClaim(raw);
+    if (!claim) return void 0;
+    return { raw, claim };
   } catch {
     return void 0;
   }
@@ -5664,12 +5670,14 @@ function parseDiscoveryClaim(raw) {
     if (startedAt === void 0 && parsed.startedAt !== null && parsed.startedAt !== void 0) {
       return void 0;
     }
+    const nonce = typeof parsed.nonce === "string" ? parsed.nonce : void 0;
     return {
       pid: parsed.pid,
       port: parsed.port,
       stateRoot: parsed.stateRoot,
       startedAt: startedAt ?? null,
-      protocolVersion: parsed.protocolVersion
+      protocolVersion: parsed.protocolVersion,
+      ...nonce !== void 0 ? { nonce } : {}
     };
   } catch {
     return void 0;
@@ -5693,7 +5701,8 @@ async function claimDiscovery(input) {
     port: input.port,
     stateRoot: input.stateRoot,
     startedAt: selfStartedAt,
-    protocolVersion: input.protocolVersion ?? IPC_PROTOCOL_VERSION
+    protocolVersion: input.protocolVersion ?? IPC_PROTOCOL_VERSION,
+    nonce: randomUUID2()
   };
   const isPidAlive2 = input.isPidAlive ?? defaultIsPidAlive4;
   const probe = input.probeDaemon ?? ((port) => probeDaemon({ port }));
