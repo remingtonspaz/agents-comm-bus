@@ -17,8 +17,12 @@ import {
 } from "../../core-daemon/bootstrap/discovery-claim.js";
 import {
   discoveryGuardFile,
+  discoveryReclaim2LockFile,
+  discoveryReclaimLockFile,
   parseDiscoveryGuardToken,
   readDiscoveryGuardRaw,
+  readDiscoveryReclaimRaw,
+  resetDiscoveryGuardTestState,
   withDiscoveryGuard,
 } from "../../core-daemon/bootstrap/discovery-guard.js";
 import { checkDaemonPidOwnership } from "../../core-daemon/bootstrap/pid-watchdog.js";
@@ -816,7 +820,7 @@ test("AGE-108 (q): dead-guard reclaim preserves a successor token published in b
   const stateRoot = await tempRoot("age108-q-");
   const discoveryRoot = path.join(stateRoot, "discovery");
   await mkdir(discoveryRoot, { recursive: true });
-  const deadToken = { pid: 69_001, startedAt: 1, at: Date.now() - 60_000 };
+  const deadToken = { pid: 69_001, startedAt: 1, at: Date.now() - 60_000, nonce: "dead-guard-q" };
   await writeFile(discoveryGuardFile(discoveryRoot), `${JSON.stringify(deadToken)}\n`);
 
   let releaseReclaim: (() => void) | undefined;
@@ -842,7 +846,7 @@ test("AGE-108 (q): dead-guard reclaim preserves a successor token published in b
   );
   assert.equal(reclaimA.ok, true);
 
-  const liveY = { pid: 69_004, startedAt: 4, at: Date.now() };
+  const liveY = { pid: 69_004, startedAt: 4, at: Date.now(), nonce: "live-guard-y" };
   await writeFile(discoveryGuardFile(discoveryRoot), `${JSON.stringify(liveY)}\n`);
   releaseReclaim?.();
   const reclaimBResult = await reclaimB;
@@ -908,4 +912,254 @@ test("AGE-108 (r): claim generation change cancels terminateDaemon", async () =>
   const rows = await audits(stateRoot);
   assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
   assert.equal(rows.find(row => row.kind === "daemon_terminate_skipped_identity_unknown")?.detail.reason, "claim_changed");
+});
+
+test("AGE-108 (s): dead reclaim recovery preserves a successor reclaim token published in between", async () => {
+  resetDiscoveryGuardTestState();
+  const stateRoot = await tempRoot("age108-s-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const deadGuard = { pid: 71_001, startedAt: 1, at: Date.now() - 60_000, nonce: "dead-guard-s" };
+  const deadReclaimX = { pid: 71_002, startedAt: 2, at: Date.now() - 60_000, nonce: "dead-reclaim-x" };
+  await writeFile(discoveryGuardFile(discoveryRoot), `${JSON.stringify(deadGuard)}\n`);
+  await writeFile(discoveryReclaimLockFile(discoveryRoot), `${JSON.stringify(deadReclaimX)}\n`);
+
+  let releaseReclaim2: (() => void) | undefined;
+  const beforeReclaim2 = async () => {
+    await new Promise<void>(resolve => {
+      releaseReclaim2 = resolve;
+    });
+  };
+  let releaseQuarantine: (() => void) | undefined;
+  const beforeQuarantine = async () => {
+    await new Promise<void>(resolve => {
+      releaseQuarantine = resolve;
+    });
+  };
+
+  const reclaimSamples: Array<string | null> = [];
+  let sampling = false;
+  let samplerDone: Promise<void> | undefined;
+  const startSampler = () => {
+    sampling = true;
+    samplerDone = (async () => {
+      while (sampling) {
+        reclaimSamples.push(await readDiscoveryReclaimRaw(discoveryRoot));
+        await new Promise(resolve => setTimeout(resolve, 2));
+      }
+    })();
+  };
+
+  const reclaimB = withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 71_003, startedAt: 3 },
+    async () => "b",
+    { maxWaitMs: 5_000, isPidAlive: pid => pid === 71_004, beforeReclaim2 },
+  );
+
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const reclaimA = withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 71_004, startedAt: 4 },
+    async () => "a",
+    { maxWaitMs: 5_000, isPidAlive: () => false, beforeQuarantine },
+  );
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const expectedY = await readDiscoveryReclaimRaw(discoveryRoot);
+  assert.ok(expectedY);
+  startSampler();
+  releaseReclaim2?.();
+  const reclaimBResult = await reclaimB;
+  assert.equal(reclaimBResult.ok, false);
+  if (!reclaimBResult.ok) assert.equal(reclaimBResult.reason, "guard_contended");
+  sampling = false;
+  await samplerDone;
+  assert.equal(
+    reclaimSamples.filter(raw => raw !== expectedY).length,
+    0,
+    "owner.lock.reclaim must equal the successor reclaim token at every sample",
+  );
+  releaseQuarantine?.();
+  const reclaimAResult = await reclaimA;
+  assert.equal(reclaimAResult.ok, true);
+
+  const reclaimY = parseDiscoveryGuardToken(expectedY);
+  assert.ok(reclaimY);
+  assert.equal(reclaimY.pid, 71_004);
+});
+
+test("AGE-108 (t): dead owner.lock.reclaim2 yields guard_contended without auto-reap", async () => {
+  resetDiscoveryGuardTestState();
+  const stateRoot = await tempRoot("age108-t-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const deadReclaim2 = { pid: 72_001, startedAt: 1, at: Date.now() - 60_000, nonce: "dead-reclaim2" };
+  const deadGuard = { pid: 72_002, startedAt: 2, at: Date.now() - 60_000, nonce: "dead-guard-t" };
+  const reclaim2Path = discoveryReclaim2LockFile(discoveryRoot);
+  await writeFile(reclaim2Path, `${JSON.stringify(deadReclaim2)}\n`);
+  await writeFile(discoveryGuardFile(discoveryRoot), `${JSON.stringify(deadGuard)}\n`);
+  const before = await readFile(reclaim2Path, "utf8");
+  const result = await withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 72_003, startedAt: 3 },
+    async () => "never",
+    { maxWaitMs: 100, isPidAlive: () => false },
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "guard_contended");
+  assert.equal(await readFile(reclaim2Path, "utf8"), before);
+});
+
+test("AGE-108 (u): same-pid overlapping guards exclude via nonce and exclusive temps", async () => {
+  const stateRoot = await tempRoot("age108-u-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const sharedPid = process.pid;
+  let nowValue = 1_700_000_000_100;
+  const now = () => nowValue;
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let holderBytes: string | null = null;
+
+  const runGuard = async (startedAt: number) =>
+    withDiscoveryGuard(
+      discoveryRoot,
+      { pid: sharedPid, startedAt },
+      async () => {
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        holderBytes = await readDiscoveryGuardRaw(discoveryRoot);
+        assert.ok(holderBytes && holderBytes.length > 0);
+        await new Promise(resolve => setTimeout(resolve, 40));
+        const during = await readDiscoveryGuardRaw(discoveryRoot);
+        assert.equal(during, holderBytes, "owner.lock bytes must stay complete and unchanged for the holder");
+        concurrent -= 1;
+        return startedAt;
+      },
+      { maxWaitMs: 500, now, isPidAlive: () => true },
+    );
+
+  const first = runGuard(1);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const second = runGuard(2);
+  const [r1, r2] = await Promise.all([first, second]);
+  assert.equal(maxConcurrent, 1, "guard callbacks must not overlap");
+  assert.equal([r1.ok, r2.ok].every(Boolean), true, "both guards should eventually succeed when serialized");
+  const files = await readdir(discoveryRoot);
+  assert.equal(files.some(name => name.includes(".tmp.")), false, "no temp files must remain");
+});
+
+test("AGE-108 (v): claim disappearance between probe and terminate cancels termination", async () => {
+  const stateRoot = await tempRoot("age108-v-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 73_010;
+  const port = 41_030;
+  const original: DiscoveryClaim = {
+    pid: claimPid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_030,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(original)}\n`);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${claimPid}\n`);
+  await writeFile(path.join(discoveryRoot, "port"), `${port}\n`);
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  const terminated: number[] = [];
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 1_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid,
+    probeDaemon: async () => {
+      await rm(discoveryOwnerFile(discoveryRoot), { force: true });
+      return {
+        ...hello(stateRoot, claimPid),
+        protocolVersion: olderMajor,
+        metadata: { pid: claimPid, stateRoot },
+      };
+    },
+    terminateDaemon: pid => {
+      terminated.push(pid);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+  assert.deepEqual(terminated, []);
+  const rows = await audits(stateRoot);
+  assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
+  assert.equal(
+    rows.find(row => row.kind === "daemon_terminate_skipped_identity_unknown")?.detail.reason,
+    "claim_changed",
+  );
+});
+
+test("AGE-108 (w): post-termination cleanup leaves a successor claim intact", async () => {
+  const stateRoot = await tempRoot("age108-w-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 74_010;
+  const successorPid = 74_011;
+  const port = 41_031;
+  const successorPort = 41_032;
+  const original: DiscoveryClaim = {
+    pid: claimPid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_031,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  const successor: DiscoveryClaim = {
+    pid: successorPid,
+    port: successorPort,
+    stateRoot,
+    startedAt: 1_700_000_000_032,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    nonce: "successor-w",
+  };
+  const ownerBytes = `${JSON.stringify(original)}\n`;
+  const pidBytes = `${claimPid}\n`;
+  const portBytes = `${port}\n`;
+  await writeFile(discoveryOwnerFile(discoveryRoot), ownerBytes);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), pidBytes);
+  await writeFile(path.join(discoveryRoot, "port"), portBytes);
+
+  const successorOwnerBytes = `${JSON.stringify(successor)}\n`;
+  const successorPidBytes = `${successorPid}\n`;
+  const successorPortBytes = `${successorPort}\n`;
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  let claimMarkedDead = false;
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 2_000,
+    retryMs: 20,
+    isPidAlive: pid => {
+      if (pid === claimPid) return !claimMarkedDead;
+      return pid === successorPid;
+    },
+    probeDaemon: async () => ({
+      ...hello(stateRoot, claimPid),
+      protocolVersion: olderMajor,
+      metadata: { pid: claimPid, stateRoot },
+    }),
+    terminateDaemon: async () => {
+      claimMarkedDead = true;
+      await writeFile(discoveryOwnerFile(discoveryRoot), successorOwnerBytes);
+      await writeFile(path.join(discoveryRoot, "daemon.pid"), successorPidBytes);
+      await writeFile(path.join(discoveryRoot, "port"), successorPortBytes);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+
+  assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8"), successorOwnerBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "daemon.pid"), "utf8"), successorPidBytes);
+  assert.equal(await readFile(path.join(discoveryRoot, "port"), "utf8"), successorPortBytes);
 });

@@ -7,7 +7,9 @@ import { DAEMON_VERSION, DEFAULT_BOOTSTRAP_RETRY_MS, DEFAULT_BOOTSTRAP_TIMEOUT_M
 import { resolveDiscoveryPaths, normalizeDaemonRootPath, resolveStatePaths, } from "../paths.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
 import { defaultSpawnLockStaleTimeoutMs, removeStaleSpawnLock, tryAcquireSpawnLock, } from "./spawn-lock.js";
-import { readDiscoveryClaim, writeDaemonDiscoveryFiles, } from "./discovery-claim.js";
+import { readDiscoveryClaim, discoveryOwnerFile, writeDaemonDiscoveryFiles, } from "./discovery-claim.js";
+import { withDiscoveryGuard } from "./discovery-guard.js";
+import { currentProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 export { writeDaemonDiscoveryFiles };
 function claimToIncumbentIdentity(claim) {
     return { pid: claim.pid, port: claim.port, startedAt: claim.startedAt };
@@ -119,7 +121,7 @@ export async function ensureDaemon(options = {}) {
                     }
                     foreignRoot = undefined;
                 }
-                return { port: claim.port, hello, incumbent };
+                return { port: claim.port, hello, incumbent, decisionClaim: claim };
             }
             catch (error) {
                 const pid = claim.pid;
@@ -205,6 +207,7 @@ export async function ensureDaemon(options = {}) {
             clientProtocol: clientProtocolVersion,
             helloPid: existing.hello.metadata?.pid,
             incumbent: existing.incumbent,
+            decisionClaim: existing.decisionClaim,
             terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
             isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
             retryMs,
@@ -365,10 +368,10 @@ function compatibleDiscoveryResult(found, clientProtocolVersion) {
 }
 async function terminateMismatchedDaemon(input) {
     const decisionIncumbent = input.incumbent;
-    const claim = await readDiscoveryClaim(input.paths.root);
+    const decisionClaim = input.decisionClaim;
     let terminatePid = input.helloPid;
     if (terminatePid === undefined || !Number.isInteger(terminatePid) || terminatePid <= 0) {
-        if (!claim) {
+        if (!decisionClaim) {
             const legacyPid = await readPidFile(input.paths.pidFile);
             if (legacyPid !== undefined) {
                 terminatePid = legacyPid;
@@ -386,31 +389,46 @@ async function terminateMismatchedDaemon(input) {
         }
         return false;
     }
-    if (claim && terminatePid !== claim.pid) {
+    if (decisionClaim && terminatePid !== decisionClaim.pid) {
         if (!input.auditedTerminateSkipped()) {
             input.markTerminateSkippedAudited();
             await input.audit.append({
                 timestamp: Date.now(),
                 kind: "daemon_terminate_skipped_identity_unknown",
-                detail: { port: input.livePort, claim_pid: claim.pid, hello_pid: terminatePid },
+                detail: { port: input.livePort, claim_pid: decisionClaim.pid, hello_pid: terminatePid },
             }).catch(() => { });
         }
         return false;
     }
     const reread = await readDiscoveryClaim(input.paths.root);
-    const currentIncumbent = reread
-        ? claimToIncumbentIdentity(reread)
-        : decisionIncumbent;
-    if (!incumbentIdentityMatches(currentIncumbent, decisionIncumbent)) {
-        if (!input.auditedTerminateSkipped()) {
-            input.markTerminateSkippedAudited();
-            await input.audit.append({
-                timestamp: Date.now(),
-                kind: "daemon_terminate_skipped_identity_unknown",
-                detail: { port: input.livePort, reason: "claim_changed" },
-            }).catch(() => { });
+    if (decisionClaim) {
+        if (!reread || !incumbentIdentityMatches(claimToIncumbentIdentity(reread), decisionIncumbent)) {
+            if (!input.auditedTerminateSkipped()) {
+                input.markTerminateSkippedAudited();
+                await input.audit.append({
+                    timestamp: Date.now(),
+                    kind: "daemon_terminate_skipped_identity_unknown",
+                    detail: { port: input.livePort, reason: "claim_changed" },
+                }).catch(() => { });
+            }
+            return false;
         }
-        return false;
+    }
+    else {
+        const currentIncumbent = reread
+            ? claimToIncumbentIdentity(reread)
+            : decisionIncumbent;
+        if (!incumbentIdentityMatches(currentIncumbent, decisionIncumbent)) {
+            if (!input.auditedTerminateSkipped()) {
+                input.markTerminateSkippedAudited();
+                await input.audit.append({
+                    timestamp: Date.now(),
+                    kind: "daemon_terminate_skipped_identity_unknown",
+                    detail: { port: input.livePort, reason: "claim_changed" },
+                }).catch(() => { });
+            }
+            return false;
+        }
     }
     await input.terminateDaemon(terminatePid);
     for (let attempt = 0; attempt < 20 && input.isPidAlive(terminatePid); attempt += 1) {
@@ -420,8 +438,26 @@ async function terminateMismatchedDaemon(input) {
         throw new Error(`agents-comm-bus daemon pid ${terminatePid} speaks incompatible IPC protocol ` +
             `${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
     }
-    await rm(input.paths.pidFile, { force: true });
-    await rm(input.paths.portFile, { force: true });
+    const guardedCleanup = await withDiscoveryGuard(input.paths.root, { pid: process.pid, startedAt: currentProcessStartEpochMs() }, async () => {
+        if (decisionClaim) {
+            const owner = await readDiscoveryClaim(input.paths.root);
+            if (!owner || !incumbentIdentityMatches(claimToIncumbentIdentity(owner), decisionIncumbent)) {
+                return;
+            }
+            await rm(discoveryOwnerFile(input.paths.root), { force: true });
+            await rm(input.paths.pidFile, { force: true });
+            await rm(input.paths.portFile, { force: true });
+            return;
+        }
+        const legacyPid = await readPidFile(input.paths.pidFile);
+        if (legacyPid === terminatePid) {
+            await rm(input.paths.pidFile, { force: true });
+            await rm(input.paths.portFile, { force: true });
+        }
+    }, { isPidAlive: input.isPidAlive });
+    if (!guardedCleanup.ok) {
+        // Best-effort: a successor may hold the guard; leave discovery files intact.
+    }
     return true;
 }
 async function probeFromPortFile(portFile, probe, options) {

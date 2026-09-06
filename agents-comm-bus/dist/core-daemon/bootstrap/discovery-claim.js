@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile, link } from "node:fs/promises";
 import path from "node:path";
 import { IPC_PROTOCOL_VERSION } from "../config.js";
@@ -104,6 +105,9 @@ export async function claimDiscovery(input) {
         maxWaitMs: input.guardTimeoutMs,
         isPidAlive,
         beforeReclaim: input.beforeReclaim,
+        beforeReclaim2: input.beforeReclaim2,
+        beforeQuarantine: input.beforeQuarantine,
+        now: input.now,
     });
     if (!guarded.ok) {
         return { ok: false, reason: "guard_contended" };
@@ -293,30 +297,43 @@ async function readLegacyIncumbent(paths) {
     };
 }
 async function writeOwnerClaimAtomic(ownerFile, claim, options) {
-    const payload = `${JSON.stringify(claim)}\n`;
-    const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
-    await writeFile(tempFile, payload, "utf8");
-    await options.beforePublish?.();
-    if (options.replace) {
-        await rename(tempFile, ownerFile);
-        return;
-    }
+    const nonce = claim.nonce ?? randomUUID();
+    const claimWithNonce = { ...claim, nonce };
+    const payload = `${JSON.stringify(claimWithNonce)}\n`;
+    const clock = options.now ?? Date.now;
+    const tempFile = `${ownerFile}.tmp.${claim.pid}.${clock()}.${nonce}`;
     try {
-        await link(tempFile, ownerFile);
-        await rm(tempFile, { force: true });
-    }
-    catch (error) {
-        await rm(tempFile, { force: true });
-        if (!isAlreadyExistsError(error))
+        await writeFile(tempFile, payload, { encoding: "utf8", flag: "wx" });
+        await options.beforePublish?.();
+        if (options.replace) {
+            await rename(tempFile, ownerFile);
+            return;
+        }
+        try {
+            await link(tempFile, ownerFile);
+        }
+        catch (error) {
+            if (!isAlreadyExistsError(error))
+                throw error;
             throw error;
-        throw error;
+        }
+    }
+    finally {
+        await rm(tempFile, { force: true });
     }
 }
-async function writeDerivedDiscoveryFiles(paths, claim) {
+async function writeDerivedDiscoveryFiles(paths, claim, now) {
     await writeFile(paths.pidFile, `${claim.pid}\n`, "utf8");
-    const portTemp = `${paths.portFile}.tmp.${claim.pid}.${Date.now()}`;
-    await writeFile(portTemp, `${claim.port}\n`, "utf8");
-    await rename(portTemp, paths.portFile);
+    const clock = now ?? Date.now;
+    const nonce = randomUUID();
+    const portTemp = `${paths.portFile}.tmp.${claim.pid}.${clock()}.${nonce}`;
+    try {
+        await writeFile(portTemp, `${claim.port}\n`, { encoding: "utf8", flag: "wx" });
+        await rename(portTemp, paths.portFile);
+    }
+    finally {
+        await rm(portTemp, { force: true });
+    }
 }
 async function auditStaleCleanup(stateRoot, stale, paths, reason) {
     const audit = new JsonlAuditStore(stateRoot);

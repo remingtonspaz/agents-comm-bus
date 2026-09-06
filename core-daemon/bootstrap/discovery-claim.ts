@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile, link } from "node:fs/promises";
 import path from "node:path";
 
@@ -15,6 +16,7 @@ export interface DiscoveryClaim {
   stateRoot: string;
   startedAt: number | null;
   protocolVersion: string;
+  nonce?: string;
 }
 
 export type ClaimDiscoveryResult =
@@ -52,6 +54,12 @@ export interface ClaimDiscoveryInput {
   guardTimeoutMs?: number;
   /** Test hook: invoked after a dead guard is verified and before reclaim-lock acquisition. */
   beforeReclaim?: () => Promise<void>;
+  /** Test hook: invoked after validating a dead reclaim token and before reclaim2 acquisition. */
+  beforeReclaim2?: () => Promise<void>;
+  /** Test hook: invoked after the reclaim lock is held and before quarantining the main guard. */
+  beforeQuarantine?: () => Promise<void>;
+  /** Injectable clock for guard temp-file names (tests). */
+  now?: () => number;
 }
 
 export interface WriteDaemonDiscoveryFilesInput {
@@ -166,6 +174,9 @@ export async function claimDiscovery(input: ClaimDiscoveryInput): Promise<ClaimD
       maxWaitMs: input.guardTimeoutMs,
       isPidAlive,
       beforeReclaim: input.beforeReclaim,
+      beforeReclaim2: input.beforeReclaim2,
+      beforeQuarantine: input.beforeQuarantine,
+      now: input.now,
     },
   );
   if (!guarded.ok) {
@@ -393,37 +404,46 @@ async function readLegacyIncumbent(
 async function writeOwnerClaimAtomic(
   ownerFile: string,
   claim: DiscoveryClaim,
-  options: { replace: boolean; beforePublish?: () => Promise<void> },
+  options: { replace: boolean; beforePublish?: () => Promise<void>; now?: () => number },
 ): Promise<void> {
-  const payload = `${JSON.stringify(claim)}\n`;
-  const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
-  await writeFile(tempFile, payload, "utf8");
-
-  await options.beforePublish?.();
-
-  if (options.replace) {
-    await rename(tempFile, ownerFile);
-    return;
-  }
-
+  const nonce = claim.nonce ?? randomUUID();
+  const claimWithNonce: DiscoveryClaim = { ...claim, nonce };
+  const payload = `${JSON.stringify(claimWithNonce)}\n`;
+  const clock = options.now ?? Date.now;
+  const tempFile = `${ownerFile}.tmp.${claim.pid}.${clock()}.${nonce}`;
   try {
-    await link(tempFile, ownerFile);
+    await writeFile(tempFile, payload, { encoding: "utf8", flag: "wx" });
+    await options.beforePublish?.();
+    if (options.replace) {
+      await rename(tempFile, ownerFile);
+      return;
+    }
+    try {
+      await link(tempFile, ownerFile);
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      throw error;
+    }
+  } finally {
     await rm(tempFile, { force: true });
-  } catch (error) {
-    await rm(tempFile, { force: true });
-    if (!isAlreadyExistsError(error)) throw error;
-    throw error;
   }
 }
 
 async function writeDerivedDiscoveryFiles(
   paths: ReturnType<typeof resolveDiscoveryPaths>,
   claim: DiscoveryClaim,
+  now?: () => number,
 ): Promise<void> {
   await writeFile(paths.pidFile, `${claim.pid}\n`, "utf8");
-  const portTemp = `${paths.portFile}.tmp.${claim.pid}.${Date.now()}`;
-  await writeFile(portTemp, `${claim.port}\n`, "utf8");
-  await rename(portTemp, paths.portFile);
+  const clock = now ?? Date.now;
+  const nonce = randomUUID();
+  const portTemp = `${paths.portFile}.tmp.${claim.pid}.${clock()}.${nonce}`;
+  try {
+    await writeFile(portTemp, `${claim.port}\n`, { encoding: "utf8", flag: "wx" });
+    await rename(portTemp, paths.portFile);
+  } finally {
+    await rm(portTemp, { force: true });
+  }
 }
 
 async function auditStaleCleanup(

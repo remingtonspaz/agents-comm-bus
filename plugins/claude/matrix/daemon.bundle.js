@@ -5379,21 +5379,28 @@ async function probeDaemon(options) {
 }
 
 // ../core-daemon/bootstrap/discovery-claim.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdir as mkdir4, readFile as readFile3, rename as rename2, rm as rm3, writeFile as writeFile2, link as link2 } from "node:fs/promises";
 import path5 from "node:path";
 
 // ../core-daemon/bootstrap/discovery-guard.ts
+import { randomUUID } from "node:crypto";
 import { mkdir as mkdir3, readFile as readFile2, rename, rm as rm2, stat as stat2, writeFile, link } from "node:fs/promises";
 import path4 from "node:path";
 var GUARD_FILE = "owner.lock";
 var RECLAIM_FILE = "owner.lock.reclaim";
+var RECLAIM2_FILE = "owner.lock.reclaim2";
 var RETRY_MS = 20;
 var DEFAULT_MAX_WAIT_MS = 2e3;
+var loggedDeadReclaim2Paths = /* @__PURE__ */ new Set();
 function discoveryGuardFile(discoveryRoot2) {
   return path4.join(discoveryRoot2, GUARD_FILE);
 }
 function discoveryReclaimLockFile(discoveryRoot2) {
   return path4.join(discoveryRoot2, RECLAIM_FILE);
+}
+function discoveryReclaim2LockFile(discoveryRoot2) {
+  return path4.join(discoveryRoot2, RECLAIM2_FILE);
 }
 function parseDiscoveryGuardToken(raw) {
   const trimmed = raw.trim();
@@ -5407,13 +5414,14 @@ function parseDiscoveryGuardToken(raw) {
     if (startedAt === void 0 && parsed.startedAt !== null && parsed.startedAt !== void 0) {
       return void 0;
     }
-    return { pid: parsed.pid, startedAt: startedAt ?? null, at: parsed.at };
+    const nonce = typeof parsed.nonce === "string" ? parsed.nonce : "";
+    return { pid: parsed.pid, startedAt: startedAt ?? null, at: parsed.at, nonce };
   } catch {
     return void 0;
   }
 }
 function guardTokensEqual(a, b) {
-  return a.pid === b.pid && a.startedAt === b.startedAt && a.at === b.at;
+  return a.pid === b.pid && a.startedAt === b.startedAt && a.at === b.at && a.nonce === b.nonce;
 }
 async function withDiscoveryGuard(discoveryRoot2, self, fn, options = {}) {
   await mkdir3(discoveryRoot2, { recursive: true });
@@ -5439,9 +5447,17 @@ async function withDiscoveryGuard(discoveryRoot2, self, fn, options = {}) {
   return { ok: false, reason: "guard_contended" };
 }
 async function tryAcquireGuard(discoveryRoot2, self, isPidAlive2, options) {
+  const reclaim2Raw = await readGuardRaw(discoveryReclaim2LockFile(discoveryRoot2));
+  if (reclaim2Raw !== null) {
+    const reclaim2 = parseDiscoveryGuardToken(reclaim2Raw);
+    if (reclaim2 && !isPidAlive2(reclaim2.pid)) {
+      logDeadReclaim2Once(discoveryReclaim2LockFile(discoveryRoot2));
+    }
+    return { kind: "failed" };
+  }
   const guardPath = discoveryGuardFile(discoveryRoot2);
-  const token = buildGuardToken(self);
-  const published = await publishFileViaLink(guardPath, token, self.pid, options.beforeGuardLink);
+  const token = buildGuardToken(self, options.now);
+  const published = await publishFileViaLink(guardPath, token, self.pid, options);
   if (published === "ok") {
     return { kind: "acquired", token };
   }
@@ -5464,18 +5480,19 @@ async function tryAcquireGuard(discoveryRoot2, self, isPidAlive2, options) {
   return reclaimed ? { kind: "contended" } : { kind: "failed" };
 }
 async function reclaimDeadGuard(discoveryRoot2, self, deadToken, isPidAlive2, options) {
-  const reclaimHeld = await tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2);
+  const reclaimHeld = await tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2, options);
   if (!reclaimHeld) return false;
   try {
+    await options.beforeQuarantine?.();
     return await quarantineVerifiedGuard(discoveryRoot2, self, deadToken, options);
   } finally {
     await releaseGuardIfTokenMatches(discoveryReclaimLockFile(discoveryRoot2), reclaimHeld);
   }
 }
-async function tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2) {
+async function tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2, options) {
   const reclaimPath = discoveryReclaimLockFile(discoveryRoot2);
-  const reclaimToken = buildGuardToken({ pid: self.pid, startedAt: self.startedAt });
-  if (await publishFileViaLink(reclaimPath, reclaimToken, self.pid) === "ok") {
+  const reclaimToken = buildGuardToken({ pid: self.pid, startedAt: self.startedAt }, options.now);
+  if (await publishFileViaLink(reclaimPath, reclaimToken, self.pid, options) === "ok") {
     return reclaimToken;
   }
   const raw = await readGuardRaw(reclaimPath);
@@ -5483,28 +5500,69 @@ async function tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2) {
   const existing = parseDiscoveryGuardToken(raw);
   if (!existing) return void 0;
   if (isPidAlive2(existing.pid)) return void 0;
-  if (!await quarantineVerifiedGuardFile(reclaimPath, self, existing)) {
-    console.error(
-      "agents-comm-bus: dead discovery reclaim lock could not be recovered; manual cleanup required"
-    );
-    return void 0;
-  }
-  if (await publishFileViaLink(reclaimPath, reclaimToken, self.pid) === "ok") {
-    return reclaimToken;
+  await options.beforeReclaim2?.();
+  const recovered = await recoverDeadReclaimLockUnderReclaim2(
+    discoveryRoot2,
+    self,
+    existing,
+    isPidAlive2,
+    options
+  );
+  if (!recovered) return void 0;
+  const retryToken = buildGuardToken({ pid: self.pid, startedAt: self.startedAt }, options.now);
+  if (await publishFileViaLink(reclaimPath, retryToken, self.pid, options) === "ok") {
+    return retryToken;
   }
   return void 0;
 }
-async function quarantineVerifiedGuard(discoveryRoot2, self, expectedDeadToken, _options) {
-  return quarantineVerifiedGuardFile(discoveryGuardFile(discoveryRoot2), self, expectedDeadToken);
+async function recoverDeadReclaimLockUnderReclaim2(discoveryRoot2, self, expectedDeadToken, isPidAlive2, options) {
+  const reclaim2Path = discoveryReclaim2LockFile(discoveryRoot2);
+  const reclaim2Raw = await readGuardRaw(reclaim2Path);
+  if (reclaim2Raw !== null) {
+    const reclaim2 = parseDiscoveryGuardToken(reclaim2Raw);
+    if (reclaim2 && !isPidAlive2(reclaim2.pid)) {
+      logDeadReclaim2Once(reclaim2Path);
+    }
+    return false;
+  }
+  const reclaim2Token = buildGuardToken({ pid: self.pid, startedAt: self.startedAt }, options.now);
+  if (await publishFileViaLink(reclaim2Path, reclaim2Token, self.pid, options) !== "ok") {
+    return false;
+  }
+  const reclaimPath = discoveryReclaimLockFile(discoveryRoot2);
+  try {
+    const reread = await readGuardRaw(reclaimPath);
+    const current = reread ? parseDiscoveryGuardToken(reread) : void 0;
+    if (!current || !guardTokensEqual(current, expectedDeadToken)) {
+      return false;
+    }
+    return await quarantineVerifiedGuardFile(reclaimPath, self, expectedDeadToken, options.now);
+  } finally {
+    await releaseGuardIfTokenMatches(reclaim2Path, reclaim2Token);
+  }
 }
-async function quarantineVerifiedGuardFile(guardPath, self, expectedDeadToken) {
+function logDeadReclaim2Once(reclaim2Path) {
+  if (loggedDeadReclaim2Paths.has(reclaim2Path)) return;
+  loggedDeadReclaim2Paths.add(reclaim2Path);
+  console.error(`dead discovery reclaim2 token at ${reclaim2Path}; manual cleanup required`);
+}
+async function quarantineVerifiedGuard(discoveryRoot2, self, expectedDeadToken, options) {
+  return quarantineVerifiedGuardFile(
+    discoveryGuardFile(discoveryRoot2),
+    self,
+    expectedDeadToken,
+    options.now
+  );
+}
+async function quarantineVerifiedGuardFile(guardPath, self, expectedDeadToken, now) {
   const raw = await readGuardRaw(guardPath);
   if (!raw) return false;
   const current = parseDiscoveryGuardToken(raw);
   if (!current || !guardTokensEqual(current, expectedDeadToken)) {
     return false;
   }
-  const stalePath = `${guardPath}.stale.${self.pid}.${Date.now()}`;
+  const clock = now ?? Date.now;
+  const stalePath = `${guardPath}.stale.${self.pid}.${clock()}`;
   try {
     await rename(guardPath, stalePath);
   } catch {
@@ -5513,25 +5571,30 @@ async function quarantineVerifiedGuardFile(guardPath, self, expectedDeadToken) {
   await rm2(stalePath, { force: true });
   return true;
 }
-async function publishFileViaLink(targetPath, content, selfPid, beforeLink) {
-  const tempPath = `${targetPath}.tmp.${selfPid}.${Date.now()}`;
-  await writeFile(tempPath, content, "utf8");
-  await beforeLink?.();
+async function publishFileViaLink(targetPath, content, selfPid, options = {}) {
+  const clock = options.now ?? Date.now;
+  const tempPath = `${targetPath}.tmp.${selfPid}.${clock()}.${randomUUID()}`;
   try {
-    await link(tempPath, targetPath);
+    await writeFile(tempPath, content, { encoding: "utf8", flag: "wx" });
+    await options.beforeGuardLink?.();
+    try {
+      await link(tempPath, targetPath);
+      return "ok";
+    } catch (error) {
+      if (isAlreadyExistsError2(error)) return "eexist";
+      throw error;
+    }
+  } finally {
     await rm2(tempPath, { force: true });
-    return "ok";
-  } catch (error) {
-    await rm2(tempPath, { force: true });
-    if (isAlreadyExistsError2(error)) return "eexist";
-    throw error;
   }
 }
-function buildGuardToken(self) {
+function buildGuardToken(self, now) {
+  const clock = now ?? Date.now;
   const token = {
     pid: self.pid,
     startedAt: self.startedAt,
-    at: Date.now()
+    at: clock(),
+    nonce: randomUUID()
   };
   return `${JSON.stringify(token)}
 `;
@@ -5649,7 +5712,10 @@ async function claimDiscovery(input) {
     {
       maxWaitMs: input.guardTimeoutMs,
       isPidAlive: isPidAlive2,
-      beforeReclaim: input.beforeReclaim
+      beforeReclaim: input.beforeReclaim,
+      beforeReclaim2: input.beforeReclaim2,
+      beforeQuarantine: input.beforeQuarantine,
+      now: input.now
     }
   );
   if (!guarded.ok) {
@@ -5827,31 +5893,42 @@ async function readLegacyIncumbent(paths) {
   };
 }
 async function writeOwnerClaimAtomic(ownerFile, claim, options) {
-  const payload = `${JSON.stringify(claim)}
+  const nonce = claim.nonce ?? randomUUID2();
+  const claimWithNonce = { ...claim, nonce };
+  const payload = `${JSON.stringify(claimWithNonce)}
 `;
-  const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
-  await writeFile2(tempFile, payload, "utf8");
-  await options.beforePublish?.();
-  if (options.replace) {
-    await rename2(tempFile, ownerFile);
-    return;
-  }
+  const clock = options.now ?? Date.now;
+  const tempFile = `${ownerFile}.tmp.${claim.pid}.${clock()}.${nonce}`;
   try {
-    await link2(tempFile, ownerFile);
+    await writeFile2(tempFile, payload, { encoding: "utf8", flag: "wx" });
+    await options.beforePublish?.();
+    if (options.replace) {
+      await rename2(tempFile, ownerFile);
+      return;
+    }
+    try {
+      await link2(tempFile, ownerFile);
+    } catch (error) {
+      if (!isAlreadyExistsError3(error)) throw error;
+      throw error;
+    }
+  } finally {
     await rm3(tempFile, { force: true });
-  } catch (error) {
-    await rm3(tempFile, { force: true });
-    if (!isAlreadyExistsError3(error)) throw error;
-    throw error;
   }
 }
-async function writeDerivedDiscoveryFiles(paths, claim) {
+async function writeDerivedDiscoveryFiles(paths, claim, now) {
   await writeFile2(paths.pidFile, `${claim.pid}
 `, "utf8");
-  const portTemp = `${paths.portFile}.tmp.${claim.pid}.${Date.now()}`;
-  await writeFile2(portTemp, `${claim.port}
-`, "utf8");
-  await rename2(portTemp, paths.portFile);
+  const clock = now ?? Date.now;
+  const nonce = randomUUID2();
+  const portTemp = `${paths.portFile}.tmp.${claim.pid}.${clock()}.${nonce}`;
+  try {
+    await writeFile2(portTemp, `${claim.port}
+`, { encoding: "utf8", flag: "wx" });
+    await rename2(portTemp, paths.portFile);
+  } finally {
+    await rm3(portTemp, { force: true });
+  }
 }
 async function auditStaleCleanup(stateRoot2, stale, paths, reason) {
   const audit = new JsonlAuditStore(stateRoot2);

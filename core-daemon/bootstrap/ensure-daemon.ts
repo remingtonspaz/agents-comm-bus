@@ -31,10 +31,13 @@ import {
 } from "./spawn-lock.js";
 import {
   readDiscoveryClaim,
+  discoveryOwnerFile,
   writeDaemonDiscoveryFiles,
   type DiscoveryClaim,
   type WriteDaemonDiscoveryFilesInput,
 } from "./discovery-claim.js";
+import { withDiscoveryGuard } from "./discovery-guard.js";
+import { currentProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 
 export { writeDaemonDiscoveryFiles, type WriteDaemonDiscoveryFilesInput };
 
@@ -129,7 +132,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
     }
   };
   const probeDiscovery = async (): Promise<
-    { port: number; hello: DaemonHello; incumbent: IncumbentIdentity } | undefined
+    { port: number; hello: DaemonHello; incumbent: IncumbentIdentity; decisionClaim?: DiscoveryClaim } | undefined
   > => {
     const claim = await readDiscoveryClaim(discoveryPaths.root);
     const incumbent: IncumbentIdentity = claim
@@ -178,7 +181,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
           }
           foreignRoot = undefined;
         }
-        return { port: claim.port, hello, incumbent };
+        return { port: claim.port, hello, incumbent, decisionClaim: claim };
       } catch (error) {
         const pid = claim.pid;
         const dead = !isPidAlive(pid);
@@ -265,6 +268,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
       clientProtocol: clientProtocolVersion,
       helloPid: existing.hello.metadata?.pid,
       incumbent: existing.incumbent,
+      decisionClaim: existing.decisionClaim,
       terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
       isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
       retryMs,
@@ -458,6 +462,7 @@ async function terminateMismatchedDaemon(input: {
   clientProtocol: string;
   helloPid?: number;
   incumbent: IncumbentIdentity;
+  decisionClaim?: DiscoveryClaim;
   terminateDaemon: (pid: number) => Promise<void> | void;
   isPidAlive: (pid: number) => boolean;
   retryMs: number;
@@ -466,11 +471,11 @@ async function terminateMismatchedDaemon(input: {
   markTerminateSkippedAudited: () => void;
 }): Promise<boolean> {
   const decisionIncumbent = input.incumbent;
-  const claim = await readDiscoveryClaim(input.paths.root);
+  const decisionClaim = input.decisionClaim;
 
   let terminatePid = input.helloPid;
   if (terminatePid === undefined || !Number.isInteger(terminatePid) || terminatePid <= 0) {
-    if (!claim) {
+    if (!decisionClaim) {
       const legacyPid = await readPidFile(input.paths.pidFile);
       if (legacyPid !== undefined) {
         terminatePid = legacyPid;
@@ -489,32 +494,46 @@ async function terminateMismatchedDaemon(input: {
     return false;
   }
 
-  if (claim && terminatePid !== claim.pid) {
+  if (decisionClaim && terminatePid !== decisionClaim.pid) {
     if (!input.auditedTerminateSkipped()) {
       input.markTerminateSkippedAudited();
       await input.audit.append({
         timestamp: Date.now(),
         kind: "daemon_terminate_skipped_identity_unknown",
-        detail: { port: input.livePort, claim_pid: claim.pid, hello_pid: terminatePid },
+        detail: { port: input.livePort, claim_pid: decisionClaim.pid, hello_pid: terminatePid },
       }).catch(() => {});
     }
     return false;
   }
 
   const reread = await readDiscoveryClaim(input.paths.root);
-  const currentIncumbent: IncumbentIdentity = reread
-    ? claimToIncumbentIdentity(reread)
-    : decisionIncumbent;
-  if (!incumbentIdentityMatches(currentIncumbent, decisionIncumbent)) {
-    if (!input.auditedTerminateSkipped()) {
-      input.markTerminateSkippedAudited();
-      await input.audit.append({
-        timestamp: Date.now(),
-        kind: "daemon_terminate_skipped_identity_unknown",
-        detail: { port: input.livePort, reason: "claim_changed" },
-      }).catch(() => {});
+  if (decisionClaim) {
+    if (!reread || !incumbentIdentityMatches(claimToIncumbentIdentity(reread), decisionIncumbent)) {
+      if (!input.auditedTerminateSkipped()) {
+        input.markTerminateSkippedAudited();
+        await input.audit.append({
+          timestamp: Date.now(),
+          kind: "daemon_terminate_skipped_identity_unknown",
+          detail: { port: input.livePort, reason: "claim_changed" },
+        }).catch(() => {});
+      }
+      return false;
     }
-    return false;
+  } else {
+    const currentIncumbent: IncumbentIdentity = reread
+      ? claimToIncumbentIdentity(reread)
+      : decisionIncumbent;
+    if (!incumbentIdentityMatches(currentIncumbent, decisionIncumbent)) {
+      if (!input.auditedTerminateSkipped()) {
+        input.markTerminateSkippedAudited();
+        await input.audit.append({
+          timestamp: Date.now(),
+          kind: "daemon_terminate_skipped_identity_unknown",
+          detail: { port: input.livePort, reason: "claim_changed" },
+        }).catch(() => {});
+      }
+      return false;
+    }
   }
 
   await input.terminateDaemon(terminatePid);
@@ -528,8 +547,31 @@ async function terminateMismatchedDaemon(input: {
     );
   }
 
-  await rm(input.paths.pidFile, { force: true });
-  await rm(input.paths.portFile, { force: true });
+  const guardedCleanup = await withDiscoveryGuard(
+    input.paths.root,
+    { pid: process.pid, startedAt: currentProcessStartEpochMs() },
+    async () => {
+      if (decisionClaim) {
+        const owner = await readDiscoveryClaim(input.paths.root);
+        if (!owner || !incumbentIdentityMatches(claimToIncumbentIdentity(owner), decisionIncumbent)) {
+          return;
+        }
+        await rm(discoveryOwnerFile(input.paths.root), { force: true });
+        await rm(input.paths.pidFile, { force: true });
+        await rm(input.paths.portFile, { force: true });
+        return;
+      }
+      const legacyPid = await readPidFile(input.paths.pidFile);
+      if (legacyPid === terminatePid) {
+        await rm(input.paths.pidFile, { force: true });
+        await rm(input.paths.portFile, { force: true });
+      }
+    },
+    { isPidAlive: input.isPidAlive },
+  );
+  if (!guardedCleanup.ok) {
+    // Best-effort: a successor may hold the guard; leave discovery files intact.
+  }
   return true;
 }
 

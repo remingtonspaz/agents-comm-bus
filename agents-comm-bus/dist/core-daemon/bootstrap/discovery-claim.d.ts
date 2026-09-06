@@ -5,6 +5,7 @@ export interface DiscoveryClaim {
     stateRoot: string;
     startedAt: number | null;
     protocolVersion: string;
+    nonce?: string;
 }
 export type ClaimDiscoveryResult = {
     ok: true;
@@ -41,6 +42,12 @@ export interface ClaimDiscoveryInput {
     guardTimeoutMs?: number;
     /** Test hook: invoked after a dead guard is verified and before reclaim-lock acquisition. */
     beforeReclaim?: () => Promise<void>;
+    /** Test hook: invoked after validating a dead reclaim token and before reclaim2 acquisition. */
+    beforeReclaim2?: () => Promise<void>;
+    /** Test hook: invoked after the reclaim lock is held and before quarantining the main guard. */
+    beforeQuarantine?: () => Promise<void>;
+    /** Injectable clock for guard temp-file names (tests). */
+    now?: () => number;
 }
 export interface WriteDaemonDiscoveryFilesInput {
     stateRoot?: string;
