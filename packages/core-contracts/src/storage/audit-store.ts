@@ -67,6 +67,7 @@ export type AuditEventKind =
   | "discovery_stale_cleanup"
   | "daemon_discovery_foreign_state_root"
   | "daemon_discovery_state_root_unknown"
+  | "daemon_terminate_skipped_identity_unknown"
   // AGE-57: adapter/credential skip not already covered by actionable console logs.
   | "comm_adapter_skip"
   // AGE-56: in-memory pending queue overflow spilled oldest entries; durable rows remain.

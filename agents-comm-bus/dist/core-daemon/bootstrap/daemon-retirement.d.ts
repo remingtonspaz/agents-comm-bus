@@ -17,8 +17,11 @@ export interface RemoveDiscoveryFilesInput {
     discoveryRoot?: string;
     selfPid: number;
     selfPort: number;
+    selfStartedAt?: number | null;
+    guardTimeoutMs?: number;
     readPidFile?: (pidFile: string) => Promise<number | null>;
     readPortFile?: (portFile: string) => Promise<number | null>;
+    isPidAlive?: (pid: number) => boolean;
 }
 export declare function removeDiscoveryFilesIfOwned(input: RemoveDiscoveryFilesInput): Promise<boolean>;
 export interface DaemonRetirementOptions {

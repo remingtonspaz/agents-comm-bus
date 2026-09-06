@@ -15729,7 +15729,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open5() {
+          ws.once("open", function open4() {
             duplex._final(callback);
           });
           return;
@@ -15750,7 +15750,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open5() {
+          ws.once("open", function open4() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -24780,7 +24780,7 @@ import path11 from "node:path";
 // ../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { mkdir as mkdir4, open as open4, readFile as readFile3, rm as rm3 } from "node:fs/promises";
+import { mkdir as mkdir4, open as open3, readFile as readFile3, rm as rm3 } from "node:fs/promises";
 import path5 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/storage/audit.js
@@ -25218,7 +25218,7 @@ function isAlreadyExistsError(error2) {
 }
 
 // ../agents-comm-bus/dist/core-daemon/bootstrap/discovery-claim.js
-import { mkdir as mkdir3, open as open3, readFile as readFile2, rename, rm as rm2, writeFile } from "node:fs/promises";
+import { mkdir as mkdir3, readFile as readFile2, rename, rm as rm2, writeFile, link } from "node:fs/promises";
 import path4 from "node:path";
 
 // ../agents-comm-bus/dist/core-daemon/runtime/process-start-epoch.js
@@ -25314,12 +25314,16 @@ function discoveryOwnerFile(discoveryRoot2) {
 async function readDiscoveryClaim(discoveryRoot2) {
   try {
     const raw = await readFile2(discoveryOwnerFile(discoveryRoot2), "utf8");
+    if (raw.length === 0)
+      return void 0;
     return parseDiscoveryClaim(raw);
   } catch {
     return void 0;
   }
 }
 function parseDiscoveryClaim(raw) {
+  if (raw.length === 0)
+    return void 0;
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0 || typeof parsed.port !== "number" || !Number.isInteger(parsed.port) || parsed.port <= 0 || parsed.port >= 65536 || typeof parsed.stateRoot !== "string" || parsed.stateRoot.length === 0 || typeof parsed.protocolVersion !== "string" || parsed.protocolVersion.length === 0) {
@@ -25342,6 +25346,12 @@ function parseDiscoveryClaim(raw) {
 }
 
 // ../agents-comm-bus/dist/core-daemon/bootstrap/ensure-daemon.js
+function claimToIncumbentIdentity(claim) {
+  return { pid: claim.pid, port: claim.port, startedAt: claim.startedAt };
+}
+function incumbentIdentityMatches(a, b) {
+  return a.pid === b.pid && a.port === b.port && a.startedAt === b.startedAt;
+}
 async function ensureDaemon(options = {}) {
   const env = options.env ?? process.env;
   const stateRoot2 = options.stateRoot ?? env.AGENTS_COMM_BUS_ROOT ?? env.AGENTS_COMM_BUS_STATE_ROOT;
@@ -25371,6 +25381,7 @@ async function ensureDaemon(options = {}) {
   let foreignRoot;
   let auditedForeign = false;
   let auditedUnknown = false;
+  let auditedTerminateSkipped = false;
   const audit = new JsonlAuditStore(paths.root);
   const probe = async (port) => {
     const pid = await readPidFile(discoveryPaths.pidFile);
@@ -25396,6 +25407,7 @@ async function ensureDaemon(options = {}) {
   };
   const probeDiscovery = async () => {
     const claim = await readDiscoveryClaim(discoveryPaths.root);
+    const incumbent = claim ? claimToIncumbentIdentity(claim) : { pid: await readPidFile(discoveryPaths.pidFile) };
     if (claim) {
       const normalizedExpected = normalizeDaemonRootPath(paths.root);
       const normalizedClaimRoot = normalizeDaemonRootPath(claim.stateRoot);
@@ -25441,7 +25453,7 @@ async function ensureDaemon(options = {}) {
           }
           foreignRoot = void 0;
         }
-        return { port: claim.port, hello };
+        return { port: claim.port, hello, incumbent };
       } catch (error2) {
         const pid = claim.pid;
         const dead = !isPidAlive2(pid);
@@ -25482,11 +25494,19 @@ async function ensureDaemon(options = {}) {
         }).catch(() => {
         });
       }
-      return found;
+      const fallbackIncumbent = {
+        pid: found.hello.metadata?.pid ?? incumbent.pid,
+        port: found.port
+      };
+      return { ...found, incumbent: fallbackIncumbent };
     }
     if (normalizeDaemonRootPath(reported) === normalizeDaemonRootPath(paths.root)) {
       foreignRoot = void 0;
-      return found;
+      const matchedIncumbent = {
+        pid: found.hello.metadata?.pid ?? incumbent.pid,
+        port: found.port
+      };
+      return { ...found, incumbent: matchedIncumbent };
     }
     foreignRoot = reported;
     if (!auditedForeign) {
@@ -25509,24 +25529,38 @@ async function ensureDaemon(options = {}) {
   if (existing) {
     const reuse = classifyDaemonReuse(existing.hello.protocolVersion, clientProtocolVersion);
     if (reuse === "compatible") {
-      return { ...existing, spawned: false };
+      return { port: existing.port, hello: existing.hello, spawned: false };
     }
     if (reuse === "daemon_newer") {
       throw new Error(`agents-comm-bus daemon protocol ${existing.hello.protocolVersion} is newer than this client's ${clientProtocolVersion}; restart this session to pick up the newer agent surface`);
     }
-    await terminateMismatchedDaemon({
+    const terminated = await terminateMismatchedDaemon({
       paths: discoveryPaths,
+      stateRoot: paths.root,
       livePort: existing.port,
       liveProtocol: existing.hello.protocolVersion,
       clientProtocol: clientProtocolVersion,
+      helloPid: existing.hello.metadata?.pid,
+      incumbent: existing.incumbent,
       terminateDaemon: options.terminateDaemon ?? defaultTerminateDaemon,
       isPidAlive: options.isPidAlive ?? defaultIsPidAlive2,
-      retryMs
+      retryMs,
+      audit,
+      auditedTerminateSkipped: () => auditedTerminateSkipped,
+      markTerminateSkippedAudited: () => {
+        auditedTerminateSkipped = true;
+      }
     });
+    if (!terminated) {
+      const retry = await probeDiscovery();
+      if (retry && classifyDaemonReuse(retry.hello.protocolVersion, clientProtocolVersion) === "compatible") {
+        return { port: retry.port, hello: retry.hello, spawned: false };
+      }
+    }
   }
   const afterTerminate = Date.now() < deadline ? await probeDiscovery() : void 0;
   if (afterTerminate && classifyDaemonReuse(afterTerminate.hello.protocolVersion, clientProtocolVersion) === "compatible") {
-    return { ...afterTerminate, spawned: false };
+    return { port: afterTerminate.port, hello: afterTerminate.hello, spawned: false };
   }
   if (foreignRoot === void 0)
     await cleanupStalePidAndPort({
@@ -25544,14 +25578,15 @@ async function ensureDaemon(options = {}) {
     const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
     if (lock) {
       try {
-        const recheck = await probeDiscovery();
+        const recheck = compatibleDiscoveryResult(await probeDiscovery(), clientProtocolVersion);
         if (recheck) {
           return { ...recheck, spawned };
         }
-        const incumbentPid = await readPidFile(discoveryPaths.pidFile);
+        const claim = await readDiscoveryClaim(discoveryPaths.root);
+        const incumbentPid = claim?.pid ?? await readPidFile(discoveryPaths.pidFile);
         const foreignSquatter = foreignRoot !== void 0;
         if (!foreignSquatter && incumbentPid !== void 0 && isPidAlive2(incumbentPid)) {
-          const found3 = await waitForDaemon(probeDiscovery, deadline, retryMs);
+          const found3 = compatibleDiscoveryResult(await waitForDaemon(probeDiscovery, deadline, retryMs), clientProtocolVersion);
           if (found3)
             return { ...found3, spawned };
           break;
@@ -25564,7 +25599,7 @@ async function ensureDaemon(options = {}) {
           defaultSpawnDaemon(paths, discoveryPaths, env);
         }
         spawned = true;
-        const found2 = await waitForDaemon(probeDiscovery, deadline, retryMs);
+        const found2 = compatibleDiscoveryResult(await waitForDaemon(probeDiscovery, deadline, retryMs), clientProtocolVersion);
         if (found2) {
           return { ...found2, spawned: true };
         }
@@ -25572,7 +25607,7 @@ async function ensureDaemon(options = {}) {
         await lock.release();
       }
     }
-    const found = await waitForDaemon(probeDiscovery, deadline, retryMs);
+    const found = compatibleDiscoveryResult(await waitForDaemon(probeDiscovery, deadline, retryMs), clientProtocolVersion);
     if (found) {
       return { ...found, spawned };
     }
@@ -25585,15 +25620,17 @@ async function ensureDaemon(options = {}) {
       });
     await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
   }
-  const finalPid = await readPidFile(discoveryPaths.pidFile);
-  return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root, finalPid !== void 0 && isPidAlive2(finalPid) ? finalPid : void 0, foreignRoot);
+  const finalClaim = await readDiscoveryClaim(discoveryPaths.root);
+  const finalPidFile = await readPidFile(discoveryPaths.pidFile);
+  const livePid = finalClaim?.pid !== void 0 && isPidAlive2(finalClaim.pid) ? finalClaim.pid : finalPidFile !== void 0 && isPidAlive2(finalPidFile) ? finalPidFile : void 0;
+  return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root, livePid, foreignRoot);
 }
 var DAEMON_STDERR_LOG_TAIL_MAX_BYTES = 4096;
 async function readBoundedDaemonStderrTail(stateRoot2) {
   const logPath = daemonStderrLogPath(stateRoot2);
   let handle;
   try {
-    handle = await open4(logPath, "r");
+    handle = await open3(logPath, "r");
     const fileStat = await handle.stat();
     if (fileStat.size === 0)
       return "";
@@ -25637,20 +25674,74 @@ function classifyDaemonReuse(daemonProtocol, clientProtocol) {
     return "compatible";
   return Number(protocolMajor(daemonProtocol)) > Number(protocolMajor(clientProtocol)) ? "daemon_newer" : "daemon_older";
 }
-async function terminateMismatchedDaemon(input) {
-  const pid = await readPidFile(input.paths.pidFile);
-  if (pid === void 0) {
-    throw new Error(`agents-comm-bus daemon on port ${input.livePort} speaks incompatible IPC protocol ${input.liveProtocol} (client ${input.clientProtocol}); cannot restart because ${input.paths.pidFile} is missing`);
+function compatibleDiscoveryResult(found, clientProtocolVersion) {
+  if (!found)
+    return void 0;
+  if (classifyDaemonReuse(found.hello.protocolVersion, clientProtocolVersion) !== "compatible") {
+    return void 0;
   }
-  await input.terminateDaemon(pid);
-  for (let attempt = 0; attempt < 20 && input.isPidAlive(pid); attempt += 1) {
+  return { port: found.port, hello: found.hello };
+}
+async function terminateMismatchedDaemon(input) {
+  const decisionIncumbent = input.incumbent;
+  const claim = await readDiscoveryClaim(input.paths.root);
+  let terminatePid = input.helloPid;
+  if (terminatePid === void 0 || !Number.isInteger(terminatePid) || terminatePid <= 0) {
+    if (!claim) {
+      const legacyPid = await readPidFile(input.paths.pidFile);
+      if (legacyPid !== void 0) {
+        terminatePid = legacyPid;
+      }
+    }
+  }
+  if (terminatePid === void 0 || !Number.isInteger(terminatePid) || terminatePid <= 0) {
+    if (!input.auditedTerminateSkipped()) {
+      input.markTerminateSkippedAudited();
+      await input.audit.append({
+        timestamp: Date.now(),
+        kind: "daemon_terminate_skipped_identity_unknown",
+        detail: { port: input.livePort, reason: "hello_pid_missing" }
+      }).catch(() => {
+      });
+    }
+    return false;
+  }
+  if (claim && terminatePid !== claim.pid) {
+    if (!input.auditedTerminateSkipped()) {
+      input.markTerminateSkippedAudited();
+      await input.audit.append({
+        timestamp: Date.now(),
+        kind: "daemon_terminate_skipped_identity_unknown",
+        detail: { port: input.livePort, claim_pid: claim.pid, hello_pid: terminatePid }
+      }).catch(() => {
+      });
+    }
+    return false;
+  }
+  const reread = await readDiscoveryClaim(input.paths.root);
+  const currentIncumbent = reread ? claimToIncumbentIdentity(reread) : decisionIncumbent;
+  if (!incumbentIdentityMatches(currentIncumbent, decisionIncumbent)) {
+    if (!input.auditedTerminateSkipped()) {
+      input.markTerminateSkippedAudited();
+      await input.audit.append({
+        timestamp: Date.now(),
+        kind: "daemon_terminate_skipped_identity_unknown",
+        detail: { port: input.livePort, reason: "claim_changed" }
+      }).catch(() => {
+      });
+    }
+    return false;
+  }
+  await input.terminateDaemon(terminatePid);
+  for (let attempt = 0; attempt < 20 && input.isPidAlive(terminatePid); attempt += 1) {
     await sleep(input.retryMs);
   }
-  if (input.isPidAlive(pid)) {
-    throw new Error(`agents-comm-bus daemon pid ${pid} speaks incompatible IPC protocol ${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
+  if (input.isPidAlive(terminatePid)) {
+    throw new Error(`agents-comm-bus daemon pid ${terminatePid} speaks incompatible IPC protocol ${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
   }
   await rm3(input.paths.pidFile, { force: true });
   await rm3(input.paths.portFile, { force: true });
+  return true;
 }
 async function probeFromPortFile(portFile, probe, options) {
   const port = await readPortFile(portFile);

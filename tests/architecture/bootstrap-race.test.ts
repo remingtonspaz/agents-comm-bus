@@ -451,7 +451,7 @@ describe("ensureDaemon", () => {
       },
       probeDaemon: async (candidatePort) => {
         if (candidatePort === 41_117) {
-          return { ...daemonHello(), protocolVersion: "0.9.0" };
+          return { ...daemonHello(), protocolVersion: "0.9.0", metadata: { pid: 12_345, test: true } };
         }
         assert.equal(candidatePort, newPort);
         return daemonHello();
@@ -624,15 +624,21 @@ describe("ensureDaemon", () => {
     assert.equal(terminated, false, "must not terminate (downgrade) a newer-protocol daemon");
   });
 
-  it("refuses a protocol-incompatible daemon when its pid is missing", async () => {
+  it("skips terminating a protocol-incompatible daemon when identity is unknown", async () => {
     const stateRoot = await tempStateRoot();
     const paths = resolveStatePaths({ stateRoot });
     await mkdir(paths.root, { recursive: true });
     await writeFile(paths.portFile, "41119\n", "utf8");
 
+    let terminated = false;
     await assert.rejects(
-      ensureDaemon({ env: {}, spawnDaemon: () => assert.fail("unexpected daemon spawn"),
+      ensureDaemon({ env: {}, spawnDaemon: () => {
+          throw new Error("unexpected daemon spawn");
+        },
         stateRoot,
+        terminateDaemon: () => {
+          terminated = true;
+        },
         probeDaemon: async (candidatePort) => {
           assert.equal(candidatePort, 41_119);
           return { ...daemonHello(), protocolVersion: "0.9.0" };
@@ -640,8 +646,17 @@ describe("ensureDaemon", () => {
         timeoutMs: 100,
         retryMs: 5,
       }),
-      /cannot restart because .*daemon\.pid is missing/,
+      /unexpected daemon spawn|Timed out starting agents-comm-bus daemon/,
     );
+    assert.equal(terminated, false);
+    const auditDir = path.join(stateRoot, "audit");
+    const files = await readdir(auditDir);
+    const rows = (await Promise.all(files.map(file => readFile(path.join(auditDir, file), "utf8"))))
+      .join("\n")
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line));
+    assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
   });
 
   it("refuses to overwrite discovery for a live daemon on another port", async () => {

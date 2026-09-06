@@ -1,19 +1,28 @@
 import assert from "node:assert/strict";
+import { constants } from "node:fs";
 import { after, test } from "node:test";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 
+import { removeDiscoveryFilesIfOwned } from "../../core-daemon/bootstrap/daemon-retirement.js";
 import { ensureDaemon } from "../../core-daemon/bootstrap/ensure-daemon.js";
 import {
   claimDiscovery,
   discoveryClaimIdentityMatches,
+  discoveryOwnerFile,
   readDiscoveryClaim,
   type DiscoveryClaim,
 } from "../../core-daemon/bootstrap/discovery-claim.js";
+import {
+  discoveryGuardFile,
+  parseDiscoveryGuardToken,
+  readDiscoveryGuardRaw,
+  withDiscoveryGuard,
+} from "../../core-daemon/bootstrap/discovery-guard.js";
 import { checkDaemonPidOwnership } from "../../core-daemon/bootstrap/pid-watchdog.js";
-import { IPC_PROTOCOL_VERSION } from "../../core-daemon/config.js";
+import { IPC_PROTOCOL_VERSION, protocolMajor } from "../../core-daemon/config.js";
 import { runDaemon } from "../../core-daemon/daemon.js";
 import type { DaemonHello } from "../../core-daemon/ipc/protocol.js";
 import { resolveDiscoveryPaths } from "../../core-daemon/paths.js";
@@ -71,7 +80,9 @@ test("AGE-108 (a): concurrent claims elect exactly one winner without torn disco
   const reader = async () => {
     for (let i = 0; i < 200; i += 1) {
       const ownerRaw = await readFile(path.join(discoveryRoot, "owner.json"), "utf8").catch(() => null);
-      if (ownerRaw) {
+      if (ownerRaw !== null && ownerRaw.length === 0) {
+        readerErrors.push("empty owner.json");
+      } else if (ownerRaw) {
         try {
           JSON.parse(ownerRaw);
         } catch {
@@ -85,17 +96,6 @@ test("AGE-108 (a): concurrent claims elect exactly one winner without torn disco
     }
   };
 
-  let barrierArrived = 0;
-  const barrierWaiters: Array<() => void> = [];
-  const beforeCreate = async () => {
-    barrierArrived += 1;
-    if (barrierArrived < claimants.length) {
-      await new Promise<void>(resolve => barrierWaiters.push(resolve));
-    } else {
-      for (const release of barrierWaiters) release();
-    }
-  };
-
   const results = await Promise.all([
     reader(),
     ...claimants.map(claimant =>
@@ -105,10 +105,8 @@ test("AGE-108 (a): concurrent claims elect exactly one winner without torn disco
         pid: claimant.pid,
         port: claimant.port,
         startedAt: 1_700_000_000_000 + claimant.pid,
-        acquireLock: async () => undefined,
-        beforeCreate,
         isPidAlive: () => true,
-        probeDaemon: async (probePort) => hello(stateRoot, winnerPid),
+        probeDaemon: async () => hello(stateRoot, winnerPid),
       }),
     ),
   ]);
@@ -390,4 +388,499 @@ test("AGE-108 (g): legacy pid/port only discovery converts to owner.json with st
   assert.equal(owner.pid, 41_003);
   const rows = await audits(stateRoot);
   assert.equal(rows.filter(row => row.kind === "discovery_stale_cleanup").length, 1);
+});
+
+async function publishBarrier(count: number): Promise<() => Promise<void>> {
+  let arrived = 0;
+  const waiters: Array<() => void> = [];
+  return async () => {
+    arrived += 1;
+    if (arrived < count) {
+      await new Promise<void>(resolve => waiters.push(resolve));
+    } else {
+      for (const release of waiters) release();
+    }
+  };
+}
+
+test("AGE-108 (h): dead-owner concurrent claims elect one winner under discovery guard", async () => {
+  const stateRoot = await tempRoot("age108-h-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const dead: DiscoveryClaim = {
+    pid: 60_001,
+    port: 41_010,
+    stateRoot,
+    startedAt: 1,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(dead)}\n`);
+  const [first, second] = await Promise.all([
+    claimDiscovery({
+      stateRoot,
+      discoveryRoot,
+      pid: 60_002,
+      port: 41_011,
+      startedAt: 2,
+      isPidAlive: pid => pid !== dead.pid,
+      probeDaemon: async () => hello(stateRoot, 60_002),
+    }),
+    claimDiscovery({
+      stateRoot,
+      discoveryRoot,
+      pid: 60_003,
+      port: 41_012,
+      startedAt: 3,
+      isPidAlive: pid => pid !== dead.pid,
+      probeDaemon: async () => hello(stateRoot, 60_002),
+    }),
+  ]);
+  const okCount = [first, second].filter(result => result.ok).length;
+  const incumbentCount = [first, second].filter(result => !result.ok && result.reason === "incumbent").length;
+  assert.equal(okCount, 1);
+  assert.equal(incumbentCount, 1);
+  const winner = first.ok ? first : second.ok ? second : undefined;
+  assert.ok(winner?.ok);
+  const owner = await readDiscoveryClaim(discoveryRoot);
+  assert.ok(owner);
+  assert.equal(await readFile(path.join(discoveryRoot, "daemon.pid"), "utf8"), `${owner.pid}\n`);
+  assert.equal(await readFile(path.join(discoveryRoot, "port"), "utf8"), `${owner.port}\n`);
+  const entries = await readdir(discoveryRoot);
+  assert.equal(entries.some(name => name.includes(".tmp.")), false);
+});
+
+test("AGE-108 (i): claimDiscovery succeeds while spawn lock is held by parent", async () => {
+  const stateRoot = await tempRoot("age108-i-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  const paths = resolveDiscoveryPaths({ stateRoot, discoveryRoot });
+  await mkdir(discoveryRoot, { recursive: true });
+  const lockHandle = await open(paths.spawnLock, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+  await lockHandle.writeFile(`${process.pid}:${Date.now()}\n`, "utf8");
+  await lockHandle.close();
+  try {
+    const result = await claimDiscovery({
+      stateRoot,
+      discoveryRoot,
+      pid: 61_001,
+      port: 41_013,
+      startedAt: 1_700_000_000_010,
+      isPidAlive: () => false,
+      probeDaemon: async () => hello(stateRoot),
+    });
+    assert.equal(result.ok, true);
+  } finally {
+    await rm(paths.spawnLock, { force: true });
+  }
+});
+
+test("AGE-108 (j): empty owner.json is replaced with invalid_owner_record audit", async () => {
+  const stateRoot = await tempRoot("age108-j-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  await writeFile(discoveryOwnerFile(discoveryRoot), "");
+  const result = await claimDiscovery({
+    stateRoot,
+    discoveryRoot,
+    pid: 62_001,
+    port: 41_014,
+    startedAt: 1_700_000_000_011,
+    isPidAlive: () => false,
+    probeDaemon: async () => hello(stateRoot),
+  });
+  assert.equal(result.ok, true);
+  const owner = await readDiscoveryClaim(discoveryRoot);
+  assert.ok(owner);
+  const rows = await audits(stateRoot);
+  const cleaned = rows.filter(row => row.kind === "discovery_stale_cleanup");
+  assert.equal(cleaned.length, 1);
+  assert.equal(cleaned[0].detail.reason, "invalid_owner_record");
+});
+
+test("AGE-108 (k): retirement honors authoritative owner.json over legacy pid/port", async () => {
+  const stateRoot = await tempRoot("age108-k-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  const paths = resolveDiscoveryPaths({ stateRoot, discoveryRoot });
+  await mkdir(discoveryRoot, { recursive: true });
+  const selfPid = 63_001;
+  const selfPort = 41_015;
+  const selfStartedAt = 1_700_000_000_012;
+  const successorPid = 63_002;
+  const owner: DiscoveryClaim = {
+    pid: successorPid,
+    port: selfPort,
+    stateRoot,
+    startedAt: 1_700_000_000_099,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(paths.pidFile, `${selfPid}\n`);
+  await writeFile(paths.portFile, `${selfPort}\n`);
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(owner)}\n`);
+
+  assert.equal(
+    await removeDiscoveryFilesIfOwned({
+      discoveryRoot,
+      selfPid,
+      selfPort,
+      selfStartedAt,
+      isPidAlive: pid => pid === successorPid,
+    }),
+    false,
+  );
+  assert.equal(await readFile(paths.pidFile, "utf8"), `${selfPid}\n`);
+  assert.equal(await readFile(paths.portFile, "utf8"), `${selfPort}\n`);
+  assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8"), `${JSON.stringify(owner)}\n`);
+
+  const selfOwner: DiscoveryClaim = {
+    pid: selfPid,
+    port: selfPort,
+    stateRoot,
+    startedAt: selfStartedAt,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(selfOwner)}\n`);
+  assert.equal(
+    await removeDiscoveryFilesIfOwned({
+      discoveryRoot,
+      selfPid,
+      selfPort,
+      selfStartedAt,
+    }),
+    true,
+  );
+  await assert.rejects(() => readFile(paths.pidFile, "utf8"));
+  await assert.rejects(() => readFile(paths.portFile, "utf8"));
+  await assert.rejects(() => readFile(discoveryOwnerFile(discoveryRoot), "utf8"));
+
+  await writeFile(paths.pidFile, `${selfPid}\n`);
+  await writeFile(paths.portFile, `${selfPort}\n`);
+  const mismatchedStartedAt = { ...selfOwner, startedAt: selfStartedAt + 1 };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(mismatchedStartedAt)}\n`);
+  assert.equal(
+    await removeDiscoveryFilesIfOwned({
+      discoveryRoot,
+      selfPid,
+      selfPort,
+      selfStartedAt,
+    }),
+    false,
+  );
+});
+
+test("AGE-108 (l): retirement does not delete files while replacement holds guard", async () => {
+  const stateRoot = await tempRoot("age108-l-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  const paths = resolveDiscoveryPaths({ stateRoot, discoveryRoot });
+  await mkdir(discoveryRoot, { recursive: true });
+  const predecessorPid = 64_001;
+  const predecessorPort = 41_016;
+  const predecessorStartedAt = 1_700_000_000_013;
+  const dead: DiscoveryClaim = {
+    pid: predecessorPid,
+    port: predecessorPort,
+    stateRoot,
+    startedAt: predecessorStartedAt,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(dead)}\n`);
+  await writeFile(paths.pidFile, `${predecessorPid}\n`);
+  await writeFile(paths.portFile, `${predecessorPort}\n`);
+
+  let holdGuard: (() => void) | undefined;
+  let signalGuardHeld: (() => void) | undefined;
+  const guardHeld = new Promise<void>(resolve => {
+    signalGuardHeld = resolve;
+  });
+  const beforePublish = async () => {
+    signalGuardHeld?.();
+    await new Promise<void>(resolve => {
+      holdGuard = resolve;
+    });
+  };
+
+  const successor = claimDiscovery({
+    stateRoot,
+    discoveryRoot,
+    pid: 64_002,
+    port: 41_017,
+    startedAt: 1_700_000_000_014,
+    beforePublish,
+    isPidAlive: pid => pid !== predecessorPid,
+    probeDaemon: async () => hello(stateRoot),
+  });
+
+  await guardHeld;
+  const removed = await removeDiscoveryFilesIfOwned({
+    discoveryRoot,
+    selfPid: predecessorPid,
+    selfPort: predecessorPort,
+    selfStartedAt: predecessorStartedAt,
+    guardTimeoutMs: 100,
+    isPidAlive: pid => pid === 64_002,
+  });
+  assert.equal(removed, false);
+  holdGuard?.();
+  const claimed = await successor;
+  assert.equal(claimed.ok, true);
+  assert.equal(await readFile(discoveryOwnerFile(discoveryRoot), "utf8").then(raw => JSON.parse(raw).pid), 64_002);
+});
+
+test("AGE-108 (m): ensureDaemon gates on claim pid when probe times out", async () => {
+  const stateRoot = await tempRoot("age108-m-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 65_001;
+  const claim: DiscoveryClaim = {
+    pid: claimPid,
+    port: 41_018,
+    stateRoot,
+    startedAt: 1_700_000_000_015,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(claim)}\n`);
+
+  await assert.rejects(
+    () =>
+      ensureDaemon({
+        stateRoot,
+        discoveryRoot,
+        env: {},
+        timeoutMs: 300,
+        retryMs: 20,
+        isPidAlive: pid => pid === claimPid,
+        probeDaemon: async () => {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return hello(stateRoot, claimPid);
+        },
+        spawnDaemon: () => assert.fail("must not spawn while claim pid is alive"),
+      }),
+    (error: Error) => error.message.includes(`Daemon pid ${claimPid}`),
+  );
+});
+
+test("AGE-108 (n): terminateDaemon uses hello metadata pid, not daemon.pid", async () => {
+  const stateRoot = await tempRoot("age108-n-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 66_001;
+  const unrelatedPid = 66_002;
+  const port = 41_019;
+  const claim: DiscoveryClaim = {
+    pid: claimPid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_016,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(claim)}\n`);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${unrelatedPid}\n`);
+  await writeFile(path.join(discoveryRoot, "port"), `${port}\n`);
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  const terminated: number[] = [];
+  let claimMarkedDead = false;
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 2_000,
+    retryMs: 20,
+    isPidAlive: pid => {
+      if (pid === claimPid) return !claimMarkedDead;
+      return pid === unrelatedPid;
+    },
+    probeDaemon: async () => ({
+      ...hello(stateRoot, claimPid),
+      protocolVersion: olderMajor,
+      metadata: { pid: claimPid, stateRoot },
+    }),
+    terminateDaemon: pid => {
+      terminated.push(pid);
+      claimMarkedDead = true;
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+  assert.deepEqual(terminated, [claimPid]);
+
+  const stateRoot2 = await tempRoot("age108-n2-");
+  const discoveryRoot2 = path.join(stateRoot2, "discovery");
+  await mkdir(discoveryRoot2, { recursive: true });
+  const claim2: DiscoveryClaim = {
+    ...claim,
+    stateRoot: stateRoot2,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot2), `${JSON.stringify(claim2)}\n`);
+  await writeFile(path.join(discoveryRoot2, "daemon.pid"), `${unrelatedPid}\n`);
+  await writeFile(path.join(discoveryRoot2, "port"), `${port}\n`);
+  const terminated2: number[] = [];
+  await ensureDaemon({
+    stateRoot: stateRoot2,
+    discoveryRoot: discoveryRoot2,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 2_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid || pid === unrelatedPid,
+    probeDaemon: async () => ({
+      ...hello(stateRoot2, claimPid),
+      protocolVersion: olderMajor,
+      metadata: { stateRoot: stateRoot2 },
+    }),
+    terminateDaemon: pid => {
+      terminated2.push(pid);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+  assert.deepEqual(terminated2, []);
+  const rows = await audits(stateRoot2);
+  assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
+});
+
+test("AGE-108 (o): guard token race elects exactly one holder", async () => {
+  const stateRoot = await tempRoot("age108-o-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  let releaseHolder: (() => void) | undefined;
+  let guardAcquired: (() => void) | undefined;
+  const acquired = new Promise<void>(resolve => {
+    guardAcquired = resolve;
+  });
+  const holder = withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 67_001, startedAt: 1 },
+    async () => {
+      guardAcquired?.();
+      await new Promise<void>(resolve => {
+        releaseHolder = resolve;
+      });
+      return "held";
+    },
+    { maxWaitMs: 2_000, isPidAlive: () => true },
+  );
+  await acquired;
+  const waiter = await withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 67_002, startedAt: 2 },
+    async () => "waiter",
+    { maxWaitMs: 100, isPidAlive: () => true },
+  );
+  releaseHolder?.();
+  const held = await holder;
+  assert.equal(held.ok, true);
+  assert.equal(waiter.ok, false);
+  if (!waiter.ok) assert.equal(waiter.reason, "guard_contended");
+});
+
+test("AGE-108 (p): unparsable owner.lock is never stolen and yields guard_contended", async () => {
+  const stateRoot = await tempRoot("age108-p-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  await writeFile(discoveryGuardFile(discoveryRoot), "");
+  const result = await withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 68_001, startedAt: 1 },
+    async () => "never",
+    { maxWaitMs: 100, isPidAlive: () => false },
+  );
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.reason, "guard_contended");
+  assert.equal(await readDiscoveryGuardRaw(discoveryRoot), "");
+});
+
+test("AGE-108 (q): dead-guard reclaim preserves a successor token published in between", async () => {
+  const stateRoot = await tempRoot("age108-q-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const deadToken = { pid: 69_001, startedAt: 1, at: Date.now() - 60_000 };
+  await writeFile(discoveryGuardFile(discoveryRoot), `${JSON.stringify(deadToken)}\n`);
+
+  let releaseReclaim: (() => void) | undefined;
+  const beforeReclaim = async () => {
+    await new Promise<void>(resolve => {
+      releaseReclaim = resolve;
+    });
+  };
+
+  const reclaimB = withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 69_003, startedAt: 3 },
+    async () => "b",
+    { maxWaitMs: 5_000, isPidAlive: pid => pid === 69_002, beforeReclaim },
+  );
+
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const reclaimA = await withDiscoveryGuard(
+    discoveryRoot,
+    { pid: 69_002, startedAt: 2 },
+    async () => "a",
+    { maxWaitMs: 5_000, isPidAlive: () => false },
+  );
+  assert.equal(reclaimA.ok, true);
+
+  const liveY = { pid: 69_004, startedAt: 4, at: Date.now() };
+  await writeFile(discoveryGuardFile(discoveryRoot), `${JSON.stringify(liveY)}\n`);
+  releaseReclaim?.();
+  const reclaimBResult = await reclaimB;
+  assert.equal(reclaimBResult.ok, false);
+  if (!reclaimBResult.ok) assert.equal(reclaimBResult.reason, "guard_contended");
+
+  const samples: Array<string | null> = [];
+  for (let i = 0; i < 20; i += 1) {
+    samples.push(await readDiscoveryGuardRaw(discoveryRoot));
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(samples.every(raw => raw === `${JSON.stringify(liveY)}\n`), true);
+  const parsed = parseDiscoveryGuardToken(samples[0] ?? "");
+  assert.ok(parsed);
+  assert.equal(parsed.pid, liveY.pid);
+});
+
+test("AGE-108 (r): claim generation change cancels terminateDaemon", async () => {
+  const stateRoot = await tempRoot("age108-r-");
+  const discoveryRoot = path.join(stateRoot, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const claimPid = 70_010;
+  const port = 41_020;
+  const original: DiscoveryClaim = {
+    pid: claimPid,
+    port,
+    stateRoot,
+    startedAt: 1_700_000_000_020,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(original)}\n`);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${claimPid}\n`);
+  await writeFile(path.join(discoveryRoot, "port"), `${port}\n`);
+
+  const olderMajor = `${Number(protocolMajor(IPC_PROTOCOL_VERSION)) - 1}.0.0`;
+  const terminated: number[] = [];
+  await ensureDaemon({
+    stateRoot,
+    discoveryRoot,
+    env: {},
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    timeoutMs: 1_000,
+    retryMs: 20,
+    isPidAlive: pid => pid === claimPid,
+    probeDaemon: async () => {
+      const changed: DiscoveryClaim = {
+        ...original,
+        startedAt: original.startedAt! + 1,
+      };
+      await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(changed)}\n`);
+      return {
+        ...hello(stateRoot, claimPid),
+        protocolVersion: olderMajor,
+        metadata: { pid: claimPid, stateRoot },
+      };
+    },
+    terminateDaemon: pid => {
+      terminated.push(pid);
+    },
+    spawnDaemon: () => undefined,
+  }).catch(() => undefined);
+  assert.deepEqual(terminated, []);
+  const rows = await audits(stateRoot);
+  assert.equal(rows.filter(row => row.kind === "daemon_terminate_skipped_identity_unknown").length, 1);
+  assert.equal(rows.find(row => row.kind === "daemon_terminate_skipped_identity_unknown")?.detail.reason, "claim_changed");
 });

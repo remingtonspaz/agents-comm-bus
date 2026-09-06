@@ -17,14 +17,14 @@ export type ClaimDiscoveryResult = {
     ok: false;
     reason: "incumbent_busy";
     incumbent: DiscoveryClaim;
+} | {
+    ok: false;
+    reason: "guard_contended";
 };
 export declare class DiscoveryClaimLostError extends Error {
     readonly winner: DiscoveryClaim;
     constructor(winner: DiscoveryClaim);
 }
-export type DiscoverySpawnLock = {
-    release(): Promise<void>;
-};
 export interface ClaimDiscoveryInput {
     stateRoot: string;
     discoveryRoot?: string;
@@ -36,9 +36,11 @@ export interface ClaimDiscoveryInput {
     probeDaemon?: (port: number) => Promise<DaemonHello>;
     /** When set, stale/foreign replacement audits are written here. */
     auditStateRoot?: string;
-    acquireLock?: (lockPath: string) => Promise<DiscoverySpawnLock | undefined>;
-    /** Invoked immediately before an exclusive owner.json create attempt. */
-    beforeCreate?: () => Promise<void>;
+    /** Invoked immediately before the owner.json publish step (inside the guard). */
+    beforePublish?: () => Promise<void>;
+    guardTimeoutMs?: number;
+    /** Test hook: invoked after a dead guard is verified and before reclaim-lock acquisition. */
+    beforeReclaim?: () => Promise<void>;
 }
 export interface WriteDaemonDiscoveryFilesInput {
     stateRoot?: string;

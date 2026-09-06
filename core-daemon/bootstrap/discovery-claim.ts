@@ -1,5 +1,4 @@
-import { constants } from "node:fs";
-import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile, link } from "node:fs/promises";
 import path from "node:path";
 
 import { IPC_PROTOCOL_VERSION } from "../config.js";
@@ -8,7 +7,7 @@ import { normalizeDaemonRootPath, resolveDiscoveryPaths } from "../paths.js";
 import { currentProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 import { JsonlAuditStore } from "../storage/audit.js";
 import { probeDaemon as defaultProbeDaemon } from "./handshake.js";
-import { tryAcquireSpawnLock } from "./spawn-lock.js";
+import { withDiscoveryGuard } from "./discovery-guard.js";
 
 export interface DiscoveryClaim {
   pid: number;
@@ -21,7 +20,8 @@ export interface DiscoveryClaim {
 export type ClaimDiscoveryResult =
   | { ok: true; claim: DiscoveryClaim }
   | { ok: false; reason: "incumbent"; winner: DiscoveryClaim }
-  | { ok: false; reason: "incumbent_busy"; incumbent: DiscoveryClaim };
+  | { ok: false; reason: "incumbent_busy"; incumbent: DiscoveryClaim }
+  | { ok: false; reason: "guard_contended" };
 
 export class DiscoveryClaimLostError extends Error {
   readonly winner: DiscoveryClaim;
@@ -36,8 +36,6 @@ export class DiscoveryClaimLostError extends Error {
   }
 }
 
-export type DiscoverySpawnLock = { release(): Promise<void> };
-
 export interface ClaimDiscoveryInput {
   stateRoot: string;
   discoveryRoot?: string;
@@ -49,9 +47,11 @@ export interface ClaimDiscoveryInput {
   probeDaemon?: (port: number) => Promise<DaemonHello>;
   /** When set, stale/foreign replacement audits are written here. */
   auditStateRoot?: string;
-  acquireLock?: (lockPath: string) => Promise<DiscoverySpawnLock | undefined>;
-  /** Invoked immediately before an exclusive owner.json create attempt. */
-  beforeCreate?: () => Promise<void>;
+  /** Invoked immediately before the owner.json publish step (inside the guard). */
+  beforePublish?: () => Promise<void>;
+  guardTimeoutMs?: number;
+  /** Test hook: invoked after a dead guard is verified and before reclaim-lock acquisition. */
+  beforeReclaim?: () => Promise<void>;
 }
 
 export interface WriteDaemonDiscoveryFilesInput {
@@ -73,6 +73,7 @@ export function discoveryOwnerFile(discoveryRoot: string): string {
 export async function readDiscoveryClaim(discoveryRoot: string): Promise<DiscoveryClaim | undefined> {
   try {
     const raw = await readFile(discoveryOwnerFile(discoveryRoot), "utf8");
+    if (raw.length === 0) return undefined;
     return parseDiscoveryClaim(raw);
   } catch {
     return undefined;
@@ -80,6 +81,7 @@ export async function readDiscoveryClaim(discoveryRoot: string): Promise<Discove
 }
 
 export function parseDiscoveryClaim(raw: string): DiscoveryClaim | undefined {
+  if (raw.length === 0) return undefined;
   try {
     const parsed = JSON.parse(raw) as Partial<DiscoveryClaim>;
     if (
@@ -148,37 +150,51 @@ export async function claimDiscovery(input: ClaimDiscoveryInput): Promise<ClaimD
   const probe = input.probeDaemon ?? ((port: number) => defaultProbeDaemon({ port }));
   const auditRoot = input.auditStateRoot ?? input.stateRoot;
 
-  const acquireLock =
-    input.acquireLock ??
-    ((lockPath: string) => tryAcquireSpawnLock(lockPath, { isPidAlive }));
-  const lock = await acquireLock(paths.spawnLock);
-  try {
-    return await claimDiscoveryUnderLock({
-      paths,
-      selfClaim,
+  const guarded = await withDiscoveryGuard(
+    paths.root,
+    { pid: selfPid, startedAt: selfStartedAt },
+    () =>
+      claimDiscoveryInGuard({
+        paths,
+        selfClaim,
+        isPidAlive,
+        probe,
+        auditRoot,
+        beforePublish: input.beforePublish,
+      }),
+    {
+      maxWaitMs: input.guardTimeoutMs,
       isPidAlive,
-      probe,
-      auditRoot,
-      beforeCreate: input.beforeCreate,
-    });
-  } finally {
-    await lock?.release();
+      beforeReclaim: input.beforeReclaim,
+    },
+  );
+  if (!guarded.ok) {
+    return { ok: false, reason: "guard_contended" };
   }
+  return guarded.value;
 }
 
-interface ClaimUnderLockInput {
+interface ClaimInGuardInput {
   paths: ReturnType<typeof resolveDiscoveryPaths>;
   selfClaim: DiscoveryClaim;
   isPidAlive: (pid: number) => boolean;
   probe: (port: number) => Promise<DaemonHello>;
   auditRoot: string;
-  beforeCreate?: () => Promise<void>;
+  beforePublish?: () => Promise<void>;
 }
 
-async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<ClaimDiscoveryResult> {
+async function claimDiscoveryInGuard(input: ClaimInGuardInput): Promise<ClaimDiscoveryResult> {
   const ownerFile = discoveryOwnerFile(input.paths.root);
-  const incumbent = await readDiscoveryClaim(input.paths.root);
+  const ownerRead = await readOwnerClaimInGuard(input.paths.root);
 
+  if (ownerRead.invalid) {
+    await auditStaleCleanup(input.auditRoot, ownerRead.invalid, input.paths, "invalid_owner_record");
+    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true, beforePublish: input.beforePublish });
+    await writeDerivedDiscoveryFiles(input.paths, input.selfClaim);
+    return { ok: true, claim: input.selfClaim };
+  }
+
+  const incumbent = ownerRead.claim;
   if (incumbent) {
     const decision = await classifyIncumbent({
       incumbent,
@@ -191,7 +207,10 @@ async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<Clai
       return decision.result!;
     }
     if (decision.action === "replace") {
-      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true });
+      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+        replace: true,
+        beforePublish: input.beforePublish,
+      });
       if (decision.auditStale) {
         await auditStaleCleanup(input.auditRoot, incumbent, input.paths);
       }
@@ -218,7 +237,10 @@ async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<Clai
     if (decision.action !== "replace") {
       throw new Error("unexpected legacy incumbent decision");
     }
-    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true });
+    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+      replace: true,
+      beforePublish: input.beforePublish,
+    });
     if (decision.auditStale || legacy.pid !== input.selfClaim.pid) {
       await auditStaleCleanup(input.auditRoot, legacy, input.paths);
     }
@@ -232,7 +254,7 @@ async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<Clai
   try {
     await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
       replace: false,
-      beforeCreate: input.beforeCreate,
+      beforePublish: input.beforePublish,
     });
   } catch (error) {
     if (!isAlreadyExistsError(error)) throw error;
@@ -247,7 +269,10 @@ async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<Clai
     });
     if (decision.action === "return") return decision.result!;
     if (decision.action === "replace") {
-      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true });
+      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+        replace: true,
+        beforePublish: input.beforePublish,
+      });
       if (decision.auditStale) await auditStaleCleanup(input.auditRoot, raced, input.paths);
       if (decision.auditForeign) await auditForeignReplaced(input.auditRoot, raced, input.selfClaim);
       await writeDerivedDiscoveryFiles(input.paths, input.selfClaim);
@@ -257,6 +282,34 @@ async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<Clai
   }
   await writeDerivedDiscoveryFiles(input.paths, input.selfClaim);
   return { ok: true, claim: input.selfClaim };
+}
+
+async function readOwnerClaimInGuard(
+  discoveryRoot: string,
+): Promise<{ claim?: DiscoveryClaim; invalid?: DiscoveryClaim }> {
+  try {
+    const raw = await readFile(discoveryOwnerFile(discoveryRoot), "utf8");
+    if (raw.length === 0) {
+      return { invalid: invalidOwnerPlaceholder() };
+    }
+    const parsed = parseDiscoveryClaim(raw);
+    if (!parsed) {
+      return { invalid: invalidOwnerPlaceholder() };
+    }
+    return { claim: parsed };
+  } catch {
+    return {};
+  }
+}
+
+function invalidOwnerPlaceholder(): DiscoveryClaim {
+  return {
+    pid: 0,
+    port: 0,
+    stateRoot: "",
+    startedAt: null,
+    protocolVersion: "",
+  };
 }
 
 type IncumbentDecision =
@@ -309,8 +362,6 @@ async function classifyIncumbent(input: {
     };
   }
 
-  // Legacy pid/port files carry no state root; a live hello without stateRoot is
-  // treated as incumbent (AGE-106 legacy compatibility), not a foreign squatter.
   if (
     input.incumbent.stateRoot === "" &&
     (typeof reported !== "string" || reported.length === 0)
@@ -342,29 +393,27 @@ async function readLegacyIncumbent(
 async function writeOwnerClaimAtomic(
   ownerFile: string,
   claim: DiscoveryClaim,
-  options: { replace: boolean; beforeCreate?: () => Promise<void> },
+  options: { replace: boolean; beforePublish?: () => Promise<void> },
 ): Promise<void> {
   const payload = `${JSON.stringify(claim)}\n`;
   const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
   await writeFile(tempFile, payload, "utf8");
 
-  if (!options.replace) {
-    await options.beforeCreate?.();
-    try {
-      const handle = await open(ownerFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
-      await handle.writeFile(payload, "utf8");
-      await handle.close();
-      await rm(tempFile, { force: true });
-      return;
-    } catch (error) {
-      await rm(tempFile, { force: true });
-      if (!isAlreadyExistsError(error)) throw error;
-      // Lost race: caller re-enters via read path on retry.
-      throw error;
-    }
+  await options.beforePublish?.();
+
+  if (options.replace) {
+    await rename(tempFile, ownerFile);
+    return;
   }
 
-  await rename(tempFile, ownerFile);
+  try {
+    await link(tempFile, ownerFile);
+    await rm(tempFile, { force: true });
+  } catch (error) {
+    await rm(tempFile, { force: true });
+    if (!isAlreadyExistsError(error)) throw error;
+    throw error;
+  }
 }
 
 async function writeDerivedDiscoveryFiles(
@@ -381,17 +430,19 @@ async function auditStaleCleanup(
   stateRoot: string,
   stale: DiscoveryClaim,
   paths: ReturnType<typeof resolveDiscoveryPaths>,
+  reason?: string,
 ): Promise<void> {
   const audit = new JsonlAuditStore(stateRoot);
   await audit.append({
     timestamp: Date.now(),
     kind: "discovery_stale_cleanup",
     detail: {
-      stale_pid: stale.pid,
-      stale_port: stale.port,
+      stale_pid: stale.pid > 0 ? stale.pid : undefined,
+      stale_port: stale.port > 0 ? stale.port : undefined,
       pid_file: paths.pidFile,
       port_file: paths.portFile,
       owner_file: discoveryOwnerFile(paths.root),
+      ...(reason ? { reason } : {}),
     },
   });
 }
@@ -434,6 +485,11 @@ export async function writeDaemonDiscoveryFiles(input: WriteDaemonDiscoveryFiles
   if (!result.ok) {
     if (result.reason === "incumbent") {
       throw new DiscoveryClaimLostError(result.winner);
+    }
+    if (result.reason === "guard_contended") {
+      throw new Error(
+        `agents-comm-bus daemon discovery guard contended; refusing to overwrite discovery with port ${input.port}`,
+      );
     }
     throw new Error(
       `agents-comm-bus daemon pid ${result.incumbent.pid} is alive but unresponsive; ` +

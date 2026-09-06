@@ -3174,7 +3174,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open7() {
+          ws.once("open", function open5() {
             duplex._final(callback);
           });
           return;
@@ -3195,7 +3195,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open7() {
+          ws.once("open", function open5() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -3661,8 +3661,6 @@ var DAEMON_NAME = "agents-comm-bus";
 var DAEMON_VERSION = "0.2.64";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
-var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
-var DEFAULT_SPAWN_LOCK_STALE_GRACE_MS = 2e3;
 function protocolMajor(version) {
   return version.split(".", 1)[0] ?? version;
 }
@@ -5380,123 +5378,195 @@ async function probeDaemon(options) {
   return connection.hello;
 }
 
-// ../core-daemon/bootstrap/spawn-lock.ts
-import { constants as constants2 } from "node:fs";
-import { open as open3, mkdir as mkdir3, readFile as readFile2, rm as rm2 } from "node:fs/promises";
+// ../core-daemon/bootstrap/discovery-claim.ts
+import { mkdir as mkdir4, readFile as readFile3, rename as rename2, rm as rm3, writeFile as writeFile2, link as link2 } from "node:fs/promises";
+import path5 from "node:path";
+
+// ../core-daemon/bootstrap/discovery-guard.ts
+import { mkdir as mkdir3, readFile as readFile2, rename, rm as rm2, stat as stat2, writeFile, link } from "node:fs/promises";
 import path4 from "node:path";
-function parseSpawnLockToken(raw) {
+var GUARD_FILE = "owner.lock";
+var RECLAIM_FILE = "owner.lock.reclaim";
+var RETRY_MS = 20;
+var DEFAULT_MAX_WAIT_MS = 2e3;
+function discoveryGuardFile(discoveryRoot2) {
+  return path4.join(discoveryRoot2, GUARD_FILE);
+}
+function discoveryReclaimLockFile(discoveryRoot2) {
+  return path4.join(discoveryRoot2, RECLAIM_FILE);
+}
+function parseDiscoveryGuardToken(raw) {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const parts = trimmed.split(":");
-  if (parts.length !== 2) {
-    return {};
-  }
-  const pid = Number(parts[0]);
-  const timestamp = Number(parts[1]);
-  return {
-    pid: Number.isInteger(pid) && pid > 0 ? pid : void 0,
-    timestamp: Number.isFinite(timestamp) && timestamp > 0 ? timestamp : void 0
-  };
-}
-function isTokenContentStale(token, options) {
-  const { pid, timestamp } = parseSpawnLockToken(token);
-  if (pid === void 0 || timestamp === void 0) {
-    return true;
-  }
-  if (!options.isPidAlive(pid)) {
-    return true;
-  }
-  return Date.now() - timestamp > options.staleTimeoutMs;
-}
-async function removeSpawnLockIfTokenMatches(lockPath, expectedToken) {
+  if (!trimmed) return void 0;
   try {
-    const current = await readFile2(lockPath, "utf8");
-    if (current.trim() !== expectedToken) {
-      return false;
-    }
-    await rm2(lockPath, { force: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function removeStaleSpawnLock(lockPath, options = {}) {
-  const resolved = resolveSpawnLockOptions(options);
-  let observedRaw;
-  try {
-    observedRaw = await readFile2(lockPath, "utf8");
-  } catch {
-    return false;
-  }
-  const observedToken = observedRaw.trim();
-  if (!isTokenContentStale(observedToken, resolved)) {
-    return false;
-  }
-  if (options.testHookAfterStaleCheck) {
-    await options.testHookAfterStaleCheck();
-  }
-  return removeSpawnLockIfTokenMatches(lockPath, observedToken);
-}
-async function tryAcquireSpawnLock(lockPath, options = {}) {
-  await mkdir3(path4.dirname(lockPath), { recursive: true });
-  const acquired = await createSpawnLock(lockPath);
-  if (acquired) {
-    return acquired;
-  }
-  if (!await removeStaleSpawnLock(lockPath, options)) {
-    return void 0;
-  }
-  return createSpawnLock(lockPath);
-}
-async function createSpawnLock(lockPath) {
-  try {
-    const handle = await open3(lockPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
-    const token = `${process.pid}:${Date.now()}`;
-    await handle.writeFile(`${token}
-`, "utf8");
-    await handle.close();
-    return {
-      path: lockPath,
-      acquired: true,
-      token,
-      release: async () => {
-        await removeSpawnLockIfTokenMatches(lockPath, token);
-      }
-    };
-  } catch (error) {
-    if (isAlreadyExistsError2(error)) {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0 || typeof parsed.at !== "number" || !Number.isFinite(parsed.at)) {
       return void 0;
     }
+    const startedAt = parsed.startedAt === null || parsed.startedAt === void 0 ? null : typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt) ? parsed.startedAt : void 0;
+    if (startedAt === void 0 && parsed.startedAt !== null && parsed.startedAt !== void 0) {
+      return void 0;
+    }
+    return { pid: parsed.pid, startedAt: startedAt ?? null, at: parsed.at };
+  } catch {
+    return void 0;
+  }
+}
+function guardTokensEqual(a, b) {
+  return a.pid === b.pid && a.startedAt === b.startedAt && a.at === b.at;
+}
+async function withDiscoveryGuard(discoveryRoot2, self, fn, options = {}) {
+  await mkdir3(discoveryRoot2, { recursive: true });
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive3;
+  const deadline = Date.now() + (options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
+  let acquiredToken;
+  while (Date.now() <= deadline) {
+    const attempt = await tryAcquireGuard(discoveryRoot2, self, isPidAlive2, options);
+    if (attempt.kind === "acquired") {
+      acquiredToken = attempt.token;
+      try {
+        return { ok: true, value: await fn() };
+      } finally {
+        await releaseGuardIfTokenMatches(discoveryGuardFile(discoveryRoot2), acquiredToken);
+      }
+    }
+    if (attempt.kind === "contended") {
+      await sleep(RETRY_MS);
+      continue;
+    }
+    return { ok: false, reason: "guard_contended" };
+  }
+  return { ok: false, reason: "guard_contended" };
+}
+async function tryAcquireGuard(discoveryRoot2, self, isPidAlive2, options) {
+  const guardPath = discoveryGuardFile(discoveryRoot2);
+  const token = buildGuardToken(self);
+  const published = await publishFileViaLink(guardPath, token, self.pid, options.beforeGuardLink);
+  if (published === "ok") {
+    return { kind: "acquired", token };
+  }
+  const raw = await readGuardRaw(guardPath);
+  if (raw === null) {
+    return { kind: "contended" };
+  }
+  const existing = parseDiscoveryGuardToken(raw);
+  if (!existing) {
+    return { kind: "contended" };
+  }
+  if (existing.pid === self.pid) {
+    return { kind: "contended" };
+  }
+  if (isPidAlive2(existing.pid)) {
+    return { kind: "contended" };
+  }
+  await options.beforeReclaim?.();
+  const reclaimed = await reclaimDeadGuard(discoveryRoot2, self, existing, isPidAlive2, options);
+  return reclaimed ? { kind: "contended" } : { kind: "failed" };
+}
+async function reclaimDeadGuard(discoveryRoot2, self, deadToken, isPidAlive2, options) {
+  const reclaimHeld = await tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2);
+  if (!reclaimHeld) return false;
+  try {
+    return await quarantineVerifiedGuard(discoveryRoot2, self, deadToken, options);
+  } finally {
+    await releaseGuardIfTokenMatches(discoveryReclaimLockFile(discoveryRoot2), reclaimHeld);
+  }
+}
+async function tryAcquireReclaimLock(discoveryRoot2, self, isPidAlive2) {
+  const reclaimPath = discoveryReclaimLockFile(discoveryRoot2);
+  const reclaimToken = buildGuardToken({ pid: self.pid, startedAt: self.startedAt });
+  if (await publishFileViaLink(reclaimPath, reclaimToken, self.pid) === "ok") {
+    return reclaimToken;
+  }
+  const raw = await readGuardRaw(reclaimPath);
+  if (!raw) return void 0;
+  const existing = parseDiscoveryGuardToken(raw);
+  if (!existing) return void 0;
+  if (isPidAlive2(existing.pid)) return void 0;
+  if (!await quarantineVerifiedGuardFile(reclaimPath, self, existing)) {
+    console.error(
+      "agents-comm-bus: dead discovery reclaim lock could not be recovered; manual cleanup required"
+    );
+    return void 0;
+  }
+  if (await publishFileViaLink(reclaimPath, reclaimToken, self.pid) === "ok") {
+    return reclaimToken;
+  }
+  return void 0;
+}
+async function quarantineVerifiedGuard(discoveryRoot2, self, expectedDeadToken, _options) {
+  return quarantineVerifiedGuardFile(discoveryGuardFile(discoveryRoot2), self, expectedDeadToken);
+}
+async function quarantineVerifiedGuardFile(guardPath, self, expectedDeadToken) {
+  const raw = await readGuardRaw(guardPath);
+  if (!raw) return false;
+  const current = parseDiscoveryGuardToken(raw);
+  if (!current || !guardTokensEqual(current, expectedDeadToken)) {
+    return false;
+  }
+  const stalePath = `${guardPath}.stale.${self.pid}.${Date.now()}`;
+  try {
+    await rename(guardPath, stalePath);
+  } catch {
+    return false;
+  }
+  await rm2(stalePath, { force: true });
+  return true;
+}
+async function publishFileViaLink(targetPath, content, selfPid, beforeLink) {
+  const tempPath = `${targetPath}.tmp.${selfPid}.${Date.now()}`;
+  await writeFile(tempPath, content, "utf8");
+  await beforeLink?.();
+  try {
+    await link(tempPath, targetPath);
+    await rm2(tempPath, { force: true });
+    return "ok";
+  } catch (error) {
+    await rm2(tempPath, { force: true });
+    if (isAlreadyExistsError2(error)) return "eexist";
     throw error;
   }
 }
-function resolveSpawnLockOptions(options) {
-  return {
-    isPidAlive: options.isPidAlive ?? defaultIsPidAlive3,
-    staleTimeoutMs: options.staleTimeoutMs ?? defaultSpawnLockStaleTimeoutMs()
+function buildGuardToken(self) {
+  const token = {
+    pid: self.pid,
+    startedAt: self.startedAt,
+    at: Date.now()
   };
+  return `${JSON.stringify(token)}
+`;
 }
-function defaultSpawnLockStaleTimeoutMs(bootstrapTimeoutMs = DEFAULT_BOOTSTRAP_TIMEOUT_MS) {
-  return bootstrapTimeoutMs + DEFAULT_SPAWN_LOCK_STALE_GRACE_MS;
+async function readGuardRaw(filePath) {
+  try {
+    return await readFile2(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+async function releaseGuardIfTokenMatches(guardPath, expectedToken) {
+  try {
+    const current = await readFile2(guardPath, "utf8");
+    if (current !== expectedToken) return;
+    await rm2(guardPath, { force: true });
+  } catch {
+  }
 }
 function defaultIsPidAlive3(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.code !== "ESRCH";
   }
 }
 function isAlreadyExistsError2(error) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ../core-daemon/bootstrap/discovery-claim.ts
-import { constants as constants3 } from "node:fs";
-import { mkdir as mkdir4, open as open4, readFile as readFile3, rename, rm as rm3, writeFile } from "node:fs/promises";
-import path5 from "node:path";
 var DiscoveryClaimLostError = class extends Error {
   winner;
   constructor(winner) {
@@ -5514,12 +5584,14 @@ function discoveryOwnerFile(discoveryRoot2) {
 async function readDiscoveryClaim(discoveryRoot2) {
   try {
     const raw = await readFile3(discoveryOwnerFile(discoveryRoot2), "utf8");
+    if (raw.length === 0) return void 0;
     return parseDiscoveryClaim(raw);
   } catch {
     return void 0;
   }
 }
 function parseDiscoveryClaim(raw) {
+  if (raw.length === 0) return void 0;
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0 || typeof parsed.port !== "number" || !Number.isInteger(parsed.port) || parsed.port <= 0 || parsed.port >= 65536 || typeof parsed.stateRoot !== "string" || parsed.stateRoot.length === 0 || typeof parsed.protocolVersion !== "string" || parsed.protocolVersion.length === 0) {
@@ -5563,24 +5635,38 @@ async function claimDiscovery(input) {
   const isPidAlive2 = input.isPidAlive ?? defaultIsPidAlive4;
   const probe = input.probeDaemon ?? ((port) => probeDaemon({ port }));
   const auditRoot = input.auditStateRoot ?? input.stateRoot;
-  const acquireLock = input.acquireLock ?? ((lockPath) => tryAcquireSpawnLock(lockPath, { isPidAlive: isPidAlive2 }));
-  const lock = await acquireLock(paths.spawnLock);
-  try {
-    return await claimDiscoveryUnderLock({
+  const guarded = await withDiscoveryGuard(
+    paths.root,
+    { pid: selfPid, startedAt: selfStartedAt },
+    () => claimDiscoveryInGuard({
       paths,
       selfClaim,
       isPidAlive: isPidAlive2,
       probe,
       auditRoot,
-      beforeCreate: input.beforeCreate
-    });
-  } finally {
-    await lock?.release();
+      beforePublish: input.beforePublish
+    }),
+    {
+      maxWaitMs: input.guardTimeoutMs,
+      isPidAlive: isPidAlive2,
+      beforeReclaim: input.beforeReclaim
+    }
+  );
+  if (!guarded.ok) {
+    return { ok: false, reason: "guard_contended" };
   }
+  return guarded.value;
 }
-async function claimDiscoveryUnderLock(input) {
+async function claimDiscoveryInGuard(input) {
   const ownerFile = discoveryOwnerFile(input.paths.root);
-  const incumbent = await readDiscoveryClaim(input.paths.root);
+  const ownerRead = await readOwnerClaimInGuard(input.paths.root);
+  if (ownerRead.invalid) {
+    await auditStaleCleanup(input.auditRoot, ownerRead.invalid, input.paths, "invalid_owner_record");
+    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true, beforePublish: input.beforePublish });
+    await writeDerivedDiscoveryFiles(input.paths, input.selfClaim);
+    return { ok: true, claim: input.selfClaim };
+  }
+  const incumbent = ownerRead.claim;
   if (incumbent) {
     const decision = await classifyIncumbent({
       incumbent,
@@ -5593,7 +5679,10 @@ async function claimDiscoveryUnderLock(input) {
       return decision.result;
     }
     if (decision.action === "replace") {
-      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true });
+      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+        replace: true,
+        beforePublish: input.beforePublish
+      });
       if (decision.auditStale) {
         await auditStaleCleanup(input.auditRoot, incumbent, input.paths);
       }
@@ -5619,7 +5708,10 @@ async function claimDiscoveryUnderLock(input) {
     if (decision.action !== "replace") {
       throw new Error("unexpected legacy incumbent decision");
     }
-    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true });
+    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+      replace: true,
+      beforePublish: input.beforePublish
+    });
     if (decision.auditStale || legacy.pid !== input.selfClaim.pid) {
       await auditStaleCleanup(input.auditRoot, legacy, input.paths);
     }
@@ -5632,7 +5724,7 @@ async function claimDiscoveryUnderLock(input) {
   try {
     await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
       replace: false,
-      beforeCreate: input.beforeCreate
+      beforePublish: input.beforePublish
     });
   } catch (error) {
     if (!isAlreadyExistsError3(error)) throw error;
@@ -5647,7 +5739,10 @@ async function claimDiscoveryUnderLock(input) {
     });
     if (decision.action === "return") return decision.result;
     if (decision.action === "replace") {
-      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: true });
+      await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+        replace: true,
+        beforePublish: input.beforePublish
+      });
       if (decision.auditStale) await auditStaleCleanup(input.auditRoot, raced, input.paths);
       if (decision.auditForeign) await auditForeignReplaced(input.auditRoot, raced, input.selfClaim);
       await writeDerivedDiscoveryFiles(input.paths, input.selfClaim);
@@ -5657,6 +5752,30 @@ async function claimDiscoveryUnderLock(input) {
   }
   await writeDerivedDiscoveryFiles(input.paths, input.selfClaim);
   return { ok: true, claim: input.selfClaim };
+}
+async function readOwnerClaimInGuard(discoveryRoot2) {
+  try {
+    const raw = await readFile3(discoveryOwnerFile(discoveryRoot2), "utf8");
+    if (raw.length === 0) {
+      return { invalid: invalidOwnerPlaceholder() };
+    }
+    const parsed = parseDiscoveryClaim(raw);
+    if (!parsed) {
+      return { invalid: invalidOwnerPlaceholder() };
+    }
+    return { claim: parsed };
+  } catch {
+    return {};
+  }
+}
+function invalidOwnerPlaceholder() {
+  return {
+    pid: 0,
+    port: 0,
+    stateRoot: "",
+    startedAt: null,
+    protocolVersion: ""
+  };
 }
 async function classifyIncumbent(input) {
   if (discoveryClaimIdentityMatches(input.incumbent, input.selfClaim.pid, input.selfClaim.startedAt ?? null) && input.incumbent.port === input.selfClaim.port) {
@@ -5711,42 +5830,41 @@ async function writeOwnerClaimAtomic(ownerFile, claim, options) {
   const payload = `${JSON.stringify(claim)}
 `;
   const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
-  await writeFile(tempFile, payload, "utf8");
-  if (!options.replace) {
-    await options.beforeCreate?.();
-    try {
-      const handle = await open4(ownerFile, constants3.O_CREAT | constants3.O_EXCL | constants3.O_WRONLY);
-      await handle.writeFile(payload, "utf8");
-      await handle.close();
-      await rm3(tempFile, { force: true });
-      return;
-    } catch (error) {
-      await rm3(tempFile, { force: true });
-      if (!isAlreadyExistsError3(error)) throw error;
-      throw error;
-    }
+  await writeFile2(tempFile, payload, "utf8");
+  await options.beforePublish?.();
+  if (options.replace) {
+    await rename2(tempFile, ownerFile);
+    return;
   }
-  await rename(tempFile, ownerFile);
+  try {
+    await link2(tempFile, ownerFile);
+    await rm3(tempFile, { force: true });
+  } catch (error) {
+    await rm3(tempFile, { force: true });
+    if (!isAlreadyExistsError3(error)) throw error;
+    throw error;
+  }
 }
 async function writeDerivedDiscoveryFiles(paths, claim) {
-  await writeFile(paths.pidFile, `${claim.pid}
+  await writeFile2(paths.pidFile, `${claim.pid}
 `, "utf8");
   const portTemp = `${paths.portFile}.tmp.${claim.pid}.${Date.now()}`;
-  await writeFile(portTemp, `${claim.port}
+  await writeFile2(portTemp, `${claim.port}
 `, "utf8");
-  await rename(portTemp, paths.portFile);
+  await rename2(portTemp, paths.portFile);
 }
-async function auditStaleCleanup(stateRoot2, stale, paths) {
+async function auditStaleCleanup(stateRoot2, stale, paths, reason) {
   const audit = new JsonlAuditStore(stateRoot2);
   await audit.append({
     timestamp: Date.now(),
     kind: "discovery_stale_cleanup",
     detail: {
-      stale_pid: stale.pid,
-      stale_port: stale.port,
+      stale_pid: stale.pid > 0 ? stale.pid : void 0,
+      stale_port: stale.port > 0 ? stale.port : void 0,
       pid_file: paths.pidFile,
       port_file: paths.portFile,
-      owner_file: discoveryOwnerFile(paths.root)
+      owner_file: discoveryOwnerFile(paths.root),
+      ...reason ? { reason } : {}
     }
   });
 }
@@ -5783,6 +5901,11 @@ async function writeDaemonDiscoveryFiles(input) {
   if (!result.ok) {
     if (result.reason === "incumbent") {
       throw new DiscoveryClaimLostError(result.winner);
+    }
+    if (result.reason === "guard_contended") {
+      throw new Error(
+        `agents-comm-bus daemon discovery guard contended; refusing to overwrite discovery with port ${input.port}`
+      );
     }
     throw new Error(
       `agents-comm-bus daemon pid ${result.incumbent.pid} is alive but unresponsive; refusing to overwrite discovery with port ${input.port}`
@@ -5951,29 +6074,55 @@ var IDLE_NO_OWNED_RESOURCES_REASON = "idle_no_owned_resources";
 function discoveryFilesMatchSelf(input) {
   return input.onDiskPid === input.selfPid && input.onDiskPort === input.selfPort;
 }
+function ownerRecordMatchesSelf(owner, selfPid, selfPort, selfStartedAt) {
+  return owner.pid === selfPid && owner.port === selfPort && (owner.startedAt == null || selfStartedAt == null || owner.startedAt === selfStartedAt);
+}
 async function removeDiscoveryFilesIfOwned(input) {
   const paths = resolveDiscoveryPaths({
     stateRoot: input.stateRoot,
     discoveryRoot: input.discoveryRoot
   });
-  const readPid = input.readPidFile ?? readDiscoveryPidFile;
-  const readPort = input.readPortFile ?? readDiscoveryPortFile;
-  const onDiskPid = await readPid(paths.pidFile);
-  const onDiskPort = await readPort(paths.portFile);
-  const owner = await readDiscoveryClaim(paths.root);
-  const ownerMatches = owner !== void 0 && owner.pid === input.selfPid && owner.port === input.selfPort;
-  if (!discoveryFilesMatchSelf({
-    selfPid: input.selfPid,
-    selfPort: input.selfPort,
-    onDiskPid,
-    onDiskPort
-  }) && !ownerMatches) {
-    return false;
-  }
-  await rm4(paths.pidFile, { force: true });
-  await rm4(paths.portFile, { force: true });
-  await rm4(discoveryOwnerFile(paths.root), { force: true });
-  return true;
+  const selfStartedAt = input.selfStartedAt ?? currentProcessStartEpochMs();
+  const isPidAlive2 = input.isPidAlive ?? defaultIsPidAlive5;
+  const guarded = await withDiscoveryGuard(
+    paths.root,
+    { pid: input.selfPid, startedAt: selfStartedAt },
+    async () => {
+      const readPid = input.readPidFile ?? readDiscoveryPidFile;
+      const readPort = input.readPortFile ?? readDiscoveryPortFile;
+      const onDiskPid = await readPid(paths.pidFile);
+      const onDiskPort = await readPort(paths.portFile);
+      const owner = await readDiscoveryClaim(paths.root);
+      if (owner !== void 0) {
+        if (!ownerRecordMatchesSelf(owner, input.selfPid, input.selfPort, selfStartedAt)) {
+          return false;
+        }
+      } else if (!discoveryFilesMatchSelf({
+        selfPid: input.selfPid,
+        selfPort: input.selfPort,
+        onDiskPid,
+        onDiskPort
+      })) {
+        return false;
+      }
+      const reread = await readDiscoveryClaim(paths.root);
+      if (reread !== void 0) {
+        if (!ownerRecordMatchesSelf(reread, input.selfPid, input.selfPort, selfStartedAt)) {
+          return false;
+        }
+      }
+      await rm4(paths.pidFile, { force: true });
+      await rm4(paths.portFile, { force: true });
+      await rm4(discoveryOwnerFile(paths.root), { force: true });
+      return true;
+    },
+    {
+      maxWaitMs: input.guardTimeoutMs,
+      isPidAlive: isPidAlive2
+    }
+  );
+  if (!guarded.ok) return false;
+  return guarded.value;
 }
 var globalRetiring = false;
 async function retireDaemon(options) {
@@ -5997,7 +6146,8 @@ async function retireDaemon(options) {
         stateRoot: options.stateRoot,
         discoveryRoot: options.discoveryRoot,
         selfPid,
-        selfPort: options.port
+        selfPort: options.port,
+        selfStartedAt: currentProcessStartEpochMs()
       }).then(() => void 0),
       "remove discovery files during daemon retirement"
     );
@@ -6055,6 +6205,14 @@ async function readDiscoveryPortFile(portFile) {
     return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
   } catch {
     return null;
+  }
+}
+function defaultIsPidAlive5(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== "ESRCH";
   }
 }
 
@@ -6129,7 +6287,7 @@ async function checkDaemonPidOwnership(options) {
   const selfPid = options.selfPid ?? process.pid;
   const selfStartedAt = options.selfStartedAt ?? currentProcessStartEpochMs();
   const read = options.readPidFile ?? readPidFile2;
-  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive5;
+  const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive6;
   const writeDiscovery = options.writeDiscoveryFiles ?? writeDaemonDiscoveryFiles;
   const discoveryRoot2 = options.discoveryRoot ?? options.stateRoot;
   if (discoveryRoot2) {
@@ -6244,7 +6402,7 @@ async function readPidFile2(pidFile) {
     return { status: "error", error };
   }
 }
-function defaultIsPidAlive5(pid) {
+function defaultIsPidAlive6(pid) {
   try {
     process.kill(pid, 0);
     return true;
@@ -6830,13 +6988,13 @@ var MessageBus = class {
       return this.resolveQueryForCurlRecovery(plannedId, decision, curlRecovery);
     }
     if (!message.text) return false;
-    const open7 = await this.options.storage.listOpenQueriesByConversation(
+    const open5 = await this.options.storage.listOpenQueriesByConversation(
       conversation.conversation_id
     );
-    if (open7.length === 0) return false;
+    if (open5.length === 0) return false;
     const chat = chatRefFromConversation(conversation);
     if (message.reply_to) {
-      const target = open7.find((q) => q.source_message_id === message.reply_to);
+      const target = open5.find((q) => q.source_message_id === message.reply_to);
       if (target) {
         const decision = decisionFromMessage(target, message, chat, this.now());
         if (!decision) return false;
@@ -6847,7 +7005,7 @@ var MessageBus = class {
         );
       }
     }
-    const candidates = open7.map((q) => ({
+    const candidates = open5.map((q) => ({
       query: q,
       decision: decisionFromMessage(q, message, chat, this.now())
     })).filter((entry) => entry.decision !== null);
@@ -6965,17 +7123,17 @@ var MessageBus = class {
     return resolved;
   }
   async resolveQueryFromCallback(input) {
-    const open7 = await this.options.storage.getOpenQueryById(input.queryId);
-    if (!open7) {
+    const open5 = await this.options.storage.getOpenQueryById(input.queryId);
+    if (!open5) {
       const existing = await this.options.storage.getQuery(input.queryId);
       return { kind: existing ? "already_resolved" : "unknown_query" };
     }
     if (input.value === "other") {
       const ok = await this.options.storage.updateQueryKind(input.queryId, "freetext");
       if (!ok) return { kind: "already_resolved" };
-      return { kind: "awaiting_freetext", query: open7 };
+      return { kind: "awaiting_freetext", query: open5 };
     }
-    const decision = decisionFromCallbackValue(open7, input.value, input.fromId, input.chat, this.now());
+    const decision = decisionFromCallbackValue(open5, input.value, input.fromId, input.chat, this.now());
     if (!decision) return { kind: "invalid_value", value: input.value };
     const stored = await this.options.storage.resolveQuery(
       input.queryId,
@@ -6990,12 +7148,12 @@ var MessageBus = class {
     await this.options.audit.append({
       timestamp: this.now(),
       kind: "query_resolved",
-      agent: open7.agent,
-      session: open7.session,
+      agent: open5.agent,
+      session: open5.session,
       detail: { query_id: input.queryId, decision: decision.decision, via: "callback" }
     });
-    await this.notifyResolveSinks(open7, decision, input.queryId);
-    return { kind: "resolved", decision, query: open7 };
+    await this.notifyResolveSinks(open5, decision, input.queryId);
+    return { kind: "resolved", decision, query: open5 };
   }
   async listConversations(filter) {
     return this.options.storage.listConversations({
@@ -8516,7 +8674,7 @@ function isConstraintError(error) {
 
 // ../core-daemon/storage/transcripts.ts
 import { createReadStream as createReadStream2 } from "node:fs";
-import { mkdir as mkdir5, stat as stat2 } from "node:fs/promises";
+import { mkdir as mkdir5, stat as stat3 } from "node:fs/promises";
 import { dirname as dirname3, join as join4 } from "node:path";
 import { createInterface as createInterface2 } from "node:readline/promises";
 function safeSegment2(value) {
@@ -8535,7 +8693,7 @@ var JsonlTranscriptStore = class {
   async *read(conversation_id, opts = {}) {
     const path11 = this.pathFor(conversation_id);
     try {
-      await stat2(path11);
+      await stat3(path11);
     } catch {
       return;
     }
@@ -8561,7 +8719,7 @@ var JsonlTranscriptStore = class {
 // ../core-daemon/storage/blobs.ts
 import { createHash } from "node:crypto";
 import { createReadStream as createReadStream3 } from "node:fs";
-import { mkdir as mkdir6, open as open5, stat as stat3 } from "node:fs/promises";
+import { mkdir as mkdir6, open as open3, stat as stat4 } from "node:fs/promises";
 import { join as join5 } from "node:path";
 import { Readable } from "node:stream";
 var ContentAddressedBlobStore = class {
@@ -8576,7 +8734,7 @@ var ContentAddressedBlobStore = class {
     await mkdir6(join5(this.root, "blobs", hash.slice(0, 2)), { recursive: true });
     let handle;
     try {
-      handle = await open5(path11, "wx");
+      handle = await open3(path11, "wx");
       await handle.writeFile(content);
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
@@ -8593,7 +8751,7 @@ var ContentAddressedBlobStore = class {
   }
   async exists(ref) {
     try {
-      const info = await stat3(this.pathFor(ref));
+      const info = await stat4(this.pathFor(ref));
       return info.isFile() && info.size === ref.size;
     } catch {
       return false;
@@ -9609,8 +9767,8 @@ function startSessionEndSweep(options) {
 }
 
 // ../core-daemon/runtime/comm-lease-sweep.ts
-import { constants as constants4, existsSync as existsSync2 } from "node:fs";
-import { mkdir as mkdir7, open as open6, readdir, readFile as readFile7, rm as rm5, stat as stat4 } from "node:fs/promises";
+import { constants as constants2, existsSync as existsSync2 } from "node:fs";
+import { mkdir as mkdir7, open as open4, readdir, readFile as readFile7, rm as rm5, stat as stat5 } from "node:fs/promises";
 import os3 from "node:os";
 import path6 from "node:path";
 var DEFAULT_COMM_LEASE_SWEEP_INTERVAL_MS = 60 * 60 * 1e3;
@@ -9651,7 +9809,7 @@ async function acquireSweepGuard(leasePath, selfPid, now, isPidAlive2, staleness
   const token = `${selfPid}:${now()}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const handle = await open6(guardPath, constants4.O_CREAT | constants4.O_EXCL | constants4.O_WRONLY);
+      const handle = await open4(guardPath, constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY);
       await handle.writeFile(`${token}
 `, "utf8");
       await handle.close();
@@ -9676,7 +9834,7 @@ async function guardIsStale(guardPath, selfPid, now, isPidAlive2, stalenessMs) {
     return !isPidAlive2(pid);
   } catch {
     try {
-      const info = await stat4(guardPath);
+      const info = await stat5(guardPath);
       return now() - info.mtimeMs > stalenessMs;
     } catch {
       return false;
@@ -9758,7 +9916,7 @@ async function runCommLeaseSweep(input) {
     const commDir = path6.join(root, commId);
     let entries;
     try {
-      const info = await stat4(commDir);
+      const info = await stat5(commDir);
       if (!info.isDirectory()) continue;
       entries = await readdir(commDir);
     } catch {
@@ -11045,7 +11203,7 @@ async function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner, identit
 
 // ../core-daemon/bridges/claude/wake.ts
 import crypto2 from "node:crypto";
-import { mkdir as mkdir9, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir9, writeFile as writeFile3 } from "node:fs/promises";
 import os5 from "node:os";
 import path7 from "node:path";
 function hashProjectKey(projectPath) {
@@ -11081,7 +11239,7 @@ function claudeWakeDirForProject(projectPath, homeDir = os5.homedir(), accountLa
 }
 async function writeClaudeWakeTrigger(wakeDir, now = Date.now) {
   await mkdir9(wakeDir, { recursive: true });
-  await writeFile2(path7.join(wakeDir, "trigger-enter"), `${now()}
+  await writeFile3(path7.join(wakeDir, "trigger-enter"), `${now()}
 `, "utf8");
 }
 var WAKE_SEED_MAX_CHARS = 2e3;
@@ -11099,11 +11257,11 @@ function buildWakeSeed(input) {
 }
 async function writeClaudeWakeSeed(wakeDir, text) {
   await mkdir9(wakeDir, { recursive: true });
-  await writeFile2(path7.join(wakeDir, "wake-seed.txt"), text, "utf8");
+  await writeFile3(path7.join(wakeDir, "wake-seed.txt"), text, "utf8");
 }
 async function writeClaudeWakeResponse(wakeDir, payload) {
   await mkdir9(wakeDir, { recursive: true });
-  await writeFile2(
+  await writeFile3(
     path7.join(wakeDir, "permission-response.json"),
     JSON.stringify(payload),
     "utf8"
@@ -12709,7 +12867,7 @@ function recordOrEmpty2(value) {
 
 // ../core-daemon/bridges/codex/app-server-lifecycle.ts
 import { execFileSync } from "node:child_process";
-import { readFile as readFile8, writeFile as writeFile3 } from "node:fs/promises";
+import { readFile as readFile8, writeFile as writeFile4 } from "node:fs/promises";
 import os6 from "node:os";
 import path8 from "node:path";
 var DEFAULT_STOPPED_BY = "codex-bridge-lease-release";
@@ -12736,7 +12894,7 @@ async function cleanupManagedCodexAppServer(session, options = {}) {
   }
   state.stoppedAt = (options.now ?? (() => /* @__PURE__ */ new Date()))().toISOString();
   state.stoppedBy = DEFAULT_STOPPED_BY;
-  await writeFile3(statePath, JSON.stringify(state, null, 2), "utf8");
+  await writeFile4(statePath, JSON.stringify(state, null, 2), "utf8");
   return result;
 }
 async function killTree(processManager, pid) {
@@ -14385,7 +14543,7 @@ var PiBridgeFactory = class {
 };
 
 // ../core-daemon/runtime/comm-adapter-loader.ts
-import { readdir as readdir2, stat as stat5 } from "node:fs/promises";
+import { readdir as readdir2, stat as stat6 } from "node:fs/promises";
 import path9 from "node:path";
 import { pathToFileURL } from "node:url";
 function defaultOnError({ modulePath, error }) {
@@ -14427,13 +14585,13 @@ async function resolveAdapterModulePath(adaptersDir, entry) {
   const entryPath = path9.join(adaptersDir, entry);
   if (entry.endsWith(".js")) return entryPath;
   try {
-    if (!(await stat5(entryPath)).isDirectory()) return null;
+    if (!(await stat6(entryPath)).isDirectory()) return null;
   } catch {
     return null;
   }
   const factoryPath = path9.join(entryPath, "factory.js");
   try {
-    if ((await stat5(factoryPath)).isFile()) return factoryPath;
+    if ((await stat6(factoryPath)).isFile()) return factoryPath;
   } catch {
     return null;
   }

@@ -1,6 +1,8 @@
 import { readFile, rm } from "node:fs/promises";
 import { resolveDiscoveryPaths } from "../paths.js";
+import { currentProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 import { discoveryOwnerFile, readDiscoveryClaim } from "./discovery-claim.js";
+import { withDiscoveryGuard } from "./discovery-guard.js";
 export const IDLE_NO_OWNED_RESOURCES_REASON = "idle_no_owned_resources";
 /**
  * AGE-36: discovery files may be removed only when BOTH on-disk pid and port
@@ -10,32 +12,54 @@ export const IDLE_NO_OWNED_RESOURCES_REASON = "idle_no_owned_resources";
 export function discoveryFilesMatchSelf(input) {
     return input.onDiskPid === input.selfPid && input.onDiskPort === input.selfPort;
 }
+function ownerRecordMatchesSelf(owner, selfPid, selfPort, selfStartedAt) {
+    return (owner.pid === selfPid &&
+        owner.port === selfPort &&
+        (owner.startedAt == null || selfStartedAt == null || owner.startedAt === selfStartedAt));
+}
 export async function removeDiscoveryFilesIfOwned(input) {
     const paths = resolveDiscoveryPaths({
         stateRoot: input.stateRoot,
         discoveryRoot: input.discoveryRoot,
     });
-    const readPid = input.readPidFile ?? readDiscoveryPidFile;
-    const readPort = input.readPortFile ?? readDiscoveryPortFile;
-    const onDiskPid = await readPid(paths.pidFile);
-    const onDiskPort = await readPort(paths.portFile);
-    const owner = await readDiscoveryClaim(paths.root);
-    const ownerMatches = owner !== undefined &&
-        owner.pid === input.selfPid &&
-        owner.port === input.selfPort;
-    if (!discoveryFilesMatchSelf({
-        selfPid: input.selfPid,
-        selfPort: input.selfPort,
-        onDiskPid,
-        onDiskPort,
-    }) &&
-        !ownerMatches) {
+    const selfStartedAt = input.selfStartedAt ?? currentProcessStartEpochMs();
+    const isPidAlive = input.isPidAlive ?? defaultIsPidAlive;
+    const guarded = await withDiscoveryGuard(paths.root, { pid: input.selfPid, startedAt: selfStartedAt }, async () => {
+        const readPid = input.readPidFile ?? readDiscoveryPidFile;
+        const readPort = input.readPortFile ?? readDiscoveryPortFile;
+        const onDiskPid = await readPid(paths.pidFile);
+        const onDiskPort = await readPort(paths.portFile);
+        const owner = await readDiscoveryClaim(paths.root);
+        if (owner !== undefined) {
+            if (!ownerRecordMatchesSelf(owner, input.selfPid, input.selfPort, selfStartedAt)) {
+                return false;
+            }
+        }
+        else if (!discoveryFilesMatchSelf({
+            selfPid: input.selfPid,
+            selfPort: input.selfPort,
+            onDiskPid,
+            onDiskPort,
+        })) {
+            return false;
+        }
+        const reread = await readDiscoveryClaim(paths.root);
+        if (reread !== undefined) {
+            if (!ownerRecordMatchesSelf(reread, input.selfPid, input.selfPort, selfStartedAt)) {
+                return false;
+            }
+        }
+        await rm(paths.pidFile, { force: true });
+        await rm(paths.portFile, { force: true });
+        await rm(discoveryOwnerFile(paths.root), { force: true });
+        return true;
+    }, {
+        maxWaitMs: input.guardTimeoutMs,
+        isPidAlive,
+    });
+    if (!guarded.ok)
         return false;
-    }
-    await rm(paths.pidFile, { force: true });
-    await rm(paths.portFile, { force: true });
-    await rm(discoveryOwnerFile(paths.root), { force: true });
-    return true;
+    return guarded.value;
 }
 let globalRetiring = false;
 export function resetDaemonRetirementGuardForTests() {
@@ -66,6 +90,7 @@ export async function retireDaemon(options) {
             discoveryRoot: options.discoveryRoot,
             selfPid,
             selfPort: options.port,
+            selfStartedAt: currentProcessStartEpochMs(),
         }).then(() => undefined), "remove discovery files during daemon retirement");
     }
     catch (error) {
@@ -128,6 +153,15 @@ async function readDiscoveryPortFile(portFile) {
     }
     catch {
         return null;
+    }
+}
+function defaultIsPidAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        return error.code !== "ESRCH";
     }
 }
 //# sourceMappingURL=daemon-retirement.js.map
