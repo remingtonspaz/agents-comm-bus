@@ -1,6 +1,7 @@
 import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Message, SessionId, Storage } from "agents-comm-bus-core";
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
+import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "./process-start-epoch.js";
 import type { AgentLeaseProperties, PersistHeldCommLeaseAgentProperties, ReadHeldCommLease } from "./comm-lease.js";
 export type { AgentLeaseProperties, HeldCommLeaseLookupResult, PersistHeldCommLeaseAgentProperties, PersistHeldCommLeaseAgentPropertiesResult, ReadHeldCommLease, } from "./comm-lease.js";
 import type { PendingInboundEntry } from "./pending-inbound.js";
@@ -188,5 +189,8 @@ export declare function sessionLeaseOwnerWithDaemon(ownerFromParams: {
     process_pid: number | null;
     process_label?: string | null;
     process_start_time?: number | null;
-} | undefined, daemonOwner: DaemonSelfIdentity): SessionLeaseOwner;
+} | undefined, daemonOwner: DaemonSelfIdentity, identity?: {
+    prefetch: typeof prefetchProcessStartIdentity;
+    read: typeof readProcessStartEpochMs;
+}): Promise<SessionLeaseOwner>;
 //# sourceMappingURL=agent-bridge.d.ts.map

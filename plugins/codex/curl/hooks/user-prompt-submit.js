@@ -3775,7 +3775,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.61";
+var DAEMON_VERSION = "0.2.62";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -4167,14 +4167,41 @@ async function ensureDaemon(options = {}) {
   const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
   const clientProtocolVersion = options.protocolVersion ?? IPC_PROTOCOL_VERSION;
   const deadline = Date.now() + timeoutMs;
-  const probe = options.probeDaemon ?? ((port) => probeDaemon({
-    port,
-    clientVersion: options.clientVersion ?? DAEMON_VERSION,
-    protocolVersion: clientProtocolVersion,
-    metadata: options.metadata,
-    timeoutMs: Math.min(1e3, retryMs * 4)
-  }));
-  const existing = await probeFromPortFile(discoveryPaths.portFile, probe);
+  const isPidAlive = options.isPidAlive ?? defaultIsPidAlive2;
+  let warnedBusy = false;
+  const probe = async (port) => {
+    const pid = await readPidFile(discoveryPaths.pidFile);
+    const budget = Math.max(1, Math.min(deadline - Date.now(), pid !== void 0 && isPidAlive(pid) ? 5e3 : Math.min(1e3, retryMs * 4)));
+    let timer;
+    try {
+      return await Promise.race([
+        options.probeDaemon ? options.probeDaemon(port) : probeDaemon({
+          port,
+          clientVersion: options.clientVersion ?? DAEMON_VERSION,
+          protocolVersion: clientProtocolVersion,
+          metadata: options.metadata,
+          timeoutMs: budget
+        }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("daemon probe timed out")), budget);
+        })
+      ]);
+    } finally {
+      if (timer)
+        clearTimeout(timer);
+    }
+  };
+  const probeDiscovery = () => probeFromPortFile(discoveryPaths.portFile, probe, {
+    pidFile: discoveryPaths.pidFile,
+    isPidAlive,
+    onBusy: (pid) => {
+      if (warnedBusy)
+        return;
+      warnedBusy = true;
+      (options.log ?? console.error)(`agents-comm-bus: daemon pid ${pid} is alive but unresponsive; waiting`);
+    }
+  });
+  const existing = await probeDiscovery();
   if (existing) {
     const reuse = classifyDaemonReuse(existing.hello.protocolVersion, clientProtocolVersion);
     if (reuse === "compatible") {
@@ -4193,7 +4220,7 @@ async function ensureDaemon(options = {}) {
       retryMs
     });
   }
-  const afterTerminate = await probeFromPortFile(discoveryPaths.portFile, probe);
+  const afterTerminate = Date.now() < deadline ? await probeDiscovery() : void 0;
   if (afterTerminate && classifyDaemonReuse(afterTerminate.hello.protocolVersion, clientProtocolVersion) === "compatible") {
     return { ...afterTerminate, spawned: false };
   }
@@ -4204,7 +4231,6 @@ async function ensureDaemon(options = {}) {
     isPidAlive: options.isPidAlive ?? defaultIsPidAlive2
   });
   let spawned = false;
-  const isPidAlive = options.isPidAlive ?? defaultIsPidAlive2;
   const spawnLockOptions = {
     isPidAlive,
     staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(timeoutMs)
@@ -4213,17 +4239,26 @@ async function ensureDaemon(options = {}) {
     const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
     if (lock) {
       try {
-        const recheck = await probeFromPortFile(discoveryPaths.portFile, probe);
+        const recheck = await probeDiscovery();
         if (recheck) {
           return { ...recheck, spawned };
         }
+        const incumbentPid = await readPidFile(discoveryPaths.pidFile);
+        if (incumbentPid !== void 0 && isPidAlive(incumbentPid)) {
+          const found3 = await waitForDaemon(probeDiscovery, deadline, retryMs);
+          if (found3)
+            return { ...found3, spawned };
+          break;
+        }
+        if (Date.now() >= deadline)
+          break;
         if (options.spawnDaemon) {
           await options.spawnDaemon(paths, discoveryPaths);
         } else {
           defaultSpawnDaemon(paths, discoveryPaths, env);
         }
         spawned = true;
-        const found2 = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+        const found2 = await waitForDaemon(probeDiscovery, deadline, retryMs);
         if (found2) {
           return { ...found2, spawned: true };
         }
@@ -4231,7 +4266,7 @@ async function ensureDaemon(options = {}) {
         await lock.release();
       }
     }
-    const found = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+    const found = await waitForDaemon(probeDiscovery, deadline, retryMs);
     if (found) {
       return { ...found, spawned };
     }
@@ -4243,7 +4278,8 @@ async function ensureDaemon(options = {}) {
     });
     await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
   }
-  return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root);
+  const finalPid = await readPidFile(discoveryPaths.pidFile);
+  return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root, finalPid !== void 0 && isPidAlive(finalPid) ? finalPid : void 0);
 }
 var DAEMON_STDERR_LOG_TAIL_MAX_BYTES = 4096;
 async function readBoundedDaemonStderrTail(stateRoot2) {
@@ -4266,9 +4302,11 @@ async function readBoundedDaemonStderrTail(stateRoot2) {
     });
   }
 }
-async function throwDaemonBootstrapTimeoutError(discoveryRoot2, stateRoot2) {
+async function throwDaemonBootstrapTimeoutError(discoveryRoot2, stateRoot2, livePid) {
   const logPath = daemonStderrLogPath(stateRoot2);
   let message = `Timed out starting agents-comm-bus daemon under ${discoveryRoot2}.`;
+  if (livePid !== void 0)
+    message += ` Daemon pid ${livePid} is alive but unresponsive; no replacement spawned.`;
   message += `
 Daemon stderr log: ${logPath}`;
   const tail = await readBoundedDaemonStderrTail(stateRoot2);
@@ -4304,21 +4342,28 @@ async function terminateMismatchedDaemon(input) {
   await rm2(input.paths.pidFile, { force: true });
   await rm2(input.paths.portFile, { force: true });
 }
-async function probeFromPortFile(portFile, probe) {
+async function probeFromPortFile(portFile, probe, options) {
   const port = await readPortFile(portFile);
   if (port === void 0) {
     return void 0;
   }
   try {
     return { port, hello: await probe(port) };
-  } catch {
-    await rm2(portFile, { force: true });
+  } catch (error) {
+    const pid = await readPidFile(options.pidFile);
+    const dead = pid !== void 0 && !options.isPidAlive(pid);
+    const refused = error?.code === "ECONNREFUSED";
+    if ((dead || refused) && await readPortFile(portFile) === port) {
+      await rm2(portFile, { force: true });
+    } else if (pid !== void 0 && !dead) {
+      options.onBusy(pid);
+    }
     return void 0;
   }
 }
-async function waitForDaemon(portFile, probe, deadline, retryMs) {
+async function waitForDaemon(probeDiscovery, deadline, retryMs) {
   while (Date.now() <= deadline) {
-    const found = await probeFromPortFile(portFile, probe);
+    const found = await probeDiscovery();
     if (found) {
       return found;
     }
@@ -4370,8 +4415,8 @@ function defaultIsPidAlive2(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.code !== "ESRCH";
   }
 }
 function defaultTerminateDaemon(pid) {

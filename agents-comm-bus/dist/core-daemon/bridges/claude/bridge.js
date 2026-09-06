@@ -328,7 +328,7 @@ export class ClaudeBridge {
             ? this.isLocallyDeliverable(baselineSession)
             : false;
         const acquired = await this.options.storage.acquireSessionLease(session, connectionId, now, this.options.daemonOwner
-            ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
+            ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
             : sessionLeaseOwnerFromParams(params));
         if (!acquired) {
             await this.ensureCommsBestEffort(project, accountLabelScope);

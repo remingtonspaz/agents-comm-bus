@@ -37,6 +37,7 @@ export interface CommLeaseSweepRecoveryInput {
 }
 export declare function isCommLeaseRecoveryAllowed(recoveryAllowed?: () => boolean): boolean;
 export declare function runCommLeaseSweep(input: {
+    prefetchIdentities?: (pids: number[]) => Promise<void>;
     homeDir?: string;
     selfPid?: number;
     now?: () => number;
@@ -59,6 +60,7 @@ export interface CommLeaseSweepHandle {
     stop(): void;
 }
 export declare function startCommLeaseSweep(options: {
+    prefetchIdentities?: (pids: number[]) => Promise<void>;
     homeDir?: string;
     selfPid?: number;
     intervalMs?: number;

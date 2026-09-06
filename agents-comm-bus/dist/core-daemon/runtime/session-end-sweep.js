@@ -45,6 +45,9 @@ export async function runSessionEndSweep(input) {
     };
     const at = (input.now ?? Date.now)();
     const sessions = await input.storage.listSessions({ status: "active" });
+    if (input.prefetchIdentities) {
+        await input.prefetchIdentities(sessions.flatMap(session => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid]));
+    }
     for (const session of sessions) {
         const ownerState = classifySessionOwnerProcess(session, livenessOptions);
         if (!shouldSweepEndSession(session, livenessOptions)) {
@@ -143,6 +146,7 @@ export function startSessionEndSweep(options) {
         earlyReconcile = false;
         void runSessionEndSweep({
             storage: options.storage,
+            prefetchIdentities: options.prefetchIdentities,
             now: options.now,
             isPidAlive: options.isPidAlive,
             recencyMs: options.recencyMs,

@@ -26,6 +26,7 @@ export declare function runSessionEndSweep(input: {
     recencyMs?: number;
     /** Row-ender classification injectables (start-probe, recency, pid liveness). */
     ownerLivenessOptions?: SessionOwnerLivenessOptions;
+    prefetchIdentities?: (pids: number[]) => Promise<void>;
     log?: (message: string) => void;
     /** Test hook: hold the sweep in-flight until released (session-end pass only). */
     sweepHold?: () => Promise<void>;
@@ -39,6 +40,7 @@ export interface SessionEndSweepHandle {
 }
 export declare function startSessionEndSweep(options: {
     storage: Storage;
+    prefetchIdentities?: (pids: number[]) => Promise<void>;
     intervalMs?: number;
     now?: () => number;
     isPidAlive?: (pid: number) => boolean;

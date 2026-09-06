@@ -186,6 +186,20 @@ export async function runCommLeaseSweep(input) {
         catch {
             continue;
         }
+        // Batch OS probes before classification; guarded snapshot re-read below
+        // remains the authority for deletion if files change while we await.
+        if (input.prefetchIdentities) {
+            const pids = [];
+            for (const entry of entries.filter(name => name.endsWith(".json"))) {
+                try {
+                    const record = parseLeaseRecord(await readFile(path.join(commDir, entry), "utf8"));
+                    if (record)
+                        pids.push(record.pid);
+                }
+                catch { /* disappearing/malformed files are handled by the real pass */ }
+            }
+            await input.prefetchIdentities(pids);
+        }
         for (const entry of entries) {
             if (!entry.endsWith(".json") || entry.endsWith(".json.guard"))
                 continue;
@@ -305,6 +319,7 @@ export function startCommLeaseSweep(options) {
         }
         sweepInFlight = true;
         void runCommLeaseSweep({
+            prefetchIdentities: options.prefetchIdentities,
             homeDir: options.homeDir,
             selfPid: options.selfPid,
             now: options.now,

@@ -7,6 +7,7 @@ import { CommLeaseArbiter, inferAuthorityRank, } from "./runtime/comm-lease.js";
 import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { prefetchProcessStartIdentity } from "./runtime/process-start-epoch.js";
 import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
 import { IDLE_NO_OWNED_RESOURCES_REASON, retireDaemon, } from "./bootstrap/daemon-retirement.js";
 import { startDaemonPidWatchdog } from "./bootstrap/pid-watchdog.js";
@@ -364,6 +365,13 @@ export async function runDaemon(options) {
         throw error;
     }
     await bus.start();
+    // Resolve our own immutable identity once, after IPC discovery is available.
+    // This async wait does not block handshakes; lease acquisition below uses it.
+    await prefetchProcessStartIdentity([process.pid]);
+    // Discovery/IPC are published first. OS identity probing must never delay
+    // the hello that bootstrap clients use to recognize this incumbent.
+    void storage.listSessions({ status: "active" }).then(sessions => prefetchProcessStartIdentity([process.pid, ...sessions.flatMap(session => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid])]))
+        .catch(() => { });
     const collectBridgeBlockers = () => {
         const blockers = {};
         for (const bridge of bridges) {
@@ -420,6 +428,7 @@ export async function runDaemon(options) {
         log: (message) => console.error(message),
     });
     sessionEndSweepHandle = startSessionEndSweep({
+        prefetchIdentities: prefetchProcessStartIdentity,
         storage,
         log: (message) => console.error(message),
         reconcile: {
@@ -448,18 +457,21 @@ export async function runDaemon(options) {
     // AGE-102: boot sweep → periodic (on success) → restore → eager, strictly ordered.
     void runCommLeaseDaemonBootstrap({
         bootSweep: () => runCommLeaseSweep({
+            prefetchIdentities: prefetchProcessStartIdentity,
             log: (message) => console.error(message),
             audit,
             recovery: commLeaseSweepRecovery,
             recoveryAllowed: () => !daemonRetiring,
         }).then(() => { }),
         startPeriodicSweep: () => startCommLeaseSweep({
+            prefetchIdentities: prefetchProcessStartIdentity,
             runOnStart: false,
             log: (message) => console.error(message),
             audit,
             recovery: commLeaseSweepRecovery,
         }),
         bootRestore: () => runBootScopeRestore({
+            prefetchIdentities: prefetchProcessStartIdentity,
             stateRoot: paths.root,
             discoveryRoot: discoveryPaths.root,
             storage,

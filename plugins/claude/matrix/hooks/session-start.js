@@ -68,6 +68,91 @@ function parseAccountLabelScope(stored) {
   return map;
 }
 
+// dist/core-daemon/runtime/process-start-epoch.js
+import { execFile } from "node:child_process";
+function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, selfPid = process.pid) {
+  const values = /* @__PURE__ */ new Map();
+  const pending = /* @__PURE__ */ new Map();
+  let generation = 0;
+  const prefetch = async (pids, refresh = false) => {
+    const ids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+    const pinned = (pid) => pid === selfPid && values.get(pid)?.value != null;
+    const missing = ids.filter((pid) => !pending.has(pid) && !pinned(pid) && (refresh || !values.has(pid) || now() - values.get(pid).at >= ttlMs));
+    if (missing.length) {
+      const epoch = generation;
+      const work = Promise.resolve().then(() => probe(missing)).catch(() => /* @__PURE__ */ new Map()).then((results) => {
+        if (epoch !== generation)
+          return;
+        for (const pid of missing)
+          values.set(pid, { value: results.get(pid) ?? null, at: now() });
+        for (const pid of values.keys()) {
+          if (values.size <= 4096)
+            break;
+          if (pid !== selfPid)
+            values.delete(pid);
+        }
+      }).finally(() => {
+        if (epoch === generation)
+          for (const pid of missing)
+            pending.delete(pid);
+      });
+      for (const pid of missing)
+        pending.set(pid, work);
+    }
+    await Promise.all(ids.map((pid) => pending.get(pid)));
+  };
+  return {
+    read(pid) {
+      if (pending.has(pid))
+        return null;
+      const entry = values.get(pid);
+      if (entry && (pid === selfPid && entry.value != null || now() - entry.at < ttlMs))
+        return entry.value;
+      void prefetch([pid]);
+      return null;
+    },
+    prefetch,
+    reset() {
+      generation += 1;
+      values.clear();
+      pending.clear();
+    }
+  };
+}
+function execText(file, args) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+}
+async function probeProcessIdentities(pids, platform = process.platform, run = execText) {
+  const result = /* @__PURE__ */ new Map();
+  pids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!pids.length)
+    return result;
+  if (platform === "win32") {
+    const out = await run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { try { '{0}:{1}' -f $_.Id,$_.StartTime.ToUniversalTime().Ticks } catch {} }`
+    ]);
+    for (const line of out.trim().split(/\r?\n/)) {
+      const match = /^(\d+):(\d+)$/.exec(line.trim());
+      if (match)
+        result.set(Number(match[1]), Number(BigInt(match[2]) / 10000n - 62135596800000n));
+    }
+  } else if (platform === "darwin") {
+    const out = await run("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")]);
+    for (const line of out.trim().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (match && Number.isFinite(Date.parse(match[2])))
+        result.set(Number(match[1]), Date.parse(match[2]));
+    }
+  }
+  return result;
+}
+var identityCache = createProcessStartIdentityCache(probeProcessIdentities);
+
 // dist/core-daemon/runtime/session-owner-liveness.js
 var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
 

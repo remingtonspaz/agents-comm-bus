@@ -4,6 +4,15 @@ export interface ProcessStartIdentityOptions {
     readProcUptime?: () => string | null;
     readClockTicksPerSec?: () => number | null;
 }
+/** Bounded, injectable cache. Expired entries are inconclusive, never stale evidence. */
+export declare function createProcessStartIdentityCache(probe: (pids: number[]) => Promise<ReadonlyMap<number, number | null>>, now?: () => number, ttlMs?: number, selfPid?: number): {
+    read(pid: number): number | null;
+    prefetch: (pids: readonly number[], refresh?: boolean) => Promise<void>;
+    reset(): void;
+};
+export declare function probeProcessIdentities(pids: number[], platform?: NodeJS.Platform, run?: (file: string, args: string[]) => Promise<string>): Promise<Map<number, number | null>>;
+export declare function prefetchProcessStartIdentity(pids: readonly number[]): Promise<void>;
+export declare function __resetProcessStartIdentityCacheForTests(): void;
 /**
  * Stable per-process identity for liveness (stored on session rows).
  * Linux: FNV hash of boot_id + starttime ticks (no Date.now drift).
@@ -20,6 +29,5 @@ export type ProcessStartIdentityCompare = "match" | "mismatch" | "inconclusive";
  * Inconclusive when either side is unavailable — callers must not treat that as dead.
  */
 export declare function compareProcessStartIdentity(stored: number | null | undefined, pid: number, options?: ProcessStartIdentityOptions): ProcessStartIdentityCompare;
-/** Boot epoch for the current process — stable for this process lifetime. */
 export declare function currentProcessStartEpochMs(): number;
 //# sourceMappingURL=process-start-epoch.d.ts.map

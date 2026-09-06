@@ -13,6 +13,7 @@ export interface BootScopeRestoreSummary {
     skipped_foreign_owner: number;
 }
 export interface BootScopeRestoreInput {
+    prefetchIdentities?: (pids: number[]) => Promise<void>;
     stateRoot: string;
     discoveryRoot: string;
     storage: Storage;

@@ -27,13 +27,40 @@ export async function ensureDaemon(options = {}) {
     const retryMs = options.retryMs ?? DEFAULT_BOOTSTRAP_RETRY_MS;
     const clientProtocolVersion = options.protocolVersion ?? IPC_PROTOCOL_VERSION;
     const deadline = Date.now() + timeoutMs;
-    const probe = options.probeDaemon ?? ((port) => defaultProbeDaemon({
-        port,
-        clientVersion: options.clientVersion ?? DAEMON_VERSION,
-        protocolVersion: clientProtocolVersion,
-        metadata: options.metadata,
-        timeoutMs: Math.min(1_000, retryMs * 4),
-    }));
+    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    let warnedBusy = false;
+    const probe = async (port) => {
+        const pid = await readPidFile(discoveryPaths.pidFile);
+        const budget = Math.max(1, Math.min(deadline - Date.now(), pid !== undefined && isPidAlive(pid) ? 5_000 : Math.min(1_000, retryMs * 4)));
+        let timer;
+        try {
+            return await Promise.race([
+                options.probeDaemon ? options.probeDaemon(port) : defaultProbeDaemon({
+                    port,
+                    clientVersion: options.clientVersion ?? DAEMON_VERSION,
+                    protocolVersion: clientProtocolVersion,
+                    metadata: options.metadata,
+                    timeoutMs: budget,
+                }),
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new Error("daemon probe timed out")), budget);
+                }),
+            ]);
+        }
+        finally {
+            if (timer)
+                clearTimeout(timer);
+        }
+    };
+    const probeDiscovery = () => probeFromPortFile(discoveryPaths.portFile, probe, {
+        pidFile: discoveryPaths.pidFile, isPidAlive,
+        onBusy: (pid) => {
+            if (warnedBusy)
+                return;
+            warnedBusy = true;
+            (options.log ?? console.error)(`agents-comm-bus: daemon pid ${pid} is alive but unresponsive; waiting`);
+        },
+    });
     // Reuse is gated on the IPC PROTOCOL, never on DAEMON_VERSION. A running
     // daemon whose wire/schema contract is compatible can serve this client
     // regardless of its bundle version: DAEMON_VERSION governs central-install
@@ -41,7 +68,7 @@ export async function ensureDaemon(options = {}) {
     // The old exact daemon-version equality (in BOTH directions) is what let two
     // shims at different patch versions terminate each other's daemon forever.
     // See AGENTS.md "Daemon version vs IPC protocol".
-    const existing = await probeFromPortFile(discoveryPaths.portFile, probe);
+    const existing = await probeDiscovery();
     if (existing) {
         const reuse = classifyDaemonReuse(existing.hello.protocolVersion, clientProtocolVersion);
         if (reuse === "compatible") {
@@ -62,7 +89,7 @@ export async function ensureDaemon(options = {}) {
             retryMs,
         });
     }
-    const afterTerminate = await probeFromPortFile(discoveryPaths.portFile, probe);
+    const afterTerminate = Date.now() < deadline ? await probeDiscovery() : undefined;
     if (afterTerminate &&
         classifyDaemonReuse(afterTerminate.hello.protocolVersion, clientProtocolVersion) === "compatible") {
         return { ...afterTerminate, spawned: false };
@@ -74,7 +101,6 @@ export async function ensureDaemon(options = {}) {
         isPidAlive: options.isPidAlive ?? defaultIsPidAlive,
     });
     let spawned = false;
-    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     const spawnLockOptions = {
         isPidAlive,
         staleTimeoutMs: defaultSpawnLockStaleTimeoutMs(timeoutMs),
@@ -83,10 +109,19 @@ export async function ensureDaemon(options = {}) {
         const lock = await tryAcquireSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
         if (lock) {
             try {
-                const recheck = await probeFromPortFile(discoveryPaths.portFile, probe);
+                const recheck = await probeDiscovery();
                 if (recheck) {
                     return { ...recheck, spawned };
                 }
+                const incumbentPid = await readPidFile(discoveryPaths.pidFile);
+                if (incumbentPid !== undefined && isPidAlive(incumbentPid)) {
+                    const found = await waitForDaemon(probeDiscovery, deadline, retryMs);
+                    if (found)
+                        return { ...found, spawned };
+                    break;
+                }
+                if (Date.now() >= deadline)
+                    break;
                 if (options.spawnDaemon) {
                     await options.spawnDaemon(paths, discoveryPaths);
                 }
@@ -94,7 +129,7 @@ export async function ensureDaemon(options = {}) {
                     defaultSpawnDaemon(paths, discoveryPaths, env);
                 }
                 spawned = true;
-                const found = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+                const found = await waitForDaemon(probeDiscovery, deadline, retryMs);
                 if (found) {
                     return { ...found, spawned: true };
                 }
@@ -103,7 +138,7 @@ export async function ensureDaemon(options = {}) {
                 await lock.release();
             }
         }
-        const found = await waitForDaemon(discoveryPaths.portFile, probe, deadline, retryMs);
+        const found = await waitForDaemon(probeDiscovery, deadline, retryMs);
         if (found) {
             return { ...found, spawned };
         }
@@ -115,7 +150,8 @@ export async function ensureDaemon(options = {}) {
         });
         await removeStaleSpawnLock(discoveryPaths.spawnLock, spawnLockOptions);
     }
-    return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root);
+    const finalPid = await readPidFile(discoveryPaths.pidFile);
+    return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root, finalPid !== undefined && isPidAlive(finalPid) ? finalPid : undefined);
 }
 const DAEMON_STDERR_LOG_TAIL_MAX_BYTES = 4_096;
 async function readBoundedDaemonStderrTail(stateRoot) {
@@ -139,9 +175,11 @@ async function readBoundedDaemonStderrTail(stateRoot) {
         await handle?.close().catch(() => { });
     }
 }
-async function throwDaemonBootstrapTimeoutError(discoveryRoot, stateRoot) {
+async function throwDaemonBootstrapTimeoutError(discoveryRoot, stateRoot, livePid) {
     const logPath = daemonStderrLogPath(stateRoot);
     let message = `Timed out starting agents-comm-bus daemon under ${discoveryRoot}.`;
+    if (livePid !== undefined)
+        message += ` Daemon pid ${livePid} is alive but unresponsive; no replacement spawned.`;
     message += `\nDaemon stderr log: ${logPath}`;
     const tail = await readBoundedDaemonStderrTail(stateRoot);
     if (tail === null) {
@@ -189,7 +227,7 @@ async function terminateMismatchedDaemon(input) {
     await rm(input.paths.pidFile, { force: true });
     await rm(input.paths.portFile, { force: true });
 }
-async function probeFromPortFile(portFile, probe) {
+async function probeFromPortFile(portFile, probe, options) {
     const port = await readPortFile(portFile);
     if (port === undefined) {
         return undefined;
@@ -197,14 +235,24 @@ async function probeFromPortFile(portFile, probe) {
     try {
         return { port, hello: await probe(port) };
     }
-    catch {
-        await rm(portFile, { force: true });
+    catch (error) {
+        const pid = await readPidFile(options.pidFile);
+        const dead = pid !== undefined && !options.isPidAlive(pid);
+        const refused = error?.code === "ECONNREFUSED";
+        // Timeout/reset/malformed hello is not evidence that an incumbent died.
+        // Recheck the observed port before cleanup; never remove a replacement.
+        if ((dead || refused) && await readPortFile(portFile) === port) {
+            await rm(portFile, { force: true });
+        }
+        else if (pid !== undefined && !dead) {
+            options.onBusy(pid);
+        }
         return undefined;
     }
 }
-async function waitForDaemon(portFile, probe, deadline, retryMs) {
+async function waitForDaemon(probeDiscovery, deadline, retryMs) {
     while (Date.now() <= deadline) {
-        const found = await probeFromPortFile(portFile, probe);
+        const found = await probeDiscovery();
         if (found) {
             return found;
         }
@@ -261,8 +309,9 @@ function defaultIsPidAlive(pid) {
         process.kill(pid, 0);
         return true;
     }
-    catch {
-        return false;
+    catch (error) {
+        // Permission denied is not evidence of death.
+        return error.code !== "ESRCH";
     }
 }
 function defaultTerminateDaemon(pid) {

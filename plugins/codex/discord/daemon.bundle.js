@@ -3658,7 +3658,7 @@ import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.61";
+var DAEMON_VERSION = "0.2.62";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -3732,8 +3732,88 @@ import os2 from "node:os";
 import path3 from "node:path";
 
 // ../core-daemon/runtime/process-start-epoch.ts
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
+function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, selfPid = process.pid) {
+  const values = /* @__PURE__ */ new Map();
+  const pending = /* @__PURE__ */ new Map();
+  let generation = 0;
+  const prefetch = async (pids, refresh = false) => {
+    const ids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+    const pinned = (pid) => pid === selfPid && values.get(pid)?.value != null;
+    const missing = ids.filter((pid) => !pending.has(pid) && !pinned(pid) && (refresh || !values.has(pid) || now() - values.get(pid).at >= ttlMs));
+    if (missing.length) {
+      const epoch = generation;
+      const work = Promise.resolve().then(() => probe(missing)).catch(() => /* @__PURE__ */ new Map()).then((results) => {
+        if (epoch !== generation) return;
+        for (const pid of missing) values.set(pid, { value: results.get(pid) ?? null, at: now() });
+        for (const pid of values.keys()) {
+          if (values.size <= 4096) break;
+          if (pid !== selfPid) values.delete(pid);
+        }
+      }).finally(() => {
+        if (epoch === generation) for (const pid of missing) pending.delete(pid);
+      });
+      for (const pid of missing) pending.set(pid, work);
+    }
+    await Promise.all(ids.map((pid) => pending.get(pid)));
+  };
+  return {
+    read(pid) {
+      if (pending.has(pid)) return null;
+      const entry = values.get(pid);
+      if (entry && (pid === selfPid && entry.value != null || now() - entry.at < ttlMs)) return entry.value;
+      void prefetch([pid]);
+      return null;
+    },
+    prefetch,
+    reset() {
+      generation += 1;
+      values.clear();
+      pending.clear();
+    }
+  };
+}
+function execText(file, args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 },
+      (error, stdout) => error ? reject(error) : resolve(stdout)
+    );
+  });
+}
+async function probeProcessIdentities(pids, platform = process.platform, run = execText) {
+  const result = /* @__PURE__ */ new Map();
+  pids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!pids.length) return result;
+  if (platform === "win32") {
+    const out = await run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { try { '{0}:{1}' -f $_.Id,$_.StartTime.ToUniversalTime().Ticks } catch {} }`
+    ]);
+    for (const line of out.trim().split(/\r?\n/)) {
+      const match = /^(\d+):(\d+)$/.exec(line.trim());
+      if (match) result.set(Number(match[1]), Number(BigInt(match[2]) / 10000n - 62135596800000n));
+    }
+  } else if (platform === "darwin") {
+    const out = await run("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")]);
+    for (const line of out.trim().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (match && Number.isFinite(Date.parse(match[2]))) result.set(Number(match[1]), Date.parse(match[2]));
+    }
+  }
+  return result;
+}
+var identityCache = createProcessStartIdentityCache(probeProcessIdentities);
+async function prefetchProcessStartIdentity(pids) {
+  if (process.platform === "win32" || process.platform === "darwin") {
+    await identityCache.prefetch(pids, true);
+  }
+}
 function readProcessStartIdentity(pid, options = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
@@ -3743,11 +3823,8 @@ function readProcessStartIdentity(pid, options = {}) {
     if (process.platform === "linux") {
       return readLinuxProcessStartIdentity(pid, options);
     }
-    if (process.platform === "darwin") {
-      return readDarwinProcessStartEpochMs(pid);
-    }
-    if (process.platform === "win32") {
-      return readWindowsProcessStartEpochMs(pid);
+    if (process.platform === "darwin" || process.platform === "win32") {
+      return identityCache.read(pid);
     }
   } catch {
     return null;
@@ -3799,30 +3876,6 @@ function readLinuxProcessStartIdentity(pid, options) {
   const startTicks = readLinuxStartTicks(pid, options.readProcStat);
   if (!bootId || startTicks == null) return null;
   return fnv1a32(`${bootId}:${startTicks}`);
-}
-function readDarwinProcessStartEpochMs(pid) {
-  const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-    encoding: "utf8"
-  }).trim();
-  if (!out) return null;
-  const parsed = Date.parse(out);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-function readWindowsProcessStartEpochMs(pid) {
-  const out = execFileSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-Command",
-      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`
-    ],
-    // windowsHide: a console-less daemon spawning powershell.exe without it
-    // allocates a visible console window per probe (one flash per liveness check).
-    { encoding: "utf8", windowsHide: true }
-  ).trim();
-  const ticks = Number(out);
-  if (!Number.isFinite(ticks)) return null;
-  return ticks / 1e4 - 621355968e5;
 }
 
 // ../core-daemon/runtime/comm-lease.ts
@@ -5418,6 +5471,7 @@ async function runBootScopeRestore(input) {
       return summary;
     }
     const sessions = await input.storage.listSessions({ status: "active" });
+    await input.prefetchIdentities?.(sessions.flatMap((session) => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid]));
     summary.candidates = sessions.length;
     const scopesToRestore = /* @__PURE__ */ new Map();
     for (const session of sessions) {
@@ -7501,6 +7555,7 @@ var SqliteStorage = class _SqliteStorage {
     const ownerPid = owner?.process_pid ?? null;
     let ownerStartTime = owner?.process_start_time ?? null;
     if (ownerPid != null && ownerStartTime == null) {
+      await prefetchProcessStartIdentity([ownerPid]);
       ownerStartTime = readProcessStartEpochMs(ownerPid);
     }
     try {
@@ -8968,6 +9023,11 @@ async function runSessionEndSweep(input) {
   };
   const at = (input.now ?? Date.now)();
   const sessions = await input.storage.listSessions({ status: "active" });
+  if (input.prefetchIdentities) {
+    await input.prefetchIdentities(
+      sessions.flatMap((session) => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid])
+    );
+  }
   for (const session of sessions) {
     const ownerState = classifySessionOwnerProcess(session, livenessOptions);
     if (!shouldSweepEndSession(session, livenessOptions)) {
@@ -9060,6 +9120,7 @@ function startSessionEndSweep(options) {
     earlyReconcile = false;
     void runSessionEndSweep({
       storage: options.storage,
+      prefetchIdentities: options.prefetchIdentities,
       now: options.now,
       isPidAlive: options.isPidAlive,
       recencyMs: options.recencyMs,
@@ -9266,6 +9327,17 @@ async function runCommLeaseSweep(input) {
     } catch {
       continue;
     }
+    if (input.prefetchIdentities) {
+      const pids = [];
+      for (const entry of entries.filter((name) => name.endsWith(".json"))) {
+        try {
+          const record = parseLeaseRecord(await readFile6(path4.join(commDir, entry), "utf8"));
+          if (record) pids.push(record.pid);
+        } catch {
+        }
+      }
+      await input.prefetchIdentities(pids);
+    }
     for (const entry of entries) {
       if (!entry.endsWith(".json") || entry.endsWith(".json.guard")) continue;
       if (entry.endsWith(".guard")) continue;
@@ -9380,6 +9452,7 @@ function startCommLeaseSweep(options) {
     }
     sweepInFlight = true;
     void runCommLeaseSweep({
+      prefetchIdentities: options.prefetchIdentities,
       homeDir: options.homeDir,
       selfPid: options.selfPid,
       now: options.now,
@@ -9863,6 +9936,9 @@ async function runDaemon(options) {
     throw error;
   }
   await bus.start();
+  await prefetchProcessStartIdentity([process.pid]);
+  void storage.listSessions({ status: "active" }).then((sessions) => prefetchProcessStartIdentity([process.pid, ...sessions.flatMap((session) => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid])])).catch(() => {
+  });
   const collectBridgeBlockers = () => {
     const blockers = {};
     for (const bridge of bridges) {
@@ -9927,6 +10003,7 @@ async function runDaemon(options) {
     log: (message) => console.error(message)
   });
   sessionEndSweepHandle = startSessionEndSweep({
+    prefetchIdentities: prefetchProcessStartIdentity,
     storage,
     log: (message) => console.error(message),
     reconcile: {
@@ -9954,6 +10031,7 @@ async function runDaemon(options) {
   };
   void runCommLeaseDaemonBootstrap({
     bootSweep: () => runCommLeaseSweep({
+      prefetchIdentities: prefetchProcessStartIdentity,
       log: (message) => console.error(message),
       audit,
       recovery: commLeaseSweepRecovery,
@@ -9961,12 +10039,14 @@ async function runDaemon(options) {
     }).then(() => {
     }),
     startPeriodicSweep: () => startCommLeaseSweep({
+      prefetchIdentities: prefetchProcessStartIdentity,
       runOnStart: false,
       log: (message) => console.error(message),
       audit,
       recovery: commLeaseSweepRecovery
     }),
     bootRestore: () => runBootScopeRestore({
+      prefetchIdentities: prefetchProcessStartIdentity,
       stateRoot: paths.root,
       discoveryRoot: discoveryPaths.root,
       storage,
@@ -10489,11 +10569,12 @@ function parseReloadOptions(params) {
 import crypto3 from "node:crypto";
 
 // ../core-daemon/runtime/agent-bridge.ts
-function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
+async function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner, identity = { prefetch: prefetchProcessStartIdentity, read: readProcessStartEpochMs }) {
   const pid = ownerFromParams?.process_pid ?? null;
   let startTime = ownerFromParams?.process_start_time ?? null;
   if (pid != null && startTime == null) {
-    startTime = readProcessStartEpochMs(pid);
+    await identity.prefetch([pid]);
+    startTime = identity.read(pid);
   }
   return {
     process_pid: pid,
@@ -11093,7 +11174,7 @@ var ClaudeBridge = class {
       session,
       connectionId,
       now,
-      this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams(params)
+      this.options.daemonOwner ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams(params)
     );
     if (!acquired) {
       await this.ensureCommsBestEffort(project, accountLabelScope);
@@ -12174,7 +12255,7 @@ function recordOrEmpty2(value) {
 }
 
 // ../core-daemon/bridges/codex/app-server-lifecycle.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFile as readFile7, writeFile as writeFile3 } from "node:fs/promises";
 import os6 from "node:os";
 import path6 from "node:path";
@@ -12241,7 +12322,7 @@ var defaultProcessManager = {
         "if ($null -ne $p) { [Console]::Out.Write($p.CommandLine) }"
       ].join("; ");
       try {
-        const output = execFileSync2(
+        const output = execFileSync(
           "powershell.exe",
           ["-NoProfile", "-Command", script],
           { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -12252,7 +12333,7 @@ var defaultProcessManager = {
       }
     }
     try {
-      const output = execFileSync2(
+      const output = execFileSync(
         "ps",
         ["-p", String(pid), "-o", "command="],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -12276,7 +12357,7 @@ function Get-Children([int]$ParentPid) {
 Get-Children -ParentPid ${pid}
 `;
       try {
-        const output = execFileSync2(
+        const output = execFileSync(
           "powershell.exe",
           ["-NoProfile", "-Command", script],
           { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -12287,7 +12368,7 @@ Get-Children -ParentPid ${pid}
       }
     }
     try {
-      const output = execFileSync2(
+      const output = execFileSync(
         "pgrep",
         ["-P", String(pid)],
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
@@ -12775,7 +12856,7 @@ var CodexBridge = class {
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
-    const leaseOwner = this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams2(params, "codex"), this.options.daemonOwner) : sessionLeaseOwnerFromParams2(params, "codex");
+    const leaseOwner = this.options.daemonOwner ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams2(params, "codex"), this.options.daemonOwner) : sessionLeaseOwnerFromParams2(params, "codex");
     let acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,
@@ -13727,7 +13808,7 @@ var PiBridge = class {
       account_label_scope: accountLabelScope,
       status: "active"
     });
-    const leaseOwner = this.options.daemonOwner ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams3(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams3(params);
+    const leaseOwner = this.options.daemonOwner ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams3(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams3(params);
     const acquired = await this.options.storage.acquireSessionLease(
       session,
       connectionId,

@@ -1,6 +1,6 @@
 {
   "name": "matrix",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Bidirectional Matrix messaging for Codex through the shared agents-comm-bus daemon.",
   "author": {
     "name": "Satrio"

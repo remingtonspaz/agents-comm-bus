@@ -68,6 +68,7 @@ export async function runBootScopeRestore(input) {
             return summary;
         }
         const sessions = await input.storage.listSessions({ status: "active" });
+        await input.prefetchIdentities?.(sessions.flatMap(session => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid]));
         summary.candidates = sessions.length;
         const scopesToRestore = new Map();
         for (const session of sessions) {

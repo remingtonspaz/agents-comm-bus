@@ -1,10 +1,11 @@
-import { readProcessStartEpochMs } from "./process-start-epoch.js";
+import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "./process-start-epoch.js";
 /** Merge hook-supplied process owner with daemon-resolved identity (AGE-58). */
-export function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner) {
+export async function sessionLeaseOwnerWithDaemon(ownerFromParams, daemonOwner, identity = { prefetch: prefetchProcessStartIdentity, read: readProcessStartEpochMs }) {
     const pid = ownerFromParams?.process_pid ?? null;
     let startTime = ownerFromParams?.process_start_time ?? null;
     if (pid != null && startTime == null) {
-        startTime = readProcessStartEpochMs(pid);
+        await identity.prefetch([pid]);
+        startTime = identity.read(pid);
     }
     return {
         process_pid: pid,
