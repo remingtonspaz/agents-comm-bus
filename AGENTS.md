@@ -527,6 +527,7 @@ agents-comm account-add `
 
 | Symptom | First thing to check |
 |---------|----------------------|
+| Comms fail in the dev checkout | Probe the dev discovery port directly with `daemon_status`; compare `hello.metadata.stateRoot` with the intended durable root (`~/.agents-comm-bus`). A temp/foreign root indicates a leaked daemon. Do not bootstrap as a diagnostic. |
 | MCP tools missing in Claude session | Restart Claude (MCP servers only spawn at session start). |
 | `mcp__telegram__*` calls time out | Daemon not running or version mismatch. Kill the running daemon (PID in `~/.agents-comm-bus/daemon.pid`), remove `port` + `daemon.pid`, retry. |
 | Inbound Telegram messages don't reach Claude | `~/.agents-comm-bus/daemon.stderr.log` (if running via Start-Process) or daemon's stderr; check `audit/*.jsonl` for `inbound_received` events **that carry a top-level `conversation_id`** (post-AGE-93: lifecycle transitions are `connection_state_changed`; pre-AGE-93 daemons mislabeled them as `inbound_received`, and those rows have no `conversation_id` — so on old logs only rows with `conversation_id` prove real inbound). If no real events, the Telegram adapter isn't polling — credentials probably didn't resolve. If instead you see `inbound_filter_drop` events (AGE-10), the adapter's allowlist dropped the sender (`sender_not_allowed` / `missing_sender_id`) — fix with `agents-comm allowlist add`. A `loop_prevention_drop` with `reason: foreign_bot` means the foreign-bot gate rejected another bot's message. For live filter traces (every pass AND drop logged), set `AGENTS_COMM_BUS_FILTER_TRACE=1` in the daemon's env. |
@@ -537,10 +538,23 @@ agents-comm account-add `
 | Watcher targets the wrong terminal | `wake-support.js` is returning the transient cmd.exe. Verify the process tree walk; `findCmdAncestor` should return the cmd.exe whose direct child is `claude.exe`. |
 | Characters dropped, doubled, or sent 65536× | `lParam` in the `PostMessage WM_CHAR` call must be `1`, not `0`. |
 | `AskUserQuestion` instantly selects option 1 | The `y` + Enter from a prior permission approval is leaking into the question UI. Make sure the permission hook auto-approves `AskUserQuestion` with `{decision:{behavior:"allow"}}` so no `y`+Enter precedes the question. |
-| Daemon respawns endlessly | Spawn-lock race; check `~/.agents-comm-bus/spawn-lock*`. Manually remove if stale. |
+| Daemon respawns endlessly | Check discovery ownership and timeout audits. Never delete `.spawn.lock` during recovery; it serializes competing bootstraps. |
 | Telegram returns `409 Conflict: terminated by other getUpdates` | Two daemons polling the same bot. Kill one. |
 | Codex inbound triggers long `working...` | Check that the live daemon has the steer-first Codex bridge. Rebuild `agents-comm-bus`, restart the daemon, and relaunch Codex via `scripts/bootstrap-codex-session.ps1`. |
 | Codex sends through the Claude bot | Check `account_registrations` and conversation identity. Session-derived sends and query prompts must resolve to the concrete Codex `bot_user_id`, not label `main`. |
+
+### Dev daemon recovery
+
+Recovery requires explicit authorization; a timeout alone is not proof of death.
+First identify the dev discovery root and verify the process identity, command
+line, and reported state root of each dev daemon in that slot. Stop only those
+verified dev processes, not production or arbitrary `serve.js` processes.
+With the slot quiescent, clear only its `port` and `daemon.pid`; never delete
+`.spawn.lock`. Start exactly one replacement with the intended durable root and
+`AGENTS_COMM_BUS_DISCOVERY_ROOT` explicitly set, then verify its hello before
+resuming clients. A bare `serve.js` does not read the checkout's dev marker.
+AGE-106 refuses foreign-root reuse but does not replace a foreign owner;
+atomic foreign-owner replacement is tracked separately in AGE-108.
 
 ### Useful debug commands
 

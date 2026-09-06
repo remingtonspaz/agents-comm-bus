@@ -16,6 +16,7 @@ import {
 } from "../config.js";
 import {
   resolveDiscoveryPaths,
+  normalizeDaemonRootPath,
   resolveStatePaths,
   type AgentsCommBusDiscoveryPaths,
   type AgentsCommBusPaths,
@@ -53,10 +54,16 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
   const env = options.env ?? process.env;
   const stateRoot = options.stateRoot ?? env.AGENTS_COMM_BUS_ROOT ?? env.AGENTS_COMM_BUS_STATE_ROOT;
   const paths = resolveStatePaths({ stateRoot });
+  const pinsDiscovery = options.stateRoot !== undefined && options.discoveryRoot === undefined;
   const discoveryPaths = resolveDiscoveryPaths({
     stateRoot: paths.root,
-    discoveryRoot: options.discoveryRoot ?? env.AGENTS_COMM_BUS_DISCOVERY_ROOT,
+    discoveryRoot: options.discoveryRoot ?? (pinsDiscovery ? paths.root : env.AGENTS_COMM_BUS_DISCOVERY_ROOT),
   });
+  if (pinsDiscovery && env.AGENTS_COMM_BUS_DISCOVERY_ROOT) {
+    (options.log ?? console.error)(`agents-comm-bus: ignoring AGENTS_COMM_BUS_DISCOVERY_ROOT=${env.AGENTS_COMM_BUS_DISCOVERY_ROOT}; explicit stateRoot ${paths.root} without discoveryRoot pins discovery to the state root`);
+  }
+  // AGE-106 phase 2: explicit daemonBin plumbing belongs with entryEnsures;
+  // this change isolates discovery without changing host binary selection.
   await mkdir(paths.root, { recursive: true });
   await mkdir(discoveryPaths.root, { recursive: true });
   warnIfSourceModeSharesDiscoveryRoot({
@@ -72,6 +79,10 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
   const deadline = Date.now() + timeoutMs;
   const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
   let warnedBusy = false;
+  let foreignRoot: string | undefined;
+  let auditedForeign = false;
+  let auditedUnknown = false;
+  const audit = new JsonlAuditStore(paths.root);
   const probe = async (port: number): Promise<DaemonHello> => {
     const pid = await readPidFile(discoveryPaths.pidFile);
     const budget = Math.max(1, Math.min(deadline - Date.now(),
@@ -94,14 +105,36 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
       if (timer) clearTimeout(timer);
     }
   };
-  const probeDiscovery = () => probeFromPortFile(discoveryPaths.portFile, probe, {
+  const probeDiscovery = async () => {
+    const found = await probeFromPortFile(discoveryPaths.portFile, probe, {
     pidFile: discoveryPaths.pidFile, isPidAlive,
+    allowCleanup: () => foreignRoot === undefined,
     onBusy: (pid) => {
       if (warnedBusy) return;
       warnedBusy = true;
       (options.log ?? console.error)(`agents-comm-bus: daemon pid ${pid} is alive but unresponsive; waiting`);
     },
-  });
+    });
+    if (!found) return undefined;
+    const reported = found.hello.metadata?.stateRoot;
+    if (typeof reported !== "string" || reported.length === 0) {
+      if (!auditedUnknown) {
+        auditedUnknown = true;
+        await audit.append({ timestamp: Date.now(), kind: "daemon_discovery_state_root_unknown",
+          detail: { port: found.port, pid: found.hello.metadata?.pid, expected_state_root: paths.root } }).catch(() => {});
+      }
+      return found; // Legacy hello: retain protocol-only compatibility.
+    }
+    if (normalizeDaemonRootPath(reported) === normalizeDaemonRootPath(paths.root)) return found;
+    foreignRoot = reported;
+    if (!auditedForeign) {
+      auditedForeign = true;
+      await audit.append({ timestamp: Date.now(), kind: "daemon_discovery_foreign_state_root",
+        detail: { port: found.port, pid: found.hello.metadata?.pid,
+          expected_state_root: paths.root, reported_state_root: reported } }).catch(() => {});
+    }
+    return undefined;
+  };
 
   // Reuse is gated on the IPC PROTOCOL, never on DAEMON_VERSION. A running
   // daemon whose wire/schema contract is compatible can serve this client
@@ -142,7 +175,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
     return { ...afterTerminate, spawned: false };
   }
 
-  await cleanupStalePidAndPort({
+  if (foreignRoot === undefined) await cleanupStalePidAndPort({
     stateRoot: paths.root,
     pidFile: discoveryPaths.pidFile,
     portFile: discoveryPaths.portFile,
@@ -166,7 +199,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
         }
 
         const incumbentPid = await readPidFile(discoveryPaths.pidFile);
-        if (incumbentPid !== undefined && isPidAlive(incumbentPid)) {
+        if (foreignRoot !== undefined || incumbentPid !== undefined && isPidAlive(incumbentPid)) {
           const found = await waitForDaemon(probeDiscovery, deadline, retryMs);
           if (found) return { ...found, spawned };
           break;
@@ -193,7 +226,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
       return { ...found, spawned };
     }
 
-    await cleanupStalePidAndPort({
+    if (foreignRoot === undefined) await cleanupStalePidAndPort({
       stateRoot: paths.root,
       pidFile: discoveryPaths.pidFile,
       portFile: discoveryPaths.portFile,
@@ -204,7 +237,7 @@ export async function ensureDaemon(options: EnsureDaemonOptions = {}): Promise<E
 
   const finalPid = await readPidFile(discoveryPaths.pidFile);
   return await throwDaemonBootstrapTimeoutError(discoveryPaths.root, paths.root,
-    finalPid !== undefined && isPidAlive(finalPid) ? finalPid : undefined);
+    finalPid !== undefined && isPidAlive(finalPid) ? finalPid : undefined, foreignRoot);
 }
 
 const DAEMON_STDERR_LOG_TAIL_MAX_BYTES = 4_096;
@@ -232,10 +265,12 @@ async function throwDaemonBootstrapTimeoutError(
   discoveryRoot: string,
   stateRoot: string,
   livePid?: number,
+  foreignRoot?: string,
 ): Promise<never> {
   const logPath = daemonStderrLogPath(stateRoot);
   let message = `Timed out starting agents-comm-bus daemon under ${discoveryRoot}.`;
   if (livePid !== undefined) message += ` Daemon pid ${livePid} is alive but unresponsive; no replacement spawned.`;
+  if (foreignRoot !== undefined) message += ` Discovery reports foreign state root ${foreignRoot}; refusing reuse or replacement.`;
   message += `\nDaemon stderr log: ${logPath}`;
   const tail = await readBoundedDaemonStderrTail(stateRoot);
   if (tail === null) {
@@ -303,7 +338,7 @@ async function terminateMismatchedDaemon(input: {
 async function probeFromPortFile(
   portFile: string,
   probe: (port: number) => Promise<DaemonHello>,
-  options: { pidFile: string; isPidAlive: (pid: number) => boolean; onBusy: (pid: number) => void },
+  options: { pidFile: string; isPidAlive: (pid: number) => boolean; onBusy: (pid: number) => void; allowCleanup?: () => boolean },
 ): Promise<{ port: number; hello: DaemonHello } | undefined> {
   const port = await readPortFile(portFile);
   if (port === undefined) {
@@ -318,7 +353,7 @@ async function probeFromPortFile(
     const refused = (error as NodeJS.ErrnoException)?.code === "ECONNREFUSED";
     // Timeout/reset/malformed hello is not evidence that an incumbent died.
     // Recheck the observed port before cleanup; never remove a replacement.
-    if ((dead || refused) && await readPortFile(portFile) === port) {
+    if (options.allowCleanup?.() !== false && (dead || refused) && await readPortFile(portFile) === port) {
       await rm(portFile, { force: true });
     } else if (pid !== undefined && !dead) {
       options.onBusy(pid);

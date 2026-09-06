@@ -63,6 +63,8 @@ export type AuditEventKind =
   | "wake_delivery_failure"
   // AGE-57: stale pid/port discovery files removed during ensureDaemon bootstrap.
   | "discovery_stale_cleanup"
+  | "daemon_discovery_foreign_state_root"
+  | "daemon_discovery_state_root_unknown"
   // AGE-57: adapter/credential skip not already covered by actionable console logs.
   | "comm_adapter_skip"
   // AGE-56: in-memory pending queue overflow spilled oldest entries; durable rows remain.
