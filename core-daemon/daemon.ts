@@ -23,6 +23,7 @@ import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js"
 import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { prefetchProcessStartIdentity } from "./runtime/process-start-epoch.js";
 import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
 import {
   IDLE_NO_OWNED_RESOURCES_REASON,
@@ -510,6 +511,12 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     throw error;
   }
   await bus.start();
+  // Discovery/IPC are published first. OS identity probing must never delay
+  // the hello that bootstrap clients use to recognize this incumbent.
+  void storage.listSessions({ status: "active" }).then(sessions =>
+    prefetchProcessStartIdentity([process.pid, ...sessions.flatMap(session =>
+      session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid])]))
+    .catch(() => { /* OS identity unavailable remains inconclusive. */ });
 
   const collectBridgeBlockers = (): Record<string, RetirementBlockerSnapshot | null> => {
     const blockers: Record<string, RetirementBlockerSnapshot | null> = {};

@@ -9,6 +9,7 @@ import type {
   ScopeReleaseReconcileState,
 } from "./scope-release-reconcile.js";
 import { reconcileLazyAdapterScopes } from "./scope-release-reconcile.js";
+import { prefetchProcessStartIdentity } from "./process-start-epoch.js";
 
 /** Default periodic sweep interval — boot-only is insufficient for long-lived daemons. */
 export const DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
@@ -60,6 +61,7 @@ export async function runSessionEndSweep(input: {
   recencyMs?: number;
   /** Row-ender classification injectables (start-probe, recency, pid liveness). */
   ownerLivenessOptions?: SessionOwnerLivenessOptions;
+  prefetchIdentities?: (pids: number[]) => Promise<void>;
   log?: (message: string) => void;
   /** Test hook: hold the sweep in-flight until released (session-end pass only). */
   sweepHold?: () => Promise<void>;
@@ -85,6 +87,10 @@ export async function runSessionEndSweep(input: {
   };
   const at = (input.now ?? Date.now)();
   const sessions = await input.storage.listSessions({ status: "active" });
+  if (input.prefetchIdentities || !livenessOptions.readProcessStartEpochMs) {
+    await (input.prefetchIdentities ?? prefetchProcessStartIdentity)(
+      sessions.flatMap(session => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid]));
+  }
 
   for (const session of sessions) {
     const ownerState = classifySessionOwnerProcess(session, livenessOptions);

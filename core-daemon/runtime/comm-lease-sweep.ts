@@ -16,6 +16,7 @@ import {
 } from "./comm-lease.js";
 import {
   compareProcessStartIdentity,
+  prefetchProcessStartIdentity,
   type ProcessStartIdentityOptions,
 } from "./process-start-epoch.js";
 import { defaultIsPidAlive, type SessionOwnerLiveness } from "./session-owner-liveness.js";
@@ -273,6 +274,18 @@ export async function runCommLeaseSweep(input: {
       continue;
     }
 
+    // Batch OS probes before classification; guarded snapshot re-read below
+    // remains the authority for deletion if files change while we await.
+    if (!livenessOptions.readProcessStartEpochMs) {
+      const pids: number[] = [];
+      for (const entry of entries.filter(name => name.endsWith(".json"))) {
+        try {
+          const record = parseLeaseRecord(await readFile(path.join(commDir, entry), "utf8"));
+          if (record) pids.push(record.pid);
+        } catch { /* disappearing/malformed files are handled by the real pass */ }
+      }
+      await prefetchProcessStartIdentity(pids);
+    }
     for (const entry of entries) {
       if (!entry.endsWith(".json") || entry.endsWith(".json.guard")) continue;
       if (entry.endsWith(".guard")) continue;
