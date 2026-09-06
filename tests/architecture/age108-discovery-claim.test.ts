@@ -138,47 +138,51 @@ test("AGE-108 (b): discovery claim loser audits daemon_claim_lost without daemon
     });
   });
 
-  const winner: DiscoveryClaim = {
-    pid: process.pid,
-    port: wsPort,
-    stateRoot,
-    startedAt: 1,
-    protocolVersion: IPC_PROTOCOL_VERSION,
-  };
-  const ownerPath = path.join(discoveryRoot, "owner.json");
-  const pidPath = path.join(discoveryRoot, "daemon.pid");
-  const portPath = path.join(discoveryRoot, "port");
-  const winnerOwner = `${JSON.stringify(winner)}\n`;
-  const winnerPid = `${winner.pid}\n`;
-  const winnerPort = `${winner.port}\n`;
-  await writeFile(ownerPath, winnerOwner);
-  await writeFile(pidPath, winnerPid);
-  await writeFile(portPath, winnerPort);
+  // Cleanup runs in `finally`: a failing assertion must fail the test, never
+  // keep the loopback server open and hang the runner (fix-round-2).
+  try {
+    const winner: DiscoveryClaim = {
+      pid: process.pid,
+      port: wsPort,
+      stateRoot,
+      startedAt: 1,
+      protocolVersion: IPC_PROTOCOL_VERSION,
+    };
+    const ownerPath = path.join(discoveryRoot, "owner.json");
+    const pidPath = path.join(discoveryRoot, "daemon.pid");
+    const portPath = path.join(discoveryRoot, "port");
+    const winnerOwner = `${JSON.stringify(winner)}\n`;
+    const winnerPid = `${winner.pid}\n`;
+    const winnerPort = `${winner.port}\n`;
+    await writeFile(ownerPath, winnerOwner);
+    await writeFile(pidPath, winnerPid);
+    await writeFile(portPath, winnerPort);
 
-  const exitCodes: number[] = [];
-  await runDaemon({
-    stateRoot,
-    discoveryRoot,
-    commAdapterFactories: [],
-    agentBridgeFactories: [],
-    exitProcess: code => {
-      exitCodes.push(code);
-    },
-  });
+    const exitCodes: number[] = [];
+    await runDaemon({
+      stateRoot,
+      discoveryRoot,
+      commAdapterFactories: [],
+      agentBridgeFactories: [],
+      exitProcess: code => {
+        exitCodes.push(code);
+      },
+    });
 
-  assert.deepEqual(exitCodes, [0]);
-  const rows = await audits(stateRoot);
-  const claimLost = rows.filter(row => row.kind === "daemon_claim_lost");
-  assert.equal(claimLost.length, 1);
-  assert.equal(claimLost[0].detail.winner_pid, process.pid);
-  assert.equal(claimLost[0].detail.winner_port, wsPort);
-  assert.equal(rows.filter(row => row.kind === "daemon_superseded").length, 0);
-  assert.equal(await readFile(ownerPath, "utf8"), winnerOwner);
-  assert.equal(await readFile(pidPath, "utf8"), winnerPid);
-  assert.equal(await readFile(portPath, "utf8"), winnerPort);
-
-  for (const client of server.clients) client.terminate();
-  await new Promise<void>(resolve => server.close(() => resolve()));
+    assert.deepEqual(exitCodes, [0]);
+    const rows = await audits(stateRoot);
+    const claimLost = rows.filter(row => row.kind === "daemon_claim_lost");
+    assert.equal(claimLost.length, 1);
+    assert.equal(claimLost[0].detail.winner_pid, process.pid);
+    assert.equal(claimLost[0].detail.winner_port, wsPort);
+    assert.equal(rows.filter(row => row.kind === "daemon_superseded").length, 0);
+    assert.equal(await readFile(ownerPath, "utf8"), winnerOwner);
+    assert.equal(await readFile(pidPath, "utf8"), winnerPid);
+    assert.equal(await readFile(portPath, "utf8"), winnerPort);
+  } finally {
+    for (const client of server.clients) client.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test("AGE-108 (c): foreign-root live squatter is replaced without process.kill", async () => {
@@ -263,6 +267,8 @@ test("AGE-108 (d): same-root slow incumbent stays incumbent_busy then incumbent"
     });
   });
 
+  // Cleanup in `finally` so a failing assertion cannot hang the runner.
+  try {
   const busy = await claimDiscovery({
     stateRoot,
     discoveryRoot,
@@ -295,8 +301,10 @@ test("AGE-108 (d): same-root slow incumbent stays incumbent_busy then incumbent"
     spawnDaemon: () => assert.fail("must reuse slow incumbent"),
   });
   assert.equal(reused.spawned, false);
-  for (const client of server.clients) client.terminate();
-  await new Promise<void>(resolve => server.close(() => resolve()));
+  } finally {
+    for (const client of server.clients) client.terminate();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });
 
 test("AGE-108 (e): watchdog identity requires matching startedAt when present", async () => {
