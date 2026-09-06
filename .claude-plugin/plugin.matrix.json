@@ -8,9 +8,7 @@
   "mcpServers": {
     "matrix": {
       "command": "node",
-      "args": [
-        "${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"
-      ]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"]
     }
   }
 }

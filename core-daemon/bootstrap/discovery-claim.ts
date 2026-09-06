@@ -36,6 +36,8 @@ export class DiscoveryClaimLostError extends Error {
   }
 }
 
+export type DiscoverySpawnLock = { release(): Promise<void> };
+
 export interface ClaimDiscoveryInput {
   stateRoot: string;
   discoveryRoot?: string;
@@ -47,6 +49,9 @@ export interface ClaimDiscoveryInput {
   probeDaemon?: (port: number) => Promise<DaemonHello>;
   /** When set, stale/foreign replacement audits are written here. */
   auditStateRoot?: string;
+  acquireLock?: (lockPath: string) => Promise<DiscoverySpawnLock | undefined>;
+  /** Invoked immediately before an exclusive owner.json create attempt. */
+  beforeCreate?: () => Promise<void>;
 }
 
 export interface WriteDaemonDiscoveryFilesInput {
@@ -143,7 +148,10 @@ export async function claimDiscovery(input: ClaimDiscoveryInput): Promise<ClaimD
   const probe = input.probeDaemon ?? ((port: number) => defaultProbeDaemon({ port }));
   const auditRoot = input.auditStateRoot ?? input.stateRoot;
 
-  const lock = await tryAcquireSpawnLock(paths.spawnLock, { isPidAlive });
+  const acquireLock =
+    input.acquireLock ??
+    ((lockPath: string) => tryAcquireSpawnLock(lockPath, { isPidAlive }));
+  const lock = await acquireLock(paths.spawnLock);
   try {
     return await claimDiscoveryUnderLock({
       paths,
@@ -151,6 +159,7 @@ export async function claimDiscovery(input: ClaimDiscoveryInput): Promise<ClaimD
       isPidAlive,
       probe,
       auditRoot,
+      beforeCreate: input.beforeCreate,
     });
   } finally {
     await lock?.release();
@@ -163,6 +172,7 @@ interface ClaimUnderLockInput {
   isPidAlive: (pid: number) => boolean;
   probe: (port: number) => Promise<DaemonHello>;
   auditRoot: string;
+  beforeCreate?: () => Promise<void>;
 }
 
 async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<ClaimDiscoveryResult> {
@@ -220,7 +230,10 @@ async function claimDiscoveryUnderLock(input: ClaimUnderLockInput): Promise<Clai
   }
 
   try {
-    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: false });
+    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+      replace: false,
+      beforeCreate: input.beforeCreate,
+    });
   } catch (error) {
     if (!isAlreadyExistsError(error)) throw error;
     const raced = await readDiscoveryClaim(input.paths.root);
@@ -329,13 +342,14 @@ async function readLegacyIncumbent(
 async function writeOwnerClaimAtomic(
   ownerFile: string,
   claim: DiscoveryClaim,
-  options: { replace: boolean },
+  options: { replace: boolean; beforeCreate?: () => Promise<void> },
 ): Promise<void> {
   const payload = `${JSON.stringify(claim)}\n`;
   const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
   await writeFile(tempFile, payload, "utf8");
 
   if (!options.replace) {
+    await options.beforeCreate?.();
     try {
       const handle = await open(ownerFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
       await handle.writeFile(payload, "utf8");
@@ -459,12 +473,4 @@ function defaultIsPidAlive(pid: number): boolean {
 
 function isAlreadyExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
-}
-
-// Test-only: non-atomic owner write to verify concurrency tests catch torn reads.
-export async function __unsafeWriteOwnerClaimForMutationTests(
-  discoveryRoot: string,
-  claim: DiscoveryClaim,
-): Promise<void> {
-  await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(claim)}\n`, "utf8");
 }

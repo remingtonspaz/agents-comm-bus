@@ -373,6 +373,7 @@ export async function runDaemon(options) {
                     winner_state_root: error.winner.stateRoot,
                 },
             }).catch(() => { });
+            await storage.close().catch(() => { });
             (options.exitProcess ?? ((code) => process.exit(code)))(0);
             return;
         }

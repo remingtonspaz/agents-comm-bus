@@ -521,6 +521,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
           winner_state_root: error.winner.stateRoot,
         },
       }).catch(() => {});
+      await storage.close().catch(() => {});
       (options.exitProcess ?? ((code: number) => process.exit(code)))(0);
       return;
     }

@@ -8,9 +8,7 @@
   "mcpServers": {
     "telegram": {
       "command": "node",
-      "args": [
-        "${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/claude-mcp-shim.js"
-      ]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/claude-mcp-shim.js"]
     }
   }
 }

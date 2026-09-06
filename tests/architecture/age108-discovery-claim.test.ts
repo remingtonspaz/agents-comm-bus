@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { after, test } from "node:test";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -11,12 +10,11 @@ import {
   claimDiscovery,
   discoveryClaimIdentityMatches,
   readDiscoveryClaim,
-  writeDaemonDiscoveryFiles,
-  __unsafeWriteOwnerClaimForMutationTests,
   type DiscoveryClaim,
 } from "../../core-daemon/bootstrap/discovery-claim.js";
 import { checkDaemonPidOwnership } from "../../core-daemon/bootstrap/pid-watchdog.js";
 import { IPC_PROTOCOL_VERSION } from "../../core-daemon/config.js";
+import { runDaemon } from "../../core-daemon/daemon.js";
 import type { DaemonHello } from "../../core-daemon/ipc/protocol.js";
 import { resolveDiscoveryPaths } from "../../core-daemon/paths.js";
 
@@ -87,6 +85,17 @@ test("AGE-108 (a): concurrent claims elect exactly one winner without torn disco
     }
   };
 
+  let barrierArrived = 0;
+  const barrierWaiters: Array<() => void> = [];
+  const beforeCreate = async () => {
+    barrierArrived += 1;
+    if (barrierArrived < claimants.length) {
+      await new Promise<void>(resolve => barrierWaiters.push(resolve));
+    } else {
+      for (const release of barrierWaiters) release();
+    }
+  };
+
   const results = await Promise.all([
     reader(),
     ...claimants.map(claimant =>
@@ -96,8 +105,10 @@ test("AGE-108 (a): concurrent claims elect exactly one winner without torn disco
         pid: claimant.pid,
         port: claimant.port,
         startedAt: 1_700_000_000_000 + claimant.pid,
-        isPidAlive: pid => claimants.some(entry => entry.pid === pid),
-        probeDaemon: async () => hello(stateRoot),
+        acquireLock: async () => undefined,
+        beforeCreate,
+        isPidAlive: () => true,
+        probeDaemon: async (probePort) => hello(stateRoot, winnerPid),
       }),
     ),
   ]);
@@ -117,43 +128,57 @@ test("AGE-108 (b): discovery claim loser audits daemon_claim_lost without daemon
   const stateRoot = await tempRoot("age108-b-");
   const discoveryRoot = path.join(stateRoot, "discovery");
   await mkdir(discoveryRoot, { recursive: true });
-  const winner: DiscoveryClaim = {
-    pid: 60_001,
-    port: 41_001,
-    stateRoot,
-    startedAt: 1_700_000_000_000,
-    protocolVersion: IPC_PROTOCOL_VERSION,
-  };
-  await writeFile(path.join(discoveryRoot, "owner.json"), `${JSON.stringify(winner)}\n`);
-  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${winner.pid}\n`);
-  await writeFile(path.join(discoveryRoot, "port"), `${winner.port}\n`);
 
-  let exitCode: number | undefined;
-  await assert.rejects(async () => {
-    await writeDaemonDiscoveryFiles({
-      stateRoot,
-      discoveryRoot,
-      pid: 60_002,
-      port: 41_002,
-      isPidAlive: pid => pid === winner.pid,
-      probeDaemon: async () => hello(stateRoot, winner.pid),
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  const wsPort = (server.address() as { port: number }).port;
+  server.on("connection", socket => {
+    socket.once("message", () => {
+      socket.send(JSON.stringify(hello(stateRoot, process.pid)));
     });
   });
 
-  const rows = await audits(stateRoot);
-  assert.equal(rows.filter(row => row.kind === "daemon_superseded").length, 0);
-  // writeDaemonDiscoveryFiles throws; daemon boot path audits claim_lost (covered via claim result).
-  const result = await claimDiscovery({
+  const winner: DiscoveryClaim = {
+    pid: process.pid,
+    port: wsPort,
+    stateRoot,
+    startedAt: 1,
+    protocolVersion: IPC_PROTOCOL_VERSION,
+  };
+  const ownerPath = path.join(discoveryRoot, "owner.json");
+  const pidPath = path.join(discoveryRoot, "daemon.pid");
+  const portPath = path.join(discoveryRoot, "port");
+  const winnerOwner = `${JSON.stringify(winner)}\n`;
+  const winnerPid = `${winner.pid}\n`;
+  const winnerPort = `${winner.port}\n`;
+  await writeFile(ownerPath, winnerOwner);
+  await writeFile(pidPath, winnerPid);
+  await writeFile(portPath, winnerPort);
+
+  const exitCodes: number[] = [];
+  await runDaemon({
     stateRoot,
     discoveryRoot,
-    pid: 60_002,
-    port: 61_002,
-    isPidAlive: pid => pid === winner.pid,
-    probeDaemon: async () => hello(stateRoot, winner.pid),
+    commAdapterFactories: [],
+    agentBridgeFactories: [],
+    exitProcess: code => {
+      exitCodes.push(code);
+    },
   });
-  assert.equal(result.ok, false);
-  if (!result.ok) assert.equal(result.reason, "incumbent");
-  void exitCode;
+
+  assert.deepEqual(exitCodes, [0]);
+  const rows = await audits(stateRoot);
+  const claimLost = rows.filter(row => row.kind === "daemon_claim_lost");
+  assert.equal(claimLost.length, 1);
+  assert.equal(claimLost[0].detail.winner_pid, process.pid);
+  assert.equal(claimLost[0].detail.winner_port, wsPort);
+  assert.equal(rows.filter(row => row.kind === "daemon_superseded").length, 0);
+  assert.equal(await readFile(ownerPath, "utf8"), winnerOwner);
+  assert.equal(await readFile(pidPath, "utf8"), winnerPid);
+  assert.equal(await readFile(portPath, "utf8"), winnerPort);
+
+  for (const client of server.clients) client.terminate();
+  await new Promise<void>(resolve => server.close(() => resolve()));
 });
 
 test("AGE-108 (c): foreign-root live squatter is replaced without process.kill", async () => {
@@ -357,78 +382,4 @@ test("AGE-108 (g): legacy pid/port only discovery converts to owner.json with st
   assert.equal(owner.pid, 41_003);
   const rows = await audits(stateRoot);
   assert.equal(rows.filter(row => row.kind === "discovery_stale_cleanup").length, 1);
-});
-
-const mutationOutcomes: Record<string, string> = {};
-
-test("AGE-108 mutations", async () => {
-  // (a) Non-atomic owner write allows multiple winners.
-  const rootA = await tempRoot("age108-mut-a-");
-  const discoveryA = path.join(rootA, "discovery");
-  await mkdir(discoveryA, { recursive: true });
-  const claimsA = await Promise.all(
-    Array.from({ length: 4 }, (_, index) =>
-      (async () => {
-        const claim: DiscoveryClaim = {
-          pid: 100_000 + index,
-          port: 41_000 + index,
-          stateRoot: rootA,
-          startedAt: 1_700_000_000_100 + index,
-          protocolVersion: IPC_PROTOCOL_VERSION,
-        };
-        await __unsafeWriteOwnerClaimForMutationTests(discoveryA, claim);
-        return claim;
-      })(),
-    ),
-  );
-  const ownersA = await Promise.all(
-    claimsA.map(() => readDiscoveryClaim(discoveryA)),
-  );
-  mutationOutcomes.a = ownersA.filter(Boolean).length > 1 || new Set(ownersA.map(o => o?.pid)).size > 1
-    ? "RED (multiple winners or torn state observed)"
-    : "GREEN (mutation did not produce multiple winners in this harness)";
-
-  // (b) check-then-write would supersede — verified by incumbent path producing zero supersede audits in (b).
-  mutationOutcomes.b = "GREEN (incumbent path returns without daemon_superseded; old check-then-write would race)";
-
-  // (c) Without root comparison branch, foreign squatter returns incumbent.
-  const rootC = await tempRoot("age108-mut-c-");
-  const discoveryC = path.join(rootC, "discovery");
-  await mkdir(discoveryC, { recursive: true });
-  const foreign = path.join(rootC, "foreign");
-  const squatter: DiscoveryClaim = {
-    pid: 110_001,
-    port: 41_008,
-    stateRoot: foreign,
-    startedAt: 1,
-    protocolVersion: IPC_PROTOCOL_VERSION,
-  };
-  await writeFile(path.join(discoveryC, "owner.json"), `${JSON.stringify(squatter)}\n`);
-  const withoutRootCompare = await claimDiscovery({
-    stateRoot: rootC,
-    discoveryRoot: discoveryC,
-    pid: 110_002,
-    port: 41_009,
-    isPidAlive: () => true,
-    probeDaemon: async () => hello(foreign),
-  });
-  mutationOutcomes.c = withoutRootCompare.ok
-    ? "GREEN (root compare enabled — foreign replaced)"
-    : "RED (would be incumbent without root compare)";
-
-  // (e) pid-only identity would treat startedAt mismatch as current.
-  const ownerE: DiscoveryClaim = {
-    pid: 120_001,
-    port: 41_010,
-    stateRoot: rootA,
-    startedAt: 1,
-    protocolVersion: IPC_PROTOCOL_VERSION,
-  };
-  const pidOnlyWouldBeCurrent = ownerE.pid === 120_001;
-  const actualMatch = discoveryClaimIdentityMatches(ownerE, 120_001, 2);
-  mutationOutcomes.e = pidOnlyWouldBeCurrent && !actualMatch
-    ? "RED (pid-only would be current; startedAt guard rejects)"
-    : "GREEN";
-
-  console.log("AGE-108 mutation outcomes:", mutationOutcomes);
 });

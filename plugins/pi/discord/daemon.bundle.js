@@ -5563,14 +5563,16 @@ async function claimDiscovery(input) {
   const isPidAlive2 = input.isPidAlive ?? defaultIsPidAlive4;
   const probe = input.probeDaemon ?? ((port) => probeDaemon({ port }));
   const auditRoot = input.auditStateRoot ?? input.stateRoot;
-  const lock = await tryAcquireSpawnLock(paths.spawnLock, { isPidAlive: isPidAlive2 });
+  const acquireLock = input.acquireLock ?? ((lockPath) => tryAcquireSpawnLock(lockPath, { isPidAlive: isPidAlive2 }));
+  const lock = await acquireLock(paths.spawnLock);
   try {
     return await claimDiscoveryUnderLock({
       paths,
       selfClaim,
       isPidAlive: isPidAlive2,
       probe,
-      auditRoot
+      auditRoot,
+      beforeCreate: input.beforeCreate
     });
   } finally {
     await lock?.release();
@@ -5628,7 +5630,10 @@ async function claimDiscoveryUnderLock(input) {
     return { ok: true, claim: input.selfClaim };
   }
   try {
-    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: false });
+    await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+      replace: false,
+      beforeCreate: input.beforeCreate
+    });
   } catch (error) {
     if (!isAlreadyExistsError3(error)) throw error;
     const raced = await readDiscoveryClaim(input.paths.root);
@@ -5708,6 +5713,7 @@ async function writeOwnerClaimAtomic(ownerFile, claim, options) {
   const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
   await writeFile(tempFile, payload, "utf8");
   if (!options.replace) {
+    await options.beforeCreate?.();
     try {
       const handle = await open4(ownerFile, constants3.O_CREAT | constants3.O_EXCL | constants3.O_WRONLY);
       await handle.writeFile(payload, "utf8");
@@ -6126,8 +6132,7 @@ async function checkDaemonPidOwnership(options) {
   const isPidAlive2 = options.isPidAlive ?? defaultIsPidAlive5;
   const writeDiscovery = options.writeDiscoveryFiles ?? writeDaemonDiscoveryFiles;
   const discoveryRoot2 = options.discoveryRoot ?? options.stateRoot;
-  const usingInjectedPidReader = options.readPidFile !== void 0;
-  if (discoveryRoot2 && !usingInjectedPidReader) {
+  if (discoveryRoot2) {
     const owner = await readDiscoveryClaim(discoveryRoot2);
     if (owner) {
       if (discoveryClaimIdentityMatches(owner, selfPid, selfStartedAt)) {
@@ -6174,7 +6179,7 @@ async function checkDaemonPidOwnership(options) {
       error: errorMessage(pidFile.error)
     };
   }
-  if (pidFile.pid === selfPid && (options.selfStartedAt == null || options.selfStartedAt === selfStartedAt)) {
+  if (pidFile.pid === selfPid) {
     return { status: "current", selfPid };
   }
   let ownerAlive;
@@ -10375,6 +10380,8 @@ async function runDaemon(options) {
           winner_state_root: error.winner.stateRoot
         }
       }).catch(() => {
+      });
+      await storage.close().catch(() => {
       });
       (options.exitProcess ?? ((code) => process.exit(code)))(0);
       return;

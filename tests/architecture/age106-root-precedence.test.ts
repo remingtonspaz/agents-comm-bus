@@ -58,6 +58,56 @@ test("AGE-106: all-env roots and explicit split roots retain their precedence", 
   }
 });
 
+test("AGE-106: foreign-root squatter is never terminated or deleted by the client, audited once", async () => {
+  const root = await tempRoot();
+  const foreign = path.join(root, "other-state");
+  const discoveryRoot = path.join(root, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const squatter = {
+    pid: 12345,
+    port: 41155,
+    stateRoot: foreign,
+    startedAt: 1,
+    protocolVersion: "1.2.0",
+  };
+  const ownerPath = path.join(discoveryRoot, "owner.json");
+  const pidPath = path.join(discoveryRoot, "daemon.pid");
+  const portPath = path.join(discoveryRoot, "port");
+  const ownerBefore = `${JSON.stringify(squatter)}\n`;
+  const pidBefore = `${squatter.pid}\n`;
+  const portBefore = `${squatter.port}\n`;
+  await writeFile(ownerPath, ownerBefore);
+  await writeFile(pidPath, pidBefore);
+  await writeFile(portPath, portBefore);
+
+  let spawns = 0;
+  await assert.rejects(
+    ensureDaemon({
+      stateRoot: root,
+      discoveryRoot,
+      env: {},
+      timeoutMs: 70,
+      retryMs: 5,
+      isPidAlive: () => true,
+      log: () => {},
+      probeDaemon: async () => hello(foreign),
+      spawnDaemon: async () => {
+        spawns += 1;
+      },
+      terminateDaemon: () => assert.fail("foreign daemon must not be terminated"),
+    }),
+    error => error instanceof Error && error.message.includes(foreign),
+  );
+
+  assert.ok(spawns > 0, "spawn may be attempted but must not replace the squatter");
+  assert.equal(await readFile(ownerPath, "utf8"), ownerBefore);
+  assert.equal(await readFile(pidPath, "utf8"), pidBefore);
+  assert.equal(await readFile(portPath, "utf8"), portBefore);
+  const rows = (await audits(root)).filter(row => row.kind === "daemon_discovery_foreign_state_root");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].detail.reported_state_root, foreign);
+});
+
 test("AGE-106: foreign-root squatter may be replaced by a spawned daemon", async () => {
   const root = await tempRoot();
   const foreign = path.join(root, "other-state");

@@ -90,7 +90,9 @@ export async function claimDiscovery(input) {
     const isPidAlive = input.isPidAlive ?? defaultIsPidAlive;
     const probe = input.probeDaemon ?? ((port) => defaultProbeDaemon({ port }));
     const auditRoot = input.auditStateRoot ?? input.stateRoot;
-    const lock = await tryAcquireSpawnLock(paths.spawnLock, { isPidAlive });
+    const acquireLock = input.acquireLock ??
+        ((lockPath) => tryAcquireSpawnLock(lockPath, { isPidAlive }));
+    const lock = await acquireLock(paths.spawnLock);
     try {
         return await claimDiscoveryUnderLock({
             paths,
@@ -98,6 +100,7 @@ export async function claimDiscovery(input) {
             isPidAlive,
             probe,
             auditRoot,
+            beforeCreate: input.beforeCreate,
         });
     }
     finally {
@@ -156,7 +159,10 @@ async function claimDiscoveryUnderLock(input) {
         return { ok: true, claim: input.selfClaim };
     }
     try {
-        await writeOwnerClaimAtomic(ownerFile, input.selfClaim, { replace: false });
+        await writeOwnerClaimAtomic(ownerFile, input.selfClaim, {
+            replace: false,
+            beforeCreate: input.beforeCreate,
+        });
     }
     catch (error) {
         if (!isAlreadyExistsError(error))
@@ -249,6 +255,7 @@ async function writeOwnerClaimAtomic(ownerFile, claim, options) {
     const tempFile = `${ownerFile}.tmp.${claim.pid}.${Date.now()}`;
     await writeFile(tempFile, payload, "utf8");
     if (!options.replace) {
+        await options.beforeCreate?.();
         try {
             const handle = await open(ownerFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
             await handle.writeFile(payload, "utf8");
@@ -355,9 +362,5 @@ function defaultIsPidAlive(pid) {
 }
 function isAlreadyExistsError(error) {
     return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
-}
-// Test-only: non-atomic owner write to verify concurrency tests catch torn reads.
-export async function __unsafeWriteOwnerClaimForMutationTests(discoveryRoot, claim) {
-    await writeFile(discoveryOwnerFile(discoveryRoot), `${JSON.stringify(claim)}\n`, "utf8");
 }
 //# sourceMappingURL=discovery-claim.js.map

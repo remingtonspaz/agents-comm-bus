@@ -77,8 +77,7 @@ export async function checkDaemonPidOwnership(options) {
     const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
     const writeDiscovery = options.writeDiscoveryFiles ?? writeDaemonDiscoveryFiles;
     const discoveryRoot = options.discoveryRoot ?? options.stateRoot;
-    const usingInjectedPidReader = options.readPidFile !== undefined;
-    if (discoveryRoot && !usingInjectedPidReader) {
+    if (discoveryRoot) {
         const owner = await readDiscoveryClaim(discoveryRoot);
         if (owner) {
             if (discoveryClaimIdentityMatches(owner, selfPid, selfStartedAt)) {
@@ -126,8 +125,7 @@ export async function checkDaemonPidOwnership(options) {
             error: errorMessage(pidFile.error),
         };
     }
-    if (pidFile.pid === selfPid &&
-        (options.selfStartedAt == null || options.selfStartedAt === selfStartedAt)) {
+    if (pidFile.pid === selfPid) {
         return { status: "current", selfPid };
     }
     let ownerAlive;
