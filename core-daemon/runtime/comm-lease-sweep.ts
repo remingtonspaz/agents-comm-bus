@@ -16,7 +16,6 @@ import {
 } from "./comm-lease.js";
 import {
   compareProcessStartIdentity,
-  prefetchProcessStartIdentity,
   type ProcessStartIdentityOptions,
 } from "./process-start-epoch.js";
 import { defaultIsPidAlive, type SessionOwnerLiveness } from "./session-owner-liveness.js";
@@ -211,6 +210,7 @@ async function isRegistrationDesiredForRecovery(
 }
 
 export async function runCommLeaseSweep(input: {
+  prefetchIdentities?: (pids: number[]) => Promise<void>;
   homeDir?: string;
   selfPid?: number;
   now?: () => number;
@@ -276,7 +276,7 @@ export async function runCommLeaseSweep(input: {
 
     // Batch OS probes before classification; guarded snapshot re-read below
     // remains the authority for deletion if files change while we await.
-    if (!livenessOptions.readProcessStartEpochMs) {
+    if (input.prefetchIdentities) {
       const pids: number[] = [];
       for (const entry of entries.filter(name => name.endsWith(".json"))) {
         try {
@@ -284,7 +284,7 @@ export async function runCommLeaseSweep(input: {
           if (record) pids.push(record.pid);
         } catch { /* disappearing/malformed files are handled by the real pass */ }
       }
-      await prefetchProcessStartIdentity(pids);
+      await input.prefetchIdentities(pids);
     }
     for (const entry of entries) {
       if (!entry.endsWith(".json") || entry.endsWith(".json.guard")) continue;
@@ -405,6 +405,7 @@ export interface CommLeaseSweepHandle {
 }
 
 export function startCommLeaseSweep(options: {
+  prefetchIdentities?: (pids: number[]) => Promise<void>;
   homeDir?: string;
   selfPid?: number;
   intervalMs?: number;
@@ -448,6 +449,7 @@ export function startCommLeaseSweep(options: {
     }
     sweepInFlight = true;
     void runCommLeaseSweep({
+      prefetchIdentities: options.prefetchIdentities,
       homeDir: options.homeDir,
       selfPid: options.selfPid,
       now: options.now,

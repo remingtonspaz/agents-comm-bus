@@ -10,6 +10,8 @@ import { WebSocketServer } from "ws";
 import { runSessionEndSweep } from "../../core-daemon/runtime/session-end-sweep.js";
 import { sessionFixture } from "./_session-fixture.js";
 import type { Storage, SessionId, AgentId } from "../../packages/core-contracts/src/index.js";
+import { sessionLeaseOwnerWithDaemon, type DaemonSelfIdentity } from "../../core-daemon/runtime/agent-bridge.js";
+import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 
 const hello: DaemonHello = { type: "daemon.hello", daemonName: "agents-comm-bus",
   protocolVersion: "1.2.0", daemonVersion: "0.2.62" };
@@ -196,4 +198,50 @@ test("AGE-104: Windows batch uses one asynchronous OS call and parses per-pid id
   assert.equal(cache.read(1), 500);
   assert.equal(cache.read(2), 900);
   assert.equal(cache.read(3), null);
+});
+
+test("AGE-104: registration awaits a delayed identity and persists it on the row", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "age104-register-"));
+  const storage = await openSqliteStorage(path.join(root, "db.sqlite"));
+  const cache = createProcessStartIdentityCache(async pids => {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return new Map(pids.map(pid => [pid, 500]));
+  });
+  const daemon = { discoveryRoot: root, stateRoot: root, checkoutRoot: root,
+    daemonBin: "test", authorityRank: "main-dev" } as DaemonSelfIdentity;
+  const id = "age104-delayed-owner" as SessionId;
+  try {
+    await storage.upsertSession(sessionFixture({ session_id: id, agent: "claude" as AgentId, project: root }));
+    const owner = await sessionLeaseOwnerWithDaemon({ process_pid: 12345 }, daemon,
+      { prefetch: pids => cache.prefetch(pids), read: pid => cache.read(pid) });
+    assert.equal(owner.process_start_time, 500, "bridge must await the cold probe");
+    await storage.acquireSessionLease(id, "conn", Date.now(), owner);
+    assert.equal((await storage.getSession(id))?.lease_owner_process_start_time, 500);
+  } finally {
+    await storage.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("AGE-104: self identity is pinned beyond TTL and forced prefetch", async () => {
+  let now = 0;
+  let calls = 0;
+  const cache = createProcessStartIdentityCache(async pids => {
+    calls += 1;
+    return new Map(pids.map(pid => [pid, 500]));
+  }, () => now, 1000, 42);
+  await cache.prefetch([42]);
+  assert.equal(cache.read(42), 500);
+  now = 2001;
+  assert.equal(cache.read(42), 500);
+  await cache.prefetch([42], true);
+  assert.equal(calls, 1);
+});
+
+test("AGE-104: production explicitly wires prefetch into all sweep entry points", async () => {
+  const daemon = await readFile(new URL("../../core-daemon/daemon.ts", import.meta.url), "utf8");
+  for (const name of ["startSessionEndSweep", "runCommLeaseSweep", "startCommLeaseSweep", "runBootScopeRestore"]) {
+    assert.match(daemon, new RegExp(`${name}\\(\\{\\s*prefetchIdentities: prefetchProcessStartIdentity`));
+  }
+  assert.ok(daemon.indexOf("await writeDaemonDiscoveryFiles(") < daemon.indexOf("await prefetchProcessStartIdentity([process.pid])"));
 });

@@ -632,7 +632,7 @@ export class CodexBridge implements AgentBridge {
       params.replace_existing_lease === true ||
       params.persist_after_disconnect === true;
     const leaseOwner = this.options.daemonOwner
-      ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params, "codex"), this.options.daemonOwner)
+      ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params, "codex"), this.options.daemonOwner)
       : sessionLeaseOwnerFromParams(params, "codex");
     let acquired = await this.options.storage.acquireSessionLease(
       session,

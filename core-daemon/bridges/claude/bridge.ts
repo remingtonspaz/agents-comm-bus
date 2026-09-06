@@ -514,7 +514,7 @@ export class ClaudeBridge implements AgentBridge {
       connectionId,
       now,
       this.options.daemonOwner
-        ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
+        ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
         : sessionLeaseOwnerFromParams(params),
     );
     if (!acquired) {

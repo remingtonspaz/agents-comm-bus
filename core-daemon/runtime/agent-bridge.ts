@@ -12,7 +12,7 @@ import type {
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 
 import type { MessageBus } from "../bus.js";
-import { readProcessStartEpochMs } from "./process-start-epoch.js";
+import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "./process-start-epoch.js";
 import type {
   AgentLeaseProperties,
   PersistHeldCommLeaseAgentProperties,
@@ -241,7 +241,7 @@ export interface AgentBridgeFactory {
 }
 
 /** Merge hook-supplied process owner with daemon-resolved identity (AGE-58). */
-export function sessionLeaseOwnerWithDaemon(
+export async function sessionLeaseOwnerWithDaemon(
   ownerFromParams:
     | {
         process_pid: number | null;
@@ -250,11 +250,13 @@ export function sessionLeaseOwnerWithDaemon(
       }
     | undefined,
   daemonOwner: DaemonSelfIdentity,
-): SessionLeaseOwner {
+  identity = { prefetch: prefetchProcessStartIdentity, read: readProcessStartEpochMs },
+): Promise<SessionLeaseOwner> {
   const pid = ownerFromParams?.process_pid ?? null;
   let startTime = ownerFromParams?.process_start_time ?? null;
   if (pid != null && startTime == null) {
-    startTime = readProcessStartEpochMs(pid);
+    await identity.prefetch([pid]);
+    startTime = identity.read(pid);
   }
   return {
     process_pid: pid,

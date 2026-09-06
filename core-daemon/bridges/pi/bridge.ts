@@ -186,7 +186,7 @@ export class PiBridge implements AgentBridge {
       status: "active",
     });
     const leaseOwner = this.options.daemonOwner
-      ? sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
+      ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
       : sessionLeaseOwnerFromParams(params);
     const acquired = await this.options.storage.acquireSessionLease(
       session,

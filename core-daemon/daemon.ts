@@ -511,6 +511,9 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     throw error;
   }
   await bus.start();
+  // Resolve our own immutable identity once, after IPC discovery is available.
+  // This async wait does not block handshakes; lease acquisition below uses it.
+  await prefetchProcessStartIdentity([process.pid]);
   // Discovery/IPC are published first. OS identity probing must never delay
   // the hello that bootstrap clients use to recognize this incumbent.
   void storage.listSessions({ status: "active" }).then(sessions =>
@@ -589,6 +592,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   });
 
   sessionEndSweepHandle = startSessionEndSweep({
+    prefetchIdentities: prefetchProcessStartIdentity,
     storage,
     log: (message) => console.error(message),
     reconcile: {
@@ -620,6 +624,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
   void runCommLeaseDaemonBootstrap({
     bootSweep: () =>
       runCommLeaseSweep({
+        prefetchIdentities: prefetchProcessStartIdentity,
         log: (message) => console.error(message),
         audit,
         recovery: commLeaseSweepRecovery,
@@ -627,6 +632,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       }).then(() => {}),
     startPeriodicSweep: () =>
       startCommLeaseSweep({
+        prefetchIdentities: prefetchProcessStartIdentity,
         runOnStart: false,
         log: (message) => console.error(message),
         audit,
@@ -634,6 +640,7 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
       }),
     bootRestore: () =>
       runBootScopeRestore({
+        prefetchIdentities: prefetchProcessStartIdentity,
         stateRoot: paths.root,
         discoveryRoot: discoveryPaths.root,
         storage,

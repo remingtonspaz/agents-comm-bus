@@ -13,13 +13,15 @@ export function createProcessStartIdentityCache(
   probe: (pids: number[]) => Promise<ReadonlyMap<number, number | null>>,
   now: () => number = Date.now,
   ttlMs = 1_000,
+  selfPid = process.pid,
 ) {
   const values = new Map<number, { value: number | null; at: number }>();
   const pending = new Map<number, Promise<void>>();
   let generation = 0;
   const prefetch = async (pids: readonly number[], refresh = false): Promise<void> => {
     const ids = [...new Set(pids)].filter(pid => Number.isInteger(pid) && pid > 0);
-    const missing = ids.filter(pid => !pending.has(pid) && (refresh ||
+    const pinned = (pid: number) => pid === selfPid && values.get(pid)?.value != null;
+    const missing = ids.filter(pid => !pending.has(pid) && !pinned(pid) && (refresh ||
       !values.has(pid) || now() - values.get(pid)!.at >= ttlMs));
     if (missing.length) {
       const epoch = generation;
@@ -29,7 +31,10 @@ export function createProcessStartIdentityCache(
           if (epoch !== generation) return;
           for (const pid of missing) values.set(pid, { value: results.get(pid) ?? null, at: now() });
           // Bound retained entries in long-running daemons.
-          while (values.size > 4096) values.delete(values.keys().next().value!);
+          for (const pid of values.keys()) {
+            if (values.size <= 4096) break;
+            if (pid !== selfPid) values.delete(pid);
+          }
         }).finally(() => {
           if (epoch === generation) for (const pid of missing) pending.delete(pid);
         });
@@ -41,7 +46,7 @@ export function createProcessStartIdentityCache(
     read(pid: number): number | null {
       if (pending.has(pid)) return null;
       const entry = values.get(pid);
-      if (entry && now() - entry.at < ttlMs) return entry.value;
+      if (entry && (pid === selfPid && entry.value != null || now() - entry.at < ttlMs)) return entry.value;
       void prefetch([pid]);
       return null;
     },
@@ -70,7 +75,7 @@ export async function probeProcessIdentities(
       `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { try { '{0}:{1}' -f $_.Id,$_.StartTime.ToUniversalTime().Ticks } catch {} }`]);
     for (const line of out.trim().split(/\r?\n/)) {
       const match = /^(\d+):(\d+)$/.exec(line.trim());
-      if (match) result.set(Number(match[1]), Number(match[2]) / 10_000 - 62_135_596_800_000);
+      if (match) result.set(Number(match[1]), Number(BigInt(match[2]) / 10_000n - 62_135_596_800_000n));
     }
   } else if (platform === "darwin") {
     const out = await run("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")]);
@@ -203,8 +208,10 @@ function readLinuxProcessStartIdentity(
 }
 
 /** Boot epoch for the current process — stable for this process lifetime. */
+let currentProcessStart: number | undefined;
 export function currentProcessStartEpochMs(): number {
+  if (currentProcessStart !== undefined) return currentProcessStart;
   const fromOs = readProcessStartIdentity(process.pid);
-  if (fromOs != null) return fromOs;
-  return Date.now() - Math.round(process.uptime() * 1000);
+  currentProcessStart = fromOs ?? Date.now() - Math.round(process.uptime() * 1000);
+  return currentProcessStart;
 }

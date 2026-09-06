@@ -36,7 +36,7 @@ import type {
   SessionId,
 } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../project-path.js";
-import { readProcessStartEpochMs } from "../runtime/process-start-epoch.js";
+import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "../runtime/process-start-epoch.js";
 import { runStorageMigrations, type SqliteLike } from "./schema/runner.js";
 
 const require = createRequire(import.meta.url);
@@ -812,6 +812,7 @@ export class SqliteStorage implements Storage {
     const ownerPid = owner?.process_pid ?? null;
     let ownerStartTime = owner?.process_start_time ?? null;
     if (ownerPid != null && ownerStartTime == null) {
+      await prefetchProcessStartIdentity([ownerPid]);
       ownerStartTime = readProcessStartEpochMs(ownerPid);
     }
     try {

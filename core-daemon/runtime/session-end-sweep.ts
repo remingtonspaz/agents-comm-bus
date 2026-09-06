@@ -9,7 +9,6 @@ import type {
   ScopeReleaseReconcileState,
 } from "./scope-release-reconcile.js";
 import { reconcileLazyAdapterScopes } from "./scope-release-reconcile.js";
-import { prefetchProcessStartIdentity } from "./process-start-epoch.js";
 
 /** Default periodic sweep interval — boot-only is insufficient for long-lived daemons. */
 export const DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
@@ -87,8 +86,8 @@ export async function runSessionEndSweep(input: {
   };
   const at = (input.now ?? Date.now)();
   const sessions = await input.storage.listSessions({ status: "active" });
-  if (input.prefetchIdentities || !livenessOptions.readProcessStartEpochMs) {
-    await (input.prefetchIdentities ?? prefetchProcessStartIdentity)(
+  if (input.prefetchIdentities) {
+    await input.prefetchIdentities(
       sessions.flatMap(session => session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid]));
   }
 
@@ -151,6 +150,7 @@ export interface SessionEndSweepHandle {
 
 export function startSessionEndSweep(options: {
   storage: Storage;
+  prefetchIdentities?: (pids: number[]) => Promise<void>;
   intervalMs?: number;
   now?: () => number;
   isPidAlive?: (pid: number) => boolean;
@@ -233,6 +233,7 @@ export function startSessionEndSweep(options: {
     earlyReconcile = false;
     void runSessionEndSweep({
       storage: options.storage,
+      prefetchIdentities: options.prefetchIdentities,
       now: options.now,
       isPidAlive: options.isPidAlive,
       recencyMs: options.recencyMs,

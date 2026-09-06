@@ -4,7 +4,6 @@ import { join } from "node:path";
 import type { AgentId, AuditStore, Storage } from "agents-comm-bus-core";
 
 import { normalizeProjectPath } from "../project-path.js";
-import { prefetchProcessStartIdentity } from "../runtime/process-start-epoch.js";
 import { normalizeDaemonRootPath } from "../paths.js";
 import type { EnsureCommsForSession } from "../runtime/agent-bridge.js";
 import {
@@ -29,6 +28,7 @@ export interface BootScopeRestoreSummary {
 }
 
 export interface BootScopeRestoreInput {
+  prefetchIdentities?: (pids: number[]) => Promise<void>;
   stateRoot: string;
   discoveryRoot: string;
   storage: Storage;
@@ -123,7 +123,7 @@ export async function runBootScopeRestore(
     }
 
     const sessions = await input.storage.listSessions({ status: "active" });
-    await prefetchProcessStartIdentity(sessions.flatMap(session =>
+    await input.prefetchIdentities?.(sessions.flatMap(session =>
       session.lease_owner_process_pid == null ? [] : [session.lease_owner_process_pid]));
     summary.candidates = sessions.length;
 
