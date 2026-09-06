@@ -16,8 +16,8 @@ export function hasProjectMcpDeclaration(content) {
 }
 
 export function findTableRange(lines, header) {
-  const headerRe = new RegExp(`^\\s*\\[${header.replace(/\./g, "\\.")}\\]\\s*$`);
-  const anyHeaderRe = /^\s*\[[^\]]+\]\s*$/;
+  const headerRe = new RegExp(`^\\s*\\[${header.replace(/\./g, "\\.")}\\]\\s*(?:#.*)?$`);
+  const anyHeaderRe = /^\s*\[\[?[^\]]+\]\]?\s*(?:#.*)?$/;
   let start = -1;
   for (let i = 0; i < lines.length; i += 1) {
     if (headerRe.test(lines[i])) {

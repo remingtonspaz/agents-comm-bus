@@ -12,6 +12,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { formatTomlEnvVars } from './hosts/codex/mcp-env-vars.js';
+import { prepareShellEnvFilter } from './hosts/codex/install-shell-env-filter.js';
 import {
   assertCanonicalProjectEnvVars,
   findTableRange,
@@ -64,9 +65,10 @@ function formatBlock({ command, args }) {
   ].join('\n');
 }
 
-function hooksBlock() {
+function hooksBlock(managedFilter) {
   return [
     '# BEGIN agents-comm-bus codex hooks',
+    ...(managedFilter ? [managedFilter, ''] : []),
     '[[hooks.SessionStart]]',
     '',
     '[[hooks.SessionStart.hooks]]',
@@ -178,11 +180,12 @@ function installMcp() {
   return true;
 }
 
-function installProjectHooks() {
+function prepareProjectHooks() {
   const existing = readFileIfExists(projectConfigPath);
   const withoutOldBlock = removeMarkedBlock(existing);
-  const withFeatures = ensureHooksFeature(withoutOldBlock);
-  const withHooks = appendBlock(withFeatures, hooksBlock());
+  const filter = prepareShellEnvFilter(withoutOldBlock);
+  const withFeatures = ensureHooksFeature(filter.content);
+  const withHooks = appendBlock(withFeatures, hooksBlock(filter.managedFilter));
   const synced = syncProjectMcpEnvVars(withHooks);
   const next = synced.content;
   if (hasProjectMcpDeclaration(existing)) {
@@ -196,6 +199,10 @@ function installProjectHooks() {
       );
     }
   }
+  return { existing, next, synced };
+}
+
+function installProjectHooks({ existing, next, synced }) {
   if (normalizeConfig(existing) === normalizeConfig(next)) {
     console.log(`Codex hooks in ${projectConfigPath} are already up to date.`);
     return false;
@@ -242,8 +249,10 @@ function normalizeConfig(content) {
 }
 
 function main() {
+  // Validate the project policy before even the existing global MCP write.
+  const hooks = MCP_ONLY ? undefined : prepareProjectHooks();
   if (!HOOKS_ONLY) installMcp();
-  if (!MCP_ONLY) installProjectHooks();
+  if (hooks) installProjectHooks(hooks);
 }
 
 function indent(text) {
