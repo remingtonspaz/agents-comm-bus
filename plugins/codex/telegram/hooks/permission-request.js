@@ -3174,7 +3174,7 @@ var require_stream = __commonJS({
       };
       duplex._final = function(callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open4() {
+          ws.once("open", function open5() {
             duplex._final(callback);
           });
           return;
@@ -3195,7 +3195,7 @@ var require_stream = __commonJS({
       };
       duplex._write = function(chunk, encoding, callback) {
         if (ws.readyState === ws.CONNECTING) {
-          ws.once("open", function open4() {
+          ws.once("open", function open5() {
             duplex._write(chunk, encoding, callback);
           });
           return;
@@ -3707,13 +3707,13 @@ function accountLabelScopeFromEnvSafe(env = process.env, log = (message) => cons
 
 // dist/core-daemon/host-runtime/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
-import path10 from "node:path";
+import path11 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { mkdir as mkdir3, open as open3, readFile as readFile2, rm as rm2, writeFile } from "node:fs/promises";
-import path4 from "node:path";
+import { mkdir as mkdir4, open as open4, readFile as readFile3, rm as rm3 } from "node:fs/promises";
+import path5 from "node:path";
 
 // dist/core-daemon/storage/audit.js
 import { createReadStream } from "node:fs";
@@ -3723,8 +3723,8 @@ import { createInterface } from "node:readline/promises";
 
 // dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
-async function appendJsonLine(path11, value) {
-  const handle = await open(path11, "a");
+async function appendJsonLine(path12, value) {
+  const handle = await open(path12, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -3744,18 +3744,18 @@ var JsonlAuditStore = class {
     this.root = root;
   }
   async append(event) {
-    const path11 = this.pathFor(event.timestamp);
-    await mkdir(dirname(path11), { recursive: true });
-    await appendJsonLine(path11, event);
+    const path12 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path12), { recursive: true });
+    await appendJsonLine(path12, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
   async hasInboundReceived(conversation_id, message, auditTimestamp) {
-    const path11 = this.pathFor(auditTimestamp ?? Date.now());
+    const path12 = this.pathFor(auditTimestamp ?? Date.now());
     try {
       const lines = createInterface({
-        input: createReadStream(path11, { encoding: "utf8" }),
+        input: createReadStream(path12, { encoding: "utf8" }),
         crlfDelay: Infinity
       });
       for await (const line of lines) {
@@ -3775,7 +3775,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.63";
+var DAEMON_VERSION = "0.2.64";
 var IPC_PROTOCOL_VERSION = "1.2.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -4149,6 +4149,130 @@ function isAlreadyExistsError(error) {
   return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 
+// dist/core-daemon/bootstrap/discovery-claim.js
+import { mkdir as mkdir3, open as open3, readFile as readFile2, rename, rm as rm2, writeFile } from "node:fs/promises";
+import path4 from "node:path";
+
+// dist/core-daemon/runtime/process-start-epoch.js
+import { execFile } from "node:child_process";
+function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, selfPid = process.pid) {
+  const values = /* @__PURE__ */ new Map();
+  const pending = /* @__PURE__ */ new Map();
+  let generation = 0;
+  const prefetch = async (pids, refresh = false) => {
+    const ids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+    const pinned = (pid) => pid === selfPid && values.get(pid)?.value != null;
+    const missing = ids.filter((pid) => !pending.has(pid) && !pinned(pid) && (refresh || !values.has(pid) || now() - values.get(pid).at >= ttlMs));
+    if (missing.length) {
+      const epoch = generation;
+      const work = Promise.resolve().then(() => probe(missing)).catch(() => /* @__PURE__ */ new Map()).then((results) => {
+        if (epoch !== generation)
+          return;
+        for (const pid of missing)
+          values.set(pid, { value: results.get(pid) ?? null, at: now() });
+        for (const pid of values.keys()) {
+          if (values.size <= 4096)
+            break;
+          if (pid !== selfPid)
+            values.delete(pid);
+        }
+      }).finally(() => {
+        if (epoch === generation)
+          for (const pid of missing)
+            pending.delete(pid);
+      });
+      for (const pid of missing)
+        pending.set(pid, work);
+    }
+    await Promise.all(ids.map((pid) => pending.get(pid)));
+  };
+  return {
+    read(pid) {
+      if (pending.has(pid))
+        return null;
+      const entry = values.get(pid);
+      if (entry && (pid === selfPid && entry.value != null || now() - entry.at < ttlMs))
+        return entry.value;
+      void prefetch([pid]);
+      return null;
+    },
+    prefetch,
+    reset() {
+      generation += 1;
+      values.clear();
+      pending.clear();
+    }
+  };
+}
+function execText(file, args) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+}
+async function probeProcessIdentities(pids, platform = process.platform, run = execText) {
+  const result = /* @__PURE__ */ new Map();
+  pids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (!pids.length)
+    return result;
+  if (platform === "win32") {
+    const out = await run("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Get-Process -Id ${pids.join(",")} -ErrorAction SilentlyContinue | ForEach-Object { try { '{0}:{1}' -f $_.Id,$_.StartTime.ToUniversalTime().Ticks } catch {} }`
+    ]);
+    for (const line of out.trim().split(/\r?\n/)) {
+      const match = /^(\d+):(\d+)$/.exec(line.trim());
+      if (match)
+        result.set(Number(match[1]), Number(BigInt(match[2]) / 10000n - 62135596800000n));
+    }
+  } else if (platform === "darwin") {
+    const out = await run("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")]);
+    for (const line of out.trim().split(/\r?\n/)) {
+      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+      if (match && Number.isFinite(Date.parse(match[2])))
+        result.set(Number(match[1]), Date.parse(match[2]));
+    }
+  }
+  return result;
+}
+var identityCache = createProcessStartIdentityCache(probeProcessIdentities);
+
+// dist/core-daemon/bootstrap/discovery-claim.js
+var OWNER_FILE = "owner.json";
+function discoveryOwnerFile(discoveryRoot2) {
+  return path4.join(discoveryRoot2, OWNER_FILE);
+}
+async function readDiscoveryClaim(discoveryRoot2) {
+  try {
+    const raw = await readFile2(discoveryOwnerFile(discoveryRoot2), "utf8");
+    return parseDiscoveryClaim(raw);
+  } catch {
+    return void 0;
+  }
+}
+function parseDiscoveryClaim(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0 || typeof parsed.port !== "number" || !Number.isInteger(parsed.port) || parsed.port <= 0 || parsed.port >= 65536 || typeof parsed.stateRoot !== "string" || parsed.stateRoot.length === 0 || typeof parsed.protocolVersion !== "string" || parsed.protocolVersion.length === 0) {
+      return void 0;
+    }
+    const startedAt = parsed.startedAt === null || parsed.startedAt === void 0 ? null : typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt) ? parsed.startedAt : void 0;
+    if (startedAt === void 0 && parsed.startedAt !== null && parsed.startedAt !== void 0) {
+      return void 0;
+    }
+    return {
+      pid: parsed.pid,
+      port: parsed.port,
+      stateRoot: parsed.stateRoot,
+      startedAt: startedAt ?? null,
+      protocolVersion: parsed.protocolVersion
+    };
+  } catch {
+    return void 0;
+  }
+}
+
 // dist/core-daemon/bootstrap/ensure-daemon.js
 async function ensureDaemon(options = {}) {
   const env = options.env ?? process.env;
@@ -4162,8 +4286,8 @@ async function ensureDaemon(options = {}) {
   if (pinsDiscovery && env.AGENTS_COMM_BUS_DISCOVERY_ROOT) {
     (options.log ?? console.error)(`agents-comm-bus: ignoring AGENTS_COMM_BUS_DISCOVERY_ROOT=${env.AGENTS_COMM_BUS_DISCOVERY_ROOT}; explicit stateRoot ${paths.root} without discoveryRoot pins discovery to the state root`);
   }
-  await mkdir3(paths.root, { recursive: true });
-  await mkdir3(discoveryPaths.root, { recursive: true });
+  await mkdir4(paths.root, { recursive: true });
+  await mkdir4(discoveryPaths.root, { recursive: true });
   warnIfSourceModeSharesDiscoveryRoot({
     stateRoot: paths.root,
     discoveryRoot: discoveryPaths.root,
@@ -4203,6 +4327,69 @@ async function ensureDaemon(options = {}) {
     }
   };
   const probeDiscovery = async () => {
+    const claim = await readDiscoveryClaim(discoveryPaths.root);
+    if (claim) {
+      const normalizedExpected = normalizeDaemonRootPath(paths.root);
+      const normalizedClaimRoot = normalizeDaemonRootPath(claim.stateRoot);
+      if (normalizedClaimRoot !== normalizedExpected) {
+        foreignRoot = claim.stateRoot;
+        if (!auditedForeign) {
+          auditedForeign = true;
+          await audit.append({
+            timestamp: Date.now(),
+            kind: "daemon_discovery_foreign_state_root",
+            detail: {
+              port: claim.port,
+              pid: claim.pid,
+              expected_state_root: paths.root,
+              reported_state_root: claim.stateRoot
+            }
+          }).catch(() => {
+          });
+        }
+        return void 0;
+      }
+      try {
+        const hello = await probe(claim.port);
+        const reported2 = hello.metadata?.stateRoot;
+        if (typeof reported2 === "string" && reported2.length > 0) {
+          if (normalizeDaemonRootPath(reported2) !== normalizedExpected) {
+            foreignRoot = reported2;
+            if (!auditedForeign) {
+              auditedForeign = true;
+              await audit.append({
+                timestamp: Date.now(),
+                kind: "daemon_discovery_foreign_state_root",
+                detail: {
+                  port: claim.port,
+                  pid: hello.metadata?.pid,
+                  expected_state_root: paths.root,
+                  reported_state_root: reported2
+                }
+              }).catch(() => {
+              });
+            }
+            return void 0;
+          }
+          foreignRoot = void 0;
+        }
+        return { port: claim.port, hello };
+      } catch (error) {
+        const pid = claim.pid;
+        const dead = !isPidAlive(pid);
+        const refused = error?.code === "ECONNREFUSED";
+        if (foreignRoot === void 0 && (dead || refused)) {
+          return void 0;
+        }
+        if (!dead) {
+          if (!warnedBusy) {
+            warnedBusy = true;
+            (options.log ?? console.error)(`agents-comm-bus: daemon pid ${pid} is alive but unresponsive; waiting`);
+          }
+        }
+        return void 0;
+      }
+    }
     const found = await probeFromPortFile(discoveryPaths.portFile, probe, {
       pidFile: discoveryPaths.pidFile,
       isPidAlive,
@@ -4229,8 +4416,10 @@ async function ensureDaemon(options = {}) {
       }
       return found;
     }
-    if (normalizeDaemonRootPath(reported) === normalizeDaemonRootPath(paths.root))
+    if (normalizeDaemonRootPath(reported) === normalizeDaemonRootPath(paths.root)) {
+      foreignRoot = void 0;
       return found;
+    }
     foreignRoot = reported;
     if (!auditedForeign) {
       auditedForeign = true;
@@ -4292,7 +4481,8 @@ async function ensureDaemon(options = {}) {
           return { ...recheck, spawned };
         }
         const incumbentPid = await readPidFile(discoveryPaths.pidFile);
-        if (foreignRoot !== void 0 || incumbentPid !== void 0 && isPidAlive(incumbentPid)) {
+        const foreignSquatter = foreignRoot !== void 0;
+        if (!foreignSquatter && incumbentPid !== void 0 && isPidAlive(incumbentPid)) {
           const found3 = await waitForDaemon(probeDiscovery, deadline, retryMs);
           if (found3)
             return { ...found3, spawned };
@@ -4335,7 +4525,7 @@ async function readBoundedDaemonStderrTail(stateRoot2) {
   const logPath = daemonStderrLogPath(stateRoot2);
   let handle;
   try {
-    handle = await open3(logPath, "r");
+    handle = await open4(logPath, "r");
     const fileStat = await handle.stat();
     if (fileStat.size === 0)
       return "";
@@ -4356,8 +4546,9 @@ async function throwDaemonBootstrapTimeoutError(discoveryRoot2, stateRoot2, live
   let message = `Timed out starting agents-comm-bus daemon under ${discoveryRoot2}.`;
   if (livePid !== void 0)
     message += ` Daemon pid ${livePid} is alive but unresponsive; no replacement spawned.`;
-  if (foreignRoot !== void 0)
-    message += ` Discovery reports foreign state root ${foreignRoot}; refusing reuse or replacement.`;
+  if (foreignRoot !== void 0) {
+    message += ` Discovery reports foreign state root ${foreignRoot}; spawn may replace the squatter.`;
+  }
   message += `
 Daemon stderr log: ${logPath}`;
   const tail = await readBoundedDaemonStderrTail(stateRoot2);
@@ -4390,8 +4581,8 @@ async function terminateMismatchedDaemon(input) {
   if (input.isPidAlive(pid)) {
     throw new Error(`agents-comm-bus daemon pid ${pid} speaks incompatible IPC protocol ${input.liveProtocol} (client ${input.clientProtocol}); failed to terminate old daemon`);
   }
-  await rm2(input.paths.pidFile, { force: true });
-  await rm2(input.paths.portFile, { force: true });
+  await rm3(input.paths.pidFile, { force: true });
+  await rm3(input.paths.portFile, { force: true });
 }
 async function probeFromPortFile(portFile, probe, options) {
   const port = await readPortFile(portFile);
@@ -4405,7 +4596,7 @@ async function probeFromPortFile(portFile, probe, options) {
     const dead = pid !== void 0 && !options.isPidAlive(pid);
     const refused = error?.code === "ECONNREFUSED";
     if (options.allowCleanup?.() !== false && (dead || refused) && await readPortFile(portFile) === port) {
-      await rm2(portFile, { force: true });
+      await rm3(portFile, { force: true });
     } else if (pid !== void 0 && !dead) {
       options.onBusy(pid);
     }
@@ -4423,7 +4614,7 @@ async function waitForDaemon(probeDiscovery, deadline, retryMs) {
   return void 0;
 }
 function daemonStderrLogPath(stateRoot2) {
-  return path4.join(stateRoot2, "daemon.stderr.log");
+  return path5.join(stateRoot2, "daemon.stderr.log");
 }
 function daemonSpawnStdio(stateRoot2) {
   mkdirSync(stateRoot2, { recursive: true });
@@ -4433,8 +4624,8 @@ function daemonSpawnStdio(stateRoot2) {
 async function cleanupStalePidAndPort(input) {
   const pid = await readPidFile(input.pidFile);
   if (pid !== void 0 && !input.isPidAlive(pid)) {
-    await rm2(input.pidFile, { force: true });
-    await rm2(input.portFile, { force: true });
+    await rm3(input.pidFile, { force: true });
+    await rm3(input.portFile, { force: true });
     const audit = new JsonlAuditStore(input.stateRoot);
     await audit.append({
       timestamp: Date.now(),
@@ -4446,7 +4637,7 @@ async function cleanupStalePidAndPort(input) {
 }
 async function readPortFile(portFile) {
   try {
-    const raw = (await readFile2(portFile, "utf8")).trim();
+    const raw = (await readFile3(portFile, "utf8")).trim();
     const port = Number(raw);
     return Number.isInteger(port) && port > 0 && port < 65536 ? port : void 0;
   } catch {
@@ -4455,7 +4646,7 @@ async function readPortFile(portFile) {
 }
 async function readPidFile(pidFile) {
   try {
-    const raw = (await readFile2(pidFile, "utf8")).trim();
+    const raw = (await readFile3(pidFile, "utf8")).trim();
     const pid = Number(raw);
     return Number.isInteger(pid) && pid > 0 ? pid : void 0;
   } catch {
@@ -4478,7 +4669,7 @@ function defaultTerminateDaemon(pid) {
 }
 function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const binOverride = env.AGENTS_COMM_BUS_BIN;
-  const daemonEntry = binOverride ? path4.resolve(binOverride) : path4.join(paths.root, "bin", "daemon.js");
+  const daemonEntry = binOverride ? path5.resolve(binOverride) : path5.join(paths.root, "bin", "daemon.js");
   const stdio = daemonSpawnStdio(paths.root);
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
@@ -4498,7 +4689,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
 function warnIfSourceModeSharesDiscoveryRoot(input) {
   if (!input.env.AGENTS_COMM_BUS_BIN)
     return;
-  if (path4.resolve(input.stateRoot) !== path4.resolve(input.discoveryRoot))
+  if (path5.resolve(input.stateRoot) !== path5.resolve(input.discoveryRoot))
     return;
   input.log("agents-comm-bus: source/dev daemon is sharing the production discovery root; set discoveryRoot in .agents-comm-bus-dev.json (for example .agents-comm-bus-discovery/) to let dev and prod daemons coexist.");
 }
@@ -4507,12 +4698,12 @@ function sleep(ms) {
 }
 
 // dist/core-daemon/host-runtime/ensure-central-install.js
-import path8 from "node:path";
+import path9 from "node:path";
 import { existsSync as existsSync2 } from "node:fs";
-import { readFile as readFile5 } from "node:fs/promises";
+import { readFile as readFile6 } from "node:fs/promises";
 
 // dist/core-daemon/host-runtime/run-central-install.js
-import path7 from "node:path";
+import path8 from "node:path";
 import { existsSync } from "node:fs";
 
 // dist/core-daemon/host-runtime/reconcile-central-install.js
@@ -4706,8 +4897,8 @@ function join2(dir, name) {
 }
 
 // dist/core-daemon/host-runtime/node-fs-seam.js
-import { mkdir as mkdir4, copyFile, writeFile as writeFile2, rename, access, readFile as readFile3, chmod } from "node:fs/promises";
-import path5 from "node:path";
+import { mkdir as mkdir5, copyFile, writeFile as writeFile2, rename as rename2, access, readFile as readFile4, chmod } from "node:fs/promises";
+import path6 from "node:path";
 
 // dist/core-daemon/host-runtime/strip-bom.js
 function stripBom(text) {
@@ -4718,17 +4909,17 @@ function stripBom(text) {
 function createAtomicNodeFsSeam() {
   return {
     mkdirp: async (dir) => {
-      await mkdir4(dir, { recursive: true });
+      await mkdir5(dir, { recursive: true });
     },
     copyFile: async (from, to) => {
       const tmp = `${to}.tmp`;
       await copyFile(from, tmp);
-      await rename(tmp, to);
+      await rename2(tmp, to);
     },
     writeFile: async (file, data) => {
       const tmp = `${file}.tmp`;
       await writeFile2(tmp, data, "utf8");
-      await rename(tmp, file);
+      await rename2(tmp, file);
     },
     chmod: async (file, mode) => {
       await chmod(file, mode);
@@ -4755,27 +4946,27 @@ async function pathExists(p) {
 }
 async function readJsonOrNull(p) {
   try {
-    return JSON.parse(stripBom(await readFile3(p, "utf8")));
+    return JSON.parse(stripBom(await readFile4(p, "utf8")));
   } catch {
     return null;
   }
 }
 function resolveCentralPaths(stateRoot2, comm) {
-  const bin = path5.join(stateRoot2, "bin");
-  const adapters = path5.join(stateRoot2, "adapters");
+  const bin = path6.join(stateRoot2, "bin");
+  const adapters = path6.join(stateRoot2, "adapters");
   return {
-    daemonBundle: path5.join(bin, "daemon.js"),
-    daemonVersionFile: path5.join(bin, "version.json"),
-    cliBundle: path5.join(bin, "cli.js"),
-    adapterBundle: path5.join(adapters, `${comm}.js`),
-    adapterVersionFile: path5.join(adapters, `${comm}.version.json`)
+    daemonBundle: path6.join(bin, "daemon.js"),
+    daemonVersionFile: path6.join(bin, "version.json"),
+    cliBundle: path6.join(bin, "cli.js"),
+    adapterBundle: path6.join(adapters, `${comm}.js`),
+    adapterVersionFile: path6.join(adapters, `${comm}.version.json`)
   };
 }
 
 // dist/core-daemon/host-runtime/install-lock.js
 import { constants as constants2 } from "node:fs";
-import { open as fsOpen, readFile as readFile4, rm as rm3, mkdir as mkdir5, stat } from "node:fs/promises";
-import path6 from "node:path";
+import { open as fsOpen, readFile as readFile5, rm as rm4, mkdir as mkdir6, stat } from "node:fs/promises";
+import path7 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
 var TRANSIENT_WIN32_OPEN_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY", "EACCES"]);
 async function acquireInstallLock(lockPath, options = {}) {
@@ -4786,7 +4977,7 @@ async function acquireInstallLock(lockPath, options = {}) {
   const sleep2 = options.sleep ?? defaultSleep;
   const openFn = options.open ?? fsOpen;
   const platform = options.platform ?? process.platform;
-  await mkdir5(path6.dirname(lockPath), { recursive: true });
+  await mkdir6(path7.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
@@ -4824,9 +5015,9 @@ async function acquireInstallLock(lockPath, options = {}) {
       stoleStale,
       release: async () => {
         try {
-          const current = await readFile4(lockPath, "utf8");
+          const current = await readFile5(lockPath, "utf8");
           if (current.trim() === token) {
-            await rm3(lockPath, { force: true });
+            await rm4(lockPath, { force: true });
           }
         } catch {
         }
@@ -4838,7 +5029,7 @@ async function stealIfStale(lockPath, staleMs, now) {
   try {
     const info = await stat(lockPath);
     if (now() - info.mtimeMs > staleMs) {
-      await rm3(lockPath, { force: true });
+      await rm4(lockPath, { force: true });
       return true;
     }
   } catch {
@@ -4878,7 +5069,7 @@ function lockTimeoutError(lockPath, timeoutMs, cause) {
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
   const fs = deps.fs ?? createAtomicNodeFsSeam();
-  const lockPath = path7.join(stateRoot2, INSTALL_LOCK_NAME);
+  const lockPath = path8.join(stateRoot2, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
     const state = await readCentralState(stateRoot2, actor.comm);
@@ -4887,7 +5078,7 @@ async function runCentralInstall(stateRoot2, actor, deps = {}) {
     const paths = resolveCentralPaths(stateRoot2, actor.comm);
     const result = await executeInstallPlan(plan, actor, paths, fs);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
-      const cliSrc = path7.join(actor.pluginInstallDir, "cli.bundle.js");
+      const cliSrc = path8.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
         await installCliLaunchers(paths, cliSrc, fs);
         result.wroteBundles.push(paths.cliBundle);
@@ -4907,9 +5098,9 @@ function resolveInstallMode(env) {
 async function readInstallStamp(pluginInstallDir, deps = {}) {
   if (!pluginInstallDir)
     return null;
-  const read = deps.readFile ?? readFile5;
+  const read = deps.readFile ?? readFile6;
   try {
-    const raw = await read(path8.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
+    const raw = await read(path9.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
     const parsed = JSON.parse(stripBom(raw));
     if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string" || !isValidAdapterBundleVersionsMap(parsed.adapter_bundle_versions)) {
       return null;
@@ -4927,7 +5118,7 @@ async function ensureCentralInstall(options) {
   }
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
-    if (options.stateRoot && existsSync2(path8.join(options.stateRoot, "bin", "daemon.js"))) {
+    if (options.stateRoot && existsSync2(path9.join(options.stateRoot, "bin", "daemon.js"))) {
       return { mode: "production", skipped: true };
     }
     throw new Error(`central install (production mode): missing or invalid plugin install metadata.
@@ -5002,18 +5193,18 @@ async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
 
 // dist/core-daemon/host-runtime/dev-config-resolver.js
 import { readFileSync, existsSync as existsSync3 } from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
 function resolveDevConfig(projectRoot, deps = {}) {
   const exists = deps.exists ?? existsSync3;
-  const readFile6 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
-  const markerPath = path9.join(projectRoot, DEV_MARKER_NAME);
+  const readFile7 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
+  const markerPath = path10.join(projectRoot, DEV_MARKER_NAME);
   if (!exists(markerPath)) {
     return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
   }
   let parsed;
   try {
-    parsed = JSON.parse(stripBom(readFile6(markerPath)));
+    parsed = JSON.parse(stripBom(readFile7(markerPath)));
   } catch (error) {
     return {
       env: {},
@@ -5025,7 +5216,7 @@ function resolveDevConfig(projectRoot, deps = {}) {
   if (!daemonBinRaw) {
     return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
   }
-  const daemonBin = path9.resolve(projectRoot, daemonBinRaw);
+  const daemonBin = path10.resolve(projectRoot, daemonBinRaw);
   if (!isInside(projectRoot, daemonBin)) {
     return { env: {}, status: "rejected", reasons: [`dev marker daemonBin escapes project root: ${daemonBinRaw}`] };
   }
@@ -5036,21 +5227,21 @@ function resolveDevConfig(projectRoot, deps = {}) {
   const reasons = [`dev marker applied from ${markerPath}`];
   const record = parsed;
   if (typeof record.stateRoot === "string" && record.stateRoot.length > 0) {
-    const stateRoot2 = path9.resolve(projectRoot, record.stateRoot);
+    const stateRoot2 = path10.resolve(projectRoot, record.stateRoot);
     if (isInside(projectRoot, stateRoot2))
       env.AGENTS_COMM_BUS_ROOT = stateRoot2;
     else
       reasons.push(`ignoring stateRoot outside project root: ${record.stateRoot}`);
   }
   if (typeof record.discoveryRoot === "string" && record.discoveryRoot.length > 0) {
-    const discoveryRoot2 = path9.resolve(projectRoot, record.discoveryRoot);
+    const discoveryRoot2 = path10.resolve(projectRoot, record.discoveryRoot);
     if (isInside(projectRoot, discoveryRoot2))
       env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot2;
     else
       reasons.push(`ignoring discoveryRoot outside project root: ${record.discoveryRoot}`);
   }
   if (typeof record.adaptersDir === "string" && record.adaptersDir.length > 0) {
-    const adaptersDir = path9.resolve(projectRoot, record.adaptersDir);
+    const adaptersDir = path10.resolve(projectRoot, record.adaptersDir);
     if (isInside(projectRoot, adaptersDir))
       env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
     else
@@ -5063,10 +5254,10 @@ function applyDevConfig(baseEnv, projectRoot, deps = {}) {
   return { env: { ...baseEnv, ...devConfig.env }, devConfig };
 }
 function isInside(root, candidate) {
-  const rel = path9.relative(root, candidate);
+  const rel = path10.relative(root, candidate);
   if (rel === "")
     return true;
-  return !rel.startsWith("..") && !path9.isAbsolute(rel);
+  return !rel.startsWith("..") && !path10.isAbsolute(rel);
 }
 
 // dist/core-daemon/host-runtime/entry-ensures.js
@@ -5078,11 +5269,11 @@ function resolveEntryContext(fromDir, deps = {}) {
   };
 }
 function findAncestorContaining(dir, name, exists) {
-  let current = path10.resolve(dir);
+  let current = path11.resolve(dir);
   for (; ; ) {
-    if (exists(path10.join(current, name)))
+    if (exists(path11.join(current, name)))
       return current;
-    const parent = path10.dirname(current);
+    const parent = path11.dirname(current);
     if (parent === current)
       return void 0;
     current = parent;

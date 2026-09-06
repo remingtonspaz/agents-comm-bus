@@ -23,6 +23,7 @@ import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js"
 import { startIpcServer } from "./ipc/server.js";
 import type { IpcRequest } from "./ipc/protocol.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { DiscoveryClaimLostError } from "./bootstrap/discovery-claim.js";
 import { prefetchProcessStartIdentity } from "./runtime/process-start-epoch.js";
 import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
 import {
@@ -131,6 +132,8 @@ export interface RunDaemonOptions {
   stateRoot?: string;
   /** Override the runtime discovery-root selection (pid/port/spawn-lock only). */
   discoveryRoot?: string;
+  /** Test hook: invoked when discovery claim is lost to an incumbent. */
+  exitProcess?: (code: number) => void;
 }
 
 /**
@@ -508,6 +511,19 @@ export async function runDaemon(options: RunDaemonOptions): Promise<void> {
     });
   } catch (error) {
     await server.close();
+    if (error instanceof DiscoveryClaimLostError) {
+      await audit.append({
+        timestamp: Date.now(),
+        kind: "daemon_claim_lost",
+        detail: {
+          winner_pid: error.winner.pid,
+          winner_port: error.winner.port,
+          winner_state_root: error.winner.stateRoot,
+        },
+      }).catch(() => {});
+      (options.exitProcess ?? ((code: number) => process.exit(code)))(0);
+      return;
+    }
     throw error;
   }
   await bus.start();

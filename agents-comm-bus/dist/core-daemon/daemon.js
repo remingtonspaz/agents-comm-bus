@@ -7,6 +7,7 @@ import { CommLeaseArbiter, inferAuthorityRank, } from "./runtime/comm-lease.js";
 import { handleInspectInboundTarget } from "./runtime/inspect-inbound-target.js";
 import { startIpcServer } from "./ipc/server.js";
 import { writeDaemonDiscoveryFiles } from "./bootstrap/ensure-daemon.js";
+import { DiscoveryClaimLostError } from "./bootstrap/discovery-claim.js";
 import { prefetchProcessStartIdentity } from "./runtime/process-start-epoch.js";
 import { runBootScopeRestore } from "./bootstrap/boot-scope-restore.js";
 import { IDLE_NO_OWNED_RESOURCES_REASON, retireDaemon, } from "./bootstrap/daemon-retirement.js";
@@ -362,6 +363,19 @@ export async function runDaemon(options) {
     }
     catch (error) {
         await server.close();
+        if (error instanceof DiscoveryClaimLostError) {
+            await audit.append({
+                timestamp: Date.now(),
+                kind: "daemon_claim_lost",
+                detail: {
+                    winner_pid: error.winner.pid,
+                    winner_port: error.winner.port,
+                    winner_state_root: error.winner.stateRoot,
+                },
+            }).catch(() => { });
+            (options.exitProcess ?? ((code) => process.exit(code)))(0);
+            return;
+        }
         throw error;
     }
     await bus.start();

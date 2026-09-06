@@ -1,5 +1,5 @@
 import type { AuditStore } from "agents-comm-bus-core";
-import { writeDaemonDiscoveryFiles } from "./ensure-daemon.js";
+import { writeDaemonDiscoveryFiles } from "./discovery-claim.js";
 export type DaemonPidWatchdogResult = {
     status: "current";
     selfPid: number;
@@ -37,6 +37,7 @@ export interface DaemonPidWatchdogCheckOptions {
     pidFile: string;
     port: number;
     selfPid?: number;
+    selfStartedAt?: number | null;
     readPidFile?: (pidFile: string) => Promise<PidFileRead>;
     isPidAlive?: (pid: number) => boolean;
     writeDiscoveryFiles?: typeof writeDaemonDiscoveryFiles;

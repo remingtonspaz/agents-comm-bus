@@ -35,6 +35,8 @@ export type AuditEventKind =
   | "inbound_dispatch_bridge_completed"
   | "inbound_dispatch_bridge_failed"
   | "daemon_superseded"
+  | "daemon_claim_lost"
+  | "daemon_discovery_foreign_owner_replaced"
   | "daemon_discovery_reclaimed"
   | "daemon_pid_watchdog_error"
   | "daemon_retired"

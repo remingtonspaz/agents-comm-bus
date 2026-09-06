@@ -1,6 +1,6 @@
 {
   "name": "matrix",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Matrix messaging for Claude Code through the agents-comm-bus daemon",
   "author": {
     "name": "Satrio"
@@ -8,7 +8,9 @@
   "mcpServers": {
     "matrix": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/claude-mcp-shim.js"
+      ]
     }
   }
 }

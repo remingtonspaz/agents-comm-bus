@@ -1,5 +1,7 @@
 import { type AgentsCommBusDiscoveryPaths, type AgentsCommBusPaths, type DiscoveryPathOptions } from "../paths.js";
 import type { DaemonHello, DiagnosticMetadata } from "../ipc/protocol.js";
+import { writeDaemonDiscoveryFiles, type WriteDaemonDiscoveryFilesInput } from "./discovery-claim.js";
+export { writeDaemonDiscoveryFiles, type WriteDaemonDiscoveryFilesInput };
 export interface EnsureDaemonOptions extends DiscoveryPathOptions {
     env?: NodeJS.ProcessEnv;
     clientVersion?: string;
@@ -22,11 +24,4 @@ export declare function ensureDaemon(options?: EnsureDaemonOptions): Promise<Ens
 export declare function daemonStderrLogPath(stateRoot: string): string;
 /** Spawn stdio for a detached daemon child: stdout+stderr share an append log fd. */
 export declare function daemonSpawnStdio(stateRoot: string): ["ignore", number, number];
-export declare function writeDaemonDiscoveryFiles(input: {
-    stateRoot?: string;
-    discoveryRoot?: string;
-    pid?: number;
-    port: number;
-    probeDaemon?: (port: number) => Promise<DaemonHello>;
-}): Promise<void>;
 //# sourceMappingURL=ensure-daemon.d.ts.map

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { ensureDaemon } from "../../core-daemon/bootstrap/ensure-daemon.js";
+import { claimDiscovery } from "../../core-daemon/bootstrap/discovery-claim.js";
 import type { DaemonHello } from "../../core-daemon/ipc/protocol.js";
 
 const roots: string[] = [];
@@ -57,26 +58,50 @@ test("AGE-106: all-env roots and explicit split roots retain their precedence", 
   }
 });
 
-test("AGE-106: foreign-root hello is never reused, deleted, terminated, or replaced", async () => {
-  for (const hasPid of [true, false]) {
-    const root = await tempRoot();
-    const foreign = path.join(root, "other-state");
-    await writeFile(path.join(root, "port"), "41152");
-    if (hasPid) await writeFile(path.join(root, "daemon.pid"), "12345");
-    let probes = 0;
-    await assert.rejects(ensureDaemon({ stateRoot: root, env: {}, timeoutMs: 70, retryMs: 5,
-      isPidAlive: () => true, log: () => {},
-      probeDaemon: async () => { probes += 1; return hello(foreign); },
-      spawnDaemon: () => assert.fail("foreign daemon must not be replaced"),
-      terminateDaemon: () => assert.fail("foreign daemon must not be terminated"),
-    }), error => error instanceof Error && error.message.includes(foreign));
-    assert.ok(probes > 1, "exercise the retry paths, not only the initial probe");
-    assert.equal(await readFile(path.join(root, "port"), "utf8"), "41152");
-    if (hasPid) assert.equal(await readFile(path.join(root, "daemon.pid"), "utf8"), "12345");
-    const rows = (await audits(root)).filter(row => row.kind === "daemon_discovery_foreign_state_root");
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].detail.reported_state_root, foreign);
-  }
+test("AGE-106: foreign-root squatter may be replaced by a spawned daemon", async () => {
+  const root = await tempRoot();
+  const foreign = path.join(root, "other-state");
+  const discoveryRoot = path.join(root, "discovery");
+  await mkdir(discoveryRoot, { recursive: true });
+  const squatter = {
+    pid: 12345,
+    port: 41152,
+    stateRoot: foreign,
+    startedAt: 1,
+    protocolVersion: "1.2.0",
+  };
+  await writeFile(path.join(discoveryRoot, "owner.json"), `${JSON.stringify(squatter)}\n`);
+  await writeFile(path.join(discoveryRoot, "daemon.pid"), `${squatter.pid}\n`);
+  await writeFile(path.join(discoveryRoot, "port"), `${squatter.port}\n`);
+  let spawns = 0;
+  let replaced = false;
+  const result = await ensureDaemon({
+    stateRoot: root,
+    discoveryRoot,
+    env: {},
+    timeoutMs: 500,
+    retryMs: 5,
+    isPidAlive: () => true,
+    log: () => {},
+    probeDaemon: async () => replaced ? hello(root) : hello(foreign),
+    spawnDaemon: async (_paths, discovery) => {
+      spawns += 1;
+      await claimDiscovery({
+        stateRoot: root,
+        discoveryRoot: discovery.root,
+        pid: 54321,
+        port: 41153,
+        startedAt: 2,
+        isPidAlive: pid => pid === squatter.pid,
+        probeDaemon: async () => hello(foreign),
+      });
+      replaced = true;
+    },
+  });
+  assert.equal(spawns, 1);
+  assert.equal(result.spawned, true);
+  const owner = JSON.parse(await readFile(path.join(discoveryRoot, "owner.json"), "utf8"));
+  assert.equal(owner.stateRoot, root);
 });
 
 test("AGE-106: matching normalized root is reused", async () => {

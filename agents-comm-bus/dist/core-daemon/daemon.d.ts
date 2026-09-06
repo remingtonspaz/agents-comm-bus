@@ -44,6 +44,8 @@ export interface RunDaemonOptions {
     stateRoot?: string;
     /** Override the runtime discovery-root selection (pid/port/spawn-lock only). */
     discoveryRoot?: string;
+    /** Test hook: invoked when discovery claim is lost to an incumbent. */
+    exitProcess?: (code: number) => void;
 }
 /**
  * Generic daemon entry point. Knows nothing about specific agents or

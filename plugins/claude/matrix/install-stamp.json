@@ -2,8 +2,8 @@
   "schema_version": 1,
   "agent": "claude",
   "comm": "matrix",
-  "plugin_version": "0.1.12",
-  "daemon_bundle_version": "0.2.63",
+  "plugin_version": "0.1.13",
+  "daemon_bundle_version": "0.2.64",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
     "matrix": "0.2.6"

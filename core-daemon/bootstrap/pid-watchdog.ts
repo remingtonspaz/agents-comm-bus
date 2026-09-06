@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 
 import type { AuditStore } from "agents-comm-bus-core";
-import { writeDaemonDiscoveryFiles } from "./ensure-daemon.js";
+import {
+  discoveryClaimIdentityMatches,
+  readDiscoveryClaim,
+  writeDaemonDiscoveryFiles,
+} from "./discovery-claim.js";
+import { currentProcessStartEpochMs } from "../runtime/process-start-epoch.js";
 
 export type DaemonPidWatchdogResult =
   | { status: "current"; selfPid: number }
@@ -21,6 +26,7 @@ export interface DaemonPidWatchdogCheckOptions {
   pidFile: string;
   port: number;
   selfPid?: number;
+  selfStartedAt?: number | null;
   readPidFile?: (pidFile: string) => Promise<PidFileRead>;
   isPidAlive?: (pid: number) => boolean;
   writeDiscoveryFiles?: typeof writeDaemonDiscoveryFiles;
@@ -125,28 +131,49 @@ export async function checkDaemonPidOwnership(
   options: DaemonPidWatchdogCheckOptions,
 ): Promise<DaemonPidWatchdogResult> {
   const selfPid = options.selfPid ?? process.pid;
+  const selfStartedAt = options.selfStartedAt ?? currentProcessStartEpochMs();
   const read = options.readPidFile ?? readPidFile;
   const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
   const writeDiscovery = options.writeDiscoveryFiles ?? writeDaemonDiscoveryFiles;
+  const discoveryRoot = options.discoveryRoot ?? options.stateRoot;
+
+  const usingInjectedPidReader = options.readPidFile !== undefined;
+
+  if (discoveryRoot && !usingInjectedPidReader) {
+    const owner = await readDiscoveryClaim(discoveryRoot);
+    if (owner) {
+      if (discoveryClaimIdentityMatches(owner, selfPid, selfStartedAt)) {
+        return { status: "current", selfPid };
+      }
+
+      let ownerAlive: boolean;
+      try {
+        ownerAlive = isPidAlive(owner.pid);
+      } catch (error) {
+        return {
+          status: "stayed_alive",
+          selfPid,
+          reason: "liveness_error",
+          ownerPid: owner.pid,
+          error: errorMessage(error),
+        };
+      }
+
+      if (ownerAlive && owner.pid !== selfPid) {
+        return { status: "superseded", selfPid, ownerPid: owner.pid };
+      }
+
+      if (!ownerAlive) {
+        return await reclaimDiscovery(options, selfPid, writeDiscovery, owner.pid);
+      }
+
+      return { status: "superseded", selfPid, ownerPid: owner.pid };
+    }
+  }
 
   const pidFile = await read(options.pidFile);
   if (pidFile.status === "missing") {
-    try {
-      await writeDiscovery({
-        stateRoot: options.stateRoot,
-        discoveryRoot: options.discoveryRoot,
-        pid: selfPid,
-        port: options.port,
-      });
-      return { status: "reclaimed", selfPid, reason: "missing" };
-    } catch (error) {
-      return {
-        status: "stayed_alive",
-        selfPid,
-        reason: "reclaim_error",
-        error: errorMessage(error),
-      };
-    }
+    return await reclaimDiscovery(options, selfPid, writeDiscovery);
   }
 
   if (pidFile.status === "invalid") {
@@ -167,7 +194,10 @@ export async function checkDaemonPidOwnership(
     };
   }
 
-  if (pidFile.pid === selfPid) {
+  if (
+    pidFile.pid === selfPid &&
+    (options.selfStartedAt == null || options.selfStartedAt === selfStartedAt)
+  ) {
     return { status: "current", selfPid };
   }
 
@@ -188,25 +218,45 @@ export async function checkDaemonPidOwnership(
     return { status: "superseded", selfPid, ownerPid: pidFile.pid };
   }
 
+  return await reclaimDiscovery(options, selfPid, writeDiscovery, pidFile.pid);
+}
+
+async function reclaimDiscovery(
+  options: DaemonPidWatchdogCheckOptions,
+  selfPid: number,
+  writeDiscovery: typeof writeDaemonDiscoveryFiles,
+  previousPid?: number,
+): Promise<DaemonPidWatchdogResult> {
+  if (!options.stateRoot) {
+    return {
+      status: "stayed_alive",
+      selfPid,
+      reason: "reclaim_error",
+      ownerPid: previousPid,
+      error: "stateRoot is required to reclaim discovery",
+    };
+  }
+
   try {
     await writeDiscovery({
-      stateRoot: options.stateRoot,
+      stateRoot: options.stateRoot ?? "",
       discoveryRoot: options.discoveryRoot,
       pid: selfPid,
       port: options.port,
+      startedAt: options.selfStartedAt,
     });
     return {
       status: "reclaimed",
       selfPid,
-      reason: "dead_owner",
-      ownerPid: pidFile.pid,
+      reason: previousPid === undefined ? "missing" : "dead_owner",
+      ...(previousPid === undefined ? {} : { ownerPid: previousPid }),
     };
   } catch (error) {
     return {
       status: "stayed_alive",
       selfPid,
       reason: "reclaim_error",
-      ownerPid: pidFile.pid,
+      ownerPid: previousPid,
       error: errorMessage(error),
     };
   }

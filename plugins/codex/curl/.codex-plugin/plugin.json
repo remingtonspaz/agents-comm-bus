@@ -1,6 +1,6 @@
 {
   "name": "curl",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Local HTTP ingress for Codex through the shared agents-comm-bus daemon: POST context from cron, CI, or scripts straight into the session.",
   "author": {
     "name": "Satrio"

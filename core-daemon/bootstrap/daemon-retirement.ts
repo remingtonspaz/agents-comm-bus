@@ -3,6 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import type { AuditStore } from "agents-comm-bus-core";
 
 import { resolveDiscoveryPaths } from "../paths.js";
+import { discoveryOwnerFile, readDiscoveryClaim } from "./discovery-claim.js";
 
 export const IDLE_NO_OWNED_RESOURCES_REASON = "idle_no_owned_resources";
 
@@ -42,18 +43,25 @@ export async function removeDiscoveryFilesIfOwned(
   const readPort = input.readPortFile ?? readDiscoveryPortFile;
   const onDiskPid = await readPid(paths.pidFile);
   const onDiskPort = await readPort(paths.portFile);
+  const owner = await readDiscoveryClaim(paths.root);
+  const ownerMatches =
+    owner !== undefined &&
+    owner.pid === input.selfPid &&
+    owner.port === input.selfPort;
   if (
     !discoveryFilesMatchSelf({
       selfPid: input.selfPid,
       selfPort: input.selfPort,
       onDiskPid,
       onDiskPort,
-    })
+    }) &&
+    !ownerMatches
   ) {
     return false;
   }
   await rm(paths.pidFile, { force: true });
   await rm(paths.portFile, { force: true });
+  await rm(discoveryOwnerFile(paths.root), { force: true });
   return true;
 }
 
