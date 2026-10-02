@@ -325,6 +325,38 @@ export function findCmdAncestor(log = () => {}, deps = {}) {
   }
 }
 
+function claudeExecutableName(name) {
+  const lower = String(name || '').toLowerCase();
+  return lower === 'claude.exe' || lower === 'claude';
+}
+
+function walkClaudePidFromChain(chain, log) {
+  log(`process chain: ${chain.map((c) => `${c.name || '?'}#${c.pid}`).join(' <- ')}`);
+  for (const entry of chain) {
+    if (claudeExecutableName(entry.name)) return entry.pid;
+  }
+  return null;
+}
+
+/** Owner pid for session lease — cmd.exe path in native terminals, or claude.exe under herdr. */
+export function findClaudeOwnerPid(log = () => {}, deps = {}) {
+  const cmd = findCmdAncestor(log, deps);
+  if (cmd?.claudePid) return cmd.claudePid;
+
+  const platform = deps.platform ?? os.platform();
+  if (platform !== 'win32') return null;
+
+  try {
+    const chain = deps.readChainRaw
+      ? deps.readChainRaw(log)
+      : readProcessChainViaCim(process.pid, log);
+    return walkClaudePidFromChain(chain, log);
+  } catch (error) {
+    log(`findClaudeOwnerPid error: ${error.message}`);
+    return null;
+  }
+}
+
 export function findClaudeWindowPid(log = () => {}) {
   return findCmdAncestor(log)?.pid ?? null;
 }

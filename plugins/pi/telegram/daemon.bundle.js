@@ -3725,7 +3725,7 @@ import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.65";
+var DAEMON_VERSION = "0.2.66";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -8577,7 +8577,7 @@ var SqliteStorage = class _SqliteStorage {
     this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE session_id = ?`).run(...params);
   }
   async getWakeMode(project, agent) {
-    const canonical = normalizeProjectPath(project);
+    const canonical = project === "" ? "" : normalizeProjectPath(project);
     const scoped = this.db.prepare(
       "SELECT mode FROM wake_preferences WHERE project = ? AND agent = ?"
     ).get(canonical, agent);
@@ -8607,6 +8607,52 @@ var SqliteStorage = class _SqliteStorage {
   async listWakeModes() {
     const rows = this.db.prepare("SELECT project, agent, mode, updated_at FROM wake_preferences ORDER BY project, agent").all();
     return rows;
+  }
+  async insertSession(rec) {
+    const project = normalizeProjectPath(rec.project);
+    this.db.prepare(`
+        INSERT INTO sessions (
+          schema_version, session_id, agent, project, created_at,
+          lease_holder_connection_id, lease_acquired_at, lease_released_at,
+          lease_owner_process_pid, lease_owner_process_label,
+          lease_owner_process_registered_at, lease_owner_process_start_time,
+          lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
+          lease_owner_daemon_state_root, lease_owner_daemon_bin,
+          lease_owner_daemon_authority_rank,
+          most_recent_inbound_conversation_id, account_label_scope, status,
+          wake_identity_json, wake_strict
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+      rec.schema_version,
+      rec.session_id,
+      rec.agent,
+      project,
+      rec.created_at,
+      rec.lease_holder_connection_id,
+      rec.lease_acquired_at,
+      rec.lease_released_at,
+      rec.lease_owner_process_pid,
+      rec.lease_owner_process_label,
+      rec.lease_owner_process_registered_at,
+      rec.lease_owner_process_start_time ?? null,
+      rec.lease_owner_daemon_discovery_root,
+      rec.lease_owner_daemon_checkout_root,
+      rec.lease_owner_daemon_state_root,
+      rec.lease_owner_daemon_bin,
+      rec.lease_owner_daemon_authority_rank,
+      rec.most_recent_inbound_conversation_id,
+      rec.account_label_scope ?? null,
+      rec.status,
+      rec.wake_identity ? JSON.stringify(rec.wake_identity) : null,
+      rec.wake_strict
+    );
+  }
+  async reactivateSessionIfEnded(session) {
+    const result = this.db.prepare(`
+        UPDATE sessions SET status = 'active'
+        WHERE session_id = ? AND status = 'ended'
+      `).run(session);
+    return Number(result.changes ?? 0) > 0;
   }
   async addAllowlistGlobal(rec) {
     this.db.prepare(`
@@ -9253,6 +9299,31 @@ async function auditWakeDeliveryFailure(deps, input) {
 async function wakeStrategyForSession(storage, session) {
   const mode = await resolveWakeMode(storage, session.project, session.agent);
   return effectiveWakeStrategy(session, mode);
+}
+function validateHerdrRegisterParams(params, expectedAgent) {
+  if (params.herdr_identity === void 0) {
+    return { ok: true };
+  }
+  const identity = parseHerdrIdentity(params.herdr_identity);
+  if (!identity || identity.agent !== expectedAgent) {
+    return { ok: false, reason: "invalid herdr_identity" };
+  }
+  return { ok: true };
+}
+async function applyHerdrWakeTargetFromRegisterParams(storage, session, params, expectedAgent) {
+  const validated = validateHerdrRegisterParams(params, expectedAgent);
+  if (!validated.ok) return;
+  const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+  const wakeStrict = parseWakeStrict(params.wake_strict);
+  if (params.herdr_identity !== void 0 && herdrIdentity) {
+    await storage.setSessionWakeTarget(
+      session,
+      herdrIdentity,
+      params.wake_strict !== void 0 ? wakeStrict : void 0
+    );
+  } else if (params.wake_strict !== void 0) {
+    await storage.setSessionWakeTarget(session, void 0, wakeStrict);
+  }
 }
 
 // ../core-daemon/runtime/comm-lease-eligibility.ts
@@ -11681,30 +11752,35 @@ async function handleHerdrRegisterPane(params, context) {
   }
   const session_id = herdrSessionId(identity);
   const now = Date.now();
-  await context.storage.upsertSession({
-    schema_version: SCHEMA_VERSION_SESSION,
-    session_id,
-    agent,
-    project,
-    created_at: now,
-    lease_holder_connection_id: null,
-    lease_acquired_at: null,
-    lease_released_at: null,
-    lease_owner_process_pid: null,
-    lease_owner_process_label: null,
-    lease_owner_process_registered_at: null,
-    lease_owner_process_start_time: null,
-    lease_owner_daemon_discovery_root: null,
-    lease_owner_daemon_checkout_root: null,
-    lease_owner_daemon_state_root: null,
-    lease_owner_daemon_bin: null,
-    lease_owner_daemon_authority_rank: null,
-    most_recent_inbound_conversation_id: null,
-    account_label_scope: null,
-    status: "active",
-    wake_identity: null,
-    wake_strict: null
-  });
+  const existing = await context.storage.getSession(session_id);
+  if (!existing) {
+    await context.storage.insertSession({
+      schema_version: SCHEMA_VERSION_SESSION,
+      session_id,
+      agent,
+      project,
+      created_at: now,
+      lease_holder_connection_id: null,
+      lease_acquired_at: null,
+      lease_released_at: null,
+      lease_owner_process_pid: null,
+      lease_owner_process_label: null,
+      lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
+      lease_owner_daemon_discovery_root: null,
+      lease_owner_daemon_checkout_root: null,
+      lease_owner_daemon_state_root: null,
+      lease_owner_daemon_bin: null,
+      lease_owner_daemon_authority_rank: null,
+      most_recent_inbound_conversation_id: null,
+      account_label_scope: null,
+      status: "active",
+      wake_identity: null,
+      wake_strict: null
+    });
+  } else if (existing.status === "ended") {
+    await context.storage.reactivateSessionIfEnded(session_id);
+  }
   await context.storage.setSessionWakeTarget(
     session_id,
     identity,
@@ -12414,6 +12490,10 @@ var ClaudeBridge = class {
     return this.ownedAccountsCache;
   }
   async registerSession(params, socket) {
+    const herdrParams = validateHerdrRegisterParams(params, this.agentId);
+    if (!herdrParams.ok) {
+      return { ok: false, reason: herdrParams.reason };
+    }
     const session = requiredString(params.session, "session");
     const project = normalizeProjectPath(requiredString(params.project, "project"));
     const connectionId = typeof params.connection_id === "string" ? params.connection_id : `claude:${session}:${crypto4.randomUUID()}`;
@@ -12444,6 +12524,12 @@ var ClaudeBridge = class {
       wake_identity: null,
       wake_strict: null
     });
+    await applyHerdrWakeTargetFromRegisterParams(
+      this.options.storage,
+      session,
+      params,
+      this.agentId
+    );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
     const acquired = await this.options.storage.acquireSessionLease(
@@ -12474,20 +12560,6 @@ var ClaudeBridge = class {
     const deliverabilityAfter = afterSession ? this.isLocallyDeliverable(afterSession) : false;
     if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
       await this.redrivePendingInboundCoalesced(session);
-    }
-    const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
-    const wakeStrict = parseWakeStrict(params.wake_strict);
-    if (params.herdr_identity !== void 0) {
-      if (!herdrIdentity || herdrIdentity.agent !== "claude") {
-        return { ok: false, reason: "invalid herdr_identity" };
-      }
-      await this.options.storage.setSessionWakeTarget(
-        session,
-        herdrIdentity,
-        params.wake_strict !== void 0 ? wakeStrict : void 0
-      );
-    } else if (params.wake_strict !== void 0) {
-      await this.options.storage.setSessionWakeTarget(session, void 0, wakeStrict);
     }
     const afterWake = await this.options.storage.getSession(session);
     const wake_strategy = afterWake ? await wakeStrategyForSession(this.options.storage, afterWake) : "native";
@@ -14176,6 +14248,10 @@ var CodexBridge = class {
     };
   }
   async registerSession(params, socket) {
+    const herdrParams = validateHerdrRegisterParams(params, this.agentId);
+    if (!herdrParams.ok) {
+      return { ok: false, reason: herdrParams.reason };
+    }
     const session = requiredString2(params.session, "session");
     const project = normalizeProjectPath(requiredString2(params.project, "project"));
     const connectionId = typeof params.connection_id === "string" ? params.connection_id : `codex:${session}:${crypto6.randomUUID()}`;
@@ -14205,6 +14281,12 @@ var CodexBridge = class {
       wake_identity: null,
       wake_strict: null
     });
+    await applyHerdrWakeTargetFromRegisterParams(
+      this.options.storage,
+      session,
+      params,
+      this.agentId
+    );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
     const replaceExistingLease = params.replace_existing_lease === true || params.persist_after_disconnect === true;
@@ -14254,7 +14336,8 @@ var CodexBridge = class {
         }
       } else if (existing?.lease_holder_connection_id) {
         await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
-        const wake_strategy2 = await this.persistHerdrWakeFromParams(session, params);
+        const afterWake2 = await this.options.storage.getSession(session);
+        const wake_strategy2 = afterWake2 ? await wakeStrategyForSession(this.options.storage, afterWake2) : "native";
         return {
           ok: true,
           reason: "codex session lease already held; registration refreshed",
@@ -14297,26 +14380,9 @@ var CodexBridge = class {
       void this.releaseSessionLease(lease);
     };
     socket?.once("close", release);
-    const wake_strategy = await this.persistHerdrWakeFromParams(session, params);
-    return { ok: true, capabilities: this.adapter.capabilities, wake_strategy };
-  }
-  async persistHerdrWakeFromParams(session, params) {
-    const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
-    const wakeStrict = parseWakeStrict(params.wake_strict);
-    if (params.herdr_identity !== void 0) {
-      if (!herdrIdentity || herdrIdentity.agent !== this.agentId) {
-        return "native";
-      }
-      await this.options.storage.setSessionWakeTarget(
-        session,
-        herdrIdentity,
-        params.wake_strict !== void 0 ? wakeStrict : void 0
-      );
-    } else if (params.wake_strict !== void 0) {
-      await this.options.storage.setSessionWakeTarget(session, void 0, wakeStrict);
-    }
     const afterWake = await this.options.storage.getSession(session);
-    return afterWake ? await wakeStrategyForSession(this.options.storage, afterWake) : "native";
+    const wake_strategy = afterWake ? await wakeStrategyForSession(this.options.storage, afterWake) : "native";
+    return { ok: true, capabilities: this.adapter.capabilities, wake_strategy };
   }
   async drainInbound(params) {
     const session = typeof params.session === "string" ? params.session : void 0;

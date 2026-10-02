@@ -3232,8 +3232,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path15) {
-      let input = path15;
+    function removeDotSegments(path17) {
+      let input = path17;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3485,8 +3485,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path15, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path15 && path15 !== "/" ? path15 : void 0;
+        const [path17, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path17 && path17 !== "/" ? path17 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -12574,12 +12574,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs2, exportName) {
+    function addFormats(ajv, list, fs3, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs2[f]);
+        ajv.addFormat(f, fs3[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -16448,10 +16448,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path15) {
-  if (!path15)
+function getElementAtPath(obj, path17) {
+  if (!path17)
     return obj;
-  return path15.reduce((acc, key) => acc?.[key], obj);
+  return path17.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -16860,11 +16860,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path15, issues) {
+function prefixIssues(path17, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path15);
+    iss.path.unshift(path17);
     return iss;
   });
 }
@@ -17011,16 +17011,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path15 = []) => {
+  const processError = (error3, path17 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path15, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path17, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path17, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path17, ...issue2.path]);
       } else {
-        const fullpath = [...path15, ...issue2.path];
+        const fullpath = [...path17, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -24791,8 +24791,8 @@ import { createInterface } from "node:readline/promises";
 
 // ../agents-comm-bus/dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
-async function appendJsonLine(path15, value) {
-  const handle = await open(path15, "a");
+async function appendJsonLine(path17, value) {
+  const handle = await open(path17, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -24812,18 +24812,18 @@ var JsonlAuditStore = class {
     this.root = root;
   }
   async append(event) {
-    const path15 = this.pathFor(event.timestamp);
-    await mkdir(dirname(path15), { recursive: true });
-    await appendJsonLine(path15, event);
+    const path17 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path17), { recursive: true });
+    await appendJsonLine(path17, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
   async hasInboundReceived(conversation_id, message, auditTimestamp) {
-    const path15 = this.pathFor(auditTimestamp ?? Date.now());
+    const path17 = this.pathFor(auditTimestamp ?? Date.now());
     try {
       const lines = createInterface({
-        input: createReadStream(path15, { encoding: "utf8" }),
+        input: createReadStream(path17, { encoding: "utf8" }),
         crlfDelay: Infinity
       });
       for await (const line of lines) {
@@ -24843,7 +24843,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.65";
+var DAEMON_VERSION = "0.2.66";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -26371,7 +26371,7 @@ function parseVersion(v) {
     return Number.isInteger(num) ? num : s;
   });
 }
-async function executeInstallPlan(plan, actor, paths, fs2) {
+async function executeInstallPlan(plan, actor, paths, fs3) {
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
   if (plan.daemon.writeBundle && !daemonSrc) {
@@ -26384,29 +26384,29 @@ async function executeInstallPlan(plan, actor, paths, fs2) {
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
     const binDir = dirname2(paths.daemonBundle);
-    await fs2.mkdirp(binDir);
-    await fs2.copyFile(daemonSrc, paths.daemonBundle);
+    await fs3.mkdirp(binDir);
+    await fs3.copyFile(daemonSrc, paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs2.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
+      await fs3.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
     }
-    await fs2.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs3.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs2.mkdirp(dirname2(paths.daemonVersionFile));
-    await fs2.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
+    await fs3.mkdirp(dirname2(paths.daemonVersionFile));
+    await fs3.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
     const adapterDir = dirname2(paths.adapterBundle);
-    await fs2.mkdirp(adapterDir);
-    await fs2.copyFile(adapterSrc, paths.adapterBundle);
-    await fs2.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs3.mkdirp(adapterDir);
+    await fs3.copyFile(adapterSrc, paths.adapterBundle);
+    await fs3.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs2.mkdirp(dirname2(paths.adapterVersionFile));
-    await fs2.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
+    await fs3.mkdirp(dirname2(paths.adapterVersionFile));
+    await fs3.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
   return { wroteBundles, wroteVersionFiles };
@@ -26416,19 +26416,19 @@ function serialize(record2) {
 `;
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
-async function installCliLaunchers(paths, cliSrc, fs2) {
+async function installCliLaunchers(paths, cliSrc, fs3) {
   const binDir = dirname2(paths.cliBundle);
-  await fs2.mkdirp(binDir);
-  await fs2.copyFile(cliSrc, paths.cliBundle);
+  await fs3.mkdirp(binDir);
+  await fs3.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs2.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
+    await fs3.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
     const posix = join2(binDir, name);
-    await fs2.writeFile(posix, `#!/bin/sh
+    await fs3.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
-    await fs2.chmod?.(posix, 493);
+    await fs3.chmod?.(posix, 493);
   }
 }
 function dirname2(p) {
@@ -26611,7 +26611,7 @@ function lockTimeoutError(lockPath, timeoutMs, cause) {
 // ../agents-comm-bus/dist/core-daemon/host-runtime/run-central-install.js
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
-  const fs2 = deps.fs ?? createAtomicNodeFsSeam();
+  const fs3 = deps.fs ?? createAtomicNodeFsSeam();
   const lockPath = path9.join(stateRoot2, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
@@ -26619,11 +26619,11 @@ async function runCentralInstall(stateRoot2, actor, deps = {}) {
     state.daemonRunning = deps.daemonRunning ?? false;
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot2, actor.comm);
-    const result = await executeInstallPlan(plan, actor, paths, fs2);
+    const result = await executeInstallPlan(plan, actor, paths, fs3);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
       const cliSrc = path9.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
-        await installCliLaunchers(paths, cliSrc, fs2);
+        await installCliLaunchers(paths, cliSrc, fs3);
         result.wroteBundles.push(paths.cliBundle);
       }
     }
@@ -26904,7 +26904,7 @@ async function ensureMcpRuntime(options) {
 var DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS = 5e3;
 var DEFAULT_HEARTBEAT_MIN_MS = 5 * 60 * 1e3;
 var DEFAULT_HEARTBEAT_MAX_MS = 10 * 60 * 1e3;
-function resolveMcpShimProject(env = process.env) {
+function resolveMcpShimProject2(env = process.env) {
   return env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
 }
 async function runWithStartupEnsureTimeout(work, timeoutMs = DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS) {
@@ -27039,7 +27039,7 @@ function startEnsureCommsHeartbeat(options) {
   };
 }
 async function ensureCommsForScopeAtStartup(options) {
-  const project = options.resolveProject?.() ?? resolveMcpShimProject(options.env);
+  const project = options.resolveProject?.() ?? resolveMcpShimProject2(options.env);
   const agent = options.agentInUse();
   const requestEnsure = options.deps?.requestEnsure ?? defaultEnsureCommsForScopeRequest;
   const timeoutMs = options.startupEnsureTimeoutMs ?? DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS;
@@ -27275,13 +27275,6 @@ function installShutdownHandlers(close) {
   });
 }
 
-// claude/hooks/wake-support.js
-import { execSync, execFileSync } from "node:child_process";
-import fs from "node:fs";
-import os3 from "node:os";
-import path14 from "node:path";
-import { fileURLToPath } from "node:url";
-
 // ../agents-comm-bus/dist/core-daemon/bridges/claude/wake.js
 import crypto from "node:crypto";
 import os2 from "node:os";
@@ -27400,9 +27393,117 @@ function accountLabelScopeFromEnvSafe(env = process.env, log2 = (message) => con
   }
 }
 
+// common/herdr-env.js
+import fs from "node:fs";
+import os3 from "node:os";
+import path15 from "node:path";
+
+// ../agents-comm-bus/dist/core-daemon/runtime/herdr.js
+import crypto2 from "node:crypto";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify } from "node:util";
+import path14 from "node:path";
+var execFileAsync = promisify(execFile2);
+function normalizeHerdrSocketPath(socketPath) {
+  const resolved = path14.resolve(socketPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function herdrSessionId(identity) {
+  const socket = normalizeHerdrSocketPath(identity.socket_path);
+  const digest = crypto2.createHash("sha256").update(`${identity.agent}
+${socket}
+${identity.pane_id}`).digest("hex").slice(0, 24);
+  return `herdr_${digest}`;
+}
+
+// common/herdr-env.js
+var SUPPORTED_AGENTS = /* @__PURE__ */ new Set(["claude", "codex", "pi"]);
+function newestHerdrStandaloneBinary(homeDir = os3.homedir()) {
+  const releasesRoot = path15.join(homeDir, ".herdr", "packages", "standalone", "releases");
+  try {
+    const entries = fs.readdirSync(releasesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, void 0, { numeric: true }));
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const dir = path15.join(releasesRoot, entries[i]);
+      const exe = process.platform === "win32" ? path15.join(dir, "herdr.exe") : path15.join(dir, "herdr");
+      if (fs.existsSync(exe)) return exe;
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveHerdrBinPath(env = process.env) {
+  if (typeof env.HERDR_BIN_PATH === "string" && env.HERDR_BIN_PATH.trim()) {
+    return env.HERDR_BIN_PATH.trim();
+  }
+  return newestHerdrStandaloneBinary() ?? void 0;
+}
+function herdrIdentityFromEnv(agent, env = process.env) {
+  if (!SUPPORTED_AGENTS.has(agent)) return null;
+  if (env.HERDR_ENV !== "1") return null;
+  const pane_id = env.HERDR_PANE_ID;
+  const socket_path = env.HERDR_SOCKET_PATH;
+  if (typeof pane_id !== "string" || !pane_id.trim()) return null;
+  if (typeof socket_path !== "string" || !socket_path.trim()) return null;
+  const identity = {
+    type: "herdr",
+    agent,
+    pane_id: pane_id.trim(),
+    socket_path: socket_path.trim()
+  };
+  if (typeof env.HERDR_WORKSPACE_ID === "string" && env.HERDR_WORKSPACE_ID.trim()) {
+    identity.workspace_id = env.HERDR_WORKSPACE_ID.trim();
+  }
+  if (typeof env.HERDR_TAB_ID === "string" && env.HERDR_TAB_ID.trim()) {
+    identity.tab_id = env.HERDR_TAB_ID.trim();
+  }
+  const bin_path = resolveHerdrBinPath(env);
+  if (bin_path) identity.bin_path = bin_path;
+  return identity;
+}
+function herdrSessionIdFromEnv(agent, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  return identity ? herdrSessionId(identity) : null;
+}
+function wakeStrictFromDevMarker(projectDir, deps = {}) {
+  const exists = deps.exists ?? fs.existsSync;
+  const readFile8 = deps.readFile ?? ((p) => fs.readFileSync(p, "utf8"));
+  const markerPath = path15.join(projectDir, DEV_MARKER_NAME);
+  if (!exists(markerPath)) return null;
+  try {
+    const parsed = JSON.parse(stripBom(readFile8(markerPath)));
+    if (!parsed || typeof parsed !== "object") return null;
+    const wakeStrict = parsed.wakeStrict;
+    return wakeStrict === "herdr" ? "herdr" : null;
+  } catch {
+    return null;
+  }
+}
+function herdrWakeFieldsForRegister(agent, projectDir, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  if (!identity) return {};
+  const wake_strict = wakeStrictFromDevMarker(projectDir, {
+    exists: (p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    }
+  });
+  return {
+    herdr_identity: identity,
+    ...wake_strict ? { wake_strict } : {}
+  };
+}
+
 // claude/hooks/wake-support.js
+import { execSync, execFileSync } from "node:child_process";
+import fs2 from "node:fs";
+import os4 from "node:os";
+import path16 from "node:path";
+import { fileURLToPath } from "node:url";
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path14.dirname(__filename);
+var __dirname = path16.dirname(__filename);
 function resolveProjectPath() {
   return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
@@ -27424,7 +27525,7 @@ function isPidAlive(pid) {
 }
 function readWatcherPid(wakeDir) {
   try {
-    const raw = fs.readFileSync(path14.join(wakeDir, "watcher.pid"), "utf8").trim();
+    const raw = fs2.readFileSync(path16.join(wakeDir, "watcher.pid"), "utf8").trim();
     const pid = Number.parseInt(raw, 10);
     return Number.isInteger(pid) ? pid : null;
   } catch {
@@ -27434,7 +27535,7 @@ function readWatcherPid(wakeDir) {
 var WATCHER_META_FILE = "watcher.json";
 function readWatcherMeta(wakeDir) {
   try {
-    return JSON.parse(fs.readFileSync(path14.join(wakeDir, WATCHER_META_FILE), "utf8"));
+    return JSON.parse(fs2.readFileSync(path16.join(wakeDir, WATCHER_META_FILE), "utf8"));
   } catch {
     return null;
   }
@@ -27445,15 +27546,15 @@ function readAuthoritativeWatcherPid(wakeDir) {
   return readWatcherPid(wakeDir);
 }
 function defaultWriteWatcherPid(wakeDir, pid) {
-  fs.writeFileSync(path14.join(wakeDir, "watcher.pid"), `${pid}
+  fs2.writeFileSync(path16.join(wakeDir, "watcher.pid"), `${pid}
 `, "utf8");
 }
 function writeWatcherMeta(wakeDir, meta2) {
-  const finalPath = path14.join(wakeDir, WATCHER_META_FILE);
+  const finalPath = path16.join(wakeDir, WATCHER_META_FILE);
   const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(meta2)}
+  fs2.writeFileSync(tmpPath, `${JSON.stringify(meta2)}
 `, "utf8");
-  fs.renameSync(tmpPath, finalPath);
+  fs2.renameSync(tmpPath, finalPath);
 }
 function defaultReadProcessCommandLine(pid) {
   try {
@@ -27473,7 +27574,7 @@ function parseSessionDirArg(cmd) {
 }
 function samePath(a, b) {
   try {
-    return path14.resolve(a).toLowerCase() === path14.resolve(b).toLowerCase();
+    return path16.resolve(a).toLowerCase() === path16.resolve(b).toLowerCase();
   } catch {
     return false;
   }
@@ -27589,7 +27690,7 @@ function walkCmdClaudeChain(chain, log2) {
 }
 function findCmdAncestor(log2 = () => {
 }, deps = {}) {
-  const platform = deps.platform ?? os3.platform();
+  const platform = deps.platform ?? os4.platform();
   if (platform !== "win32") return null;
   const backoffMs = deps.backoffMs ?? [0, 500, 1e3];
   const sleep3 = deps.sleep ?? defaultSyncSleep;
@@ -27615,20 +27716,45 @@ function findCmdAncestor(log2 = () => {
     return null;
   }
 }
+function claudeExecutableName(name) {
+  const lower = String(name || "").toLowerCase();
+  return lower === "claude.exe" || lower === "claude";
+}
+function walkClaudePidFromChain(chain, log2) {
+  log2(`process chain: ${chain.map((c) => `${c.name || "?"}#${c.pid}`).join(" <- ")}`);
+  for (const entry of chain) {
+    if (claudeExecutableName(entry.name)) return entry.pid;
+  }
+  return null;
+}
+function findClaudeOwnerPid(log2 = () => {
+}, deps = {}) {
+  const cmd = findCmdAncestor(log2, deps);
+  if (cmd?.claudePid) return cmd.claudePid;
+  const platform = deps.platform ?? os4.platform();
+  if (platform !== "win32") return null;
+  try {
+    const chain = deps.readChainRaw ? deps.readChainRaw(log2) : readProcessChainViaCim(process.pid, log2);
+    return walkClaudePidFromChain(chain, log2);
+  } catch (error2) {
+    log2(`findClaudeOwnerPid error: ${error2.message}`);
+    return null;
+  }
+}
 function enterWatcherScriptCandidates(fromDir = __dirname) {
   return [
     // Staged plugin MCP shim: plugins/claude/<comm>/scripts/
-    path14.resolve(fromDir, "scripts", "enter-watcher.ps1"),
+    path16.resolve(fromDir, "scripts", "enter-watcher.ps1"),
     // Staged hook bundle: <plugin>/hooks/ → ../scripts/
-    path14.resolve(fromDir, "..", "scripts", "enter-watcher.ps1"),
+    path16.resolve(fromDir, "..", "scripts", "enter-watcher.ps1"),
     // MCP shim dev bundle (mcp-server/dist) or hosts/claude source → <repo>/scripts/
-    path14.resolve(fromDir, "..", "..", "scripts", "enter-watcher.ps1"),
+    path16.resolve(fromDir, "..", "..", "scripts", "enter-watcher.ps1"),
     // Source hook tree: hosts/claude/hooks/ → ../../../scripts/
-    path14.resolve(fromDir, "..", "..", "..", "scripts", "enter-watcher.ps1")
+    path16.resolve(fromDir, "..", "..", "..", "scripts", "enter-watcher.ps1")
   ];
 }
 function resolveEnterWatcherScript(fromDir = __dirname) {
-  return enterWatcherScriptCandidates(fromDir).find((candidate) => fs.existsSync(candidate)) ?? null;
+  return enterWatcherScriptCandidates(fromDir).find((candidate) => fs2.existsSync(candidate)) ?? null;
 }
 function escapeForPwshSingleQuoted(value) {
   return String(value).replace(/'/g, "''");
@@ -27646,20 +27772,20 @@ function buildStartProcessCommand(watcherScript, watcherArgs) {
   return `Start-Process -FilePath 'powershell' -ArgumentList ${argList} -WindowStyle Hidden -PassThru | Select-Object -ExpandProperty Id`;
 }
 function tryAcquireWatcherLock(wakeDir, log2) {
-  const lockFile = path14.join(wakeDir, "watcher.lock");
+  const lockFile = path16.join(wakeDir, "watcher.lock");
   try {
-    fs.writeFileSync(lockFile, `${process.pid}
+    fs2.writeFileSync(lockFile, `${process.pid}
 `, { flag: "wx" });
     return lockFile;
   } catch {
     try {
-      const ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+      const ageMs = Date.now() - fs2.statSync(lockFile).mtimeMs;
       if (ageMs < 3e4) {
         log2("watcher spawn already in progress (lock <30s old); skipping");
         return null;
       }
-      fs.unlinkSync(lockFile);
-      fs.writeFileSync(lockFile, `${process.pid}
+      fs2.unlinkSync(lockFile);
+      fs2.writeFileSync(lockFile, `${process.pid}
 `, { flag: "wx" });
       return lockFile;
     } catch {
@@ -27676,13 +27802,13 @@ function ensureClaudeWakeWatcher(options = {}) {
   const readProcessCommandLine = options.readProcessCommandLine || defaultReadProcessCommandLine;
   const writeMeta = options.writeWatcherMeta || writeWatcherMeta;
   const writeWatcherPid = options.writeWatcherPid || defaultWriteWatcherPid;
-  if (os3.platform() !== "win32") {
+  if (os4.platform() !== "win32") {
     log2("Auto-watcher only supported on Windows");
     return { started: false, reason: "unsupported_platform" };
   }
   const projectPath = options.projectPath || resolveProjectPath();
   const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath, options.env || process.env);
-  fs.mkdirSync(wakeDir, { recursive: true });
+  fs2.mkdirSync(wakeDir, { recursive: true });
   const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log: log2 };
   const existingPid = readAuthoritativeWatcherPid(wakeDir);
   const existingDedupe = dedupeLiveWatcher(existingPid, wakeDir, "already_running", identityDeps);
@@ -27761,7 +27887,7 @@ function ensureClaudeWakeWatcher(options = {}) {
         }
         if (mirrored) {
           try {
-            fs.rmSync(path14.join(wakeDir, WATCHER_META_FILE), { force: true });
+            fs2.rmSync(path16.join(wakeDir, WATCHER_META_FILE), { force: true });
           } catch {
           }
         }
@@ -27790,8 +27916,8 @@ function ensureClaudeWakeWatcher(options = {}) {
   } catch (error2) {
     log2(`Watcher spawn error: ${error2.message}`);
     try {
-      fs.appendFileSync(
-        path14.join(wakeDir, "debug.log"),
+      fs2.appendFileSync(
+        path16.join(wakeDir, "debug.log"),
         `[${(/* @__PURE__ */ new Date()).toISOString()}] wake-support spawn error: ${error2.message}
 `
       );
@@ -27800,9 +27926,61 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, wakeDir, reason: "spawn_error", error: error2.message };
   } finally {
     try {
-      fs.unlinkSync(lockFile);
+      fs2.unlinkSync(lockFile);
     } catch {
     }
+  }
+}
+
+// common/claude-mcp-session.js
+var lastWakeStrategy = null;
+function claudeMcpSessionInUse() {
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  const herdr = herdrSessionIdFromEnv("claude");
+  if (herdr) return herdr;
+  return process.env.CLAUDE_SESSION_ID ?? "mcp";
+}
+function claudeMcpLastWakeStrategy() {
+  return lastWakeStrategy;
+}
+async function registerClaudeMcpSession(options = {}) {
+  const project = normalizeProjectPath(options.resolveProject?.() ?? resolveMcpShimProject2());
+  const session = options.sessionInUse?.() ?? claudeMcpSessionInUse();
+  const wakeDir = claudeWakeDirForProject(project, void 0, accountLabelScopeFromEnvSafe());
+  const metadata = {
+    shimName: options.shimName ?? "agents-comm-claude-mcp-shim/session-registration",
+    agent: "claude",
+    project,
+    session
+  };
+  const runtime = await ensureMcpRuntime({
+    agentInUse: () => "claude",
+    shimName: metadata.shimName,
+    fromDir: options.fromDir,
+    env: options.env
+  });
+  const connection = await connectIpc({
+    port: runtime.ensured.port,
+    clientVersion: DAEMON_VERSION,
+    metadata
+  });
+  try {
+    const registerResult = await connection.request("claude_register_session", {
+      agent: "claude",
+      session,
+      project,
+      cwd: project,
+      wake_dir: wakeDir,
+      source: "mcp-server",
+      owner_process_pid: findClaudeOwnerPid(log),
+      owner_process_label: "claude",
+      account_label_scope: accountLabelScopeFromEnvSafe(options.env),
+      ...herdrWakeFieldsForRegister("claude", project, options.env)
+    });
+    lastWakeStrategy = registerResult?.wake_strategy ?? null;
+    return registerResult;
+  } finally {
+    connection.close();
   }
 }
 
@@ -27811,7 +27989,7 @@ function agentInUse() {
   return process.env.AGENTS_COMM_BUS_AGENT ?? "claude";
 }
 function sessionInUse() {
-  return process.env.AGENTS_COMM_BUS_SESSION_ID ?? process.env.CLAUDE_SESSION_ID ?? "mcp";
+  return claudeMcpSessionInUse();
 }
 var shimCommonOptions = {
   agentInUse,
@@ -27822,12 +28000,23 @@ var shimCommonOptions = {
 runMcpShim({
   ...shimCommonOptions,
   sessionInUse,
-  beforeConnect: () => ensureCommsForScopeAtStartup(shimCommonOptions),
+  beforeConnect: async () => {
+    await ensureCommsForScopeAtStartup(shimCommonOptions);
+    await registerClaudeMcpSession({
+      ...shimCommonOptions,
+      sessionInUse
+    });
+  },
   afterConnect: () => {
     const heartbeat = startEnsureCommsHeartbeat({
       ...shimCommonOptions,
       deps: {
-        ensureWatcher: () => ensureClaudeWakeWatcher({ log })
+        ensureWatcher: async () => {
+          if (claudeMcpLastWakeStrategy() === "herdr") {
+            return { reason: "herdr" };
+          }
+          return ensureClaudeWakeWatcher({ log });
+        }
       }
     });
     installShutdownHandlers(() => heartbeat.stop());

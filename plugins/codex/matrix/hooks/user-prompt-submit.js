@@ -3648,9 +3648,6 @@ var require_websocket_server = __commonJS({
   }
 });
 
-// ../hosts/codex/hooks/user-prompt-submit.js
-import crypto from "node:crypto";
-
 // ../hosts/common/hook-degraded.js
 var AGENTS_COMM_BUS_DEGRADED_MESSAGE = "\u26A0\uFE0F agents-comm-bus: daemon unreachable \u2014 comm integration degraded this turn";
 
@@ -3705,15 +3702,209 @@ function accountLabelScopeFromEnvSafe(env = process.env, log = (message) => cons
   }
 }
 
+// ../hosts/common/herdr-env.js
+import fs from "node:fs";
+import os from "node:os";
+import path3 from "node:path";
+
+// dist/core-daemon/runtime/herdr.js
+import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import path from "node:path";
+var execFileAsync = promisify(execFile);
+function normalizeHerdrSocketPath(socketPath) {
+  const resolved = path.resolve(socketPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function herdrSessionId(identity) {
+  const socket = normalizeHerdrSocketPath(identity.socket_path);
+  const digest = crypto.createHash("sha256").update(`${identity.agent}
+${socket}
+${identity.pane_id}`).digest("hex").slice(0, 24);
+  return `herdr_${digest}`;
+}
+
+// dist/core-daemon/host-runtime/dev-config-resolver.js
+import { readFileSync, existsSync } from "node:fs";
+import path2 from "node:path";
+
+// dist/core-daemon/host-runtime/strip-bom.js
+function stripBom(text) {
+  return typeof text === "string" && text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+}
+
+// dist/core-daemon/host-runtime/dev-config-resolver.js
+var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
+function resolveDevConfig(projectRoot, deps = {}) {
+  const exists = deps.exists ?? existsSync;
+  const readFile8 = deps.readFile ?? ((p) => readFileSync(p, "utf8"));
+  const markerPath = path2.join(projectRoot, DEV_MARKER_NAME);
+  if (!exists(markerPath)) {
+    return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(stripBom(readFile8(markerPath)));
+  } catch (error) {
+    return {
+      env: {},
+      status: "rejected",
+      reasons: [`dev marker unparseable: ${error instanceof Error ? error.message : String(error)}`]
+    };
+  }
+  const daemonBinRaw = parsed && typeof parsed === "object" && parsed !== null && "daemonBin" in parsed && typeof parsed.daemonBin === "string" ? parsed.daemonBin : null;
+  if (!daemonBinRaw) {
+    return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
+  }
+  const daemonBin = path2.resolve(projectRoot, daemonBinRaw);
+  if (!isInside(projectRoot, daemonBin)) {
+    return { env: {}, status: "rejected", reasons: [`dev marker daemonBin escapes project root: ${daemonBinRaw}`] };
+  }
+  if (!exists(daemonBin)) {
+    return { env: {}, status: "rejected", reasons: [`dev marker daemonBin does not exist: ${daemonBin}`] };
+  }
+  const env = { AGENTS_COMM_BUS_BIN: daemonBin };
+  const reasons = [`dev marker applied from ${markerPath}`];
+  const record = parsed;
+  if (typeof record.stateRoot === "string" && record.stateRoot.length > 0) {
+    const stateRoot2 = path2.resolve(projectRoot, record.stateRoot);
+    if (isInside(projectRoot, stateRoot2))
+      env.AGENTS_COMM_BUS_ROOT = stateRoot2;
+    else
+      reasons.push(`ignoring stateRoot outside project root: ${record.stateRoot}`);
+  }
+  if (typeof record.discoveryRoot === "string" && record.discoveryRoot.length > 0) {
+    const discoveryRoot2 = path2.resolve(projectRoot, record.discoveryRoot);
+    if (isInside(projectRoot, discoveryRoot2))
+      env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot2;
+    else
+      reasons.push(`ignoring discoveryRoot outside project root: ${record.discoveryRoot}`);
+  }
+  if (typeof record.adaptersDir === "string" && record.adaptersDir.length > 0) {
+    const adaptersDir = path2.resolve(projectRoot, record.adaptersDir);
+    if (isInside(projectRoot, adaptersDir))
+      env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
+    else
+      reasons.push(`ignoring adaptersDir outside project root: ${record.adaptersDir}`);
+  }
+  return { env, status: "applied", reasons };
+}
+function applyDevConfig(baseEnv, projectRoot, deps = {}) {
+  const devConfig = resolveDevConfig(projectRoot, deps);
+  return { env: { ...baseEnv, ...devConfig.env }, devConfig };
+}
+function isInside(root, candidate) {
+  const rel = path2.relative(root, candidate);
+  if (rel === "")
+    return true;
+  return !rel.startsWith("..") && !path2.isAbsolute(rel);
+}
+
+// ../hosts/common/herdr-env.js
+var SUPPORTED_AGENTS = /* @__PURE__ */ new Set(["claude", "codex", "pi"]);
+function newestHerdrStandaloneBinary(homeDir = os.homedir()) {
+  const releasesRoot = path3.join(homeDir, ".herdr", "packages", "standalone", "releases");
+  try {
+    const entries = fs.readdirSync(releasesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, void 0, { numeric: true }));
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const dir = path3.join(releasesRoot, entries[i]);
+      const exe = process.platform === "win32" ? path3.join(dir, "herdr.exe") : path3.join(dir, "herdr");
+      if (fs.existsSync(exe)) return exe;
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveHerdrBinPath(env = process.env) {
+  if (typeof env.HERDR_BIN_PATH === "string" && env.HERDR_BIN_PATH.trim()) {
+    return env.HERDR_BIN_PATH.trim();
+  }
+  return newestHerdrStandaloneBinary() ?? void 0;
+}
+function herdrIdentityFromEnv(agent, env = process.env) {
+  if (!SUPPORTED_AGENTS.has(agent)) return null;
+  if (env.HERDR_ENV !== "1") return null;
+  const pane_id = env.HERDR_PANE_ID;
+  const socket_path = env.HERDR_SOCKET_PATH;
+  if (typeof pane_id !== "string" || !pane_id.trim()) return null;
+  if (typeof socket_path !== "string" || !socket_path.trim()) return null;
+  const identity = {
+    type: "herdr",
+    agent,
+    pane_id: pane_id.trim(),
+    socket_path: socket_path.trim()
+  };
+  if (typeof env.HERDR_WORKSPACE_ID === "string" && env.HERDR_WORKSPACE_ID.trim()) {
+    identity.workspace_id = env.HERDR_WORKSPACE_ID.trim();
+  }
+  if (typeof env.HERDR_TAB_ID === "string" && env.HERDR_TAB_ID.trim()) {
+    identity.tab_id = env.HERDR_TAB_ID.trim();
+  }
+  const bin_path = resolveHerdrBinPath(env);
+  if (bin_path) identity.bin_path = bin_path;
+  return identity;
+}
+function herdrSessionIdFromEnv(agent, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  return identity ? herdrSessionId(identity) : null;
+}
+function wakeStrictFromDevMarker(projectDir, deps = {}) {
+  const exists = deps.exists ?? fs.existsSync;
+  const readFile8 = deps.readFile ?? ((p) => fs.readFileSync(p, "utf8"));
+  const markerPath = path3.join(projectDir, DEV_MARKER_NAME);
+  if (!exists(markerPath)) return null;
+  try {
+    const parsed = JSON.parse(stripBom(readFile8(markerPath)));
+    if (!parsed || typeof parsed !== "object") return null;
+    const wakeStrict = parsed.wakeStrict;
+    return wakeStrict === "herdr" ? "herdr" : null;
+  } catch {
+    return null;
+  }
+}
+function herdrWakeFieldsForRegister(agent, projectDir, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  if (!identity) return {};
+  const wake_strict = wakeStrictFromDevMarker(projectDir, {
+    exists: (p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    }
+  });
+  return {
+    herdr_identity: identity,
+    ...wake_strict ? { wake_strict } : {}
+  };
+}
+
+// ../hosts/common/codex-session-id.js
+import crypto2 from "node:crypto";
+function codexThreadIdFromHook(hookInput) {
+  return hookInput?.thread_id || hookInput?.threadId || hookInput?.session_id || hookInput?.sessionId || process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "";
+}
+function resolveCodexSessionId(hookInput) {
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
+    return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  }
+  const herdr = herdrSessionIdFromEnv("codex");
+  if (herdr) return herdr;
+  const raw = codexThreadIdFromHook(hookInput) || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ""}`;
+  return `codex_${crypto2.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
+}
+
 // dist/core-daemon/host-runtime/entry-ensures.js
 import { existsSync as existsSync4 } from "node:fs";
-import path12 from "node:path";
+import path14 from "node:path";
 
 // dist/core-daemon/bootstrap/ensure-daemon.js
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { mkdir as mkdir5, open as open3, readFile as readFile4, rm as rm4 } from "node:fs/promises";
-import path6 from "node:path";
+import path9 from "node:path";
 
 // dist/core-daemon/storage/audit.js
 import { createReadStream } from "node:fs";
@@ -3723,8 +3914,8 @@ import { createInterface } from "node:readline/promises";
 
 // dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
-async function appendJsonLine(path13, value) {
-  const handle = await open(path13, "a");
+async function appendJsonLine(path15, value) {
+  const handle = await open(path15, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -3744,18 +3935,18 @@ var JsonlAuditStore = class {
     this.root = root;
   }
   async append(event) {
-    const path13 = this.pathFor(event.timestamp);
-    await mkdir(dirname(path13), { recursive: true });
-    await appendJsonLine(path13, event);
+    const path15 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path15), { recursive: true });
+    await appendJsonLine(path15, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
   async hasInboundReceived(conversation_id, message, auditTimestamp) {
-    const path13 = this.pathFor(auditTimestamp ?? Date.now());
+    const path15 = this.pathFor(auditTimestamp ?? Date.now());
     try {
       const lines = createInterface({
-        input: createReadStream(path13, { encoding: "utf8" }),
+        input: createReadStream(path15, { encoding: "utf8" }),
         crlfDelay: Infinity
       });
       for await (const line of lines) {
@@ -3789,14 +3980,14 @@ function isProtocolCompatible(daemonProtocolVersion, clientProtocolVersion) {
 }
 
 // dist/core-daemon/paths.js
-import os from "node:os";
-import path2 from "node:path";
+import os2 from "node:os";
+import path5 from "node:path";
 
 // dist/core-daemon/project-path.js
-import path from "node:path";
+import path4 from "node:path";
 function normalizeProjectPath(project) {
-  let resolved = path.resolve(project);
-  if (path.sep === "\\") {
+  let resolved = path4.resolve(project);
+  if (path4.sep === "\\") {
     resolved = resolved.replace(/\//g, "\\");
   } else {
     resolved = resolved.replace(/\\/g, "/");
@@ -3804,8 +3995,8 @@ function normalizeProjectPath(project) {
   if (/^[A-Za-z]:/.test(resolved)) {
     resolved = resolved[0].toUpperCase() + resolved.slice(1);
   }
-  const isBareRoot = resolved === path.sep || path.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
-  if (resolved.length > 1 && resolved.endsWith(path.sep) && !isBareRoot) {
+  const isBareRoot = resolved === path4.sep || path4.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path4.sep) && !isBareRoot) {
     resolved = resolved.slice(0, -1);
   }
   return resolved;
@@ -3813,26 +4004,26 @@ function normalizeProjectPath(project) {
 
 // dist/core-daemon/paths.js
 function stateRoot(options = {}) {
-  return path2.resolve(options.stateRoot ?? path2.join(options.homeDir ?? os.homedir(), `.${DAEMON_NAME}`));
+  return path5.resolve(options.stateRoot ?? path5.join(options.homeDir ?? os2.homedir(), `.${DAEMON_NAME}`));
 }
 function resolveStatePaths(options = {}) {
   const root = stateRoot(options);
-  const database = path2.join(root, `${DAEMON_NAME}.db`);
+  const database = path5.join(root, `${DAEMON_NAME}.db`);
   return {
     root,
     database,
     databaseWal: `${database}-wal`,
     databaseShm: `${database}-shm`,
-    auditDir: path2.join(root, "audit"),
-    chatsDir: path2.join(root, "chats"),
-    tokensDir: path2.join(root, "tokens"),
-    pidFile: path2.join(root, "daemon.pid"),
-    portFile: path2.join(root, "port"),
-    spawnLock: path2.join(root, ".spawn.lock")
+    auditDir: path5.join(root, "audit"),
+    chatsDir: path5.join(root, "chats"),
+    tokensDir: path5.join(root, "tokens"),
+    pidFile: path5.join(root, "daemon.pid"),
+    portFile: path5.join(root, "port"),
+    spawnLock: path5.join(root, ".spawn.lock")
   };
 }
 function discoveryRoot(options = {}) {
-  return path2.resolve(options.discoveryRoot ?? stateRoot(options));
+  return path5.resolve(options.discoveryRoot ?? stateRoot(options));
 }
 function normalizeDaemonRootPath(root) {
   return normalizeProjectPath(root);
@@ -3841,9 +4032,9 @@ function resolveDiscoveryPaths(options = {}) {
   const root = discoveryRoot(options);
   return {
     root,
-    pidFile: path2.join(root, "daemon.pid"),
-    portFile: path2.join(root, "port"),
-    spawnLock: path2.join(root, ".spawn.lock")
+    pidFile: path5.join(root, "daemon.pid"),
+    portFile: path5.join(root, "port"),
+    spawnLock: path5.join(root, ".spawn.lock")
   };
 }
 
@@ -4039,7 +4230,7 @@ async function probeDaemon(options) {
 // dist/core-daemon/bootstrap/spawn-lock.js
 import { constants } from "node:fs";
 import { open as open2, mkdir as mkdir2, readFile, rm } from "node:fs/promises";
-import path3 from "node:path";
+import path6 from "node:path";
 function parseSpawnLockToken(raw) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -4096,7 +4287,7 @@ async function removeStaleSpawnLock(lockPath, options = {}) {
   return removeSpawnLockIfTokenMatches(lockPath, observedToken);
 }
 async function tryAcquireSpawnLock(lockPath, options = {}) {
-  await mkdir2(path3.dirname(lockPath), { recursive: true });
+  await mkdir2(path6.dirname(lockPath), { recursive: true });
   const acquired = await createSpawnLock(lockPath);
   if (acquired) {
     return acquired;
@@ -4151,11 +4342,11 @@ function isAlreadyExistsError(error) {
 
 // dist/core-daemon/bootstrap/discovery-claim.js
 import { mkdir as mkdir4, readFile as readFile3, rename as rename2, rm as rm3, writeFile as writeFile2, link as link2 } from "node:fs/promises";
-import path5 from "node:path";
+import path8 from "node:path";
 
 // dist/core-daemon/runtime/process-start-epoch.js
-import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFile as execFile2 } from "node:child_process";
+import { readFileSync as readFileSync2 } from "node:fs";
 function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, selfPid = process.pid) {
   const values = /* @__PURE__ */ new Map();
   const pending = /* @__PURE__ */ new Map();
@@ -4207,7 +4398,7 @@ function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, sel
 }
 function execText(file, args) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+    execFile2(file, args, { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
   });
 }
 async function probeProcessIdentities(pids, platform = process.platform, run = execText) {
@@ -4268,7 +4459,7 @@ function readLinuxBootId(options) {
   if (options.readBootId)
     return options.readBootId();
   try {
-    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+    return readFileSync2("/proc/sys/kernel/random/boot_id", "utf8").trim();
   } catch {
     return null;
   }
@@ -4276,7 +4467,7 @@ function readLinuxBootId(options) {
 function readLinuxStartTicks(pid, readProcStat) {
   const raw = readProcStat?.(pid) ?? (() => {
     try {
-      return readFileSync(`/proc/${pid}/stat`, "utf8");
+      return readFileSync2(`/proc/${pid}/stat`, "utf8");
     } catch {
       return null;
     }
@@ -4309,7 +4500,7 @@ function currentProcessStartEpochMs() {
 // dist/core-daemon/bootstrap/discovery-guard.js
 import { randomUUID } from "node:crypto";
 import { mkdir as mkdir3, readFile as readFile2, rename, rm as rm2, stat, writeFile, link } from "node:fs/promises";
-import path4 from "node:path";
+import path7 from "node:path";
 var GUARD_FILE = "owner.lock";
 var RECLAIM_FILE = "owner.lock.reclaim";
 var RECLAIM2_FILE = "owner.lock.reclaim2";
@@ -4317,13 +4508,13 @@ var RETRY_MS = 20;
 var DEFAULT_MAX_WAIT_MS = 2e3;
 var loggedDeadReclaim2Paths = /* @__PURE__ */ new Set();
 function discoveryGuardFile(discoveryRoot2) {
-  return path4.join(discoveryRoot2, GUARD_FILE);
+  return path7.join(discoveryRoot2, GUARD_FILE);
 }
 function discoveryReclaimLockFile(discoveryRoot2) {
-  return path4.join(discoveryRoot2, RECLAIM_FILE);
+  return path7.join(discoveryRoot2, RECLAIM_FILE);
 }
 function discoveryReclaim2LockFile(discoveryRoot2) {
-  return path4.join(discoveryRoot2, RECLAIM2_FILE);
+  return path7.join(discoveryRoot2, RECLAIM2_FILE);
 }
 function parseDiscoveryGuardToken(raw) {
   const trimmed = raw.trim();
@@ -4554,7 +4745,7 @@ function sleep(ms) {
 // dist/core-daemon/bootstrap/discovery-claim.js
 var OWNER_FILE = "owner.json";
 function discoveryOwnerFile(discoveryRoot2) {
-  return path5.join(discoveryRoot2, OWNER_FILE);
+  return path8.join(discoveryRoot2, OWNER_FILE);
 }
 async function readDiscoveryClaim(discoveryRoot2) {
   const read = await readDiscoveryClaimRaw(discoveryRoot2);
@@ -5077,7 +5268,7 @@ async function waitForDaemon(probeDiscovery, deadline, retryMs) {
   return void 0;
 }
 function daemonStderrLogPath(stateRoot2) {
-  return path6.join(stateRoot2, "daemon.stderr.log");
+  return path9.join(stateRoot2, "daemon.stderr.log");
 }
 function daemonSpawnStdio(stateRoot2) {
   mkdirSync(stateRoot2, { recursive: true });
@@ -5144,7 +5335,7 @@ function defaultTerminateDaemon(pid) {
 }
 function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
   const binOverride = env.AGENTS_COMM_BUS_BIN;
-  const daemonEntry = binOverride ? path6.resolve(binOverride) : path6.join(paths.root, "bin", "daemon.js");
+  const daemonEntry = binOverride ? path9.resolve(binOverride) : path9.join(paths.root, "bin", "daemon.js");
   const stdio = daemonSpawnStdio(paths.root);
   const child = spawn(process.execPath, [daemonEntry, "serve"], {
     detached: true,
@@ -5164,7 +5355,7 @@ function defaultSpawnDaemon(paths, discoveryPaths, env = process.env) {
 function warnIfSourceModeSharesDiscoveryRoot(input) {
   if (!input.env.AGENTS_COMM_BUS_BIN)
     return;
-  if (path6.resolve(input.stateRoot) !== path6.resolve(input.discoveryRoot))
+  if (path9.resolve(input.stateRoot) !== path9.resolve(input.discoveryRoot))
     return;
   input.log("agents-comm-bus: source/dev daemon is sharing the production discovery root; set discoveryRoot in .agents-comm-bus-dev.json (for example .agents-comm-bus-discovery/) to let dev and prod daemons coexist.");
 }
@@ -5173,13 +5364,13 @@ function sleep2(ms) {
 }
 
 // dist/core-daemon/host-runtime/ensure-central-install.js
-import path10 from "node:path";
-import { existsSync as existsSync2 } from "node:fs";
+import path13 from "node:path";
+import { existsSync as existsSync3 } from "node:fs";
 import { readFile as readFile7 } from "node:fs/promises";
 
 // dist/core-daemon/host-runtime/run-central-install.js
-import path9 from "node:path";
-import { existsSync } from "node:fs";
+import path12 from "node:path";
+import { existsSync as existsSync2 } from "node:fs";
 
 // dist/core-daemon/host-runtime/reconcile-central-install.js
 var VERSION_FILE_SCHEMA = 1;
@@ -5303,7 +5494,7 @@ function parseVersion(v) {
     return Number.isInteger(num) ? num : s;
   });
 }
-async function executeInstallPlan(plan, actor, paths, fs) {
+async function executeInstallPlan(plan, actor, paths, fs2) {
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
   if (plan.daemon.writeBundle && !daemonSrc) {
@@ -5316,29 +5507,29 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
     const binDir = dirname2(paths.daemonBundle);
-    await fs.mkdirp(binDir);
-    await fs.copyFile(daemonSrc, paths.daemonBundle);
+    await fs2.mkdirp(binDir);
+    await fs2.copyFile(daemonSrc, paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
+      await fs2.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
     }
-    await fs.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs2.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.daemonVersionFile));
-    await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
+    await fs2.mkdirp(dirname2(paths.daemonVersionFile));
+    await fs2.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
     const adapterDir = dirname2(paths.adapterBundle);
-    await fs.mkdirp(adapterDir);
-    await fs.copyFile(adapterSrc, paths.adapterBundle);
-    await fs.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs2.mkdirp(adapterDir);
+    await fs2.copyFile(adapterSrc, paths.adapterBundle);
+    await fs2.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.adapterVersionFile));
-    await fs.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
+    await fs2.mkdirp(dirname2(paths.adapterVersionFile));
+    await fs2.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
   return { wroteBundles, wroteVersionFiles };
@@ -5348,19 +5539,19 @@ function serialize(record) {
 `;
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
-async function installCliLaunchers(paths, cliSrc, fs) {
+async function installCliLaunchers(paths, cliSrc, fs2) {
   const binDir = dirname2(paths.cliBundle);
-  await fs.mkdirp(binDir);
-  await fs.copyFile(cliSrc, paths.cliBundle);
+  await fs2.mkdirp(binDir);
+  await fs2.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
+    await fs2.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
     const posix = join2(binDir, name);
-    await fs.writeFile(posix, `#!/bin/sh
+    await fs2.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
-    await fs.chmod?.(posix, 493);
+    await fs2.chmod?.(posix, 493);
   }
 }
 function dirname2(p) {
@@ -5373,14 +5564,7 @@ function join2(dir, name) {
 
 // dist/core-daemon/host-runtime/node-fs-seam.js
 import { mkdir as mkdir6, copyFile, writeFile as writeFile3, rename as rename3, access, readFile as readFile5, chmod } from "node:fs/promises";
-import path7 from "node:path";
-
-// dist/core-daemon/host-runtime/strip-bom.js
-function stripBom(text) {
-  return typeof text === "string" && text.charCodeAt(0) === 65279 ? text.slice(1) : text;
-}
-
-// dist/core-daemon/host-runtime/node-fs-seam.js
+import path10 from "node:path";
 function createAtomicNodeFsSeam() {
   return {
     mkdirp: async (dir) => {
@@ -5427,21 +5611,21 @@ async function readJsonOrNull(p) {
   }
 }
 function resolveCentralPaths(stateRoot2, comm) {
-  const bin = path7.join(stateRoot2, "bin");
-  const adapters = path7.join(stateRoot2, "adapters");
+  const bin = path10.join(stateRoot2, "bin");
+  const adapters = path10.join(stateRoot2, "adapters");
   return {
-    daemonBundle: path7.join(bin, "daemon.js"),
-    daemonVersionFile: path7.join(bin, "version.json"),
-    cliBundle: path7.join(bin, "cli.js"),
-    adapterBundle: path7.join(adapters, `${comm}.js`),
-    adapterVersionFile: path7.join(adapters, `${comm}.version.json`)
+    daemonBundle: path10.join(bin, "daemon.js"),
+    daemonVersionFile: path10.join(bin, "version.json"),
+    cliBundle: path10.join(bin, "cli.js"),
+    adapterBundle: path10.join(adapters, `${comm}.js`),
+    adapterVersionFile: path10.join(adapters, `${comm}.version.json`)
   };
 }
 
 // dist/core-daemon/host-runtime/install-lock.js
 import { constants as constants2 } from "node:fs";
 import { open as fsOpen, readFile as readFile6, rm as rm5, mkdir as mkdir7, stat as stat2 } from "node:fs/promises";
-import path8 from "node:path";
+import path11 from "node:path";
 var DEFAULTS = { timeoutMs: 5e3, retryMs: 50, staleMs: 3e4 };
 var TRANSIENT_WIN32_OPEN_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY", "EACCES"]);
 async function acquireInstallLock(lockPath, options = {}) {
@@ -5452,7 +5636,7 @@ async function acquireInstallLock(lockPath, options = {}) {
   const sleep3 = options.sleep ?? defaultSleep;
   const openFn = options.open ?? fsOpen;
   const platform = options.platform ?? process.platform;
-  await mkdir7(path8.dirname(lockPath), { recursive: true });
+  await mkdir7(path11.dirname(lockPath), { recursive: true });
   const token = `${process.pid}:${now()}`;
   const start = now();
   let stoleStale = false;
@@ -5543,19 +5727,19 @@ function lockTimeoutError(lockPath, timeoutMs, cause) {
 // dist/core-daemon/host-runtime/run-central-install.js
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
-  const fs = deps.fs ?? createAtomicNodeFsSeam();
-  const lockPath = path9.join(stateRoot2, INSTALL_LOCK_NAME);
+  const fs2 = deps.fs ?? createAtomicNodeFsSeam();
+  const lockPath = path12.join(stateRoot2, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
     const state = await readCentralState(stateRoot2, actor.comm);
     state.daemonRunning = deps.daemonRunning ?? false;
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot2, actor.comm);
-    const result = await executeInstallPlan(plan, actor, paths, fs);
+    const result = await executeInstallPlan(plan, actor, paths, fs2);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
-      const cliSrc = path9.join(actor.pluginInstallDir, "cli.bundle.js");
-      if (existsSync(cliSrc)) {
-        await installCliLaunchers(paths, cliSrc, fs);
+      const cliSrc = path12.join(actor.pluginInstallDir, "cli.bundle.js");
+      if (existsSync2(cliSrc)) {
+        await installCliLaunchers(paths, cliSrc, fs2);
         result.wroteBundles.push(paths.cliBundle);
       }
     }
@@ -5575,7 +5759,7 @@ async function readInstallStamp(pluginInstallDir, deps = {}) {
     return null;
   const read = deps.readFile ?? readFile7;
   try {
-    const raw = await read(path10.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
+    const raw = await read(path13.join(pluginInstallDir, INSTALL_STAMP_NAME), "utf8");
     const parsed = JSON.parse(stripBom(raw));
     if (!parsed || parsed.schema_version !== 1 || typeof parsed.plugin_version !== "string" || typeof parsed.daemon_bundle_version !== "string" || typeof parsed.adapter_bundle_version !== "string" || !isValidAdapterBundleVersionsMap(parsed.adapter_bundle_versions)) {
       return null;
@@ -5593,7 +5777,7 @@ async function ensureCentralInstall(options) {
   }
   const stamp = await readInstallStamp(options.pluginInstallDir, options.deps);
   if (!options.pluginInstallDir || !stamp) {
-    if (options.stateRoot && existsSync2(path10.join(options.stateRoot, "bin", "daemon.js"))) {
+    if (options.stateRoot && existsSync3(path13.join(options.stateRoot, "bin", "daemon.js"))) {
       return { mode: "production", skipped: true };
     }
     throw new Error(`central install (production mode): missing or invalid plugin install metadata.
@@ -5666,75 +5850,6 @@ async function centralInstallHasRunnableContent(stateRoot2, comm, deps = {}) {
   }
 }
 
-// dist/core-daemon/host-runtime/dev-config-resolver.js
-import { readFileSync as readFileSync2, existsSync as existsSync3 } from "node:fs";
-import path11 from "node:path";
-var DEV_MARKER_NAME = ".agents-comm-bus-dev.json";
-function resolveDevConfig(projectRoot, deps = {}) {
-  const exists = deps.exists ?? existsSync3;
-  const readFile8 = deps.readFile ?? ((p) => readFileSync2(p, "utf8"));
-  const markerPath = path11.join(projectRoot, DEV_MARKER_NAME);
-  if (!exists(markerPath)) {
-    return { env: {}, status: "none", reasons: [`no dev marker at ${markerPath}`] };
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(stripBom(readFile8(markerPath)));
-  } catch (error) {
-    return {
-      env: {},
-      status: "rejected",
-      reasons: [`dev marker unparseable: ${error instanceof Error ? error.message : String(error)}`]
-    };
-  }
-  const daemonBinRaw = parsed && typeof parsed === "object" && parsed !== null && "daemonBin" in parsed && typeof parsed.daemonBin === "string" ? parsed.daemonBin : null;
-  if (!daemonBinRaw) {
-    return { env: {}, status: "rejected", reasons: ["dev marker missing string field `daemonBin`"] };
-  }
-  const daemonBin = path11.resolve(projectRoot, daemonBinRaw);
-  if (!isInside(projectRoot, daemonBin)) {
-    return { env: {}, status: "rejected", reasons: [`dev marker daemonBin escapes project root: ${daemonBinRaw}`] };
-  }
-  if (!exists(daemonBin)) {
-    return { env: {}, status: "rejected", reasons: [`dev marker daemonBin does not exist: ${daemonBin}`] };
-  }
-  const env = { AGENTS_COMM_BUS_BIN: daemonBin };
-  const reasons = [`dev marker applied from ${markerPath}`];
-  const record = parsed;
-  if (typeof record.stateRoot === "string" && record.stateRoot.length > 0) {
-    const stateRoot2 = path11.resolve(projectRoot, record.stateRoot);
-    if (isInside(projectRoot, stateRoot2))
-      env.AGENTS_COMM_BUS_ROOT = stateRoot2;
-    else
-      reasons.push(`ignoring stateRoot outside project root: ${record.stateRoot}`);
-  }
-  if (typeof record.discoveryRoot === "string" && record.discoveryRoot.length > 0) {
-    const discoveryRoot2 = path11.resolve(projectRoot, record.discoveryRoot);
-    if (isInside(projectRoot, discoveryRoot2))
-      env.AGENTS_COMM_BUS_DISCOVERY_ROOT = discoveryRoot2;
-    else
-      reasons.push(`ignoring discoveryRoot outside project root: ${record.discoveryRoot}`);
-  }
-  if (typeof record.adaptersDir === "string" && record.adaptersDir.length > 0) {
-    const adaptersDir = path11.resolve(projectRoot, record.adaptersDir);
-    if (isInside(projectRoot, adaptersDir))
-      env.AGENTS_COMM_BUS_ADAPTERS_DIR = adaptersDir;
-    else
-      reasons.push(`ignoring adaptersDir outside project root: ${record.adaptersDir}`);
-  }
-  return { env, status: "applied", reasons };
-}
-function applyDevConfig(baseEnv, projectRoot, deps = {}) {
-  const devConfig = resolveDevConfig(projectRoot, deps);
-  return { env: { ...baseEnv, ...devConfig.env }, devConfig };
-}
-function isInside(root, candidate) {
-  const rel = path11.relative(root, candidate);
-  if (rel === "")
-    return true;
-  return !rel.startsWith("..") && !path11.isAbsolute(rel);
-}
-
 // dist/core-daemon/host-runtime/entry-ensures.js
 function resolveEntryContext(fromDir, deps = {}) {
   const exists = deps.exists ?? existsSync4;
@@ -5744,11 +5859,11 @@ function resolveEntryContext(fromDir, deps = {}) {
   };
 }
 function findAncestorContaining(dir, name, exists) {
-  let current = path12.resolve(dir);
+  let current = path14.resolve(dir);
   for (; ; ) {
-    if (exists(path12.join(current, name)))
+    if (exists(path14.join(current, name)))
       return current;
-    const parent = path12.dirname(current);
+    const parent = path14.dirname(current);
     if (parent === current)
       return void 0;
     current = parent;
@@ -5802,16 +5917,6 @@ async function entryEnsures(options) {
 
 // ../hosts/codex/hooks/user-prompt-submit.js
 var CLIENT_VERSION = "codex-hook-phase3";
-function stableSessionId(hookInput) {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
-    return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  }
-  const raw = codexThreadId(hookInput) || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ""}`;
-  return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
-}
-function codexThreadId(hookInput) {
-  return hookInput?.thread_id || hookInput?.threadId || hookInput?.session_id || hookInput?.sessionId || process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "";
-}
 async function readStdinJson() {
   let input = "";
   for await (const chunk of process.stdin) input += chunk;
@@ -5890,7 +5995,7 @@ ${lines.join("\n")}
 }
 async function main() {
   const hookInput = await readStdinJson();
-  const session = stableSessionId(hookInput);
+  const session = resolveCodexSessionId(hookInput);
   const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "hosts/codex/hooks/user-prompt-submit.js",
@@ -5908,10 +6013,11 @@ async function main() {
       project,
       cwd: project,
       app_server_url: process.env.CODEX_APP_SERVER_URL,
-      thread_id: codexThreadId(hookInput) || void 0,
+      thread_id: codexThreadIdFromHook(hookInput) || void 0,
       hook: "UserPromptSubmit",
       codex: hookInput,
-      account_label_scope: accountLabelScopeFromEnvSafe()
+      account_label_scope: accountLabelScopeFromEnvSafe(),
+      ...herdrWakeFieldsForRegister("codex", project)
     });
     if (!registered?.ok) {
       throw new Error(registered?.reason || "codex session registration failed");

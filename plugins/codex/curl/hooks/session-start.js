@@ -3649,11 +3649,11 @@ var require_websocket_server = __commonJS({
 });
 
 // ../hosts/codex/hooks/session-start.js
-import crypto from "node:crypto";
-import fs from "node:fs";
+import crypto3 from "node:crypto";
+import fs2 from "node:fs";
 import net from "node:net";
-import os2 from "node:os";
-import path13 from "node:path";
+import os3 from "node:os";
+import path15 from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -3675,8 +3675,8 @@ import { createInterface } from "node:readline/promises";
 
 // dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
-async function appendJsonLine(path14, value) {
-  const handle = await open(path14, "a");
+async function appendJsonLine(path16, value) {
+  const handle = await open(path16, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -3696,18 +3696,18 @@ var JsonlAuditStore = class {
     this.root = root;
   }
   async append(event) {
-    const path14 = this.pathFor(event.timestamp);
-    await mkdir(dirname(path14), { recursive: true });
-    await appendJsonLine(path14, event);
+    const path16 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path16), { recursive: true });
+    await appendJsonLine(path16, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
   async hasInboundReceived(conversation_id, message, auditTimestamp) {
-    const path14 = this.pathFor(auditTimestamp ?? Date.now());
+    const path16 = this.pathFor(auditTimestamp ?? Date.now());
     try {
       const lines = createInterface({
-        input: createReadStream(path14, { encoding: "utf8" }),
+        input: createReadStream(path16, { encoding: "utf8" }),
         crlfDelay: Infinity
       });
       for await (const line of lines) {
@@ -5255,7 +5255,7 @@ function parseVersion(v) {
     return Number.isInteger(num) ? num : s;
   });
 }
-async function executeInstallPlan(plan, actor, paths, fs2) {
+async function executeInstallPlan(plan, actor, paths, fs3) {
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
   if (plan.daemon.writeBundle && !daemonSrc) {
@@ -5268,29 +5268,29 @@ async function executeInstallPlan(plan, actor, paths, fs2) {
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
     const binDir = dirname2(paths.daemonBundle);
-    await fs2.mkdirp(binDir);
-    await fs2.copyFile(daemonSrc, paths.daemonBundle);
+    await fs3.mkdirp(binDir);
+    await fs3.copyFile(daemonSrc, paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs2.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
+      await fs3.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
     }
-    await fs2.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs3.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs2.mkdirp(dirname2(paths.daemonVersionFile));
-    await fs2.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
+    await fs3.mkdirp(dirname2(paths.daemonVersionFile));
+    await fs3.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
     const adapterDir = dirname2(paths.adapterBundle);
-    await fs2.mkdirp(adapterDir);
-    await fs2.copyFile(adapterSrc, paths.adapterBundle);
-    await fs2.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs3.mkdirp(adapterDir);
+    await fs3.copyFile(adapterSrc, paths.adapterBundle);
+    await fs3.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs2.mkdirp(dirname2(paths.adapterVersionFile));
-    await fs2.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
+    await fs3.mkdirp(dirname2(paths.adapterVersionFile));
+    await fs3.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
   return { wroteBundles, wroteVersionFiles };
@@ -5300,19 +5300,19 @@ function serialize(record) {
 `;
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
-async function installCliLaunchers(paths, cliSrc, fs2) {
+async function installCliLaunchers(paths, cliSrc, fs3) {
   const binDir = dirname2(paths.cliBundle);
-  await fs2.mkdirp(binDir);
-  await fs2.copyFile(cliSrc, paths.cliBundle);
+  await fs3.mkdirp(binDir);
+  await fs3.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs2.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
+    await fs3.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
     const posix = join2(binDir, name);
-    await fs2.writeFile(posix, `#!/bin/sh
+    await fs3.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
-    await fs2.chmod?.(posix, 493);
+    await fs3.chmod?.(posix, 493);
   }
 }
 function dirname2(p) {
@@ -5495,7 +5495,7 @@ function lockTimeoutError(lockPath, timeoutMs, cause) {
 // dist/core-daemon/host-runtime/run-central-install.js
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot3, actor, deps = {}) {
-  const fs2 = deps.fs ?? createAtomicNodeFsSeam();
+  const fs3 = deps.fs ?? createAtomicNodeFsSeam();
   const lockPath = path9.join(stateRoot3, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
@@ -5503,11 +5503,11 @@ async function runCentralInstall(stateRoot3, actor, deps = {}) {
     state.daemonRunning = deps.daemonRunning ?? false;
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot3, actor.comm);
-    const result = await executeInstallPlan(plan, actor, paths, fs2);
+    const result = await executeInstallPlan(plan, actor, paths, fs3);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
       const cliSrc = path9.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
-        await installCliLaunchers(paths, cliSrc, fs2);
+        await installCliLaunchers(paths, cliSrc, fs3);
         result.wroteBundles.push(paths.cliBundle);
       }
     }
@@ -5803,6 +5803,124 @@ function accountLabelScopeFromEnvSafe(env = process.env, log = (message) => cons
   }
 }
 
+// ../hosts/common/herdr-env.js
+import fs from "node:fs";
+import os2 from "node:os";
+import path14 from "node:path";
+
+// dist/core-daemon/runtime/herdr.js
+import crypto from "node:crypto";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify } from "node:util";
+import path13 from "node:path";
+var execFileAsync = promisify(execFile2);
+function normalizeHerdrSocketPath(socketPath) {
+  const resolved = path13.resolve(socketPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function herdrSessionId(identity) {
+  const socket = normalizeHerdrSocketPath(identity.socket_path);
+  const digest = crypto.createHash("sha256").update(`${identity.agent}
+${socket}
+${identity.pane_id}`).digest("hex").slice(0, 24);
+  return `herdr_${digest}`;
+}
+
+// ../hosts/common/herdr-env.js
+var SUPPORTED_AGENTS = /* @__PURE__ */ new Set(["claude", "codex", "pi"]);
+function newestHerdrStandaloneBinary(homeDir = os2.homedir()) {
+  const releasesRoot = path14.join(homeDir, ".herdr", "packages", "standalone", "releases");
+  try {
+    const entries = fs.readdirSync(releasesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, void 0, { numeric: true }));
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const dir = path14.join(releasesRoot, entries[i]);
+      const exe = process.platform === "win32" ? path14.join(dir, "herdr.exe") : path14.join(dir, "herdr");
+      if (fs.existsSync(exe)) return exe;
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveHerdrBinPath(env = process.env) {
+  if (typeof env.HERDR_BIN_PATH === "string" && env.HERDR_BIN_PATH.trim()) {
+    return env.HERDR_BIN_PATH.trim();
+  }
+  return newestHerdrStandaloneBinary() ?? void 0;
+}
+function herdrIdentityFromEnv(agent, env = process.env) {
+  if (!SUPPORTED_AGENTS.has(agent)) return null;
+  if (env.HERDR_ENV !== "1") return null;
+  const pane_id = env.HERDR_PANE_ID;
+  const socket_path = env.HERDR_SOCKET_PATH;
+  if (typeof pane_id !== "string" || !pane_id.trim()) return null;
+  if (typeof socket_path !== "string" || !socket_path.trim()) return null;
+  const identity = {
+    type: "herdr",
+    agent,
+    pane_id: pane_id.trim(),
+    socket_path: socket_path.trim()
+  };
+  if (typeof env.HERDR_WORKSPACE_ID === "string" && env.HERDR_WORKSPACE_ID.trim()) {
+    identity.workspace_id = env.HERDR_WORKSPACE_ID.trim();
+  }
+  if (typeof env.HERDR_TAB_ID === "string" && env.HERDR_TAB_ID.trim()) {
+    identity.tab_id = env.HERDR_TAB_ID.trim();
+  }
+  const bin_path = resolveHerdrBinPath(env);
+  if (bin_path) identity.bin_path = bin_path;
+  return identity;
+}
+function herdrSessionIdFromEnv(agent, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  return identity ? herdrSessionId(identity) : null;
+}
+function wakeStrictFromDevMarker(projectDir, deps = {}) {
+  const exists = deps.exists ?? fs.existsSync;
+  const readFile8 = deps.readFile ?? ((p) => fs.readFileSync(p, "utf8"));
+  const markerPath = path14.join(projectDir, DEV_MARKER_NAME);
+  if (!exists(markerPath)) return null;
+  try {
+    const parsed = JSON.parse(stripBom(readFile8(markerPath)));
+    if (!parsed || typeof parsed !== "object") return null;
+    const wakeStrict = parsed.wakeStrict;
+    return wakeStrict === "herdr" ? "herdr" : null;
+  } catch {
+    return null;
+  }
+}
+function herdrWakeFieldsForRegister(agent, projectDir, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  if (!identity) return {};
+  const wake_strict = wakeStrictFromDevMarker(projectDir, {
+    exists: (p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    }
+  });
+  return {
+    herdr_identity: identity,
+    ...wake_strict ? { wake_strict } : {}
+  };
+}
+
+// ../hosts/common/codex-session-id.js
+import crypto2 from "node:crypto";
+function codexThreadIdFromHook(hookInput) {
+  return hookInput?.thread_id || hookInput?.threadId || hookInput?.session_id || hookInput?.sessionId || process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "";
+}
+function resolveCodexSessionId(hookInput) {
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
+    return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  }
+  const herdr = herdrSessionIdFromEnv("codex");
+  if (herdr) return herdr;
+  const raw = codexThreadIdFromHook(hookInput) || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ""}`;
+  return `codex_${crypto2.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
+}
+
 // ../hosts/codex/hooks/session-start.js
 var CLIENT_VERSION = "codex-session-start-bootstrap";
 var RESTART_GUARD_MS = 6e4;
@@ -5813,18 +5931,11 @@ var watchdog = setTimeout(() => {
   process.exit(0);
 }, HOOK_TIMEOUT_MS);
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path13.dirname(__filename);
+var __dirname = path15.dirname(__filename);
 var bootstrapperPath = [
-  path13.resolve(__dirname, "..", "scripts", "bootstrap-codex-session.ps1"),
-  path13.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1")
-].find((candidate) => fs.existsSync(candidate)) ?? path13.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1");
-function stableSessionId(hookInput) {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
-    return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  }
-  const raw = codexThreadId(hookInput) || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ""}`;
-  return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
-}
+  path15.resolve(__dirname, "..", "scripts", "bootstrap-codex-session.ps1"),
+  path15.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1")
+].find((candidate) => fs2.existsSync(candidate)) ?? path15.resolve(__dirname, "..", "..", "..", "scripts", "bootstrap-codex-session.ps1");
 function codexThreadId(hookInput) {
   return hookInput?.thread_id || hookInput?.threadId || hookInput?.session_id || hookInput?.sessionId || process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "";
 }
@@ -5898,16 +6009,16 @@ function closeIpc(ipc) {
   }
 }
 function stateRoot2() {
-  return path13.join(os2.homedir(), ".agents-comm-bus", "codex-bootstrapper");
+  return path15.join(os3.homedir(), ".agents-comm-bus", "codex-bootstrapper");
 }
 function guardPath(project, session) {
-  const hash = crypto.createHash("sha256").update(`${project}:${session}`).digest("hex").slice(0, 24);
-  return path13.join(stateRoot2(), "session-start", `${hash}.json`);
+  const hash = crypto3.createHash("sha256").update(`${project}:${session}`).digest("hex").slice(0, 24);
+  return path15.join(stateRoot2(), "session-start", `${hash}.json`);
 }
 function recentRestartAlreadyScheduled(project, session) {
   const file = guardPath(project, session);
   try {
-    const marker = JSON.parse(fs.readFileSync(file, "utf8"));
+    const marker = JSON.parse(fs2.readFileSync(file, "utf8"));
     return typeof marker.scheduled_at === "number" && Date.now() - marker.scheduled_at < RESTART_GUARD_MS;
   } catch {
     return false;
@@ -5915,8 +6026,8 @@ function recentRestartAlreadyScheduled(project, session) {
 }
 function writeRestartMarker(project, session, status) {
   const file = guardPath(project, session);
-  fs.mkdirSync(path13.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({
+  fs2.mkdirSync(path15.dirname(file), { recursive: true });
+  fs2.writeFileSync(file, JSON.stringify({
     project,
     session,
     scheduled_at: Date.now(),
@@ -5927,7 +6038,7 @@ function scheduleBootstrapRestart(project, threadId) {
   if (process.platform !== "win32") {
     throw new Error("Codex bootstrap restart hook currently supports Windows PowerShell only");
   }
-  if (!fs.existsSync(bootstrapperPath)) {
+  if (!fs2.existsSync(bootstrapperPath)) {
     throw new Error(`Codex bootstrapper not found at ${bootstrapperPath}`);
   }
   const args = [
@@ -5967,7 +6078,7 @@ function scheduleBootstrapRestart(project, threadId) {
 async function main() {
   const hookInput = await readStdinJson();
   const threadId = codexThreadId(hookInput);
-  const session = stableSessionId(hookInput);
+  const session = resolveCodexSessionId(hookInput);
   const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "hosts/codex/hooks/session-start.js",
@@ -5990,7 +6101,8 @@ async function main() {
       managed_session_id: process.env.AGENTS_COMM_BUS_SESSION_ID,
       account_label_scope: accountLabelScopeFromEnvSafe(),
       hook: "SessionStart",
-      codex: hookInput
+      codex: hookInput,
+      ...herdrWakeFieldsForRegister("codex", project)
     }), "codex_bootstrap_status");
     if (!status?.bootstrap_required) {
       return;

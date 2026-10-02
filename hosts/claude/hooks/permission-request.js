@@ -8,29 +8,21 @@
  * pending permission files.
  */
 
-import crypto from 'node:crypto';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
 import { accountLabelScopeFromEnvSafe } from '../../common/comm-labels.js';
+import { ensureClaudeWakeWatcherAfterRegister } from '../../common/claude-wake-after-register.js';
+import { herdrWakeFieldsForRegister } from '../../common/herdr-env.js';
+import { resolveClaudeSessionId } from '../../common/claude-session-id.js';
 import {
-  ensureClaudeWakeWatcher,
-  findCmdAncestor,
+  findClaudeOwnerPid,
   resolveClaudeWakeDir,
   resolveProjectPath,
 } from './wake-support.js';
 
 const CLIENT_VERSION = 'claude-hook-phase2';
 const DEFAULT_TTL_SECONDS = 60 * 60;
-
-function stableSessionId(hookInput) {
-  const raw =
-    hookInput?.session_id ||
-    hookInput?.sessionId ||
-    process.env.CLAUDE_SESSION_ID ||
-    `${process.cwd()}:${process.env.CLAUDE_PROJECT_DIR || ''}`;
-  return `claude_${crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 24)}`;
-}
 
 async function readStdinJson() {
   let input = '';
@@ -224,14 +216,11 @@ async function main() {
 
   const toolName = hookInput.tool_name || hookInput.toolName || 'PermissionRequest';
   const toolInput = hookInput.tool_input || hookInput.toolInput || {};
-  const session = stableSessionId(hookInput);
+  const session = resolveClaudeSessionId(hookInput);
   const project = resolveProjectPath();
   const wakeDir = resolveClaudeWakeDir(project);
-  ensureClaudeWakeWatcher({
-    projectPath: project,
-    wakeDir,
-    log: (message) => process.stderr.write(`[claude-permission-request] ${message}\n`),
-  });
+  const watcherLog = (message) => process.stderr.write(`[claude-permission-request] ${message}\n`);
+  const watcherOptions = { projectPath: project, wakeDir, log: watcherLog };
   const metadata = {
     shimName: 'hosts/claude/hooks/permission-request.js',
     agent: 'claude',
@@ -241,13 +230,12 @@ async function main() {
   };
 
   // Discover persistent claude.exe PID for session ownership tracking.
-  const cmdInfo = findCmdAncestor();
-  const claudePid = cmdInfo?.claudePid;
+  const claudePid = findClaudeOwnerPid(watcherLog);
 
   let ipc;
   try {
     ipc = await openDaemonConnection(metadata);
-    await ipc.request('claude_register_session', {
+    const registerResult = await ipc.request('claude_register_session', {
       agent: 'claude',
       session,
       project,
@@ -258,7 +246,9 @@ async function main() {
       owner_process_pid: claudePid,
       owner_process_label: 'claude',
       account_label_scope: accountLabelScopeFromEnvSafe(),
+      ...herdrWakeFieldsForRegister('claude', project),
     });
+    ensureClaudeWakeWatcherAfterRegister(registerResult, watcherOptions);
     const queryPayload = {
       kind: queryKind(toolName),
       prompt_text: promptText(toolName, toolInput),
@@ -284,6 +274,7 @@ async function main() {
     });
     console.log(JSON.stringify(translateDecision(result, toolName)));
   } catch (error) {
+    ensureClaudeWakeWatcherAfterRegister(null, watcherOptions);
     process.stderr.write(`Claude PermissionRequest daemon hook fell back: ${error.message}\n`);
     console.log(JSON.stringify({
       systemMessage: AGENTS_COMM_BUS_DEGRADED_MESSAGE,

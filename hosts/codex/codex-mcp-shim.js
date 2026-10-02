@@ -13,6 +13,7 @@ import {
 } from "../common/mcp-shim-shared.js";
 import { normalizeProjectPath } from "../../agents-comm-bus/dist/core-daemon/project-path.js";
 import { accountLabelScopeFromEnvSafe } from "../common/comm-labels.js";
+import { herdrSessionIdFromEnv, herdrWakeFieldsForRegister } from "../common/herdr-env.js";
 
 let persistentRegistration = null;
 const codexRuntime = {
@@ -26,6 +27,8 @@ function agentInUse() {
 
 function sessionInUse() {
   if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  const herdr = herdrSessionIdFromEnv("codex");
+  if (herdr) return herdr;
   const raw = process.env.CODEX_SESSION_ID ??
     process.env.CODEX_THREAD_ID ??
     codexRuntime.threadId ??
@@ -233,15 +236,17 @@ function threadIdFrom(value) {
 
 async function startPersistentCodexRegistration() {
   await discoverCodexRuntime();
+  const project = normalizeProjectPath(process.cwd());
+  const herdrFields = herdrWakeFieldsForRegister("codex", project);
+  const hasHerdr = Boolean(herdrFields.herdr_identity);
   const appServerUrl = process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl;
-  if (!appServerUrl) {
+  if (!hasHerdr && !appServerUrl) {
     log("Codex session registration skipped: CODEX_APP_SERVER_URL is not set");
     return;
   }
   if (persistentRegistration) return;
 
   const session = sessionInUse();
-  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "agents-comm-mcp-shim/session-registration",
     agent: "codex",
@@ -259,15 +264,16 @@ async function startPersistentCodexRegistration() {
     session,
     project,
     cwd: project,
-    app_server_url: appServerUrl,
+    ...(hasHerdr ? {} : { app_server_url: appServerUrl }),
     thread_id: threadId ?? undefined,
     owner_process_pid: ownerProcess.pid,
     owner_process_label: ownerProcess.label,
     source: "mcp-server",
     replace_existing_lease: true,
     persist_after_disconnect: true,
-    manage_app_server_lifecycle: true,
+    manage_app_server_lifecycle: !hasHerdr,
     account_label_scope: accountLabelScopeFromEnvSafe(),
+    ...herdrFields,
   };
 
   const runtime = await ensureMcpRuntime({

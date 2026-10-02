@@ -6,6 +6,7 @@
  * wake is appropriate and writes trigger-enter into the registered wake dir.
  */
 
+import { herdrIdentityFromEnv } from '../../common/herdr-env.js';
 import { ensureClaudeWakeWatcher } from './wake-support.js';
 
 function log(message) {
@@ -17,7 +18,9 @@ let initialized = false;
 function safeInitializeWatcher() {
   if (initialized) return;
   initialized = true;
-  ensureClaudeWakeWatcher({ log });
+  if (!herdrIdentityFromEnv('claude')) {
+    ensureClaudeWakeWatcher({ log });
+  }
   console.log(JSON.stringify({}));
 }
 

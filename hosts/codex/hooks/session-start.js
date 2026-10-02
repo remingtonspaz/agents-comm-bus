@@ -20,6 +20,8 @@ import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { accountLabelScopeFromEnvSafe } from '../../common/comm-labels.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
+import { herdrWakeFieldsForRegister } from '../../common/herdr-env.js';
+import { resolveCodexSessionId } from '../../common/codex-session-id.js';
 
 const CLIENT_VERSION = 'codex-session-start-bootstrap';
 const RESTART_GUARD_MS = 60_000;
@@ -44,14 +46,6 @@ const bootstrapperPath =
     path.resolve(__dirname, '..', '..', '..', 'scripts', 'bootstrap-codex-session.ps1'),
   ].find((candidate) => fs.existsSync(candidate)) ??
   path.resolve(__dirname, '..', '..', '..', 'scripts', 'bootstrap-codex-session.ps1');
-
-function stableSessionId(hookInput) {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
-    return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  }
-  const raw = codexThreadId(hookInput) || `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ''}`;
-  return `codex_${crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 24)}`;
-}
 
 function codexThreadId(hookInput) {
   return (
@@ -226,7 +220,7 @@ function scheduleBootstrapRestart(project, threadId) {
 async function main() {
   const hookInput = await readStdinJson();
   const threadId = codexThreadId(hookInput);
-  const session = stableSessionId(hookInput);
+  const session = resolveCodexSessionId(hookInput);
   const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: 'hosts/codex/hooks/session-start.js',
@@ -251,6 +245,7 @@ async function main() {
       account_label_scope: accountLabelScopeFromEnvSafe(),
       hook: 'SessionStart',
       codex: hookInput,
+      ...herdrWakeFieldsForRegister('codex', project),
     }), 'codex_bootstrap_status');
 
     if (!status?.bootstrap_required) {

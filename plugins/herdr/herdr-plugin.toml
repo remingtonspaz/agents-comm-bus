@@ -1,0 +1,17 @@
+id = "agents-comm-bus.herdr"
+name = "agents-comm-bus herdr sync"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Sync herdr panes with agents-comm-bus sessions (Telegram/Discord/Matrix wake path)."
+platforms = ["linux", "macos", "windows"]
+
+[[startup]]
+command = ["node", "plugin.js", "startup"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "plugin.js", "agent-detected"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "plugin.js", "pane-closed"]

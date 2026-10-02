@@ -1,23 +1,78 @@
 #!/usr/bin/env node
 import { createRequire as __acbCreateRequire } from 'module'; const require = __acbCreateRequire(import.meta.url);
 
+// ../hosts/common/herdr-env.js
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// dist/core-daemon/runtime/herdr.js
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+
+// ../hosts/common/herdr-env.js
+var SUPPORTED_AGENTS = /* @__PURE__ */ new Set(["claude", "codex", "pi"]);
+function newestHerdrStandaloneBinary(homeDir = os.homedir()) {
+  const releasesRoot = path.join(homeDir, ".herdr", "packages", "standalone", "releases");
+  try {
+    const entries = fs.readdirSync(releasesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, void 0, { numeric: true }));
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const dir = path.join(releasesRoot, entries[i]);
+      const exe = process.platform === "win32" ? path.join(dir, "herdr.exe") : path.join(dir, "herdr");
+      if (fs.existsSync(exe)) return exe;
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveHerdrBinPath(env = process.env) {
+  if (typeof env.HERDR_BIN_PATH === "string" && env.HERDR_BIN_PATH.trim()) {
+    return env.HERDR_BIN_PATH.trim();
+  }
+  return newestHerdrStandaloneBinary() ?? void 0;
+}
+function herdrIdentityFromEnv(agent, env = process.env) {
+  if (!SUPPORTED_AGENTS.has(agent)) return null;
+  if (env.HERDR_ENV !== "1") return null;
+  const pane_id = env.HERDR_PANE_ID;
+  const socket_path = env.HERDR_SOCKET_PATH;
+  if (typeof pane_id !== "string" || !pane_id.trim()) return null;
+  if (typeof socket_path !== "string" || !socket_path.trim()) return null;
+  const identity = {
+    type: "herdr",
+    agent,
+    pane_id: pane_id.trim(),
+    socket_path: socket_path.trim()
+  };
+  if (typeof env.HERDR_WORKSPACE_ID === "string" && env.HERDR_WORKSPACE_ID.trim()) {
+    identity.workspace_id = env.HERDR_WORKSPACE_ID.trim();
+  }
+  if (typeof env.HERDR_TAB_ID === "string" && env.HERDR_TAB_ID.trim()) {
+    identity.tab_id = env.HERDR_TAB_ID.trim();
+  }
+  const bin_path = resolveHerdrBinPath(env);
+  if (bin_path) identity.bin_path = bin_path;
+  return identity;
+}
+
 // ../hosts/claude/hooks/wake-support.js
 import { execSync, execFileSync } from "node:child_process";
-import fs from "node:fs";
-import os2 from "node:os";
-import path3 from "node:path";
+import fs2 from "node:fs";
+import os3 from "node:os";
+import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // dist/core-daemon/bridges/claude/wake.js
 import crypto from "node:crypto";
-import os from "node:os";
-import path2 from "node:path";
+import os2 from "node:os";
+import path3 from "node:path";
 
 // dist/core-daemon/project-path.js
-import path from "node:path";
+import path2 from "node:path";
 function normalizeProjectPath(project) {
-  let resolved = path.resolve(project);
-  if (path.sep === "\\") {
+  let resolved = path2.resolve(project);
+  if (path2.sep === "\\") {
     resolved = resolved.replace(/\//g, "\\");
   } else {
     resolved = resolved.replace(/\\/g, "/");
@@ -25,8 +80,8 @@ function normalizeProjectPath(project) {
   if (/^[A-Za-z]:/.test(resolved)) {
     resolved = resolved[0].toUpperCase() + resolved.slice(1);
   }
-  const isBareRoot = resolved === path.sep || path.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
-  if (resolved.length > 1 && resolved.endsWith(path.sep) && !isBareRoot) {
+  const isBareRoot = resolved === path2.sep || path2.sep === "\\" && /^[A-Za-z]:\\$/.test(resolved);
+  if (resolved.length > 1 && resolved.endsWith(path2.sep) && !isBareRoot) {
     resolved = resolved.slice(0, -1);
   }
   return resolved;
@@ -69,7 +124,7 @@ function parseAccountLabelScope(stored) {
 }
 
 // dist/core-daemon/runtime/process-start-epoch.js
-import { execFile } from "node:child_process";
+import { execFile as execFile2 } from "node:child_process";
 function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, selfPid = process.pid) {
   const values = /* @__PURE__ */ new Map();
   const pending = /* @__PURE__ */ new Map();
@@ -121,7 +176,7 @@ function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, sel
 }
 function execText(file, args) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+    execFile2(file, args, { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 }, (error, stdout) => error ? reject(error) : resolve(stdout));
   });
 }
 async function probeProcessIdentities(pids, platform = process.platform, run = execText) {
@@ -165,9 +220,9 @@ function hashProjectKey(projectPath) {
   }
   return hash.toString(16).padStart(8, "0");
 }
-function claudeWakeDirForProject(projectPath, homeDir = os.homedir(), accountLabelScope = null) {
+function claudeWakeDirForProject(projectPath, homeDir = os2.homedir(), accountLabelScope = null) {
   const canonical = normalizeProjectPath(projectPath);
-  const basename = path2.basename(canonical) || "project";
+  const basename = path3.basename(canonical) || "project";
   const legacyDir = `${basename}-${hashProjectKey(canonical)}`;
   let canonicalScope;
   try {
@@ -176,7 +231,7 @@ function claudeWakeDirForProject(projectPath, homeDir = os.homedir(), accountLab
     console.error(`agents-comm-bus: invalid persisted Claude account_label_scope; using a scope-inert wake directory: ${error instanceof Error ? error.message : String(error)}`);
     canonicalScope = `__invalid__:${accountLabelScope}`;
   }
-  return path2.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", canonicalScope ? `${legacyDir}-${crypto.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}` : legacyDir);
+  return path3.join(homeDir, ".agents-comm-bus", "claude-wake", "sessions", canonicalScope ? `${legacyDir}-${crypto.createHash("sha256").update(canonicalScope).digest("hex").slice(0, 12)}` : legacyDir);
 }
 
 // ../hosts/common/comm-labels.js
@@ -232,7 +287,7 @@ function accountLabelScopeFromEnvSafe(env = process.env, log2 = (message) => con
 
 // ../hosts/claude/hooks/wake-support.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path3.dirname(__filename);
+var __dirname = path4.dirname(__filename);
 function resolveProjectPath() {
   return normalizeProjectPath(process.env.CLAUDE_PROJECT_DIR || process.env.PWD || process.cwd());
 }
@@ -254,7 +309,7 @@ function isPidAlive(pid) {
 }
 function readWatcherPid(wakeDir) {
   try {
-    const raw = fs.readFileSync(path3.join(wakeDir, "watcher.pid"), "utf8").trim();
+    const raw = fs2.readFileSync(path4.join(wakeDir, "watcher.pid"), "utf8").trim();
     const pid = Number.parseInt(raw, 10);
     return Number.isInteger(pid) ? pid : null;
   } catch {
@@ -264,7 +319,7 @@ function readWatcherPid(wakeDir) {
 var WATCHER_META_FILE = "watcher.json";
 function readWatcherMeta(wakeDir) {
   try {
-    return JSON.parse(fs.readFileSync(path3.join(wakeDir, WATCHER_META_FILE), "utf8"));
+    return JSON.parse(fs2.readFileSync(path4.join(wakeDir, WATCHER_META_FILE), "utf8"));
   } catch {
     return null;
   }
@@ -275,15 +330,15 @@ function readAuthoritativeWatcherPid(wakeDir) {
   return readWatcherPid(wakeDir);
 }
 function defaultWriteWatcherPid(wakeDir, pid) {
-  fs.writeFileSync(path3.join(wakeDir, "watcher.pid"), `${pid}
+  fs2.writeFileSync(path4.join(wakeDir, "watcher.pid"), `${pid}
 `, "utf8");
 }
 function writeWatcherMeta(wakeDir, meta) {
-  const finalPath = path3.join(wakeDir, WATCHER_META_FILE);
+  const finalPath = path4.join(wakeDir, WATCHER_META_FILE);
   const tmpPath = `${finalPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpPath, `${JSON.stringify(meta)}
+  fs2.writeFileSync(tmpPath, `${JSON.stringify(meta)}
 `, "utf8");
-  fs.renameSync(tmpPath, finalPath);
+  fs2.renameSync(tmpPath, finalPath);
 }
 function defaultReadProcessCommandLine(pid) {
   try {
@@ -303,7 +358,7 @@ function parseSessionDirArg(cmd) {
 }
 function samePath(a, b) {
   try {
-    return path3.resolve(a).toLowerCase() === path3.resolve(b).toLowerCase();
+    return path4.resolve(a).toLowerCase() === path4.resolve(b).toLowerCase();
   } catch {
     return false;
   }
@@ -419,7 +474,7 @@ function walkCmdClaudeChain(chain, log2) {
 }
 function findCmdAncestor(log2 = () => {
 }, deps = {}) {
-  const platform = deps.platform ?? os2.platform();
+  const platform = deps.platform ?? os3.platform();
   if (platform !== "win32") return null;
   const backoffMs = deps.backoffMs ?? [0, 500, 1e3];
   const sleep = deps.sleep ?? defaultSyncSleep;
@@ -448,17 +503,17 @@ function findCmdAncestor(log2 = () => {
 function enterWatcherScriptCandidates(fromDir = __dirname) {
   return [
     // Staged plugin MCP shim: plugins/claude/<comm>/scripts/
-    path3.resolve(fromDir, "scripts", "enter-watcher.ps1"),
+    path4.resolve(fromDir, "scripts", "enter-watcher.ps1"),
     // Staged hook bundle: <plugin>/hooks/ → ../scripts/
-    path3.resolve(fromDir, "..", "scripts", "enter-watcher.ps1"),
+    path4.resolve(fromDir, "..", "scripts", "enter-watcher.ps1"),
     // MCP shim dev bundle (mcp-server/dist) or hosts/claude source → <repo>/scripts/
-    path3.resolve(fromDir, "..", "..", "scripts", "enter-watcher.ps1"),
+    path4.resolve(fromDir, "..", "..", "scripts", "enter-watcher.ps1"),
     // Source hook tree: hosts/claude/hooks/ → ../../../scripts/
-    path3.resolve(fromDir, "..", "..", "..", "scripts", "enter-watcher.ps1")
+    path4.resolve(fromDir, "..", "..", "..", "scripts", "enter-watcher.ps1")
   ];
 }
 function resolveEnterWatcherScript(fromDir = __dirname) {
-  return enterWatcherScriptCandidates(fromDir).find((candidate) => fs.existsSync(candidate)) ?? null;
+  return enterWatcherScriptCandidates(fromDir).find((candidate) => fs2.existsSync(candidate)) ?? null;
 }
 function escapeForPwshSingleQuoted(value) {
   return String(value).replace(/'/g, "''");
@@ -476,20 +531,20 @@ function buildStartProcessCommand(watcherScript, watcherArgs) {
   return `Start-Process -FilePath 'powershell' -ArgumentList ${argList} -WindowStyle Hidden -PassThru | Select-Object -ExpandProperty Id`;
 }
 function tryAcquireWatcherLock(wakeDir, log2) {
-  const lockFile = path3.join(wakeDir, "watcher.lock");
+  const lockFile = path4.join(wakeDir, "watcher.lock");
   try {
-    fs.writeFileSync(lockFile, `${process.pid}
+    fs2.writeFileSync(lockFile, `${process.pid}
 `, { flag: "wx" });
     return lockFile;
   } catch {
     try {
-      const ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+      const ageMs = Date.now() - fs2.statSync(lockFile).mtimeMs;
       if (ageMs < 3e4) {
         log2("watcher spawn already in progress (lock <30s old); skipping");
         return null;
       }
-      fs.unlinkSync(lockFile);
-      fs.writeFileSync(lockFile, `${process.pid}
+      fs2.unlinkSync(lockFile);
+      fs2.writeFileSync(lockFile, `${process.pid}
 `, { flag: "wx" });
       return lockFile;
     } catch {
@@ -506,13 +561,13 @@ function ensureClaudeWakeWatcher(options = {}) {
   const readProcessCommandLine = options.readProcessCommandLine || defaultReadProcessCommandLine;
   const writeMeta = options.writeWatcherMeta || writeWatcherMeta;
   const writeWatcherPid = options.writeWatcherPid || defaultWriteWatcherPid;
-  if (os2.platform() !== "win32") {
+  if (os3.platform() !== "win32") {
     log2("Auto-watcher only supported on Windows");
     return { started: false, reason: "unsupported_platform" };
   }
   const projectPath = options.projectPath || resolveProjectPath();
   const wakeDir = options.wakeDir || resolveClaudeWakeDir(projectPath, options.env || process.env);
-  fs.mkdirSync(wakeDir, { recursive: true });
+  fs2.mkdirSync(wakeDir, { recursive: true });
   const identityDeps = { pidAlive, readProcessCommandLine, writeMeta, log: log2 };
   const existingPid = readAuthoritativeWatcherPid(wakeDir);
   const existingDedupe = dedupeLiveWatcher(existingPid, wakeDir, "already_running", identityDeps);
@@ -591,7 +646,7 @@ function ensureClaudeWakeWatcher(options = {}) {
         }
         if (mirrored) {
           try {
-            fs.rmSync(path3.join(wakeDir, WATCHER_META_FILE), { force: true });
+            fs2.rmSync(path4.join(wakeDir, WATCHER_META_FILE), { force: true });
           } catch {
           }
         }
@@ -620,8 +675,8 @@ function ensureClaudeWakeWatcher(options = {}) {
   } catch (error) {
     log2(`Watcher spawn error: ${error.message}`);
     try {
-      fs.appendFileSync(
-        path3.join(wakeDir, "debug.log"),
+      fs2.appendFileSync(
+        path4.join(wakeDir, "debug.log"),
         `[${(/* @__PURE__ */ new Date()).toISOString()}] wake-support spawn error: ${error.message}
 `
       );
@@ -630,7 +685,7 @@ function ensureClaudeWakeWatcher(options = {}) {
     return { started: false, wakeDir, reason: "spawn_error", error: error.message };
   } finally {
     try {
-      fs.unlinkSync(lockFile);
+      fs2.unlinkSync(lockFile);
     } catch {
     }
   }
@@ -644,7 +699,9 @@ var initialized = false;
 function safeInitializeWatcher() {
   if (initialized) return;
   initialized = true;
-  ensureClaudeWakeWatcher({ log });
+  if (!herdrIdentityFromEnv("claude")) {
+    ensureClaudeWakeWatcher({ log });
+  }
   console.log(JSON.stringify({}));
 }
 async function main() {

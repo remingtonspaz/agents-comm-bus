@@ -3,10 +3,14 @@ import {
   ensureCommsForScopeAtStartup,
   installShutdownHandlers,
   log,
-  resolveMcpShimProject,
   runMcpShim,
   startEnsureCommsHeartbeat,
 } from "../common/mcp-shim-shared.js";
+import {
+  claudeMcpLastWakeStrategy,
+  claudeMcpSessionInUse,
+  registerClaudeMcpSession,
+} from "../common/claude-mcp-session.js";
 import { ensureClaudeWakeWatcher } from "./hooks/wake-support.js";
 
 function agentInUse() {
@@ -14,7 +18,7 @@ function agentInUse() {
 }
 
 function sessionInUse() {
-  return process.env.AGENTS_COMM_BUS_SESSION_ID ?? process.env.CLAUDE_SESSION_ID ?? "mcp";
+  return claudeMcpSessionInUse();
 }
 
 const shimCommonOptions = {
@@ -27,12 +31,23 @@ const shimCommonOptions = {
 runMcpShim({
   ...shimCommonOptions,
   sessionInUse,
-  beforeConnect: () => ensureCommsForScopeAtStartup(shimCommonOptions),
+  beforeConnect: async () => {
+    await ensureCommsForScopeAtStartup(shimCommonOptions);
+    await registerClaudeMcpSession({
+      ...shimCommonOptions,
+      sessionInUse,
+    });
+  },
   afterConnect: () => {
     const heartbeat = startEnsureCommsHeartbeat({
       ...shimCommonOptions,
       deps: {
-        ensureWatcher: () => ensureClaudeWakeWatcher({ log }),
+        ensureWatcher: async () => {
+          if (claudeMcpLastWakeStrategy() === "herdr") {
+            return { reason: "herdr" };
+          }
+          return ensureClaudeWakeWatcher({ log });
+        },
       },
     });
     installShutdownHandlers(() => heartbeat.stop());

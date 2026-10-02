@@ -6848,8 +6848,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path13) {
-      let input = path13;
+    function removeDotSegments(path15) {
+      let input = path15;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -7101,8 +7101,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path13, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path13 && path13 !== "/" ? path13 : void 0;
+        const [path15, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path15 && path15 !== "/" ? path15 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -16190,12 +16190,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs, exportName) {
+    function addFormats(ajv, list, fs2, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs[f]);
+        ajv.addFormat(f, fs2[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -16204,7 +16204,7 @@ var require_dist = __commonJS({
 });
 
 // codex/codex-mcp-shim.js
-import crypto from "node:crypto";
+import crypto2 from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 // ../node_modules/ws/wrapper.mjs
@@ -16459,10 +16459,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path13) {
-  if (!path13)
+function getElementAtPath(obj, path15) {
+  if (!path15)
     return obj;
-  return path13.reduce((acc, key) => acc?.[key], obj);
+  return path15.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -16871,11 +16871,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path13, issues) {
+function prefixIssues(path15, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path13);
+    iss.path.unshift(path15);
     return iss;
   });
 }
@@ -17022,16 +17022,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path13 = []) => {
+  const processError = (error3, path15 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path13, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path15, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path13, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path15, ...issue2.path]);
       } else {
-        const fullpath = [...path13, ...issue2.path];
+        const fullpath = [...path15, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -24802,8 +24802,8 @@ import { createInterface } from "node:readline/promises";
 
 // ../agents-comm-bus/dist/core-daemon/storage/jsonl.js
 import { open } from "node:fs/promises";
-async function appendJsonLine(path13, value) {
-  const handle = await open(path13, "a");
+async function appendJsonLine(path15, value) {
+  const handle = await open(path15, "a");
   try {
     await handle.writeFile(`${JSON.stringify(value)}
 `, "utf8");
@@ -24823,18 +24823,18 @@ var JsonlAuditStore = class {
     this.root = root;
   }
   async append(event) {
-    const path13 = this.pathFor(event.timestamp);
-    await mkdir(dirname(path13), { recursive: true });
-    await appendJsonLine(path13, event);
+    const path15 = this.pathFor(event.timestamp);
+    await mkdir(dirname(path15), { recursive: true });
+    await appendJsonLine(path15, event);
   }
   pathFor(timestamp) {
     return join(this.root, "audit", `${utcDay(timestamp)}.jsonl`);
   }
   async hasInboundReceived(conversation_id, message, auditTimestamp) {
-    const path13 = this.pathFor(auditTimestamp ?? Date.now());
+    const path15 = this.pathFor(auditTimestamp ?? Date.now());
     try {
       const lines = createInterface({
-        input: createReadStream(path13, { encoding: "utf8" }),
+        input: createReadStream(path15, { encoding: "utf8" }),
         crlfDelay: Infinity
       });
       for await (const line of lines) {
@@ -24854,7 +24854,7 @@ var JsonlAuditStore = class {
 
 // ../agents-comm-bus/dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.65";
+var DAEMON_VERSION = "0.2.66";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -26374,7 +26374,7 @@ function parseVersion(v) {
     return Number.isInteger(num) ? num : s;
   });
 }
-async function executeInstallPlan(plan, actor, paths, fs) {
+async function executeInstallPlan(plan, actor, paths, fs2) {
   const daemonSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/daemon.bundle.js` : null;
   const adapterSrc = actor.pluginInstallDir ? `${actor.pluginInstallDir}/${actor.comm}.adapter.bundle.js` : null;
   if (plan.daemon.writeBundle && !daemonSrc) {
@@ -26387,29 +26387,29 @@ async function executeInstallPlan(plan, actor, paths, fs) {
   const wroteVersionFiles = [];
   if (plan.daemon.writeBundle) {
     const binDir = dirname2(paths.daemonBundle);
-    await fs.mkdirp(binDir);
-    await fs.copyFile(daemonSrc, paths.daemonBundle);
+    await fs2.mkdirp(binDir);
+    await fs2.copyFile(daemonSrc, paths.daemonBundle);
     wroteBundles.push(paths.daemonBundle);
     for (const name of actor.daemonSidecars ?? []) {
-      await fs.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
+      await fs2.copyFile(`${actor.pluginInstallDir}/${name}`, join2(binDir, name));
     }
-    await fs.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs2.writeFile(join2(binDir, "package.json"), '{\n  "type": "module"\n}\n');
   }
   if (plan.daemon.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.daemonVersionFile));
-    await fs.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
+    await fs2.mkdirp(dirname2(paths.daemonVersionFile));
+    await fs2.writeFile(paths.daemonVersionFile, serialize(plan.daemon.resultingVersionFile));
     wroteVersionFiles.push(paths.daemonVersionFile);
   }
   if (plan.adapter.writeBundle) {
     const adapterDir = dirname2(paths.adapterBundle);
-    await fs.mkdirp(adapterDir);
-    await fs.copyFile(adapterSrc, paths.adapterBundle);
-    await fs.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
+    await fs2.mkdirp(adapterDir);
+    await fs2.copyFile(adapterSrc, paths.adapterBundle);
+    await fs2.writeFile(join2(adapterDir, "package.json"), '{\n  "type": "module"\n}\n');
     wroteBundles.push(paths.adapterBundle);
   }
   if (plan.adapter.writeVersionFile) {
-    await fs.mkdirp(dirname2(paths.adapterVersionFile));
-    await fs.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
+    await fs2.mkdirp(dirname2(paths.adapterVersionFile));
+    await fs2.writeFile(paths.adapterVersionFile, serialize(plan.adapter.resultingVersionFile));
     wroteVersionFiles.push(paths.adapterVersionFile);
   }
   return { wroteBundles, wroteVersionFiles };
@@ -26419,19 +26419,19 @@ function serialize(record2) {
 `;
 }
 var CLI_LAUNCHER_NAMES = ["agents-comm", "agents-comm-bus"];
-async function installCliLaunchers(paths, cliSrc, fs) {
+async function installCliLaunchers(paths, cliSrc, fs2) {
   const binDir = dirname2(paths.cliBundle);
-  await fs.mkdirp(binDir);
-  await fs.copyFile(cliSrc, paths.cliBundle);
+  await fs2.mkdirp(binDir);
+  await fs2.copyFile(cliSrc, paths.cliBundle);
   for (const name of CLI_LAUNCHER_NAMES) {
-    await fs.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
+    await fs2.writeFile(join2(binDir, `${name}.cmd`), `@echo off\r
 node "%~dp0cli.js" %*\r
 `);
     const posix = join2(binDir, name);
-    await fs.writeFile(posix, `#!/bin/sh
+    await fs2.writeFile(posix, `#!/bin/sh
 exec node "$(dirname "$0")/cli.js" "$@"
 `);
-    await fs.chmod?.(posix, 493);
+    await fs2.chmod?.(posix, 493);
   }
 }
 function dirname2(p) {
@@ -26614,7 +26614,7 @@ function lockTimeoutError(lockPath, timeoutMs, cause) {
 // ../agents-comm-bus/dist/core-daemon/host-runtime/run-central-install.js
 var INSTALL_LOCK_NAME = "install.lock";
 async function runCentralInstall(stateRoot2, actor, deps = {}) {
-  const fs = deps.fs ?? createAtomicNodeFsSeam();
+  const fs2 = deps.fs ?? createAtomicNodeFsSeam();
   const lockPath = path9.join(stateRoot2, INSTALL_LOCK_NAME);
   const lock = await acquireInstallLock(lockPath, deps.lock ?? {});
   try {
@@ -26622,11 +26622,11 @@ async function runCentralInstall(stateRoot2, actor, deps = {}) {
     state.daemonRunning = deps.daemonRunning ?? false;
     const plan = reconcileInstall(actor, state);
     const paths = resolveCentralPaths(stateRoot2, actor.comm);
-    const result = await executeInstallPlan(plan, actor, paths, fs);
+    const result = await executeInstallPlan(plan, actor, paths, fs2);
     if (plan.daemon.writeBundle && actor.pluginInstallDir) {
       const cliSrc = path9.join(actor.pluginInstallDir, "cli.bundle.js");
       if (existsSync(cliSrc)) {
-        await installCliLaunchers(paths, cliSrc, fs);
+        await installCliLaunchers(paths, cliSrc, fs2);
         result.wroteBundles.push(paths.cliBundle);
       }
     }
@@ -27395,6 +27395,109 @@ function accountLabelScopeFromEnvSafe(env = process.env, log2 = (message) => con
   }
 }
 
+// common/herdr-env.js
+import fs from "node:fs";
+import os2 from "node:os";
+import path14 from "node:path";
+
+// ../agents-comm-bus/dist/core-daemon/runtime/herdr.js
+import crypto from "node:crypto";
+import { execFile as execFile2 } from "node:child_process";
+import { promisify } from "node:util";
+import path13 from "node:path";
+var execFileAsync = promisify(execFile2);
+function normalizeHerdrSocketPath(socketPath) {
+  const resolved = path13.resolve(socketPath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function herdrSessionId(identity) {
+  const socket = normalizeHerdrSocketPath(identity.socket_path);
+  const digest = crypto.createHash("sha256").update(`${identity.agent}
+${socket}
+${identity.pane_id}`).digest("hex").slice(0, 24);
+  return `herdr_${digest}`;
+}
+
+// common/herdr-env.js
+var SUPPORTED_AGENTS = /* @__PURE__ */ new Set(["claude", "codex", "pi"]);
+function newestHerdrStandaloneBinary(homeDir = os2.homedir()) {
+  const releasesRoot = path14.join(homeDir, ".herdr", "packages", "standalone", "releases");
+  try {
+    const entries = fs.readdirSync(releasesRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => a.localeCompare(b, void 0, { numeric: true }));
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const dir = path14.join(releasesRoot, entries[i]);
+      const exe = process.platform === "win32" ? path14.join(dir, "herdr.exe") : path14.join(dir, "herdr");
+      if (fs.existsSync(exe)) return exe;
+    }
+  } catch {
+  }
+  return null;
+}
+function resolveHerdrBinPath(env = process.env) {
+  if (typeof env.HERDR_BIN_PATH === "string" && env.HERDR_BIN_PATH.trim()) {
+    return env.HERDR_BIN_PATH.trim();
+  }
+  return newestHerdrStandaloneBinary() ?? void 0;
+}
+function herdrIdentityFromEnv(agent, env = process.env) {
+  if (!SUPPORTED_AGENTS.has(agent)) return null;
+  if (env.HERDR_ENV !== "1") return null;
+  const pane_id = env.HERDR_PANE_ID;
+  const socket_path = env.HERDR_SOCKET_PATH;
+  if (typeof pane_id !== "string" || !pane_id.trim()) return null;
+  if (typeof socket_path !== "string" || !socket_path.trim()) return null;
+  const identity = {
+    type: "herdr",
+    agent,
+    pane_id: pane_id.trim(),
+    socket_path: socket_path.trim()
+  };
+  if (typeof env.HERDR_WORKSPACE_ID === "string" && env.HERDR_WORKSPACE_ID.trim()) {
+    identity.workspace_id = env.HERDR_WORKSPACE_ID.trim();
+  }
+  if (typeof env.HERDR_TAB_ID === "string" && env.HERDR_TAB_ID.trim()) {
+    identity.tab_id = env.HERDR_TAB_ID.trim();
+  }
+  const bin_path = resolveHerdrBinPath(env);
+  if (bin_path) identity.bin_path = bin_path;
+  return identity;
+}
+function herdrSessionIdFromEnv(agent, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  return identity ? herdrSessionId(identity) : null;
+}
+function wakeStrictFromDevMarker(projectDir, deps = {}) {
+  const exists = deps.exists ?? fs.existsSync;
+  const readFile8 = deps.readFile ?? ((p) => fs.readFileSync(p, "utf8"));
+  const markerPath = path14.join(projectDir, DEV_MARKER_NAME);
+  if (!exists(markerPath)) return null;
+  try {
+    const parsed = JSON.parse(stripBom(readFile8(markerPath)));
+    if (!parsed || typeof parsed !== "object") return null;
+    const wakeStrict = parsed.wakeStrict;
+    return wakeStrict === "herdr" ? "herdr" : null;
+  } catch {
+    return null;
+  }
+}
+function herdrWakeFieldsForRegister(agent, projectDir, env = process.env) {
+  const identity = herdrIdentityFromEnv(agent, env);
+  if (!identity) return {};
+  const wake_strict = wakeStrictFromDevMarker(projectDir, {
+    exists: (p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    }
+  });
+  return {
+    herdr_identity: identity,
+    ...wake_strict ? { wake_strict } : {}
+  };
+}
+
 // codex/codex-mcp-shim.js
 var persistentRegistration = null;
 var codexRuntime = {
@@ -27406,8 +27509,10 @@ function agentInUse() {
 }
 function sessionInUse() {
   if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
+  const herdr = herdrSessionIdFromEnv("codex");
+  if (herdr) return herdr;
   const raw = process.env.CODEX_SESSION_ID ?? process.env.CODEX_THREAD_ID ?? codexRuntime.threadId ?? `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl ?? ""}`;
-  return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
+  return `codex_${crypto2.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
 }
 async function discoverCodexRuntime() {
   codexRuntime.appServerUrl ??= process.env.CODEX_APP_SERVER_URL ?? discoverAppServerUrlFromAncestors();
@@ -27589,14 +27694,16 @@ function threadIdFrom(value) {
 }
 async function startPersistentCodexRegistration() {
   await discoverCodexRuntime();
+  const project = normalizeProjectPath(process.cwd());
+  const herdrFields = herdrWakeFieldsForRegister("codex", project);
+  const hasHerdr = Boolean(herdrFields.herdr_identity);
   const appServerUrl = process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl;
-  if (!appServerUrl) {
+  if (!hasHerdr && !appServerUrl) {
     log("Codex session registration skipped: CODEX_APP_SERVER_URL is not set");
     return;
   }
   if (persistentRegistration) return;
   const session = sessionInUse();
-  const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: "agents-comm-mcp-shim/session-registration",
     agent: "codex",
@@ -27610,15 +27717,16 @@ async function startPersistentCodexRegistration() {
     session,
     project,
     cwd: project,
-    app_server_url: appServerUrl,
+    ...hasHerdr ? {} : { app_server_url: appServerUrl },
     thread_id: threadId ?? void 0,
     owner_process_pid: ownerProcess.pid,
     owner_process_label: ownerProcess.label,
     source: "mcp-server",
     replace_existing_lease: true,
     persist_after_disconnect: true,
-    manage_app_server_lifecycle: true,
-    account_label_scope: accountLabelScopeFromEnvSafe()
+    manage_app_server_lifecycle: !hasHerdr,
+    account_label_scope: accountLabelScopeFromEnvSafe(),
+    ...herdrFields
   };
   const runtime = await ensureMcpRuntime({
     agentInUse: () => "codex",

@@ -3681,7 +3681,7 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.65";
+var DAEMON_VERSION = "0.2.66";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -4832,7 +4832,7 @@ var SqliteStorage = class _SqliteStorage {
     this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE session_id = ?`).run(...params);
   }
   async getWakeMode(project, agent) {
-    const canonical = normalizeProjectPath(project);
+    const canonical = project === "" ? "" : normalizeProjectPath(project);
     const scoped = this.db.prepare(
       "SELECT mode FROM wake_preferences WHERE project = ? AND agent = ?"
     ).get(canonical, agent);
@@ -4862,6 +4862,52 @@ var SqliteStorage = class _SqliteStorage {
   async listWakeModes() {
     const rows = this.db.prepare("SELECT project, agent, mode, updated_at FROM wake_preferences ORDER BY project, agent").all();
     return rows;
+  }
+  async insertSession(rec) {
+    const project = normalizeProjectPath(rec.project);
+    this.db.prepare(`
+        INSERT INTO sessions (
+          schema_version, session_id, agent, project, created_at,
+          lease_holder_connection_id, lease_acquired_at, lease_released_at,
+          lease_owner_process_pid, lease_owner_process_label,
+          lease_owner_process_registered_at, lease_owner_process_start_time,
+          lease_owner_daemon_discovery_root, lease_owner_daemon_checkout_root,
+          lease_owner_daemon_state_root, lease_owner_daemon_bin,
+          lease_owner_daemon_authority_rank,
+          most_recent_inbound_conversation_id, account_label_scope, status,
+          wake_identity_json, wake_strict
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+      rec.schema_version,
+      rec.session_id,
+      rec.agent,
+      project,
+      rec.created_at,
+      rec.lease_holder_connection_id,
+      rec.lease_acquired_at,
+      rec.lease_released_at,
+      rec.lease_owner_process_pid,
+      rec.lease_owner_process_label,
+      rec.lease_owner_process_registered_at,
+      rec.lease_owner_process_start_time ?? null,
+      rec.lease_owner_daemon_discovery_root,
+      rec.lease_owner_daemon_checkout_root,
+      rec.lease_owner_daemon_state_root,
+      rec.lease_owner_daemon_bin,
+      rec.lease_owner_daemon_authority_rank,
+      rec.most_recent_inbound_conversation_id,
+      rec.account_label_scope ?? null,
+      rec.status,
+      rec.wake_identity ? JSON.stringify(rec.wake_identity) : null,
+      rec.wake_strict
+    );
+  }
+  async reactivateSessionIfEnded(session) {
+    const result = this.db.prepare(`
+        UPDATE sessions SET status = 'active'
+        WHERE session_id = ? AND status = 'ended'
+      `).run(session);
+    return Number(result.changes ?? 0) > 0;
   }
   async addAllowlistGlobal(rec) {
     this.db.prepare(`
