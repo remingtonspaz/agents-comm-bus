@@ -1,19 +1,27 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 // AGE-110 hotfix: ec97ac9 dropped the `resolveMcpShimProject` import from
 // hosts/claude/claude-mcp-shim.js. The source still parsed and every unit test
 // passed, but the built shim died at startup with a ReferenceError, so every
-// Claude session lost its comm_* tools. This test starts each BUILT shim (the
-// artifact Claude/Codex actually load) and fails on any reference/type error
-// during startup. The daemon bin points at a missing file and HOME is a temp
-// dir, so the shim can never reach or spawn a real daemon.
+// Claude session lost its comm_* tools. This test starts each BUILT shim and
+// fails on any reference error during startup.
+//
+// SAFETY (2026-10-02 incident): a built shim resolves `.agents-comm-bus-dev.json`
+// upward from its OWN location, and the marker's `daemonBin` + `discoveryRoot`
+// override env isolation. Running the in-repo artifact from a dev checkout
+// therefore spawned a real daemon into the real dev discovery and superseded
+// the live dev daemon. So each shim is COPIED into a temp dir (no marker above
+// it) and run from there, and a guard asserts that the real discovery files
+// are byte-identical before and after.
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const DEV_MARKER = ".agents-comm-bus-dev.json";
 
 async function builtShims(): Promise<string[]> {
   const shims = [
@@ -28,6 +36,32 @@ async function builtShims(): Promise<string[]> {
     }
   }
   return shims;
+}
+
+/** Real discovery dirs a leaked spawn could touch: the checkout's dev slot + the home slot. */
+async function realDiscoveryDirs(): Promise<string[]> {
+  const dirs = [path.join(os.homedir(), ".agents-comm-bus")];
+  const markerPath = path.join(repoRoot, DEV_MARKER);
+  if (existsSync(markerPath)) {
+    try {
+      const marker = JSON.parse((await readFile(markerPath, "utf8")).replace(/^﻿/, ""));
+      if (typeof marker.discoveryRoot === "string") dirs.push(path.resolve(repoRoot, marker.discoveryRoot));
+    } catch {
+      // unreadable marker: the home slot is still guarded
+    }
+  }
+  return dirs;
+}
+
+async function snapshotDiscovery(dirs: string[]): Promise<string> {
+  const parts: string[] = [];
+  for (const dir of dirs) {
+    for (const name of ["port", "daemon.pid", "owner.json"]) {
+      const file = path.join(dir, name);
+      parts.push(`${file}=${existsSync(file) ? await readFile(file, "utf8") : "<absent>"}`);
+    }
+  }
+  return parts.join("\n");
 }
 
 function isolatedEnv(home: string): NodeJS.ProcessEnv {
@@ -59,21 +93,40 @@ function runShim(shim: string, env: NodeJS.ProcessEnv, cwd: string): Promise<str
 }
 
 describe("AGE-110 hotfix: built MCP shims start without reference errors", () => {
-  it("every built claude/codex shim survives startup without ReferenceError/TypeError", async () => {
+  it("every built claude/codex shim survives startup without ReferenceError, without touching real discovery", async () => {
     const shims = await builtShims();
     assert.ok(shims.length >= 4, `expected built shims, got ${shims.length}`);
+    const guarded = await realDiscoveryDirs();
+    const before = await snapshotDiscovery(guarded);
+
     for (const shim of shims) {
       const home = await mkdtemp(path.join(os.tmpdir(), "acb-shim-smoke-"));
       try {
-        const stderr = await runShim(shim, isolatedEnv(home), home);
+        // Run a COPY from the temp dir so no dev marker sits above the artifact.
+        const runDir = path.join(home, "run");
+        await (await import("node:fs/promises")).mkdir(runDir, { recursive: true });
+        await writeFile(path.join(runDir, "package.json"), '{"type":"module"}\n');
+        const copy = path.join(runDir, path.basename(shim));
+        await copyFile(shim, copy);
+        assert.equal(existsSync(path.join(runDir, DEV_MARKER)), false);
+
+        const stderr = await runShim(copy, isolatedEnv(home), runDir);
         assert.doesNotMatch(
           stderr,
           /ReferenceError|TypeError: \S+ is not a function|is not defined/,
           `${path.relative(repoRoot, shim)} crashed at startup:\n${stderr.slice(0, 800)}`,
         );
       } finally {
-        await rm(home, { recursive: true, force: true });
+        // Windows can hold the dir briefly after the child exits (EBUSY);
+        // cleanup is best-effort and must not fail the startup assertion.
+        await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
       }
     }
+
+    assert.equal(
+      await snapshotDiscovery(guarded),
+      before,
+      "a shim run changed REAL discovery files (port/daemon.pid/owner.json): isolation leak",
+    );
   });
 });
