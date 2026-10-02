@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import WebSocket from "ws";
 
@@ -13,7 +12,8 @@ import {
 } from "../common/mcp-shim-shared.js";
 import { normalizeProjectPath } from "../../agents-comm-bus/dist/core-daemon/project-path.js";
 import { accountLabelScopeFromEnvSafe } from "../common/comm-labels.js";
-import { herdrSessionIdFromEnv, herdrWakeFieldsForRegister } from "../common/herdr-env.js";
+import { herdrWakeFieldsForRegister } from "../common/herdr-env.js";
+import { resolveCodexMcpSessionId } from "../common/codex-session-id.js";
 
 let persistentRegistration = null;
 const codexRuntime = {
@@ -26,14 +26,7 @@ function agentInUse() {
 }
 
 function sessionInUse() {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  const herdr = herdrSessionIdFromEnv("codex");
-  if (herdr) return herdr;
-  const raw = process.env.CODEX_SESSION_ID ??
-    process.env.CODEX_THREAD_ID ??
-    codexRuntime.threadId ??
-    `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL ?? codexRuntime.appServerUrl ?? ""}`;
-  return `codex_${crypto.createHash("sha256").update(String(raw)).digest("hex").slice(0, 24)}`;
+  return resolveCodexMcpSessionId({});
 }
 
 async function discoverCodexRuntime() {

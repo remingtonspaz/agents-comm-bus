@@ -1,14 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-import { DEV_MARKER_NAME } from '../../agents-comm-bus/dist/core-daemon/host-runtime/dev-config-resolver.js';
-import { stripBom } from '../../agents-comm-bus/dist/core-daemon/host-runtime/strip-bom.js';
+export const DEV_MARKER_NAME = '.agents-comm-bus-dev.json';
+export const SUPPORTED_AGENTS = ['claude', 'codex'];
+export const CENTRAL_CLI = path.join(os.homedir(), '.agents-comm-bus', 'bin', 'cli.js');
+export const CHECKOUT_CLI_REL = path.join('agents-comm-bus', 'dist', 'core-daemon', 'cli', 'index.js');
 
-const SUPPORTED_AGENTS = ['claude', 'codex'];
-const CENTRAL_CLI = path.join(os.homedir(), '.agents-comm-bus', 'bin', 'cli.js');
-const CHECKOUT_CLI_REL = path.join('agents-comm-bus', 'dist', 'core-daemon', 'cli', 'index.js');
+export function stripBom(text) {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
 
 export function findGitRoot(startDir) {
   let current = path.resolve(startDir);
@@ -32,10 +34,27 @@ function readDevMarker(checkoutRoot, deps = {}) {
     if (!daemonBinRaw) return null;
     const daemonBin = path.resolve(checkoutRoot, daemonBinRaw);
     if (!daemonBin.startsWith(path.resolve(checkoutRoot))) return null;
-    return { checkoutRoot, daemonBin };
+    return { checkoutRoot, daemonBin, wakeStrict: parsed.wakeStrict === 'herdr' ? 'herdr' : null };
   } catch {
     return null;
   }
+}
+
+export function wakeStrictForProject(projectCwd, deps = {}) {
+  const gitRoot = findGitRoot(projectCwd);
+  if (!gitRoot) return null;
+
+  let current = path.resolve(projectCwd);
+  const stop = path.resolve(gitRoot);
+  while (true) {
+    const marker = readDevMarker(current, deps);
+    if (marker?.wakeStrict === 'herdr') return 'herdr';
+    if (current === stop) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
 }
 
 /**
@@ -76,27 +95,101 @@ export function parsePluginEventJson(raw) {
   }
 }
 
-export function identityFromPaneEnv(agent, env = process.env) {
-  const pane_id = env.HERDR_PANE_ID;
+export function extractAgentKind(value) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value.agent ?? value.kind ?? value.type;
+  if (typeof candidate === 'string') return candidate;
+  if (candidate && typeof candidate === 'object') {
+    const nested = candidate.agent ?? candidate.kind;
+    if (typeof nested === 'string') return nested;
+  }
+  return null;
+}
+
+export function agentKindFromListEntry(entry) {
+  return extractAgentKind(entry?.agent) ?? extractAgentKind(entry?.kind) ?? null;
+}
+
+export function agentKindFromGetResult(result) {
+  const agent = result?.result?.agent ?? result?.agent;
+  return extractAgentKind(agent);
+}
+
+export function cwdFromAgentGetResult(result) {
+  const cwd = result?.result?.agent?.cwd ?? result?.agent?.cwd;
+  return typeof cwd === 'string' && cwd.trim() ? path.resolve(cwd.trim()) : null;
+}
+
+export function cwdFromListEntry(entry) {
+  const cwd = entry?.cwd;
+  return typeof cwd === 'string' && cwd.trim() ? path.resolve(cwd.trim()) : null;
+}
+
+export function cwdFromEvent(event) {
+  if (!event || typeof event !== 'object') return null;
+  const cwd = event.cwd ?? event.pane?.cwd;
+  if (typeof cwd === 'string' && cwd.trim()) return path.resolve(cwd.trim());
+  const agentObj = event.agent;
+  if (agentObj && typeof agentObj === 'object' && typeof agentObj.cwd === 'string' && agentObj.cwd.trim()) {
+    return path.resolve(agentObj.cwd.trim());
+  }
+  return null;
+}
+
+/**
+ * Build sync identity for an agent pane (never uses HERDR_PANE_ID from env for pane_id).
+ */
+export function buildSyncIdentity(agent, paneId, env = process.env, sourceEntry = {}) {
   const socket_path = env.HERDR_SOCKET_PATH;
-  if (typeof pane_id !== 'string' || !pane_id.trim()) return null;
+  if (typeof paneId !== 'string' || !paneId.trim()) return null;
   if (typeof socket_path !== 'string' || !socket_path.trim()) return null;
+
   const identity = {
     type: 'herdr',
     agent,
-    pane_id: pane_id.trim(),
+    pane_id: paneId.trim(),
     socket_path: socket_path.trim(),
   };
-  if (typeof env.HERDR_WORKSPACE_ID === 'string' && env.HERDR_WORKSPACE_ID.trim()) {
-    identity.workspace_id = env.HERDR_WORKSPACE_ID.trim();
-  }
-  if (typeof env.HERDR_TAB_ID === 'string' && env.HERDR_TAB_ID.trim()) {
-    identity.tab_id = env.HERDR_TAB_ID.trim();
-  }
-  if (typeof env.HERDR_BIN_PATH === 'string' && env.HERDR_BIN_PATH.trim()) {
-    identity.bin_path = env.HERDR_BIN_PATH.trim();
-  }
+
+  const workspace =
+    sourceEntry.workspace_id ??
+    sourceEntry.workspaceId ??
+    (typeof env.HERDR_WORKSPACE_ID === 'string' ? env.HERDR_WORKSPACE_ID : undefined);
+  if (typeof workspace === 'string' && workspace.trim()) identity.workspace_id = workspace.trim();
+
+  const tab =
+    sourceEntry.tab_id ??
+    sourceEntry.tabId ??
+    (typeof env.HERDR_TAB_ID === 'string' ? env.HERDR_TAB_ID : undefined);
+  if (typeof tab === 'string' && tab.trim()) identity.tab_id = tab.trim();
+
+  const bin =
+    (typeof env.HERDR_BIN_PATH === 'string' && env.HERDR_BIN_PATH.trim())
+      ? env.HERDR_BIN_PATH.trim()
+      : undefined;
+  if (bin) identity.bin_path = bin;
+
   return identity;
+}
+
+export async function resolveProjectForPane({ listEntry, event, paneId, agentGet }, deps = {}) {
+  const fromList = listEntry ? cwdFromListEntry(listEntry) : null;
+  if (fromList) return fromList;
+
+  const fromEvent = event ? cwdFromEvent(event) : null;
+  if (fromEvent) return fromEvent;
+
+  if (paneId && agentGet) {
+    try {
+      const got = await agentGet(paneId);
+      const fromGet = cwdFromAgentGetResult(got);
+      if (fromGet) return fromGet;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export function appendPluginLog(stateDir, record, deps = {}) {
@@ -121,9 +214,3 @@ export async function execFileAsync(execFile, file, args, options = {}) {
     });
   });
 }
-
-export function projectFromCwd(cwd) {
-  return path.resolve(cwd || process.cwd());
-}
-
-export { SUPPORTED_AGENTS, CENTRAL_CLI, CHECKOUT_CLI_REL };

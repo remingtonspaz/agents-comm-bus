@@ -27935,9 +27935,9 @@ function ensureClaudeWakeWatcher(options = {}) {
 // common/claude-mcp-session.js
 var lastWakeStrategy = null;
 function claudeMcpSessionInUse() {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
   const herdr = herdrSessionIdFromEnv("claude");
   if (herdr) return herdr;
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
   return process.env.CLAUDE_SESSION_ID ?? "mcp";
 }
 function claudeMcpLastWakeStrategy() {

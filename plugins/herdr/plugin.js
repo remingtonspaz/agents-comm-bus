@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   SUPPORTED_AGENTS,
+  CENTRAL_CLI,
   appendPluginLog,
+  agentKindFromGetResult,
+  agentKindFromListEntry,
+  buildSyncIdentity,
+  cwdFromAgentGetResult,
   execFileAsync,
-  identityFromPaneEnv,
+  extractAgentKind,
   parsePluginEventJson,
-  projectFromCwd,
   resolveCliEntry,
+  resolveProjectForPane,
+  wakeStrictForProject,
 } from './plugin-lib.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function logAction(kind, detail) {
   appendPluginLog(process.env.HERDR_PLUGIN_STATE_DIR, {
@@ -49,21 +51,6 @@ async function runHerdrAgentGet(binPath, paneId) {
   return JSON.parse(stdout);
 }
 
-function agentKindFromListEntry(entry) {
-  const agent = entry?.agent ?? entry?.kind;
-  return typeof agent === 'string' ? agent : null;
-}
-
-function agentKindFromGetResult(result) {
-  const agent = result?.result?.agent?.agent ?? result?.agent?.agent;
-  return typeof agent === 'string' ? agent : null;
-}
-
-function cwdFromEvent(event) {
-  const cwd = event?.cwd ?? event?.pane?.cwd ?? event?.agent?.cwd;
-  return typeof cwd === 'string' && cwd.trim() ? path.resolve(cwd.trim()) : projectFromCwd(process.cwd());
-}
-
 async function syncAgent(agent, project, identity, wakeStrict) {
   const { entry, source } = resolveCliEntry(project);
   const args = [
@@ -88,16 +75,17 @@ async function syncAgent(agent, project, identity, wakeStrict) {
   logAction('sync', { agent, project, cli: entry, cli_source: source, pane_id: identity.pane_id });
 }
 
-async function releaseIdentity(identity) {
-  const project = projectFromCwd(process.cwd());
-  const { entry, source } = resolveCliEntry(project);
+async function releaseIdentity(identity, projectCwd) {
+  const { entry, source } = projectCwd
+    ? resolveCliEntry(projectCwd)
+    : { entry: CENTRAL_CLI, source: 'central' };
   await execFileAsync(execFile, process.execPath, [
     entry,
     'herdr-pane-release',
     '--identity-json',
     JSON.stringify(identity),
   ], {
-    cwd: project,
+    cwd: projectCwd ?? undefined,
     env: process.env,
     windowsHide: true,
     timeout: 30_000,
@@ -105,33 +93,34 @@ async function releaseIdentity(identity) {
   logAction('release', { agent: identity.agent, cli: entry, cli_source: source, pane_id: identity.pane_id });
 }
 
-async function syncFromPane(agent, paneId, project, binPath) {
-  const identity = identityFromPaneEnv(agent);
+async function syncFromPane(agent, paneId, project, listOrEventEntry) {
+  const identity = buildSyncIdentity(agent, paneId, process.env, listOrEventEntry ?? {});
   if (!identity) {
-    const built = {
-      type: 'herdr',
-      agent,
-      pane_id: paneId,
-      socket_path: process.env.HERDR_SOCKET_PATH,
-    };
-    if (typeof process.env.HERDR_BIN_PATH === 'string') built.bin_path = process.env.HERDR_BIN_PATH;
-    await syncAgent(agent, project, built, null);
+    logAction('sync_skip', { reason: 'missing_socket_path', agent, pane_id: paneId });
     return;
   }
-  await syncAgent(agent, project, identity, null);
+  const wakeStrict = wakeStrictForProject(project);
+  await syncAgent(agent, project, identity, wakeStrict);
 }
 
 async function handleStartup() {
   const bin = process.env.HERDR_BIN_PATH;
+  const agentGet = (paneId) => runHerdrAgentGet(bin, paneId);
   const agents = await runHerdrAgentList(bin);
   for (const entry of agents) {
     const kind = agentKindFromListEntry(entry);
     if (!kind || !SUPPORTED_AGENTS.includes(kind)) continue;
     const paneId = entry.pane_id ?? entry.paneId;
-    const cwd = entry.cwd ? path.resolve(entry.cwd) : projectFromCwd(process.cwd());
     if (!paneId) continue;
+
+    const project = await resolveProjectForPane({ listEntry: entry, paneId, agentGet });
+    if (!project) {
+      logAction('startup_skip', { reason: 'missing_project_cwd', agent: kind, pane_id: paneId });
+      continue;
+    }
+
     try {
-      await syncFromPane(kind, paneId, cwd, bin);
+      await syncFromPane(kind, paneId, project, entry);
     } catch (error) {
       logAction('sync_error', { agent: kind, pane_id: paneId, message: error.message });
     }
@@ -150,18 +139,18 @@ async function handleAgentDetected() {
     return;
   }
 
-  let agent =
-    event?.agent ??
-    event?.pane?.agent ??
-    event?.agent_kind;
-  let project = cwdFromEvent(event);
+  const bin = process.env.HERDR_BIN_PATH;
+  const agentGet = (id) => runHerdrAgentGet(bin, id);
 
-  if (!agent || !project) {
+  let agent =
+    extractAgentKind(event?.agent) ??
+    extractAgentKind(event?.pane?.agent) ??
+    extractAgentKind(event?.agent_kind);
+
+  if (!agent) {
     try {
-      const got = await runHerdrAgentGet(process.env.HERDR_BIN_PATH, paneId);
-      agent = agent ?? agentKindFromGetResult(got);
-      const cwd = got?.result?.agent?.cwd ?? got?.agent?.cwd;
-      if (cwd) project = path.resolve(cwd);
+      const got = await agentGet(paneId);
+      agent = agentKindFromGetResult(got);
     } catch (error) {
       logAction('agent_detected_skip', { reason: 'agent_get_failed', message: error.message });
       return;
@@ -173,30 +162,39 @@ async function handleAgentDetected() {
     return;
   }
 
+  const project = await resolveProjectForPane({ event, paneId, agentGet });
+  if (!project) {
+    logAction('agent_detected_skip', { reason: 'missing_project_cwd', agent, pane_id: paneId });
+    return;
+  }
+
   try {
-    await syncFromPane(agent, paneId, project, process.env.HERDR_BIN_PATH);
+    await syncFromPane(agent, paneId, project, event?.pane ?? event ?? {});
   } catch (error) {
     logAction('sync_error', { agent, pane_id: paneId, message: error.message });
   }
 }
 
 async function handlePaneClosed() {
+  const event = parsePluginEventJson(process.env.HERDR_PLUGIN_EVENT_JSON);
   const paneId =
-    parsePluginEventJson(process.env.HERDR_PLUGIN_EVENT_JSON)?.pane_id ??
+    event?.pane_id ??
+    event?.paneId ??
     process.env.HERDR_PANE_ID;
   if (!paneId || typeof process.env.HERDR_SOCKET_PATH !== 'string') {
     logAction('pane_closed_skip', { reason: 'missing_identity_fields' });
     return;
   }
+  const releaseProject = await resolveProjectForPane({
+    event,
+    paneId,
+    agentGet: (id) => runHerdrAgentGet(process.env.HERDR_BIN_PATH, id),
+  });
   for (const agent of SUPPORTED_AGENTS) {
-    const identity = {
-      type: 'herdr',
-      agent,
-      pane_id: paneId,
-      socket_path: process.env.HERDR_SOCKET_PATH,
-    };
+    const identity = buildSyncIdentity(agent, paneId, process.env, {});
+    if (!identity) continue;
     try {
-      await releaseIdentity(identity);
+      await releaseIdentity(identity, releaseProject);
     } catch (error) {
       logAction('release_error', { agent, pane_id: paneId, message: error.message });
     }

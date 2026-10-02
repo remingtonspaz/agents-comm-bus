@@ -14,9 +14,9 @@ import { connectIpc } from '../../agents-comm-bus/dist/core-daemon/ipc/client.js
 let lastWakeStrategy = null;
 
 export function claudeMcpSessionInUse() {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
   const herdr = herdrSessionIdFromEnv('claude');
   if (herdr) return herdr;
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) return process.env.AGENTS_COMM_BUS_SESSION_ID;
   return process.env.CLAUDE_SESSION_ID ?? 'mcp';
 }
 

@@ -3,9 +3,6 @@ import crypto from 'node:crypto';
 import { herdrSessionIdFromEnv } from './herdr-env.js';
 
 export function resolveClaudeSessionId(hookInput) {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
-    return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  }
   const herdr = herdrSessionIdFromEnv('claude');
   if (herdr) return herdr;
   const raw =

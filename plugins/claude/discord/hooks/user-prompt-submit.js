@@ -6414,9 +6414,6 @@ function herdrWakeFieldsForRegister(agent, projectDir, env = process.env) {
 // ../hosts/common/claude-session-id.js
 import crypto3 from "node:crypto";
 function resolveClaudeSessionId(hookInput) {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
-    return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  }
   const herdr = herdrSessionIdFromEnv("claude");
   if (herdr) return herdr;
   const raw = hookInput?.session_id || hookInput?.sessionId || process.env.CLAUDE_SESSION_ID || `${process.cwd()}:${process.env.CLAUDE_PROJECT_DIR || ""}`;
