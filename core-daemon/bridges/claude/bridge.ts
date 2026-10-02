@@ -52,11 +52,11 @@ import {
 } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
-import { parseHerdrIdentity } from "../../runtime/herdr.js";
 import {
+  applyHerdrWakeTargetFromRegisterParams,
   herdrRespond,
   herdrWake,
-  parseWakeStrict,
+  validateHerdrRegisterParams,
   wakeSeedFromMessage,
   wakeStrategyForSession,
   type EffectiveWakeStrategy,
@@ -515,6 +515,10 @@ export class ClaudeBridge implements AgentBridge {
     params: Record<string, unknown>,
     socket?: { once(event: "close", handler: () => void): void },
   ): Promise<RegisterSessionResult> {
+    const herdrParams = validateHerdrRegisterParams(params, this.agentId);
+    if (!herdrParams.ok) {
+      return { ok: false, reason: herdrParams.reason };
+    }
     const session = requiredString(params.session, "session") as SessionId;
     const project = normalizeProjectPath(requiredString(params.project, "project"));
     const connectionId = typeof params.connection_id === "string"
@@ -551,6 +555,12 @@ export class ClaudeBridge implements AgentBridge {
       wake_identity: null,
       wake_strict: null,
     });
+    await applyHerdrWakeTargetFromRegisterParams(
+      this.options.storage,
+      session,
+      params,
+      this.agentId,
+    );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession
       ? this.isLocallyDeliverable(baselineSession)
@@ -588,20 +598,6 @@ export class ClaudeBridge implements AgentBridge {
       : false;
     if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
       await this.redrivePendingInboundCoalesced(session);
-    }
-    const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
-    const wakeStrict = parseWakeStrict(params.wake_strict);
-    if (params.herdr_identity !== undefined) {
-      if (!herdrIdentity || herdrIdentity.agent !== "claude") {
-        return { ok: false, reason: "invalid herdr_identity" };
-      }
-      await this.options.storage.setSessionWakeTarget(
-        session,
-        herdrIdentity,
-        params.wake_strict !== undefined ? wakeStrict : undefined,
-      );
-    } else if (params.wake_strict !== undefined) {
-      await this.options.storage.setSessionWakeTarget(session, undefined, wakeStrict);
     }
     const afterWake = await this.options.storage.getSession(session);
     const wake_strategy = afterWake

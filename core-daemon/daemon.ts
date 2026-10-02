@@ -1473,7 +1473,7 @@ export async function probeCommIdentity(
   };
 }
 
-async function handleHerdrRegisterPane(
+export async function handleHerdrRegisterPane(
   params: Record<string, unknown>,
   context: {
     storage: Storage;
@@ -1492,30 +1492,35 @@ async function handleHerdrRegisterPane(
   }
   const session_id = herdrSessionId(identity) as SessionId;
   const now = Date.now();
-  await context.storage.upsertSession({
-    schema_version: SCHEMA_VERSION_SESSION,
-    session_id,
-    agent,
-    project,
-    created_at: now,
-    lease_holder_connection_id: null,
-    lease_acquired_at: null,
-    lease_released_at: null,
-    lease_owner_process_pid: null,
-    lease_owner_process_label: null,
-    lease_owner_process_registered_at: null,
-    lease_owner_process_start_time: null,
-    lease_owner_daemon_discovery_root: null,
-    lease_owner_daemon_checkout_root: null,
-    lease_owner_daemon_state_root: null,
-    lease_owner_daemon_bin: null,
-    lease_owner_daemon_authority_rank: null,
-    most_recent_inbound_conversation_id: null,
-    account_label_scope: null,
-    status: "active",
-    wake_identity: null,
-    wake_strict: null,
-  });
+  const existing = await context.storage.getSession(session_id);
+  if (!existing) {
+    await context.storage.insertSession({
+      schema_version: SCHEMA_VERSION_SESSION,
+      session_id,
+      agent,
+      project,
+      created_at: now,
+      lease_holder_connection_id: null,
+      lease_acquired_at: null,
+      lease_released_at: null,
+      lease_owner_process_pid: null,
+      lease_owner_process_label: null,
+      lease_owner_process_registered_at: null,
+      lease_owner_process_start_time: null,
+      lease_owner_daemon_discovery_root: null,
+      lease_owner_daemon_checkout_root: null,
+      lease_owner_daemon_state_root: null,
+      lease_owner_daemon_bin: null,
+      lease_owner_daemon_authority_rank: null,
+      most_recent_inbound_conversation_id: null,
+      account_label_scope: null,
+      status: "active",
+      wake_identity: null,
+      wake_strict: null,
+    });
+  } else if (existing.status === "ended") {
+    await context.storage.reactivateSessionIfEnded(session_id);
+  }
   await context.storage.setSessionWakeTarget(
     session_id,
     identity,
@@ -1530,7 +1535,7 @@ async function handleHerdrRegisterPane(
   return { ok: true, session, wake_strategy };
 }
 
-async function handleHerdrReleasePane(
+export async function handleHerdrReleasePane(
   params: Record<string, unknown>,
   context: { storage: Storage },
 ): Promise<unknown> {

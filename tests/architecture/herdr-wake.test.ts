@@ -7,6 +7,10 @@ import assert from "node:assert/strict";
 import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
 import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
 import { MessageBus } from "../../core-daemon/bus.js";
+import { normalizeProjectPath } from "../../core-daemon/project-path.js";
+import {
+  createSessionOwnerLiveness,
+} from "../../core-daemon/runtime/session-owner-liveness.js";
 import {
   HerdrClient,
   herdrSessionId,
@@ -99,10 +103,10 @@ async function withDb<T>(
   }
 }
 
-function registration(project = "project-a"): AccountRegistration {
+function registration(project: string = "project-a"): AccountRegistration {
   return {
     schema_version: SCHEMA_VERSION_ACCOUNT,
-    project,
+    project: normalizeProjectPath(project),
     comm: "telegram" as CommId,
     agent: "claude" as AgentId,
     account_label: "main",
@@ -115,13 +119,15 @@ function registration(project = "project-a"): AccountRegistration {
   };
 }
 
-function conversation(project = "project-a"): Conversation {
+function conversation(project: string = "project-a"): Conversation {
+  const canonical = normalizeProjectPath(project);
   return {
     schema_version: SCHEMA_VERSION_CONVERSATION,
-    project,
+    project: canonical,
     comm: "telegram" as CommId,
     account_label: "main",
     bot_user_id: "bot-1",
+    registration_id: "reg-bot-1",
     chat_native_id: "chat-1",
     thread_native_id: null,
     conversation_id: "conv-1" as ConversationId,
@@ -425,6 +431,83 @@ describe("herdr wake (AGE-110 phase 1)", () => {
       normalizeHerdrSocketPath(id.socket_path),
       normalizeHerdrSocketPath(alt.socket_path),
     );
+  });
+
+  it("global wake_mode key '' is not normalized to cwd", async () => {
+    await withDb(async (storage) => {
+      await storage.setWakeMode("", "claude" as AgentId, "native", 1);
+      await storage.setWakeMode(
+        process.cwd(),
+        "claude" as AgentId,
+        "auto",
+        2,
+      );
+      assert.equal(await storage.getWakeMode("", "claude" as AgentId), "native");
+      assert.equal(
+        await storage.getWakeMode(process.cwd(), "claude" as AgentId),
+        "auto",
+      );
+    });
+  });
+
+  it("register rejects invalid herdr_identity before persisting session row", async () => {
+    await withDb(async (storage) => {
+      const session = "claude-never-upserted" as SessionId;
+      const bridge = new ClaudeBridge({
+        storage,
+        bus: testBus(storage),
+        pendingInbound: [],
+      });
+      const result = await bridge.registerSession({
+        session,
+        project: "project-a",
+        herdr_identity: identity({ agent: "codex" as AgentId }),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, "invalid herdr_identity");
+      assert.equal(await storage.getSession(session), null);
+    });
+  });
+
+  it("register redrive after rehydration uses herdr agent prompt, not trigger-enter", async () => {
+    await withDb(async (storage) => {
+      const fake = new FakeHerdrExec();
+      const project = normalizeProjectPath("D:/repo/herdr-redrive");
+      const wakeDir = join(tmpdir(), `wake-redrive-${Date.now()}`);
+      await storage.putAccountRegistration(registration(project));
+      const conv = conversation(project);
+      await storage.upsertConversation(conv);
+      const pendingInbound: PendingInboundEntry[] = [
+        { message: message(), conversation: conv },
+      ];
+      const bridge = new ClaudeBridge({
+        storage,
+        bus: testBus(storage),
+        pendingInbound,
+        ensureCommsForSession: async () => ({ rehydrated: true }),
+        herdrClientFactory: (id) => fake.client(id),
+        sessionOwnerIsLive: createSessionOwnerLiveness({
+          now: () => Date.now(),
+          isPidAlive: () => true,
+        }),
+      });
+      const result = await bridge.registerSession({
+        session: "claude-s1" as SessionId,
+        project,
+        connection_id: "claude:conn-1",
+        wake_dir: wakeDir,
+        owner_process_pid: 100,
+        owner_process_label: "claude",
+        herdr_identity: identity(),
+      });
+      assert.equal(result.ok, true);
+      assert.equal(
+        fake.calls.some((c) => c.args[0] === "agent" && c.args[1] === "prompt"),
+        true,
+      );
+      await assert.rejects(() => readFile(join(wakeDir, "trigger-enter"), "utf8"));
+      assert.equal(pendingInbound.length, 1);
+    });
   });
 
   it("j. herdr wake survives daemon restart (new bridge + same storage)", async () => {

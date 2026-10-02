@@ -1,4 +1,4 @@
-import type { AuditStore, Session, Storage } from "agents-comm-bus-core";
+import type { AgentId, AuditStore, Session, SessionId, Storage } from "agents-comm-bus-core";
 import type { ClaudeWakeResponsePayload } from "../bridges/claude/wake.js";
 import { HerdrClient, type HerdrIdentity, type HerdrWakeStrict } from "./herdr.js";
 export type WakeMode = "auto" | "native";
@@ -32,4 +32,11 @@ export declare function wakeSeedFromMessage(input: {
 }): string;
 export declare function parseWakeStrict(raw: unknown): HerdrWakeStrict | null;
 export declare function wakeStrategyForSession(storage: Storage, session: Session): Promise<EffectiveWakeStrategy>;
+export declare function validateHerdrRegisterParams(params: Record<string, unknown>, expectedAgent: AgentId): {
+    ok: true;
+} | {
+    ok: false;
+    reason: "invalid herdr_identity";
+};
+export declare function applyHerdrWakeTargetFromRegisterParams(storage: Storage, session: SessionId, params: Record<string, unknown>, expectedAgent: AgentId): Promise<void>;
 //# sourceMappingURL=wake-strategy.d.ts.map

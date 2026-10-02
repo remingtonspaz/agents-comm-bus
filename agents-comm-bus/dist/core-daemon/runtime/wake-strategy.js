@@ -1,3 +1,4 @@
+import { parseHerdrIdentity } from "./herdr.js";
 import { HerdrClient, validateHerdrIdentityAgent, } from "./herdr.js";
 import { buildWakeSeed } from "./wake-seed.js";
 export async function resolveWakeMode(storage, project, agent) {
@@ -171,5 +172,28 @@ async function auditWakeDeliveryFailure(deps, input) {
 export async function wakeStrategyForSession(storage, session) {
     const mode = await resolveWakeMode(storage, session.project, session.agent);
     return effectiveWakeStrategy(session, mode);
+}
+export function validateHerdrRegisterParams(params, expectedAgent) {
+    if (params.herdr_identity === undefined) {
+        return { ok: true };
+    }
+    const identity = parseHerdrIdentity(params.herdr_identity);
+    if (!identity || identity.agent !== expectedAgent) {
+        return { ok: false, reason: "invalid herdr_identity" };
+    }
+    return { ok: true };
+}
+export async function applyHerdrWakeTargetFromRegisterParams(storage, session, params, expectedAgent) {
+    const validated = validateHerdrRegisterParams(params, expectedAgent);
+    if (!validated.ok)
+        return;
+    const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+    const wakeStrict = parseWakeStrict(params.wake_strict);
+    if (params.herdr_identity !== undefined && herdrIdentity) {
+        await storage.setSessionWakeTarget(session, herdrIdentity, params.wake_strict !== undefined ? wakeStrict : undefined);
+    }
+    else if (params.wake_strict !== undefined) {
+        await storage.setSessionWakeTarget(session, undefined, wakeStrict);
+    }
 }
 //# sourceMappingURL=wake-strategy.js.map

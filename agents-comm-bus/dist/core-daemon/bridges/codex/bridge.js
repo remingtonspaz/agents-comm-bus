@@ -12,7 +12,7 @@ import { probeCodexWakeTargetByCwd } from "./wake-target-probe.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
 import { herdrSessionId, parseHerdrIdentity, } from "../../runtime/herdr.js";
-import { effectiveWakeStrategy, herdrWake, parseWakeStrict, resolveWakeMode, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
+import { applyHerdrWakeTargetFromRegisterParams, effectiveWakeStrategy, herdrWake, parseWakeStrict, resolveWakeMode, validateHerdrRegisterParams, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_CODEX_PROBE_PORT_MIN = 4500;
 const DEFAULT_CODEX_PROBE_PORT_MAX = 4600;
@@ -400,6 +400,10 @@ export class CodexBridge {
         };
     }
     async registerSession(params, socket) {
+        const herdrParams = validateHerdrRegisterParams(params, this.agentId);
+        if (!herdrParams.ok) {
+            return { ok: false, reason: herdrParams.reason };
+        }
         const session = requiredString(params.session, "session");
         const project = normalizeProjectPath(requiredString(params.project, "project"));
         const connectionId = typeof params.connection_id === "string"
@@ -431,6 +435,7 @@ export class CodexBridge {
             wake_identity: null,
             wake_strict: null,
         });
+        await applyHerdrWakeTargetFromRegisterParams(this.options.storage, session, params, this.agentId);
         const baselineSession = await this.options.storage.getSession(session);
         const deliverabilityBaseline = baselineSession
             ? this.isLocallyDeliverable(baselineSession)
@@ -464,7 +469,10 @@ export class CodexBridge {
             }
             else if (existing?.lease_holder_connection_id) {
                 await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
-                const wake_strategy = await this.persistHerdrWakeFromParams(session, params);
+                const afterWake = await this.options.storage.getSession(session);
+                const wake_strategy = afterWake
+                    ? await wakeStrategyForSession(this.options.storage, afterWake)
+                    : "native";
                 return {
                     ok: true,
                     reason: "codex session lease already held; registration refreshed",
@@ -509,25 +517,11 @@ export class CodexBridge {
             void this.releaseSessionLease(lease);
         };
         socket?.once("close", release);
-        const wake_strategy = await this.persistHerdrWakeFromParams(session, params);
-        return { ok: true, capabilities: this.adapter.capabilities, wake_strategy };
-    }
-    async persistHerdrWakeFromParams(session, params) {
-        const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
-        const wakeStrict = parseWakeStrict(params.wake_strict);
-        if (params.herdr_identity !== undefined) {
-            if (!herdrIdentity || herdrIdentity.agent !== this.agentId) {
-                return "native";
-            }
-            await this.options.storage.setSessionWakeTarget(session, herdrIdentity, params.wake_strict !== undefined ? wakeStrict : undefined);
-        }
-        else if (params.wake_strict !== undefined) {
-            await this.options.storage.setSessionWakeTarget(session, undefined, wakeStrict);
-        }
         const afterWake = await this.options.storage.getSession(session);
-        return afterWake
+        const wake_strategy = afterWake
             ? await wakeStrategyForSession(this.options.storage, afterWake)
             : "native";
+        return { ok: true, capabilities: this.adapter.capabilities, wake_strategy };
     }
     async drainInbound(params) {
         const session = typeof params.session === "string" ? params.session : undefined;

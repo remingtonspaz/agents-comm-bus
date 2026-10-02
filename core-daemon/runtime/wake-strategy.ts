@@ -1,4 +1,6 @@
-import type { AuditStore, Session, Storage } from "agents-comm-bus-core";
+import type { AgentId, AuditStore, Session, SessionId, Storage } from "agents-comm-bus-core";
+
+import { parseHerdrIdentity } from "./herdr.js";
 
 import type { ClaudeWakeResponsePayload } from "../bridges/claude/wake.js";
 import {
@@ -231,4 +233,39 @@ export async function wakeStrategyForSession(
 ): Promise<EffectiveWakeStrategy> {
   const mode = await resolveWakeMode(storage, session.project, session.agent);
   return effectiveWakeStrategy(session, mode);
+}
+
+export function validateHerdrRegisterParams(
+  params: Record<string, unknown>,
+  expectedAgent: AgentId,
+): { ok: true } | { ok: false; reason: "invalid herdr_identity" } {
+  if (params.herdr_identity === undefined) {
+    return { ok: true };
+  }
+  const identity = parseHerdrIdentity(params.herdr_identity);
+  if (!identity || identity.agent !== expectedAgent) {
+    return { ok: false, reason: "invalid herdr_identity" };
+  }
+  return { ok: true };
+}
+
+export async function applyHerdrWakeTargetFromRegisterParams(
+  storage: Storage,
+  session: SessionId,
+  params: Record<string, unknown>,
+  expectedAgent: AgentId,
+): Promise<void> {
+  const validated = validateHerdrRegisterParams(params, expectedAgent);
+  if (!validated.ok) return;
+  const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+  const wakeStrict = parseWakeStrict(params.wake_strict);
+  if (params.herdr_identity !== undefined && herdrIdentity) {
+    await storage.setSessionWakeTarget(
+      session,
+      herdrIdentity,
+      params.wake_strict !== undefined ? wakeStrict : undefined,
+    );
+  } else if (params.wake_strict !== undefined) {
+    await storage.setSessionWakeTarget(session, undefined, wakeStrict);
+  }
 }

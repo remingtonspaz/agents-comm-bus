@@ -448,6 +448,20 @@ class MemoryStorage implements Storage {
     return [...this.wakeModes];
   }
 
+  async insertSession(rec: Session): Promise<void> {
+    if (this.sessions.has(rec.session_id)) {
+      throw new Error("session already exists");
+    }
+    this.sessions.set(rec.session_id, rec);
+  }
+
+  async reactivateSessionIfEnded(session: SessionId): Promise<boolean> {
+    const current = this.sessions.get(session);
+    if (!current || current.status !== "ended") return false;
+    this.sessions.set(session, { ...current, status: "active" });
+    return true;
+  }
+
   async getSession(session: SessionId): Promise<Session | null> {
     return this.sessions.get(session) ?? null;
   }

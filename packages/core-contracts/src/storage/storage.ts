@@ -300,6 +300,11 @@ export interface Storage {
     Array<{ project: string; agent: AgentId; mode: "auto" | "native"; updated_at: number }>
   >;
 
+  /** AGE-110: insert a new session row; fails if session_id already exists. */
+  insertSession(rec: Session): Promise<void>;
+  /** AGE-110: set status active when the row is ended; no other columns change. */
+  reactivateSessionIfEnded(session: SessionId): Promise<boolean>;
+
   // allowlist
   /**
    * Insert (or no-op on PK collision) an allowlist row that applies across

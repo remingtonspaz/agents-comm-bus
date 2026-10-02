@@ -84,6 +84,8 @@ export declare class SqliteStorage implements Storage {
         mode: "auto" | "native";
         updated_at: number;
     }>>;
+    insertSession(rec: Session): Promise<void>;
+    reactivateSessionIfEnded(session: SessionId): Promise<boolean>;
     addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void>;
     removeAllowlistGlobal(comm: CommId, sender_id: string): Promise<void>;
     listAllowlistGlobal(filter?: {

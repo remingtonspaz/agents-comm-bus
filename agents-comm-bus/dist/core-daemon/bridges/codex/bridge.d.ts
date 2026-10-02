@@ -104,7 +104,6 @@ export declare class CodexBridge implements AgentBridge {
     registerSession(params: Record<string, unknown>, socket?: {
         once(event: "close", handler: () => void): void;
     }): Promise<RegisterCodexSessionResult>;
-    private persistHerdrWakeFromParams;
     drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]>;
     openQuery(params: Record<string, unknown>): Promise<CodexOpenQueryResult>;
     turnControl(params: Record<string, unknown>): Promise<unknown>;

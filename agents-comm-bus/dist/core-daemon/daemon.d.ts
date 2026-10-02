@@ -221,4 +221,12 @@ export declare function probeCommIdentity(params: Record<string, unknown>, facto
     account_id: string;
     account_username?: string | null;
 }>;
+export declare function handleHerdrRegisterPane(params: Record<string, unknown>, context: {
+    storage: Storage;
+    bridges: readonly AgentBridge[];
+    ensureCommsForSession: EnsureCommsForSession;
+}): Promise<unknown>;
+export declare function handleHerdrReleasePane(params: Record<string, unknown>, context: {
+    storage: Storage;
+}): Promise<unknown>;
 //# sourceMappingURL=daemon.d.ts.map
