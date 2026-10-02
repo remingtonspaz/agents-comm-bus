@@ -65,14 +65,16 @@ describe("AGE-110 hotfix: built MCP shims start without reference errors", () =>
     for (const shim of shims) {
       const home = await mkdtemp(path.join(os.tmpdir(), "acb-shim-smoke-"));
       try {
-        const stderr = await runShim(shim, isolatedEnv(home), home);
+        const stderr = await runShim(shim, isolatedEnv(home), os.tmpdir());
         assert.doesNotMatch(
           stderr,
           /ReferenceError|TypeError: \S+ is not a function|is not defined/,
           `${path.relative(repoRoot, shim)} crashed at startup:\n${stderr.slice(0, 800)}`,
         );
       } finally {
-        await rm(home, { recursive: true, force: true });
+        // Windows can hold the dir briefly after the child exits (EBUSY);
+        // cleanup is best-effort and must not fail the startup assertion.
+        await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
       }
     }
   });
