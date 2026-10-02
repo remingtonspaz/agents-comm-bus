@@ -104,6 +104,11 @@
       "type": "schema-sidecar"
     },
     {
+      "source": "agents-comm-bus/dist-bundle/016_herdr_wake.sql",
+      "artifact": "plugins/claude/curl/016_herdr_wake.sql",
+      "type": "schema-sidecar"
+    },
+    {
       "source": "(generated)",
       "artifact": "plugins/claude/curl/package.json",
       "type": "package-json"

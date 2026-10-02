@@ -282,6 +282,24 @@ export interface Storage {
     account_label_scope?: string | null;
   }): Promise<Session[]>;
 
+  /** AGE-110: persist herdr wake target without clobbering on generic upsert. */
+  setSessionWakeTarget(
+    session: SessionId,
+    identity: Session["wake_identity"] | null | undefined,
+    wake_strict: Session["wake_strict"] | null | undefined,
+  ): Promise<void>;
+  getWakeMode(project: string, agent: AgentId): Promise<"auto" | "native">;
+  setWakeMode(
+    project: string,
+    agent: AgentId,
+    mode: "auto" | "native",
+    updated_at: number,
+  ): Promise<void>;
+  clearWakeMode(project: string, agent: AgentId): Promise<void>;
+  listWakeModes(): Promise<
+    Array<{ project: string; agent: AgentId; mode: "auto" | "native"; updated_at: number }>
+  >;
+
   // allowlist
   /**
    * Insert (or no-op on PK collision) an allowlist row that applies across

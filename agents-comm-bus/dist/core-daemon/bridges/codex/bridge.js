@@ -11,6 +11,8 @@ import { cleanupManagedCodexAppServer } from "./app-server-lifecycle.js";
 import { probeCodexWakeTargetByCwd } from "./wake-target-probe.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
+import { herdrSessionId, parseHerdrIdentity, } from "../../runtime/herdr.js";
+import { effectiveWakeStrategy, herdrWake, parseWakeStrict, resolveWakeMode, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_CODEX_PROBE_PORT_MIN = 4500;
 const DEFAULT_CODEX_PROBE_PORT_MAX = 4600;
@@ -105,6 +107,32 @@ export class CodexBridge {
         const pendingForSession = await this.pendingInboundForConversation(conversation, session);
         const mostRecentConversationId = pendingForSession.at(-1)?.conversation.conversation_id ?? conversation.conversation_id;
         await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
+        const sessionRecord = await this.options.storage.getSession(session);
+        if (sessionRecord) {
+            const strategy = await wakeStrategyForSession(this.options.storage, sessionRecord);
+            if (strategy === "herdr") {
+                const latest = pendingForSession.at(-1);
+                const seed = latest
+                    ? wakeSeedFromMessage({
+                        comm: latest.message.chat.comm,
+                        sender: latest.message.sender?.display_name ?? latest.message.sender?.id,
+                        body: latest.message.text,
+                    })
+                    : wakeSeedFromMessage({
+                        comm: conversation.comm,
+                        body: "",
+                    });
+                const herdr = await herdrWake(sessionRecord, seed, {
+                    storage: this.options.storage,
+                    audit: this.options.audit,
+                    clientFactory: this.options.herdrClientFactory,
+                });
+                if (herdr.ok)
+                    return;
+                if (herdr.strict)
+                    return;
+            }
+        }
         const wakeTarget = await this.resolveInboundWakeTargetFromCommLock(conversation);
         if (!wakeTarget.ok) {
             if (wakeTarget.reason === "comm_lease_missing_codex_target") {
@@ -322,18 +350,53 @@ export class CodexBridge {
             hasManagedSession &&
             params.app_server_reachable === true;
         const hasAccountRegistration = scopedRegistrations.length > 0;
-        const bootstrapRequired = hasAccountRegistration && !managedAppServerPresent;
+        let bootstrapRequired = hasAccountRegistration && !managedAppServerPresent;
+        let reason = !hasAccountRegistration
+            ? "no codex comm account registration for project"
+            : managedAppServerPresent
+                ? "codex session already has a reachable managed app-server url"
+                : "codex comm account registration exists but no managed app-server url is present";
+        const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+        if (herdrIdentity?.agent === this.agentId) {
+            const wakeStrict = parseWakeStrict(params.wake_strict);
+            const stored = (await this.options.storage.getSession(herdrSessionId(herdrIdentity))) ??
+                {
+                    schema_version: SCHEMA_VERSION_SESSION,
+                    session_id: herdrSessionId(herdrIdentity),
+                    agent: this.agentId,
+                    project,
+                    created_at: 0,
+                    lease_holder_connection_id: null,
+                    lease_acquired_at: null,
+                    lease_released_at: null,
+                    lease_owner_process_pid: null,
+                    lease_owner_process_label: null,
+                    lease_owner_process_registered_at: null,
+                    lease_owner_process_start_time: null,
+                    lease_owner_daemon_discovery_root: null,
+                    lease_owner_daemon_checkout_root: null,
+                    lease_owner_daemon_state_root: null,
+                    lease_owner_daemon_bin: null,
+                    lease_owner_daemon_authority_rank: null,
+                    most_recent_inbound_conversation_id: null,
+                    account_label_scope: accountLabelScope,
+                    status: "active",
+                    wake_identity: herdrIdentity,
+                    wake_strict: wakeStrict,
+                };
+            const mode = await resolveWakeMode(this.options.storage, project, this.agentId);
+            if (effectiveWakeStrategy(stored, mode) === "herdr") {
+                bootstrapRequired = false;
+                reason = "herdr";
+            }
+        }
         return {
             ok: true,
             has_account_registration: hasAccountRegistration,
             registration_count: scopedRegistrations.length,
             managed_app_server_present: managedAppServerPresent,
             bootstrap_required: bootstrapRequired,
-            reason: !hasAccountRegistration
-                ? "no codex comm account registration for project"
-                : managedAppServerPresent
-                    ? "codex session already has a reachable managed app-server url"
-                    : "codex comm account registration exists but no managed app-server url is present",
+            reason,
         };
     }
     async registerSession(params, socket) {
@@ -365,6 +428,8 @@ export class CodexBridge {
             most_recent_inbound_conversation_id: null,
             account_label_scope: accountLabelScope,
             status: "active",
+            wake_identity: null,
+            wake_strict: null,
         });
         const baselineSession = await this.options.storage.getSession(session);
         const deliverabilityBaseline = baselineSession
@@ -399,10 +464,12 @@ export class CodexBridge {
             }
             else if (existing?.lease_holder_connection_id) {
                 await this.ensureCommsBestEffort(project, accountLabelScope, agentLeaseProperties);
+                const wake_strategy = await this.persistHerdrWakeFromParams(session, params);
                 return {
                     ok: true,
                     reason: "codex session lease already held; registration refreshed",
                     capabilities: this.adapter.capabilities,
+                    wake_strategy,
                 };
             }
             else {
@@ -442,7 +509,25 @@ export class CodexBridge {
             void this.releaseSessionLease(lease);
         };
         socket?.once("close", release);
-        return { ok: true, capabilities: this.adapter.capabilities };
+        const wake_strategy = await this.persistHerdrWakeFromParams(session, params);
+        return { ok: true, capabilities: this.adapter.capabilities, wake_strategy };
+    }
+    async persistHerdrWakeFromParams(session, params) {
+        const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+        const wakeStrict = parseWakeStrict(params.wake_strict);
+        if (params.herdr_identity !== undefined) {
+            if (!herdrIdentity || herdrIdentity.agent !== this.agentId) {
+                return "native";
+            }
+            await this.options.storage.setSessionWakeTarget(session, herdrIdentity, params.wake_strict !== undefined ? wakeStrict : undefined);
+        }
+        else if (params.wake_strict !== undefined) {
+            await this.options.storage.setSessionWakeTarget(session, undefined, wakeStrict);
+        }
+        const afterWake = await this.options.storage.getSession(session);
+        return afterWake
+            ? await wakeStrategyForSession(this.options.storage, afterWake)
+            : "native";
     }
     async drainInbound(params) {
         const session = typeof params.session === "string" ? params.session : undefined;

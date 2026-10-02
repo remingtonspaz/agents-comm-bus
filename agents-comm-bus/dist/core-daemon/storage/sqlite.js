@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { normalizeProjectPath } from "../project-path.js";
+import { parseHerdrIdentityJson } from "../runtime/herdr.js";
 import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "../runtime/process-start-epoch.js";
 import { runStorageMigrations } from "./schema/runner.js";
 const require = createRequire(import.meta.url);
@@ -702,6 +703,64 @@ export class SqliteStorage {
       `)
             .run(conversation_id, session);
     }
+    async setSessionWakeTarget(session, identity, wake_strict) {
+        const sets = [];
+        const params = [];
+        if (identity !== undefined) {
+            sets.push("wake_identity_json = ?");
+            params.push(identity == null ? null : JSON.stringify(identity));
+        }
+        if (wake_strict !== undefined) {
+            sets.push("wake_strict = ?");
+            params.push(wake_strict);
+        }
+        if (sets.length === 0)
+            return;
+        params.push(session);
+        this.db
+            .prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE session_id = ?`)
+            .run(...params);
+    }
+    async getWakeMode(project, agent) {
+        const canonical = normalizeProjectPath(project);
+        const scoped = this.db
+            .prepare("SELECT mode FROM wake_preferences WHERE project = ? AND agent = ?")
+            .get(canonical, agent);
+        if (scoped?.mode === "auto" || scoped?.mode === "native") {
+            return scoped.mode;
+        }
+        const global = this.db
+            .prepare("SELECT mode FROM wake_preferences WHERE project = '' AND agent = ?")
+            .get(agent);
+        if (global?.mode === "auto" || global?.mode === "native") {
+            return global.mode;
+        }
+        return "auto";
+    }
+    async setWakeMode(project, agent, mode, updated_at) {
+        const canonical = project === "" ? "" : normalizeProjectPath(project);
+        this.db
+            .prepare(`
+        INSERT INTO wake_preferences (project, agent, mode, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(project, agent) DO UPDATE SET
+          mode = excluded.mode,
+          updated_at = excluded.updated_at
+      `)
+            .run(canonical, agent, mode, updated_at);
+    }
+    async clearWakeMode(project, agent) {
+        const canonical = project === "" ? "" : normalizeProjectPath(project);
+        this.db
+            .prepare("DELETE FROM wake_preferences WHERE project = ? AND agent = ?")
+            .run(canonical, agent);
+    }
+    async listWakeModes() {
+        const rows = this.db
+            .prepare("SELECT project, agent, mode, updated_at FROM wake_preferences ORDER BY project, agent")
+            .all();
+        return rows;
+    }
     async addAllowlistGlobal(rec) {
         this.db
             .prepare(`
@@ -1072,6 +1131,8 @@ export class SqliteStorage {
             most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
             account_label_scope: r.account_label_scope ?? null,
             status: r.status,
+            wake_identity: parseHerdrIdentityJson(r.wake_identity_json),
+            wake_strict: r.wake_strict === "herdr" ? "herdr" : null,
         };
     }
 }

@@ -169,6 +169,31 @@ class RecordingStorage implements Partial<Storage> {
   }
 
   async acknowledgePendingInboundDeliveries(): Promise<void> {}
+
+  async setSessionWakeTarget(
+    session: SessionId,
+    identity: Session["wake_identity"] | null | undefined,
+    wake_strict: Session["wake_strict"] | null | undefined,
+  ): Promise<void> {
+    const record = this.sessions.get(session);
+    if (!record) return;
+    this.sessions.set(session, {
+      ...record,
+      ...(identity !== undefined ? { wake_identity: identity } : {}),
+      ...(wake_strict !== undefined ? { wake_strict } : {}),
+    });
+  }
+
+  async getWakeMode(): Promise<"auto" | "native"> {
+    return "auto";
+  }
+
+  async setWakeMode(): Promise<void> {}
+  async clearWakeMode(): Promise<void> {}
+  async listWakeModes() {
+    return [];
+  }
+
   async close(): Promise<void> {}
 }
 

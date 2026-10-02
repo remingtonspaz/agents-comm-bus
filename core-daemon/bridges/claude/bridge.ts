@@ -52,6 +52,16 @@ import {
 } from "../../session-label-scope.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
+import { parseHerdrIdentity } from "../../runtime/herdr.js";
+import {
+  herdrRespond,
+  herdrWake,
+  parseWakeStrict,
+  wakeSeedFromMessage,
+  wakeStrategyForSession,
+  type EffectiveWakeStrategy,
+} from "../../runtime/wake-strategy.js";
+import type { HerdrClient, HerdrIdentity } from "../../runtime/herdr.js";
 import { ClaudeWakeRegistry } from "./wake.js";
 import { ClaudeOpenQueryTracker } from "./open-query-tracker.js";
 import {
@@ -87,6 +97,8 @@ export interface ClaudeBridgeOptions {
   clearTimeoutFn?: (handle: unknown) => void;
   /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
   sessionOwnerIsLive?: SessionOwnerLiveness;
+  /** AGE-110: injectable herdr client for tests. */
+  herdrClientFactory?: (identity: HerdrIdentity) => HerdrClient;
 }
 
 const DEFAULT_TTL_SECONDS = 3600;
@@ -125,6 +137,7 @@ export interface RegisterSessionResult {
   ok: boolean;
   reason?: string;
   wake_dir?: string;
+  wake_strategy?: EffectiveWakeStrategy;
 }
 
 /**
@@ -189,6 +202,16 @@ export class ClaudeBridge implements AgentBridge {
         const payload = wakePayloadFromDecision(decision);
         if (!payload) return;
         try {
+          const sessionRecord = await this.options.storage.getSession(query.session);
+          if (sessionRecord) {
+            const herdr = await herdrRespond(sessionRecord, payload, {
+              storage: this.options.storage,
+              audit: this.options.audit,
+              clientFactory: this.options.herdrClientFactory,
+            });
+            if (herdr.ok) return;
+            if (herdr.strict) return;
+          }
           const delivered = await this.wake.writeResponseForSession(query.session, payload);
           if (!delivered) {
             await this.auditWakeFailure({
@@ -250,6 +273,27 @@ export class ClaudeBridge implements AgentBridge {
   ): Promise<void> {
     if (conversation.agent !== this.agentId) return;
     try {
+      const target = await this.wake.resolveRegistrationForInbound(conversation, message);
+      if (target) {
+        const strategy = await wakeStrategyForSession(
+          this.options.storage,
+          target.session,
+        );
+        if (strategy === "herdr") {
+          const seed = wakeSeedFromMessage({
+            comm: message?.chat.comm,
+            sender: message?.sender?.display_name ?? message?.sender?.id,
+            body: message?.text,
+          });
+          const herdr = await herdrWake(target.session, seed, {
+            storage: this.options.storage,
+            audit: this.options.audit,
+            clientFactory: this.options.herdrClientFactory,
+          });
+          if (herdr.ok) return;
+          if (herdr.strict) return;
+        }
+      }
       const delivered = await this.wake.wakeConversation(conversation, message);
       if (!delivered) {
         await this.auditWakeFailure({
@@ -504,6 +548,8 @@ export class ClaudeBridge implements AgentBridge {
       most_recent_inbound_conversation_id: null,
       account_label_scope: accountLabelScope,
       status: "active",
+      wake_identity: null,
+      wake_strict: null,
     });
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession
@@ -543,7 +589,25 @@ export class ClaudeBridge implements AgentBridge {
     if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
       await this.redrivePendingInboundCoalesced(session);
     }
-    return { ok: true, wake_dir: registration.wakeDir };
+    const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+    const wakeStrict = parseWakeStrict(params.wake_strict);
+    if (params.herdr_identity !== undefined) {
+      if (!herdrIdentity || herdrIdentity.agent !== "claude") {
+        return { ok: false, reason: "invalid herdr_identity" };
+      }
+      await this.options.storage.setSessionWakeTarget(
+        session,
+        herdrIdentity,
+        params.wake_strict !== undefined ? wakeStrict : undefined,
+      );
+    } else if (params.wake_strict !== undefined) {
+      await this.options.storage.setSessionWakeTarget(session, undefined, wakeStrict);
+    }
+    const afterWake = await this.options.storage.getSession(session);
+    const wake_strategy = afterWake
+      ? await wakeStrategyForSession(this.options.storage, afterWake)
+      : "native";
+    return { ok: true, wake_dir: registration.wakeDir, wake_strategy };
   }
 
   async drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]> {

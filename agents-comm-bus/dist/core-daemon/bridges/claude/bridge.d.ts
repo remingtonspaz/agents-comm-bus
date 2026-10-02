@@ -12,6 +12,8 @@ import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type C
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
+import { type EffectiveWakeStrategy } from "../../runtime/wake-strategy.js";
+import type { HerdrClient, HerdrIdentity } from "../../runtime/herdr.js";
 import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
 export type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 export interface ClaudeBridgeOptions {
@@ -40,6 +42,8 @@ export interface ClaudeBridgeOptions {
     clearTimeoutFn?: (handle: unknown) => void;
     /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
     sessionOwnerIsLive?: SessionOwnerLiveness;
+    /** AGE-110: injectable herdr client for tests. */
+    herdrClientFactory?: (identity: HerdrIdentity) => HerdrClient;
 }
 /**
  * Outcome shape returned by claude_register_session.
@@ -48,6 +52,7 @@ export interface RegisterSessionResult {
     ok: boolean;
     reason?: string;
     wake_dir?: string;
+    wake_strategy?: EffectiveWakeStrategy;
 }
 /**
  * Outcome shape returned by claude_open_query.

@@ -3681,8 +3681,8 @@ import { createHash } from "node:crypto";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.64";
-var IPC_PROTOCOL_VERSION = "1.2.0";
+var DAEMON_VERSION = "0.2.65";
+var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
 var DEFAULT_BOOTSTRAP_RETRY_MS = 50;
@@ -3749,8 +3749,48 @@ function safePathSegment(value) {
 // ../core-daemon/storage/sqlite.ts
 import { createRequire } from "node:module";
 
-// ../core-daemon/runtime/process-start-epoch.ts
+// ../core-daemon/runtime/herdr.ts
 import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+function parseHerdrIdentity(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw;
+  if (record.type !== "herdr") return null;
+  const agent = record.agent;
+  const pane_id = record.pane_id;
+  const socket_path = record.socket_path;
+  if (typeof agent !== "string" || agent.trim() === "") return null;
+  if (typeof pane_id !== "string" || pane_id.trim() === "") return null;
+  if (typeof socket_path !== "string" || socket_path.trim() === "") return null;
+  const identity = {
+    type: "herdr",
+    agent,
+    pane_id,
+    socket_path
+  };
+  if (typeof record.workspace_id === "string" && record.workspace_id.length > 0) {
+    identity.workspace_id = record.workspace_id;
+  }
+  if (typeof record.tab_id === "string" && record.tab_id.length > 0) {
+    identity.tab_id = record.tab_id;
+  }
+  if (typeof record.bin_path === "string" && record.bin_path.length > 0) {
+    identity.bin_path = record.bin_path;
+  }
+  return identity;
+}
+function parseHerdrIdentityJson(json) {
+  if (!json) return null;
+  try {
+    return parseHerdrIdentity(JSON.parse(json));
+  } catch {
+    return null;
+  }
+}
+
+// ../core-daemon/runtime/process-start-epoch.ts
+import { execFile as execFile2 } from "node:child_process";
 import { readFileSync } from "node:fs";
 function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, selfPid = process.pid) {
   const values = /* @__PURE__ */ new Map();
@@ -3794,7 +3834,7 @@ function createProcessStartIdentityCache(probe, now = Date.now, ttlMs = 1e3, sel
 }
 function execText(file, args) {
   return new Promise((resolve3, reject) => {
-    execFile(
+    execFile2(
       file,
       args,
       { encoding: "utf8", windowsHide: true, timeout: 2e3, maxBuffer: 1024 * 1024 },
@@ -4046,6 +4086,14 @@ var sessionOwnerProcessStartTimeMigration = {
     await ctx.exec(sql);
   }
 };
+var herdrWakeMigration = {
+  version: 16,
+  description: "AGE-110: herdr wake identity + wake mode preferences",
+  async up(ctx) {
+    const sql = await readFile(join(schemaDir, "016_herdr_wake.sql"), "utf8");
+    await ctx.exec(sql);
+  }
+};
 async function runStorageMigrations(db) {
   await new SqliteMigrationRunner(db).apply([
     initialMigration,
@@ -4062,7 +4110,8 @@ async function runStorageMigrations(db) {
     sessionLabelScopeMigration,
     curlInboundIdempotencyMigration,
     registrationActivationMigration,
-    sessionOwnerProcessStartTimeMigration
+    sessionOwnerProcessStartTimeMigration,
+    herdrWakeMigration
   ]);
 }
 
@@ -4765,6 +4814,55 @@ var SqliteStorage = class _SqliteStorage {
         WHERE session_id = ?
       `).run(conversation_id, session);
   }
+  async setSessionWakeTarget(session, identity, wake_strict) {
+    const sets = [];
+    const params = [];
+    if (identity !== void 0) {
+      sets.push("wake_identity_json = ?");
+      params.push(
+        identity == null ? null : JSON.stringify(identity)
+      );
+    }
+    if (wake_strict !== void 0) {
+      sets.push("wake_strict = ?");
+      params.push(wake_strict);
+    }
+    if (sets.length === 0) return;
+    params.push(session);
+    this.db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE session_id = ?`).run(...params);
+  }
+  async getWakeMode(project, agent) {
+    const canonical = normalizeProjectPath(project);
+    const scoped = this.db.prepare(
+      "SELECT mode FROM wake_preferences WHERE project = ? AND agent = ?"
+    ).get(canonical, agent);
+    if (scoped?.mode === "auto" || scoped?.mode === "native") {
+      return scoped.mode;
+    }
+    const global = this.db.prepare("SELECT mode FROM wake_preferences WHERE project = '' AND agent = ?").get(agent);
+    if (global?.mode === "auto" || global?.mode === "native") {
+      return global.mode;
+    }
+    return "auto";
+  }
+  async setWakeMode(project, agent, mode, updated_at) {
+    const canonical = project === "" ? "" : normalizeProjectPath(project);
+    this.db.prepare(`
+        INSERT INTO wake_preferences (project, agent, mode, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(project, agent) DO UPDATE SET
+          mode = excluded.mode,
+          updated_at = excluded.updated_at
+      `).run(canonical, agent, mode, updated_at);
+  }
+  async clearWakeMode(project, agent) {
+    const canonical = project === "" ? "" : normalizeProjectPath(project);
+    this.db.prepare("DELETE FROM wake_preferences WHERE project = ? AND agent = ?").run(canonical, agent);
+  }
+  async listWakeModes() {
+    const rows = this.db.prepare("SELECT project, agent, mode, updated_at FROM wake_preferences ORDER BY project, agent").all();
+    return rows;
+  }
   async addAllowlistGlobal(rec) {
     this.db.prepare(`
         INSERT INTO allowlist_global (comm, sender_id, added_at, added_by, note)
@@ -5123,7 +5221,9 @@ var SqliteStorage = class _SqliteStorage {
       lease_owner_daemon_authority_rank: r.lease_owner_daemon_authority_rank,
       most_recent_inbound_conversation_id: r.most_recent_inbound_conversation_id,
       account_label_scope: r.account_label_scope ?? null,
-      status: r.status
+      status: r.status,
+      wake_identity: parseHerdrIdentityJson(r.wake_identity_json),
+      wake_strict: r.wake_strict === "herdr" ? "herdr" : null
     };
   }
 };
@@ -8580,7 +8680,160 @@ function formatTs(value) {
   return new Date(value).toISOString();
 }
 
+// ../core-daemon/cli/wake-mode.ts
+async function wakeModeSet(options) {
+  const storage = await openSqliteStorage(resolveStatePaths().database);
+  try {
+    const project = options.project && options.project.length > 0 ? normalizeProjectPath(options.project) : "";
+    await storage.setWakeMode(
+      project,
+      options.agent,
+      options.mode,
+      Date.now()
+    );
+    return { ok: true };
+  } finally {
+    await storage.close();
+  }
+}
+async function wakeModeGet(options) {
+  const storage = await openSqliteStorage(resolveStatePaths().database);
+  try {
+    const project = options.project && options.project.length > 0 ? normalizeProjectPath(options.project) : "";
+    const mode = await storage.getWakeMode(project, options.agent);
+    const rows = await storage.listWakeModes();
+    const scoped = rows.find(
+      (row) => row.project === project && row.agent === options.agent
+    );
+    const global = rows.find(
+      (row) => row.project === "" && row.agent === options.agent
+    );
+    const source = scoped ? { scope: "project", project } : global ? { scope: "global", project: "" } : { scope: "default", project: "" };
+    return { ok: true, mode, source };
+  } finally {
+    await storage.close();
+  }
+}
+async function wakeModeClear(options) {
+  const storage = await openSqliteStorage(resolveStatePaths().database);
+  try {
+    const project = options.project && options.project.length > 0 ? normalizeProjectPath(options.project) : "";
+    await storage.clearWakeMode(project, options.agent);
+    return { ok: true };
+  } finally {
+    await storage.close();
+  }
+}
+async function wakeModeList() {
+  const storage = await openSqliteStorage(resolveStatePaths().database);
+  try {
+    const rows = await storage.listWakeModes();
+    return { ok: true, rows };
+  } finally {
+    await storage.close();
+  }
+}
+
+// ../core-daemon/cli/herdr-pane.ts
+async function herdrPaneSync(options) {
+  const identity = parseHerdrIdentity(JSON.parse(options.identityJson));
+  if (!identity) {
+    throw new Error("invalid --identity-json");
+  }
+  const daemon = await entryEnsures({
+    agent: options.agent,
+    fromDir: import.meta.dirname,
+    env: process.env,
+    ensureDaemonOptions: {
+      metadata: { shimName: "agents-comm-bus/cli", operation: "herdr-pane-sync" }
+    }
+  });
+  const connection = await connectIpc({
+    port: daemon.port,
+    clientVersion: DAEMON_VERSION,
+    timeoutMs: 5e3,
+    metadata: { shimName: "agents-comm-bus/cli", operation: "herdr-pane-sync" }
+  });
+  try {
+    return await connection.request("herdr_register_pane", {
+      project: options.project,
+      agent: options.agent,
+      identity,
+      wake_strict: options.wakeStrict
+    });
+  } finally {
+    connection.close();
+  }
+}
+async function herdrPaneRelease(options) {
+  const identity = parseHerdrIdentity(JSON.parse(options.identityJson));
+  if (!identity) {
+    throw new Error("invalid --identity-json");
+  }
+  const daemon = await entryEnsures({
+    agent: identity.agent,
+    fromDir: import.meta.dirname,
+    env: process.env,
+    ensureDaemonOptions: {
+      metadata: { shimName: "agents-comm-bus/cli", operation: "herdr-pane-release" }
+    }
+  });
+  const connection = await connectIpc({
+    port: daemon.port,
+    clientVersion: DAEMON_VERSION,
+    timeoutMs: 5e3,
+    metadata: { shimName: "agents-comm-bus/cli", operation: "herdr-pane-release" }
+  });
+  try {
+    return await connection.request("herdr_release_pane", { identity });
+  } finally {
+    connection.close();
+  }
+}
+
 // ../core-daemon/cli/index.ts
+async function handleWakeModeCommand(rest) {
+  const [sub, ...tail] = rest;
+  const args = parseArgs(tail);
+  switch (sub) {
+    case "set": {
+      const mode = required(args.mode ?? tail.find((a) => !a.startsWith("--")), "mode");
+      if (mode !== "auto" && mode !== "native") {
+        throw new Error("wake-mode set requires mode auto|native");
+      }
+      const out = await wakeModeSet({
+        agent: required(args.agent, "--agent"),
+        project: args.project,
+        mode
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "get": {
+      const out = await wakeModeGet({
+        agent: required(args.agent, "--agent"),
+        project: args.project
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "clear": {
+      const out = await wakeModeClear({
+        agent: required(args.agent, "--agent"),
+        project: args.project
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "list": {
+      const out = await wakeModeList();
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    default:
+      throw new Error(`unknown wake-mode subcommand: ${sub ?? "(none)"}`);
+  }
+}
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
@@ -8703,6 +8956,27 @@ async function main() {
     case "migrate": {
       const result = runMigration(parseMigrateArgs(rest));
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case "wake-mode": {
+      await handleWakeModeCommand(rest);
+      return;
+    }
+    case "herdr-pane-sync": {
+      const out = await herdrPaneSync({
+        project: required(args.project, "--project"),
+        agent: required(args.agent, "--agent"),
+        identityJson: required(args.identityJson ?? args["identity-json"], "--identity-json"),
+        wakeStrict: args.wakeStrict ?? args["wake-strict"]
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "herdr-pane-release": {
+      const out = await herdrPaneRelease({
+        identityJson: required(args.identityJson ?? args["identity-json"], "--identity-json")
+      });
+      console.log(JSON.stringify(out, null, 2));
       return;
     }
     case "status": {

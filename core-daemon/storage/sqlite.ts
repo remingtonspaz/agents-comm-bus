@@ -36,6 +36,7 @@ import type {
   SessionId,
 } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../project-path.js";
+import { parseHerdrIdentityJson, type HerdrIdentity } from "../runtime/herdr.js";
 import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "../runtime/process-start-epoch.js";
 import { runStorageMigrations, type SqliteLike } from "./schema/runner.js";
 
@@ -1000,6 +1001,88 @@ export class SqliteStorage implements Storage {
       .run(conversation_id, session);
   }
 
+  async setSessionWakeTarget(
+    session: SessionId,
+    identity: Session["wake_identity"] | null | undefined,
+    wake_strict: Session["wake_strict"] | null | undefined,
+  ): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (identity !== undefined) {
+      sets.push("wake_identity_json = ?");
+      params.push(
+        identity == null ? null : JSON.stringify(identity satisfies HerdrIdentity),
+      );
+    }
+    if (wake_strict !== undefined) {
+      sets.push("wake_strict = ?");
+      params.push(wake_strict);
+    }
+    if (sets.length === 0) return;
+    params.push(session);
+    this.db
+      .prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE session_id = ?`)
+      .run(...params);
+  }
+
+  async getWakeMode(project: string, agent: AgentId): Promise<"auto" | "native"> {
+    const canonical = normalizeProjectPath(project);
+    const scoped = this.db
+      .prepare(
+        "SELECT mode FROM wake_preferences WHERE project = ? AND agent = ?",
+      )
+      .get(canonical, agent) as { mode?: string } | undefined;
+    if (scoped?.mode === "auto" || scoped?.mode === "native") {
+      return scoped.mode;
+    }
+    const global = this.db
+      .prepare("SELECT mode FROM wake_preferences WHERE project = '' AND agent = ?")
+      .get(agent) as { mode?: string } | undefined;
+    if (global?.mode === "auto" || global?.mode === "native") {
+      return global.mode;
+    }
+    return "auto";
+  }
+
+  async setWakeMode(
+    project: string,
+    agent: AgentId,
+    mode: "auto" | "native",
+    updated_at: number,
+  ): Promise<void> {
+    const canonical = project === "" ? "" : normalizeProjectPath(project);
+    this.db
+      .prepare(`
+        INSERT INTO wake_preferences (project, agent, mode, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(project, agent) DO UPDATE SET
+          mode = excluded.mode,
+          updated_at = excluded.updated_at
+      `)
+      .run(canonical, agent, mode, updated_at);
+  }
+
+  async clearWakeMode(project: string, agent: AgentId): Promise<void> {
+    const canonical = project === "" ? "" : normalizeProjectPath(project);
+    this.db
+      .prepare("DELETE FROM wake_preferences WHERE project = ? AND agent = ?")
+      .run(canonical, agent);
+  }
+
+  async listWakeModes(): Promise<
+    Array<{ project: string; agent: AgentId; mode: "auto" | "native"; updated_at: number }>
+  > {
+    const rows = this.db
+      .prepare("SELECT project, agent, mode, updated_at FROM wake_preferences ORDER BY project, agent")
+      .all() as Array<{
+      project: string;
+      agent: AgentId;
+      mode: "auto" | "native";
+      updated_at: number;
+    }>;
+    return rows;
+  }
+
   async addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void> {
     this.db
       .prepare(`
@@ -1456,6 +1539,8 @@ export class SqliteStorage implements Storage {
         r.most_recent_inbound_conversation_id as ConversationId | null,
       account_label_scope: (r.account_label_scope as string | null) ?? null,
       status: r.status as Session["status"],
+      wake_identity: parseHerdrIdentityJson(r.wake_identity_json as string | null),
+      wake_strict: r.wake_strict === "herdr" ? "herdr" : null,
     };
   }
 }

@@ -112,6 +112,8 @@ export class PiBridge {
             most_recent_inbound_conversation_id: null,
             account_label_scope: accountLabelScope,
             status: "active",
+            wake_identity: null,
+            wake_strict: null,
         });
         const leaseOwner = this.options.daemonOwner
             ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)

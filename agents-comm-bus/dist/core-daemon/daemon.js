@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import os from "node:os";
 import { DAEMON_VERSION } from "./config.js";
 import { normalizeProjectPath } from "./project-path.js";
@@ -17,6 +18,9 @@ import { openSqliteStorage } from "./storage/sqlite.js";
 import { JsonlTranscriptStore } from "./storage/transcripts.js";
 import { JsonlAuditStore } from "./storage/audit.js";
 import { ContentAddressedBlobStore } from "./storage/blobs.js";
+import { herdrSessionId, parseHerdrIdentity } from "./runtime/herdr.js";
+import { parseWakeStrict, wakeStrategyForSession, } from "./runtime/wake-strategy.js";
+import { sessionEndObservation } from "./runtime/session-end-sweep.js";
 import { addAdapterForRegistration, adapterMapKey, appendCredentialResolutionFailedAudit, createAdapterFromRegistration, logInvalidCredentialResolution, removeLiveAdapter, unresolvedCredentialsReason, } from "./runtime/comm-adapter-lifecycle.js";
 import { ensureRegistrationById, ensureRegistrationForAccount, reconcileEagerRegistrations, } from "./runtime/ensure-registration.js";
 import { createEagerActivationRetryScheduler, } from "./runtime/eager-activation-retry.js";
@@ -1033,6 +1037,24 @@ async function dispatchIpc(request, context) {
     if (request.method === "probe_comm_identity") {
         return probeCommIdentity(params, context.commAdapterFactories, context.env, context.rescanFactories);
     }
+    if (request.method === "herdr_register_pane") {
+        return handleHerdrRegisterPane(params, context);
+    }
+    if (request.method === "herdr_release_pane") {
+        return handleHerdrReleasePane(params, context);
+    }
+    if (request.method === "wake_mode_get") {
+        return handleWakeModeGet(params, context.storage);
+    }
+    if (request.method === "wake_mode_set") {
+        return handleWakeModeSet(params, context.storage);
+    }
+    if (request.method === "wake_mode_clear") {
+        return handleWakeModeClear(params, context.storage);
+    }
+    if (request.method === "wake_mode_list") {
+        return handleWakeModeList(context.storage);
+    }
     const bridge = context.bridgesByMethod.get(request.method);
     if (bridge) {
         return bridge.handleIpcMethod(request.method, params, { socket: context.socket });
@@ -1070,6 +1092,116 @@ export async function probeCommIdentity(params, factories, env, rescanFactories)
         account_id: String(identity.accountId),
         account_username: identity.accountUsername ?? null,
     };
+}
+async function handleHerdrRegisterPane(params, context) {
+    const project = normalizeProjectPath(requiredDaemonString(params.project, "project"));
+    const agent = requiredDaemonString(params.agent, "agent");
+    if (!context.bridges.some((bridge) => bridge.agentId === agent)) {
+        throw new Error(`unknown agent for herdr_register_pane: ${agent}`);
+    }
+    const identity = parseHerdrIdentity(params.identity);
+    if (!identity || identity.agent !== agent) {
+        throw new Error("herdr_register_pane requires valid params.identity");
+    }
+    const session_id = herdrSessionId(identity);
+    const now = Date.now();
+    await context.storage.upsertSession({
+        schema_version: SCHEMA_VERSION_SESSION,
+        session_id,
+        agent,
+        project,
+        created_at: now,
+        lease_holder_connection_id: null,
+        lease_acquired_at: null,
+        lease_released_at: null,
+        lease_owner_process_pid: null,
+        lease_owner_process_label: null,
+        lease_owner_process_registered_at: null,
+        lease_owner_process_start_time: null,
+        lease_owner_daemon_discovery_root: null,
+        lease_owner_daemon_checkout_root: null,
+        lease_owner_daemon_state_root: null,
+        lease_owner_daemon_bin: null,
+        lease_owner_daemon_authority_rank: null,
+        most_recent_inbound_conversation_id: null,
+        account_label_scope: null,
+        status: "active",
+        wake_identity: null,
+        wake_strict: null,
+    });
+    await context.storage.setSessionWakeTarget(session_id, identity, params.wake_strict !== undefined ? parseWakeStrict(params.wake_strict) : undefined);
+    await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
+    const session = await context.storage.getSession(session_id);
+    if (!session) {
+        throw new Error("herdr_register_pane failed to load session row");
+    }
+    const wake_strategy = await wakeStrategyForSession(context.storage, session);
+    return { ok: true, session, wake_strategy };
+}
+async function handleHerdrReleasePane(params, context) {
+    const identity = parseHerdrIdentity(params.identity);
+    if (!identity) {
+        throw new Error("herdr_release_pane requires valid params.identity");
+    }
+    const session_id = herdrSessionId(identity);
+    const session = await context.storage.getSession(session_id);
+    if (!session) {
+        return { ok: true };
+    }
+    if (session.lease_holder_connection_id) {
+        await context.storage.setSessionWakeTarget(session_id, null, null);
+    }
+    else {
+        await context.storage.endSessionIfUnchanged(session_id, sessionEndObservation(session), Date.now());
+    }
+    return { ok: true };
+}
+async function handleWakeModeGet(params, storage) {
+    const agent = requiredDaemonString(params.agent, "agent");
+    const projectRaw = typeof params.project === "string" ? params.project : "";
+    const canonical = projectRaw === "" ? "" : normalizeProjectPath(projectRaw);
+    const effective = await storage.getWakeMode(canonical, agent);
+    const scoped = await storageWakeModeRow(storage, canonical, agent);
+    const global = await storageWakeModeRow(storage, "", agent);
+    const source = scoped != null
+        ? { scope: "project", project: canonical }
+        : global != null
+            ? { scope: "global", project: "" }
+            : { scope: "default", project: "" };
+    return { ok: true, mode: effective, source };
+}
+async function storageWakeModeRow(storage, project, agent) {
+    const rows = await storage.listWakeModes();
+    const row = rows.find((entry) => entry.project === project && entry.agent === agent);
+    return row?.mode ?? null;
+}
+async function handleWakeModeSet(params, storage) {
+    const agent = requiredDaemonString(params.agent, "agent");
+    const mode = requiredDaemonString(params.mode, "mode");
+    if (mode !== "auto" && mode !== "native") {
+        throw new Error("wake_mode_set mode must be auto or native");
+    }
+    const projectRaw = typeof params.project === "string" ? params.project : "";
+    const project = projectRaw === "" ? "" : normalizeProjectPath(projectRaw);
+    await storage.setWakeMode(project, agent, mode, Date.now());
+    return { ok: true };
+}
+async function handleWakeModeClear(params, storage) {
+    const agent = requiredDaemonString(params.agent, "agent");
+    const projectRaw = typeof params.project === "string" ? params.project : "";
+    const project = projectRaw === "" ? "" : normalizeProjectPath(projectRaw);
+    await storage.clearWakeMode(project, agent);
+    return { ok: true };
+}
+async function handleWakeModeList(storage) {
+    const rows = await storage.listWakeModes();
+    return { ok: true, rows };
+}
+function requiredDaemonString(value, name) {
+    if (typeof value !== "string" || value.trim() === "") {
+        throw new Error(`${name} is required`);
+    }
+    return value.trim();
 }
 function parseReloadOptions(params) {
     const forceRaw = params.forceCredentialRefresh;

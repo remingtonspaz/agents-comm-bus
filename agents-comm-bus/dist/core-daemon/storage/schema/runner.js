@@ -145,6 +145,14 @@ export const sessionOwnerProcessStartTimeMigration = {
         await ctx.exec(sql);
     },
 };
+export const herdrWakeMigration = {
+    version: 16,
+    description: "AGE-110: herdr wake identity + wake mode preferences",
+    async up(ctx) {
+        const sql = await readFile(join(schemaDir, "016_herdr_wake.sql"), "utf8");
+        await ctx.exec(sql);
+    },
+};
 export async function runStorageMigrations(db) {
     await new SqliteMigrationRunner(db).apply([
         initialMigration,
@@ -162,6 +170,7 @@ export async function runStorageMigrations(db) {
         curlInboundIdempotencyMigration,
         registrationActivationMigration,
         sessionOwnerProcessStartTimeMigration,
+        herdrWakeMigration,
     ]);
 }
 //# sourceMappingURL=runner.js.map

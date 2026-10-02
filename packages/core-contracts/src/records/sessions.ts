@@ -46,4 +46,19 @@ export interface Session {
   account_label_scope: string | null;
 
   status: "active" | "ended";
+
+  /** AGE-110: parsed herdr pane identity when wake transport is herdr. */
+  wake_identity: HerdrWakeIdentity | null;
+  /** AGE-110: when `"herdr"`, never fall back to native wake on herdr failure. */
+  wake_strict: "herdr" | null;
+}
+
+export interface HerdrWakeIdentity {
+  type: "herdr";
+  agent: AgentId;
+  pane_id: string;
+  socket_path: string;
+  workspace_id?: string;
+  tab_id?: string;
+  bin_path?: string;
 }

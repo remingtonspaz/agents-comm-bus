@@ -1,4 +1,4 @@
-import type { Conversation, Message, SessionId, Storage } from "agents-comm-bus-core";
+import type { Conversation, Message, Session, SessionId, Storage } from "agents-comm-bus-core";
 import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
 export interface ClaudeWakeRegistration {
     session: SessionId;
@@ -10,13 +10,7 @@ export interface ClaudeWakeRegistration {
 export declare function hashProjectKey(projectPath: string): string;
 export declare function claudeWakeDirForProject(projectPath: string, homeDir?: string, accountLabelScope?: string | null): string;
 export declare function writeClaudeWakeTrigger(wakeDir: string, now?: () => number): Promise<void>;
-export declare const WAKE_SEED_MAX_CHARS = 2000;
-export declare function sanitizeWakeSeed(text: string | undefined): string;
-export declare function buildWakeSeed(input: {
-    comm?: string;
-    sender?: string;
-    body?: string;
-}): string;
+export { WAKE_SEED_MAX_CHARS, buildWakeSeed, sanitizeWakeSeed, } from "../../runtime/wake-seed.js";
 export declare function writeClaudeWakeSeed(wakeDir: string, text: string): Promise<void>;
 export type ClaudeWakeResponsePromptType = "permission" | "question" | "freetext";
 export interface ClaudeWakeResponsePayload {
@@ -52,6 +46,10 @@ export declare class ClaudeWakeRegistry {
     }): ClaudeWakeRegistration | undefined;
     getForSession(session: SessionId): ClaudeWakeRegistration | undefined;
     writeResponseForSession(session: SessionId, payload: ClaudeWakeResponsePayload): Promise<boolean>;
+    resolveRegistrationForInbound(conversation: Conversation, message?: Message): Promise<{
+        registration: ClaudeWakeRegistration;
+        session: Session;
+    } | null>;
     wakeConversation(conversation: Conversation, message?: Message): Promise<boolean>;
     /**
      * On a miss in `wakeConversation`, look up the most recent Claude session

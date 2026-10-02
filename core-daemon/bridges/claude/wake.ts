@@ -7,6 +7,7 @@ import type {
   AgentId,
   Conversation,
   Message,
+  Session,
   SessionId,
   Storage,
 } from "agents-comm-bus-core";
@@ -80,43 +81,12 @@ export async function writeClaudeWakeTrigger(
   await writeFile(path.join(wakeDir, "trigger-enter"), `${now()}\n`, "utf8");
 }
 
-// AGE-65: the wake "seed" is the inbound message typed into the Claude prompt
-// slot (so the auto-mode classifier sees real user intent instead of a bare ".").
-// It is DECORATED with the comm + sender ("<comm> message from <sender>: <body>")
-// so another agent's message (Codex/Pi) can't be misread as the user's. Newlines
-// are PRESERVED — the watcher types each as backslash+Enter for a real multi-line
-// TUI prompt — while other control chars are stripped and the whole is bounded.
-// The hook's [Daemon Inbound Messages] block stays the authoritative full-content
-// + routing channel; this seed is best-effort.
-export const WAKE_SEED_MAX_CHARS = 2000;
-
-// Normalize CRLF->LF, keep newlines (0x0A), strip other control chars, cap, trim.
-export function sanitizeWakeSeed(text: string | undefined): string {
-  if (!text) return "";
-  const normalized = text
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\x00-\x09\x0B-\x1F\x7F]/g, "")
-    .trim();
-  return normalized.length > WAKE_SEED_MAX_CHARS
-    ? normalized.slice(0, WAKE_SEED_MAX_CHARS)
-    : normalized;
-}
-
-// Build the decorated, sanitized seed. The "<comm> message from <sender>:" prefix
-// attributes the message so a Codex/Pi message isn't misconstrued as the user's.
-// Returns "" when there's no text to seed (e.g. attachment-only) -> bare "." wake.
-export function buildWakeSeed(input: {
-  comm?: string;
-  sender?: string;
-  body?: string;
-}): string {
-  const body = (input.body ?? "").trim();
-  if (!body) return "";
-  const comm = input.comm && input.comm.length > 0 ? input.comm : "message";
-  const sender =
-    input.sender && input.sender.length > 0 ? input.sender : "unknown sender";
-  return sanitizeWakeSeed(`${comm} message from ${sender}: ${body}`);
-}
+export {
+  WAKE_SEED_MAX_CHARS,
+  buildWakeSeed,
+  sanitizeWakeSeed,
+} from "../../runtime/wake-seed.js";
+import { buildWakeSeed } from "../../runtime/wake-seed.js";
 
 export async function writeClaudeWakeSeed(
   wakeDir: string,
@@ -245,6 +215,20 @@ export class ClaudeWakeRegistry {
     return true;
   }
 
+  async resolveRegistrationForInbound(
+    conversation: Conversation,
+    message?: Message,
+  ): Promise<{ registration: ClaudeWakeRegistration; session: Session } | null> {
+    if (conversation.agent !== ("claude" as AgentId)) return null;
+    const registration =
+      this.latestForProject(conversation.project, conversation) ??
+      (await this.hydrateLatestForProject(conversation.project, conversation));
+    if (!registration || !this.storage) return null;
+    const session = await this.storage.getSession(registration.session);
+    if (!session) return null;
+    return { registration, session };
+  }
+
   async wakeConversation(
     conversation: Conversation,
     message?: Message,
@@ -296,6 +280,16 @@ export class ClaudeWakeRegistry {
     let match = conversation
       ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id)
       : pool[0];
+    if (conversation && !match) {
+      const herdrPool = pool.filter((session) => session.wake_identity != null);
+      if (herdrPool.length > 0) {
+        match = resolveSessionForConversation(
+          herdrPool,
+          conversation,
+          (sess) => sess.session_id,
+        );
+      }
+    }
     if (conversation && !match) {
       // Multiple legacy/unscoped rows are ambiguous by session id but share
       // the exact same project-only wake directory. Reaching this branch also

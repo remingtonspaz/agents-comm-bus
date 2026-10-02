@@ -74,6 +74,16 @@ export declare class SqliteStorage implements Storage {
         account_label_scope?: string | null;
     }): Promise<Session[]>;
     setSessionMostRecentInbound(session: SessionId, conversation_id: ConversationId): Promise<void>;
+    setSessionWakeTarget(session: SessionId, identity: Session["wake_identity"] | null | undefined, wake_strict: Session["wake_strict"] | null | undefined): Promise<void>;
+    getWakeMode(project: string, agent: AgentId): Promise<"auto" | "native">;
+    setWakeMode(project: string, agent: AgentId, mode: "auto" | "native", updated_at: number): Promise<void>;
+    clearWakeMode(project: string, agent: AgentId): Promise<void>;
+    listWakeModes(): Promise<Array<{
+        project: string;
+        agent: AgentId;
+        mode: "auto" | "native";
+        updated_at: number;
+    }>>;
     addAllowlistGlobal(rec: AllowlistGlobalEntry): Promise<void>;
     removeAllowlistGlobal(comm: CommId, sender_id: string): Promise<void>;
     listAllowlistGlobal(filter?: {

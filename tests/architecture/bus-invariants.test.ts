@@ -398,6 +398,56 @@ class MemoryStorage implements Storage {
     }
   }
 
+  wakeModes: Array<{
+    project: string;
+    agent: AgentId;
+    mode: "auto" | "native";
+    updated_at: number;
+  }> = [];
+
+  async setSessionWakeTarget(
+    session: SessionId,
+    identity: Session["wake_identity"] | null | undefined,
+    wake_strict: Session["wake_strict"] | null | undefined,
+  ): Promise<void> {
+    const current = this.sessions.get(session);
+    if (!current) return;
+    this.sessions.set(session, {
+      ...current,
+      ...(identity !== undefined ? { wake_identity: identity } : {}),
+      ...(wake_strict !== undefined ? { wake_strict } : {}),
+    });
+  }
+
+  async getWakeMode(project: string, agent: AgentId): Promise<"auto" | "native"> {
+    const scoped = this.wakeModes.find((row) => row.project === project && row.agent === agent);
+    if (scoped) return scoped.mode;
+    const global = this.wakeModes.find((row) => row.project === "" && row.agent === agent);
+    if (global) return global.mode;
+    return "auto";
+  }
+
+  async setWakeMode(
+    project: string,
+    agent: AgentId,
+    mode: "auto" | "native",
+    updated_at: number,
+  ): Promise<void> {
+    const idx = this.wakeModes.findIndex((row) => row.project === project && row.agent === agent);
+    if (idx >= 0) this.wakeModes[idx] = { project, agent, mode, updated_at };
+    else this.wakeModes.push({ project, agent, mode, updated_at });
+  }
+
+  async clearWakeMode(project: string, agent: AgentId): Promise<void> {
+    this.wakeModes = this.wakeModes.filter(
+      (row) => !(row.project === project && row.agent === agent),
+    );
+  }
+
+  async listWakeModes() {
+    return [...this.wakeModes];
+  }
+
   async getSession(session: SessionId): Promise<Session | null> {
     return this.sessions.get(session) ?? null;
   }

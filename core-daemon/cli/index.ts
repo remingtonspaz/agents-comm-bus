@@ -26,6 +26,56 @@ import { parseMigrateArgs, runMigration } from "./migrate.js";
 import { reloadDaemonRegistrations } from "./reload-helper.js";
 import { redact } from "./redact.js";
 import { daemonStatus, formatDaemonStatus } from "./status.js";
+import {
+  wakeModeClear,
+  wakeModeGet,
+  wakeModeList,
+  wakeModeSet,
+} from "./wake-mode.js";
+import { herdrPaneRelease, herdrPaneSync } from "./herdr-pane.js";
+
+async function handleWakeModeCommand(rest: string[]): Promise<void> {
+  const [sub, ...tail] = rest;
+  const args = parseArgs(tail);
+  switch (sub) {
+    case "set": {
+      const mode = required(args.mode ?? tail.find((a) => !a.startsWith("--")), "mode");
+      if (mode !== "auto" && mode !== "native") {
+        throw new Error("wake-mode set requires mode auto|native");
+      }
+      const out = await wakeModeSet({
+        agent: required(args.agent, "--agent"),
+        project: args.project,
+        mode,
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "get": {
+      const out = await wakeModeGet({
+        agent: required(args.agent, "--agent"),
+        project: args.project,
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "clear": {
+      const out = await wakeModeClear({
+        agent: required(args.agent, "--agent"),
+        project: args.project,
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "list": {
+      const out = await wakeModeList();
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    default:
+      throw new Error(`unknown wake-mode subcommand: ${sub ?? "(none)"}`);
+  }
+}
 
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
@@ -152,6 +202,27 @@ async function main(): Promise<void> {
     case "migrate": {
       const result = runMigration(parseMigrateArgs(rest));
       console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    case "wake-mode": {
+      await handleWakeModeCommand(rest);
+      return;
+    }
+    case "herdr-pane-sync": {
+      const out = await herdrPaneSync({
+        project: required(args.project, "--project"),
+        agent: required(args.agent, "--agent"),
+        identityJson: required(args.identityJson ?? args["identity-json"], "--identity-json"),
+        wakeStrict: args.wakeStrict ?? args["wake-strict"],
+      });
+      console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+    case "herdr-pane-release": {
+      const out = await herdrPaneRelease({
+        identityJson: required(args.identityJson ?? args["identity-json"], "--identity-json"),
+      });
+      console.log(JSON.stringify(out, null, 2));
       return;
     }
     case "status": {

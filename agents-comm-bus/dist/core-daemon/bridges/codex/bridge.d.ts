@@ -4,6 +4,8 @@ import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIde
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
 import { CodexAgentAdapter, type CodexAgentAdapterOptions } from "./adapter.js";
 import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
+import { type HerdrClient, type HerdrIdentity } from "../../runtime/herdr.js";
+import { type EffectiveWakeStrategy } from "../../runtime/wake-strategy.js";
 export interface CodexBridgeOptions {
     storage: Storage;
     bus: MessageBus;
@@ -40,11 +42,14 @@ export interface CodexBridgeOptions {
     codexProbeTimeoutMs?: number;
     codexProbeConcurrency?: number;
     requestScopeReconcile?: () => void;
+    /** AGE-110: injectable herdr client for tests. */
+    herdrClientFactory?: (identity: HerdrIdentity) => HerdrClient;
 }
 export interface RegisterCodexSessionResult {
     ok: boolean;
     reason?: string;
     capabilities?: CodexAgentAdapter["capabilities"];
+    wake_strategy?: EffectiveWakeStrategy;
 }
 export interface CodexOpenQueryResult {
     query_id: QueryId;
@@ -99,6 +104,7 @@ export declare class CodexBridge implements AgentBridge {
     registerSession(params: Record<string, unknown>, socket?: {
         once(event: "close", handler: () => void): void;
     }): Promise<RegisterCodexSessionResult>;
+    private persistHerdrWakeFromParams;
     drainInbound(params: Record<string, unknown>): Promise<PendingInboundEntry[]>;
     openQuery(params: Record<string, unknown>): Promise<CodexOpenQueryResult>;
     turnControl(params: Record<string, unknown>): Promise<unknown>;
