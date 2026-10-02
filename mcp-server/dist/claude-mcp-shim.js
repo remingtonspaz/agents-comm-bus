@@ -26904,7 +26904,7 @@ async function ensureMcpRuntime(options) {
 var DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS = 5e3;
 var DEFAULT_HEARTBEAT_MIN_MS = 5 * 60 * 1e3;
 var DEFAULT_HEARTBEAT_MAX_MS = 10 * 60 * 1e3;
-function resolveMcpShimProject2(env = process.env) {
+function resolveMcpShimProject(env = process.env) {
   return env.CLAUDE_PROJECT_DIR ?? env.PWD ?? process.cwd();
 }
 async function runWithStartupEnsureTimeout(work, timeoutMs = DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS) {
@@ -27039,7 +27039,7 @@ function startEnsureCommsHeartbeat(options) {
   };
 }
 async function ensureCommsForScopeAtStartup(options) {
-  const project = options.resolveProject?.() ?? resolveMcpShimProject2(options.env);
+  const project = options.resolveProject?.() ?? resolveMcpShimProject(options.env);
   const agent = options.agentInUse();
   const requestEnsure = options.deps?.requestEnsure ?? defaultEnsureCommsForScopeRequest;
   const timeoutMs = options.startupEnsureTimeoutMs ?? DEFAULT_ENSURE_COMMS_SCOPE_TIMEOUT_MS;
@@ -27944,7 +27944,7 @@ function claudeMcpLastWakeStrategy() {
   return lastWakeStrategy;
 }
 async function registerClaudeMcpSession(options = {}) {
-  const project = normalizeProjectPath(options.resolveProject?.() ?? resolveMcpShimProject2());
+  const project = normalizeProjectPath(options.resolveProject?.() ?? resolveMcpShimProject());
   const session = options.sessionInUse?.() ?? claudeMcpSessionInUse();
   const wakeDir = claudeWakeDirForProject(project, void 0, accountLabelScopeFromEnvSafe());
   const metadata = {

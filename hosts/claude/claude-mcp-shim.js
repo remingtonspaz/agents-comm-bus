@@ -3,6 +3,7 @@ import {
   ensureCommsForScopeAtStartup,
   installShutdownHandlers,
   log,
+  resolveMcpShimProject,
   runMcpShim,
   startEnsureCommsHeartbeat,
 } from "../common/mcp-shim-shared.js";
