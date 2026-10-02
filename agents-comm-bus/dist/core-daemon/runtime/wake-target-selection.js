@@ -1,6 +1,10 @@
 import { normalizeProjectPath } from "../project-path.js";
 import { resolveSessionForConversation } from "../session-label-scope.js";
 import { sessionEndObservation } from "./session-end-sweep.js";
+/** Codex/Pi inbound selection: prefer sessions holding a connection lease. */
+export function sessionLeaseHeld(session) {
+    return session.lease_holder_connection_id != null;
+}
 function pickScopeMatchedSession(pool, conversation) {
     if (pool.length === 0)
         return undefined;
@@ -15,10 +19,10 @@ function pickScopeMatchedSession(pool, conversation) {
     return pool.find((session) => session.account_label_scope == null);
 }
 /**
- * Storage-first inbound wake target: live owner, then herdr identity, then legacy.
- * Scope matches the conversation label the same way as the pre-AGE-110 hydrate path.
+ * Storage-first inbound wake target: preferred tier, then herdr identity, then legacy.
+ * Claude passes owner liveness; Codex/Pi pass {@link sessionLeaseHeld}.
  */
-export async function selectActiveSessionForInboundWake(storage, project, agent, conversation, sessionOwnerIsLive) {
+export async function selectActiveSessionForInboundWake(storage, project, agent, conversation, isPreferredTier) {
     const resolved = normalizeProjectPath(project);
     const sessions = await storage.listSessions({
         project: resolved,
@@ -27,10 +31,10 @@ export async function selectActiveSessionForInboundWake(storage, project, agent,
     });
     if (sessions.length === 0)
         return null;
-    const live = sessions.filter((session) => sessionOwnerIsLive(session));
-    const herdr = sessions.filter((session) => !sessionOwnerIsLive(session) && session.wake_identity != null);
-    const legacy = sessions.filter((session) => !sessionOwnerIsLive(session) && session.wake_identity == null);
-    for (const tier of [live, herdr, legacy]) {
+    const preferred = sessions.filter(isPreferredTier);
+    const herdr = sessions.filter((session) => !isPreferredTier(session) && session.wake_identity != null);
+    const legacy = sessions.filter((session) => !isPreferredTier(session) && session.wake_identity == null);
+    for (const tier of [preferred, herdr, legacy]) {
         const picked = pickScopeMatchedSession(tier, conversation);
         if (picked)
             return picked;

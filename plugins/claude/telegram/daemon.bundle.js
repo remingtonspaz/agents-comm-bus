@@ -3725,7 +3725,7 @@ import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.68";
+var DAEMON_VERSION = "0.2.69";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -9646,6 +9646,9 @@ function startSessionEndSweep(options) {
 }
 
 // ../core-daemon/runtime/wake-target-selection.ts
+function sessionLeaseHeld(session) {
+  return session.lease_holder_connection_id != null;
+}
 function pickScopeMatchedSession(pool, conversation) {
   if (pool.length === 0) return void 0;
   if (!conversation) return pool[0];
@@ -9655,11 +9658,10 @@ function pickScopeMatchedSession(pool, conversation) {
     (sess) => sess.session_id
   );
   if (match) return match;
-  const unlabeled = pool.filter((session) => session.account_label_scope == null);
-  if (unlabeled.length === 1) return unlabeled[0];
-  return void 0;
+  if (!conversation) return void 0;
+  return pool.find((session) => session.account_label_scope == null);
 }
-async function selectActiveSessionForInboundWake(storage, project, agent, conversation, sessionOwnerIsLive) {
+async function selectActiveSessionForInboundWake(storage, project, agent, conversation, isPreferredTier) {
   const resolved = normalizeProjectPath(project);
   const sessions = await storage.listSessions({
     project: resolved,
@@ -9667,14 +9669,14 @@ async function selectActiveSessionForInboundWake(storage, project, agent, conver
     status: "active"
   });
   if (sessions.length === 0) return null;
-  const live = sessions.filter((session) => sessionOwnerIsLive(session));
+  const preferred = sessions.filter(isPreferredTier);
   const herdr = sessions.filter(
-    (session) => !sessionOwnerIsLive(session) && session.wake_identity != null
+    (session) => !isPreferredTier(session) && session.wake_identity != null
   );
   const legacy = sessions.filter(
-    (session) => !sessionOwnerIsLive(session) && session.wake_identity == null
+    (session) => !isPreferredTier(session) && session.wake_identity == null
   );
-  for (const tier of [live, herdr, legacy]) {
+  for (const tier of [preferred, herdr, legacy]) {
     const picked = pickScopeMatchedSession(tier, conversation);
     if (picked) return picked;
   }
@@ -12167,7 +12169,23 @@ var ClaudeWakeRegistry = class {
   }
   async wakeConversation(conversation, message) {
     if (conversation.agent !== "claude") return false;
-    if (!this.storage) return false;
+    if (!this.storage) {
+      const registration2 = this.latestForProject(conversation.project, conversation);
+      if (!registration2) return false;
+      const seed2 = buildWakeSeed({
+        comm: message?.chat.comm,
+        sender: message?.sender?.display_name ?? message?.sender?.id,
+        body: message?.text
+      });
+      if (seed2) {
+        try {
+          await writeClaudeWakeSeed(registration2.wakeDir, seed2);
+        } catch {
+        }
+      }
+      await writeClaudeWakeTrigger(registration2.wakeDir, this.now);
+      return true;
+    }
     const session = await selectActiveSessionForInboundWake(
       this.storage,
       conversation.project,
@@ -14823,7 +14841,7 @@ var CodexBridge = class {
       project,
       this.agentId,
       conversation,
-      this.sessionOwnerIsLive
+      sessionLeaseHeld
     );
     if (!session) return void 0;
     this.trackSession(project, session.session_id, session.account_label_scope);
@@ -15448,7 +15466,7 @@ var PiBridge = class {
       conversation.project,
       this.agentId,
       conversation,
-      this.sessionOwnerIsLive
+      sessionLeaseHeld
     );
     return session?.session_id;
   }

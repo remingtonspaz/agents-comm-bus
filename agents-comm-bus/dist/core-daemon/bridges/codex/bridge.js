@@ -13,7 +13,7 @@ import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
 import { herdrSessionId, parseHerdrIdentity, } from "../../runtime/herdr.js";
 import { applyHerdrWakeTargetFromRegisterParams, effectiveWakeStrategy, herdrWake, parseWakeStrict, resolveWakeMode, validateHerdrRegisterParams, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
-import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
+import { selectActiveSessionForInboundWake, sessionLeaseHeld, } from "../../runtime/wake-target-selection.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_CODEX_PROBE_PORT_MIN = 4500;
 const DEFAULT_CODEX_PROBE_PORT_MAX = 4600;
@@ -828,7 +828,7 @@ export class CodexBridge {
     }
     async resolveSessionForConversation(conversation) {
         const project = normalizeProjectPath(conversation.project);
-        const session = await selectActiveSessionForInboundWake(this.options.storage, project, this.agentId, conversation, this.sessionOwnerIsLive);
+        const session = await selectActiveSessionForInboundWake(this.options.storage, project, this.agentId, conversation, sessionLeaseHeld);
         if (!session)
             return undefined;
         this.trackSession(project, session.session_id, session.account_label_scope);

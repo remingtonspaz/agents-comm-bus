@@ -41,7 +41,10 @@ import {
   wakeStrategyForSession,
   type EffectiveWakeStrategy,
 } from "../../runtime/wake-strategy.js";
-import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
+import {
+  selectActiveSessionForInboundWake,
+  sessionLeaseHeld,
+} from "../../runtime/wake-target-selection.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import {
@@ -315,7 +318,7 @@ export class PiBridge implements AgentBridge {
       conversation.project,
       this.agentId,
       conversation,
-      this.sessionOwnerIsLive,
+      sessionLeaseHeld,
     );
     return session?.session_id;
   }

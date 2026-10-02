@@ -10,7 +10,7 @@ import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { normalizeProjectPath } from "../../project-path.js";
 import { accountLabelScopeFromParams, filterRegistrationsForSession, } from "../../session-label-scope.js";
 import { applyHerdrWakeTargetFromRegisterParams, herdrWake, validateHerdrRegisterParams, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
-import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
+import { selectActiveSessionForInboundWake, sessionLeaseHeld, } from "../../runtime/wake-target-selection.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
@@ -194,7 +194,7 @@ export class PiBridge {
         }
     }
     async resolveSessionForConversation(conversation) {
-        const session = await selectActiveSessionForInboundWake(this.options.storage, conversation.project, this.agentId, conversation, this.sessionOwnerIsLive);
+        const session = await selectActiveSessionForInboundWake(this.options.storage, conversation.project, this.agentId, conversation, sessionLeaseHeld);
         return session?.session_id;
     }
     async drainInbound(params) {

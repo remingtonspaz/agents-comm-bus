@@ -16,7 +16,11 @@ import {
   type HerdrIdentity,
 } from "../../core-daemon/runtime/herdr.js";
 import { createSessionOwnerLiveness } from "../../core-daemon/runtime/session-owner-liveness.js";
-import { supersedeStaleSessionsOnHerdrRegister } from "../../core-daemon/runtime/wake-target-selection.js";
+import {
+  selectActiveSessionForInboundWake,
+  sessionLeaseHeld,
+  supersedeStaleSessionsOnHerdrRegister,
+} from "../../core-daemon/runtime/wake-target-selection.js";
 import { openSqliteStorage } from "../../core-daemon/storage/sqlite.js";
 import { sessionFixture } from "./_session-fixture.js";
 import type {
@@ -33,6 +37,7 @@ import {
   type CommId,
   type ConversationId,
   type MessageId,
+  type QueryId,
   type SessionId,
 } from "../../packages/core-contracts/src/types.js";
 
@@ -416,6 +421,80 @@ describe("AGE-110 bug A wake target selection", () => {
     });
   });
 
+  it("Codex lease-held row wins over unleased live-owner row", async () => {
+    await withDb(async (storage) => {
+      const project = "project-a";
+      const now = Date.now();
+      const leased = "codex_leased" as SessionId;
+      const liveUnleased = "codex_live_unleased" as SessionId;
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: leased,
+          project,
+          agent: "codex",
+          lease_holder_connection_id: "codex:leased-conn",
+          lease_owner_process_pid: DEAD_PID,
+          lease_owner_process_registered_at: now,
+        }),
+      );
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: liveUnleased,
+          project,
+          agent: "codex",
+          lease_owner_process_pid: LIVE_PID,
+          lease_owner_process_registered_at: now,
+        }),
+      );
+      const conv = conversation(project, "codex");
+      const picked = await selectActiveSessionForInboundWake(
+        storage,
+        project,
+        "codex",
+        conv,
+        sessionLeaseHeld,
+      );
+      assert.equal(picked?.session_id, leased);
+    });
+  });
+
+  it("Pi lease-held row wins over unleased live-owner row", async () => {
+    await withDb(async (storage) => {
+      const project = "project-a";
+      const now = Date.now();
+      const leased = "pi_leased" as SessionId;
+      const liveUnleased = "pi_live_unleased" as SessionId;
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: leased,
+          project,
+          agent: "pi",
+          lease_holder_connection_id: "pi:leased-conn",
+          lease_owner_process_pid: DEAD_PID,
+          lease_owner_process_registered_at: now,
+        }),
+      );
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: liveUnleased,
+          project,
+          agent: "pi",
+          lease_owner_process_pid: LIVE_PID,
+          lease_owner_process_registered_at: now,
+        }),
+      );
+      const conv = conversation(project, "pi");
+      const picked = await selectActiveSessionForInboundWake(
+        storage,
+        project,
+        "pi",
+        conv,
+        sessionLeaseHeld,
+      );
+      assert.equal(picked?.session_id, leased);
+    });
+  });
+
   it("e. successful herdr inbound wake audits agent_wake_succeeded", async () => {
     await withDb(async (storage) => {
       const audit = new RecordingAudit();
@@ -451,6 +530,71 @@ describe("AGE-110 bug A wake target selection", () => {
       assert.equal(successes.length, 1);
       assert.equal(successes[0].detail?.strategy, "herdr");
       assert.equal(successes[0].detail?.path, "inbound_wake");
+    });
+  });
+
+  it("e. herdr resolve sink audits agent_wake_succeeded with path resolve_sink", async () => {
+    await withDb(async (storage) => {
+      const audit = new RecordingAudit();
+      const fake = new FakeHerdrExec();
+      const bus = new MessageBus({
+        project: "project-a",
+        storage,
+        transcripts: { append: async () => {} } as never,
+        audit,
+        comms: [],
+      });
+      const bridge = new ClaudeBridge({
+        storage,
+        bus,
+        pendingInbound: [],
+        audit,
+        herdrClientFactory: (id) => fake.client(id),
+        sessionOwnerIsLive: liveness(),
+      });
+      bridge.attach([]);
+      const session = "session-claude" as SessionId;
+      await storage.upsertSession(
+        sessionFixture({
+          session_id: session,
+          agent: "claude",
+          project: "project-a",
+        }),
+      );
+      await storage.setSessionWakeTarget(session, identity(), null);
+      const chat = {
+        comm: "telegram" as CommId,
+        account: "bot-1",
+        native_id: "chat-1",
+      };
+      const now = Date.now();
+      await storage.insertQuery({
+        schema_version: 1,
+        query_id: "q-resolve" as QueryId,
+        agent: "claude",
+        session,
+        kind: "choice",
+        prompt_text: "pick",
+        created_at: now,
+        ttl_seconds: 3600,
+        origin_chat_id: null,
+        source_message_id: null,
+        resolved_at: null,
+        resolution: null,
+        options_json: null,
+      });
+      await bus.resolveQuery("q-resolve" as QueryId, {
+        query_id: "q-resolve" as QueryId,
+        decision: "select_option",
+        selected_option_index: 1,
+        decided_by_sender_id: "user-1",
+        decided_in_chat: chat,
+        decided_at: now + 1,
+      });
+      const successes = audit.events.filter((e) => e.kind === "agent_wake_succeeded");
+      assert.equal(successes.length, 1);
+      assert.equal(successes[0].detail?.strategy, "herdr");
+      assert.equal(successes[0].detail?.path, "resolve_sink");
     });
   });
 });

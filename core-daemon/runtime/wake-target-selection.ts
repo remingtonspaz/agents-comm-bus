@@ -3,9 +3,16 @@ import type { AgentId, CommId, Conversation, Session, Storage } from "agents-com
 import { normalizeProjectPath } from "../project-path.js";
 import { resolveSessionForConversation } from "../session-label-scope.js";
 import { sessionEndObservation } from "./session-end-sweep.js";
-import type { SessionOwnerLiveness } from "./session-owner-liveness.js";
+import type { SessionOwnerRecord } from "./session-owner-liveness.js";
 
 type ScopeConversation = { comm: CommId; account_label: string };
+
+export type PreferredWakeTier = (session: Session) => boolean;
+
+/** Codex/Pi inbound selection: prefer sessions holding a connection lease. */
+export function sessionLeaseHeld(session: SessionOwnerRecord): boolean {
+  return session.lease_holder_connection_id != null;
+}
 
 function pickScopeMatchedSession(
   pool: Session[],
@@ -25,15 +32,15 @@ function pickScopeMatchedSession(
 }
 
 /**
- * Storage-first inbound wake target: live owner, then herdr identity, then legacy.
- * Scope matches the conversation label the same way as the pre-AGE-110 hydrate path.
+ * Storage-first inbound wake target: preferred tier, then herdr identity, then legacy.
+ * Claude passes owner liveness; Codex/Pi pass {@link sessionLeaseHeld}.
  */
 export async function selectActiveSessionForInboundWake(
   storage: Storage,
   project: string,
   agent: AgentId,
   conversation: ScopeConversation | undefined,
-  sessionOwnerIsLive: SessionOwnerLiveness,
+  isPreferredTier: PreferredWakeTier,
 ): Promise<Session | null> {
   const resolved = normalizeProjectPath(project);
   const sessions = await storage.listSessions({
@@ -43,15 +50,15 @@ export async function selectActiveSessionForInboundWake(
   });
   if (sessions.length === 0) return null;
 
-  const live = sessions.filter((session) => sessionOwnerIsLive(session));
+  const preferred = sessions.filter(isPreferredTier);
   const herdr = sessions.filter(
-    (session) => !sessionOwnerIsLive(session) && session.wake_identity != null,
+    (session) => !isPreferredTier(session) && session.wake_identity != null,
   );
   const legacy = sessions.filter(
-    (session) => !sessionOwnerIsLive(session) && session.wake_identity == null,
+    (session) => !isPreferredTier(session) && session.wake_identity == null,
   );
 
-  for (const tier of [live, herdr, legacy]) {
+  for (const tier of [preferred, herdr, legacy]) {
     const picked = pickScopeMatchedSession(tier, conversation);
     if (picked) return picked;
   }
@@ -67,7 +74,7 @@ function scopesMatch(a: Session, b: Session): boolean {
 export async function supersedeStaleSessionsOnHerdrRegister(
   storage: Storage,
   herdrSession: Session,
-  sessionOwnerIsLive: SessionOwnerLiveness,
+  sessionOwnerIsLive: PreferredWakeTier,
   now: number = Date.now(),
 ): Promise<void> {
   const sessions = await storage.listSessions({

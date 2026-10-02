@@ -76,7 +76,10 @@ import {
   wakeStrategyForSession,
   type EffectiveWakeStrategy,
 } from "../../runtime/wake-strategy.js";
-import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
+import {
+  selectActiveSessionForInboundWake,
+  sessionLeaseHeld,
+} from "../../runtime/wake-target-selection.js";
 
 export interface CodexBridgeOptions {
   storage: Storage;
@@ -1238,7 +1241,7 @@ export class CodexBridge implements AgentBridge {
       project,
       this.agentId,
       conversation,
-      this.sessionOwnerIsLive,
+      sessionLeaseHeld,
     );
     if (!session) return undefined;
     this.trackSession(project, session.session_id, session.account_label_scope);
