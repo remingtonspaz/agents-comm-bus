@@ -31,7 +31,6 @@ import { normalizeProjectPath } from "../../project-path.js";
 import {
   accountLabelScopeFromParams,
   filterRegistrationsForSession,
-  resolveSessionForConversation,
 } from "../../session-label-scope.js";
 import type { HerdrClient, HerdrIdentity } from "../../runtime/herdr.js";
 import {
@@ -42,6 +41,7 @@ import {
   wakeStrategyForSession,
   type EffectiveWakeStrategy,
 } from "../../runtime/wake-strategy.js";
+import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import {
@@ -212,6 +212,7 @@ export class PiBridge implements AgentBridge {
       session,
       params,
       this.agentId,
+      this.sessionOwnerIsLive,
     );
     const leaseOwner = this.options.daemonOwner
       ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
@@ -295,6 +296,7 @@ export class PiBridge implements AgentBridge {
       storage: this.options.storage,
       audit: this.options.audit,
       clientFactory: this.options.herdrClientFactory,
+      conversationId: conversation.conversation_id,
     });
     if (herdr.ok) {
       this.herdrPollFallback.delete(session);
@@ -308,16 +310,14 @@ export class PiBridge implements AgentBridge {
   private async resolveSessionForConversation(
     conversation: Conversation,
   ): Promise<SessionId | undefined> {
-    const project = normalizeProjectPath(conversation.project);
-    const sessions = await this.options.storage.listSessions({
-      project,
-      agent: this.agentId,
-      status: "active",
-    });
-    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
-    const pool = live.length > 0 ? live : sessions;
-    const match = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
-    return match?.session_id;
+    const session = await selectActiveSessionForInboundWake(
+      this.options.storage,
+      conversation.project,
+      this.agentId,
+      conversation,
+      this.sessionOwnerIsLive,
+    );
+    return session?.session_id;
   }
 
   async drainInbound(

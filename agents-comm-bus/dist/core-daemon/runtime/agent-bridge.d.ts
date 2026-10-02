@@ -1,4 +1,4 @@
-import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Message, SessionId, Storage } from "agents-comm-bus-core";
+import type { AccountId, AgentId, AuditStore, CommAdapter, CommId, Conversation, Message, Session, SessionId, Storage } from "agents-comm-bus-core";
 import type { SessionLeaseOwner } from "agents-comm-bus-core/storage/storage";
 import type { MessageBus } from "../bus.js";
 import { readProcessStartEpochMs, prefetchProcessStartIdentity } from "./process-start-epoch.js";
@@ -168,6 +168,8 @@ export interface AgentBridge {
      * defense-in-depth, not because the contract permits foreign delivery.
      */
     onInboundConversation?(conversation: Conversation, message?: Message): Promise<void>;
+    /** Optional: herdr pane registered in storage (plugin IPC) — refresh bridge caches. */
+    onHerdrPaneRegistered?(session: Session): void;
     /** Handle an IPC method that this bridge advertised in `ipcMethods`. */
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
         socket?: {

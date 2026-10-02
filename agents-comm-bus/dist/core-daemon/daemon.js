@@ -21,6 +21,7 @@ import { ContentAddressedBlobStore } from "./storage/blobs.js";
 import { herdrSessionId, parseHerdrIdentity } from "./runtime/herdr.js";
 import { parseWakeStrict, wakeStrategyForSession, } from "./runtime/wake-strategy.js";
 import { sessionEndObservation } from "./runtime/session-end-sweep.js";
+import { supersedeStaleSessionsOnHerdrRegister } from "./runtime/wake-target-selection.js";
 import { addAdapterForRegistration, adapterMapKey, appendCredentialResolutionFailedAudit, createAdapterFromRegistration, logInvalidCredentialResolution, removeLiveAdapter, unresolvedCredentialsReason, } from "./runtime/comm-adapter-lifecycle.js";
 import { ensureRegistrationById, ensureRegistrationForAccount, reconcileEagerRegistrations, } from "./runtime/ensure-registration.js";
 import { createEagerActivationRetryScheduler, } from "./runtime/eager-activation-retry.js";
@@ -1136,11 +1137,17 @@ export async function handleHerdrRegisterPane(params, context) {
         await context.storage.reactivateSessionIfEnded(session_id);
     }
     await context.storage.setSessionWakeTarget(session_id, identity, params.wake_strict !== undefined ? parseWakeStrict(params.wake_strict) : undefined);
-    await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
     const session = await context.storage.getSession(session_id);
     if (!session) {
         throw new Error("herdr_register_pane failed to load session row");
     }
+    await supersedeStaleSessionsOnHerdrRegister(context.storage, session, createSessionOwnerLiveness());
+    for (const bridge of context.bridges) {
+        if (bridge.agentId === agent) {
+            bridge.onHerdrPaneRegistered?.(session);
+        }
+    }
+    await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
     const wake_strategy = await wakeStrategyForSession(context.storage, session);
     return { ok: true, session, wake_strategy };
 }

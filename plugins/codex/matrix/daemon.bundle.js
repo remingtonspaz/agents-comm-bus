@@ -3725,7 +3725,7 @@ import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.67";
+var DAEMON_VERSION = "0.2.68";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -9133,199 +9133,6 @@ function buildWakeSeed(input) {
   return sanitizeWakeSeed(`${comm} message from ${sender}: ${body}`);
 }
 
-// ../core-daemon/runtime/wake-strategy.ts
-async function resolveWakeMode(storage, project, agent) {
-  return storage.getWakeMode(project, agent);
-}
-function effectiveWakeStrategy(session, mode) {
-  if (!session.wake_identity) return "native";
-  if (session.wake_strict === "herdr") return "herdr";
-  if (mode === "auto") return "herdr";
-  return "native";
-}
-async function herdrWake(session, seedText, deps) {
-  const identity = session.wake_identity;
-  if (!identity) {
-    return { ok: false, reason: "no_herdr_identity", strict: false };
-  }
-  const mode = await resolveWakeMode(deps.storage, session.project, session.agent);
-  if (effectiveWakeStrategy(session, mode) !== "herdr") {
-    return { ok: false, reason: "strategy_native", strict: false };
-  }
-  const client = deps.clientFactory?.(identity) ?? new HerdrClient(identity);
-  const validated = await validateHerdrIdentityAgent(client, identity);
-  if (!validated.ok) {
-    const strict = session.wake_strict === "herdr";
-    await auditWakeDeliveryFailure(deps, {
-      session,
-      strategy: "herdr",
-      reason: validated.reason,
-      path: "inbound_wake"
-    });
-    return { ok: false, reason: validated.reason, strict };
-  }
-  const prompt = seedText.trim().length > 0 ? seedText : ".";
-  const prompted = await client.agentPrompt(prompt);
-  if (!prompted.ok) {
-    const strict = session.wake_strict === "herdr";
-    await auditWakeDeliveryFailure(deps, {
-      session,
-      strategy: "herdr",
-      reason: `herdr_prompt_failed:${prompted.code}`,
-      path: "inbound_wake",
-      detail: { message: prompted.message }
-    });
-    return { ok: false, reason: prompted.message, strict };
-  }
-  return { ok: true };
-}
-async function herdrRespond(session, payload, deps) {
-  const identity = session.wake_identity;
-  if (!identity) {
-    return { ok: false, reason: "no_herdr_identity", strict: false };
-  }
-  const mode = await resolveWakeMode(deps.storage, session.project, session.agent);
-  if (effectiveWakeStrategy(session, mode) !== "herdr") {
-    return { ok: false, reason: "strategy_native", strict: false };
-  }
-  const client = deps.clientFactory?.(identity) ?? new HerdrClient(identity);
-  const validated = await validateHerdrIdentityAgent(client, identity);
-  if (!validated.ok) {
-    const strict = session.wake_strict === "herdr";
-    await auditWakeDeliveryFailure(deps, {
-      session,
-      strategy: "herdr",
-      reason: validated.reason,
-      path: "resolve_sink",
-      detail: { prompt_type: payload.prompt_type }
-    });
-    return { ok: false, reason: validated.reason, strict };
-  }
-  const response = payload.response;
-  if (payload.prompt_type === "question" && /^\d+$/.test(response)) {
-    const sent = await client.agentSendKeys(response);
-    if (!sent.ok) {
-      const strict = session.wake_strict === "herdr";
-      await auditWakeDeliveryFailure(deps, {
-        session,
-        strategy: "herdr",
-        reason: `herdr_send_keys_failed:${sent.code}`,
-        path: "resolve_sink",
-        detail: { prompt_type: payload.prompt_type }
-      });
-      return { ok: false, reason: sent.message, strict };
-    }
-    return { ok: true };
-  }
-  let text = response;
-  if (payload.prompt_type === "freetext") {
-    text = response.replace(/[\r\n]+/g, " ").trim();
-  }
-  if (payload.prompt_type === "permission" && (response === "y" || response === "n" || response === "a")) {
-    const typed = await client.paneSendText(response);
-    if (!typed.ok) {
-      const strict = session.wake_strict === "herdr";
-      await auditWakeDeliveryFailure(deps, {
-        session,
-        strategy: "herdr",
-        reason: `herdr_send_text_failed:${typed.code}`,
-        path: "resolve_sink"
-      });
-      return { ok: false, reason: typed.message, strict };
-    }
-    const enter = await client.agentSendKeys("enter");
-    if (!enter.ok) {
-      const strict = session.wake_strict === "herdr";
-      await auditWakeDeliveryFailure(deps, {
-        session,
-        strategy: "herdr",
-        reason: `herdr_send_keys_failed:${enter.code}`,
-        path: "resolve_sink"
-      });
-      return { ok: false, reason: enter.message, strict };
-    }
-    return { ok: true };
-  }
-  if (payload.prompt_type === "freetext" && text) {
-    const typed = await client.paneSendText(text);
-    if (!typed.ok) {
-      const strict = session.wake_strict === "herdr";
-      await auditWakeDeliveryFailure(deps, {
-        session,
-        strategy: "herdr",
-        reason: `herdr_send_text_failed:${typed.code}`,
-        path: "resolve_sink"
-      });
-      return { ok: false, reason: typed.message, strict };
-    }
-    const enter = await client.agentSendKeys("enter");
-    if (!enter.ok) {
-      const strict = session.wake_strict === "herdr";
-      await auditWakeDeliveryFailure(deps, {
-        session,
-        strategy: "herdr",
-        reason: `herdr_send_keys_failed:${enter.code}`,
-        path: "resolve_sink"
-      });
-      return { ok: false, reason: enter.message, strict };
-    }
-    return { ok: true };
-  }
-  return { ok: false, reason: "unsupported_herdr_response", strict: false };
-}
-function wakeSeedFromMessage(input) {
-  return buildWakeSeed(input);
-}
-function parseWakeStrict(raw) {
-  return raw === "herdr" ? "herdr" : null;
-}
-async function auditWakeDeliveryFailure(deps, input) {
-  try {
-    await deps.audit?.append({
-      timestamp: deps.now?.() ?? Date.now(),
-      kind: "wake_delivery_failure",
-      agent: input.session.agent,
-      session: input.session.session_id,
-      detail: {
-        reason: input.reason,
-        strategy: input.strategy,
-        path: input.path,
-        ...input.detail
-      }
-    });
-  } catch {
-  }
-}
-async function wakeStrategyForSession(storage, session) {
-  const mode = await resolveWakeMode(storage, session.project, session.agent);
-  return effectiveWakeStrategy(session, mode);
-}
-function validateHerdrRegisterParams(params, expectedAgent) {
-  if (params.herdr_identity === void 0) {
-    return { ok: true };
-  }
-  const identity = parseHerdrIdentity(params.herdr_identity);
-  if (!identity || identity.agent !== expectedAgent) {
-    return { ok: false, reason: "invalid herdr_identity" };
-  }
-  return { ok: true };
-}
-async function applyHerdrWakeTargetFromRegisterParams(storage, session, params, expectedAgent) {
-  const validated = validateHerdrRegisterParams(params, expectedAgent);
-  if (!validated.ok) return;
-  const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
-  const wakeStrict = parseWakeStrict(params.wake_strict);
-  if (params.herdr_identity !== void 0 && herdrIdentity) {
-    await storage.setSessionWakeTarget(
-      session,
-      herdrIdentity,
-      params.wake_strict !== void 0 ? wakeStrict : void 0
-    );
-  } else if (params.wake_strict !== void 0) {
-    await storage.setSessionWakeTarget(session, void 0, wakeStrict);
-  }
-}
-
 // ../core-daemon/runtime/comm-lease-eligibility.ts
 function classifySessionDaemonOwner2(session, currentDiscoveryRoot) {
   const stamped = session.lease_owner_daemon_discovery_root;
@@ -9836,6 +9643,297 @@ function startSessionEndSweep(options) {
       tick();
     }
   };
+}
+
+// ../core-daemon/runtime/wake-target-selection.ts
+function pickScopeMatchedSession(pool, conversation) {
+  if (pool.length === 0) return void 0;
+  if (!conversation) return pool[0];
+  const match = resolveSessionForConversation(
+    pool,
+    conversation,
+    (sess) => sess.session_id
+  );
+  if (match) return match;
+  const unlabeled = pool.filter((session) => session.account_label_scope == null);
+  if (unlabeled.length === 1) return unlabeled[0];
+  return void 0;
+}
+async function selectActiveSessionForInboundWake(storage, project, agent, conversation, sessionOwnerIsLive) {
+  const resolved = normalizeProjectPath(project);
+  const sessions = await storage.listSessions({
+    project: resolved,
+    agent,
+    status: "active"
+  });
+  if (sessions.length === 0) return null;
+  const live = sessions.filter((session) => sessionOwnerIsLive(session));
+  const herdr = sessions.filter(
+    (session) => !sessionOwnerIsLive(session) && session.wake_identity != null
+  );
+  const legacy = sessions.filter(
+    (session) => !sessionOwnerIsLive(session) && session.wake_identity == null
+  );
+  for (const tier of [live, herdr, legacy]) {
+    const picked = pickScopeMatchedSession(tier, conversation);
+    if (picked) return picked;
+  }
+  return null;
+}
+function scopesMatch(a, b) {
+  if (a.account_label_scope == null && b.account_label_scope == null) return true;
+  return a.account_label_scope === b.account_label_scope;
+}
+async function supersedeStaleSessionsOnHerdrRegister(storage, herdrSession, sessionOwnerIsLive, now = Date.now()) {
+  const sessions = await storage.listSessions({
+    project: herdrSession.project,
+    agent: herdrSession.agent,
+    status: "active"
+  });
+  for (const row of sessions) {
+    if (row.session_id === herdrSession.session_id) continue;
+    if (!scopesMatch(row, herdrSession)) continue;
+    if (sessionOwnerIsLive(row)) continue;
+    if (row.lease_holder_connection_id != null) continue;
+    await storage.endSessionIfUnchanged(
+      row.session_id,
+      sessionEndObservation(row),
+      now
+    );
+  }
+}
+
+// ../core-daemon/runtime/wake-strategy.ts
+async function resolveWakeMode(storage, project, agent) {
+  return storage.getWakeMode(project, agent);
+}
+function effectiveWakeStrategy(session, mode) {
+  if (!session.wake_identity) return "native";
+  if (session.wake_strict === "herdr") return "herdr";
+  if (mode === "auto") return "herdr";
+  return "native";
+}
+async function herdrWake(session, seedText, deps) {
+  const identity = session.wake_identity;
+  if (!identity) {
+    return { ok: false, reason: "no_herdr_identity", strict: false };
+  }
+  const mode = await resolveWakeMode(deps.storage, session.project, session.agent);
+  if (effectiveWakeStrategy(session, mode) !== "herdr") {
+    return { ok: false, reason: "strategy_native", strict: false };
+  }
+  const client = deps.clientFactory?.(identity) ?? new HerdrClient(identity);
+  const validated = await validateHerdrIdentityAgent(client, identity);
+  if (!validated.ok) {
+    const strict = session.wake_strict === "herdr";
+    await auditWakeDeliveryFailure(deps, {
+      session,
+      strategy: "herdr",
+      reason: validated.reason,
+      path: "inbound_wake"
+    });
+    return { ok: false, reason: validated.reason, strict };
+  }
+  const prompt = seedText.trim().length > 0 ? seedText : ".";
+  const prompted = await client.agentPrompt(prompt);
+  if (!prompted.ok) {
+    const strict = session.wake_strict === "herdr";
+    await auditWakeDeliveryFailure(deps, {
+      session,
+      strategy: "herdr",
+      reason: `herdr_prompt_failed:${prompted.code}`,
+      path: "inbound_wake",
+      detail: { message: prompted.message }
+    });
+    return { ok: false, reason: prompted.message, strict };
+  }
+  await auditHerdrWakeSuccess(deps, session, {
+    path: "inbound_wake",
+    pane_id: identity.pane_id
+  });
+  return { ok: true };
+}
+async function herdrRespond(session, payload, deps) {
+  const identity = session.wake_identity;
+  if (!identity) {
+    return { ok: false, reason: "no_herdr_identity", strict: false };
+  }
+  const mode = await resolveWakeMode(deps.storage, session.project, session.agent);
+  if (effectiveWakeStrategy(session, mode) !== "herdr") {
+    return { ok: false, reason: "strategy_native", strict: false };
+  }
+  const client = deps.clientFactory?.(identity) ?? new HerdrClient(identity);
+  const validated = await validateHerdrIdentityAgent(client, identity);
+  if (!validated.ok) {
+    const strict = session.wake_strict === "herdr";
+    await auditWakeDeliveryFailure(deps, {
+      session,
+      strategy: "herdr",
+      reason: validated.reason,
+      path: "resolve_sink",
+      detail: { prompt_type: payload.prompt_type }
+    });
+    return { ok: false, reason: validated.reason, strict };
+  }
+  const response = payload.response;
+  if (payload.prompt_type === "question" && /^\d+$/.test(response)) {
+    const sent = await client.agentSendKeys(response);
+    if (!sent.ok) {
+      const strict = session.wake_strict === "herdr";
+      await auditWakeDeliveryFailure(deps, {
+        session,
+        strategy: "herdr",
+        reason: `herdr_send_keys_failed:${sent.code}`,
+        path: "resolve_sink",
+        detail: { prompt_type: payload.prompt_type }
+      });
+      return { ok: false, reason: sent.message, strict };
+    }
+    await auditHerdrWakeSuccess(deps, session, {
+      path: "resolve_sink",
+      pane_id: identity.pane_id,
+      prompt_type: payload.prompt_type
+    });
+    return { ok: true };
+  }
+  let text = response;
+  if (payload.prompt_type === "freetext") {
+    text = response.replace(/[\r\n]+/g, " ").trim();
+  }
+  if (payload.prompt_type === "permission" && (response === "y" || response === "n" || response === "a")) {
+    const typed = await client.paneSendText(response);
+    if (!typed.ok) {
+      const strict = session.wake_strict === "herdr";
+      await auditWakeDeliveryFailure(deps, {
+        session,
+        strategy: "herdr",
+        reason: `herdr_send_text_failed:${typed.code}`,
+        path: "resolve_sink"
+      });
+      return { ok: false, reason: typed.message, strict };
+    }
+    const enter = await client.agentSendKeys("enter");
+    if (!enter.ok) {
+      const strict = session.wake_strict === "herdr";
+      await auditWakeDeliveryFailure(deps, {
+        session,
+        strategy: "herdr",
+        reason: `herdr_send_keys_failed:${enter.code}`,
+        path: "resolve_sink"
+      });
+      return { ok: false, reason: enter.message, strict };
+    }
+    await auditHerdrWakeSuccess(deps, session, {
+      path: "resolve_sink",
+      pane_id: identity.pane_id,
+      prompt_type: payload.prompt_type
+    });
+    return { ok: true };
+  }
+  if (payload.prompt_type === "freetext" && text) {
+    const typed = await client.paneSendText(text);
+    if (!typed.ok) {
+      const strict = session.wake_strict === "herdr";
+      await auditWakeDeliveryFailure(deps, {
+        session,
+        strategy: "herdr",
+        reason: `herdr_send_text_failed:${typed.code}`,
+        path: "resolve_sink"
+      });
+      return { ok: false, reason: typed.message, strict };
+    }
+    const enter = await client.agentSendKeys("enter");
+    if (!enter.ok) {
+      const strict = session.wake_strict === "herdr";
+      await auditWakeDeliveryFailure(deps, {
+        session,
+        strategy: "herdr",
+        reason: `herdr_send_keys_failed:${enter.code}`,
+        path: "resolve_sink"
+      });
+      return { ok: false, reason: enter.message, strict };
+    }
+    await auditHerdrWakeSuccess(deps, session, {
+      path: "resolve_sink",
+      pane_id: identity.pane_id,
+      prompt_type: payload.prompt_type
+    });
+    return { ok: true };
+  }
+  return { ok: false, reason: "unsupported_herdr_response", strict: false };
+}
+function wakeSeedFromMessage(input) {
+  return buildWakeSeed(input);
+}
+function parseWakeStrict(raw) {
+  return raw === "herdr" ? "herdr" : null;
+}
+async function auditHerdrWakeSuccess(deps, session, detail) {
+  try {
+    await deps.audit?.append({
+      timestamp: deps.now?.() ?? Date.now(),
+      kind: "agent_wake_succeeded",
+      agent: session.agent,
+      session: session.session_id,
+      conversation_id: deps.conversationId,
+      detail: {
+        strategy: "herdr",
+        ...detail
+      }
+    });
+  } catch {
+  }
+}
+async function auditWakeDeliveryFailure(deps, input) {
+  try {
+    await deps.audit?.append({
+      timestamp: deps.now?.() ?? Date.now(),
+      kind: "wake_delivery_failure",
+      agent: input.session.agent,
+      session: input.session.session_id,
+      detail: {
+        reason: input.reason,
+        strategy: input.strategy,
+        path: input.path,
+        ...input.detail
+      }
+    });
+  } catch {
+  }
+}
+async function wakeStrategyForSession(storage, session) {
+  const mode = await resolveWakeMode(storage, session.project, session.agent);
+  return effectiveWakeStrategy(session, mode);
+}
+function validateHerdrRegisterParams(params, expectedAgent) {
+  if (params.herdr_identity === void 0) {
+    return { ok: true };
+  }
+  const identity = parseHerdrIdentity(params.herdr_identity);
+  if (!identity || identity.agent !== expectedAgent) {
+    return { ok: false, reason: "invalid herdr_identity" };
+  }
+  return { ok: true };
+}
+async function applyHerdrWakeTargetFromRegisterParams(storage, session, params, expectedAgent, sessionOwnerIsLive) {
+  const validated = validateHerdrRegisterParams(params, expectedAgent);
+  if (!validated.ok) return;
+  const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
+  const wakeStrict = parseWakeStrict(params.wake_strict);
+  const liveness = sessionOwnerIsLive ?? createSessionOwnerLiveness();
+  if (params.herdr_identity !== void 0 && herdrIdentity) {
+    await storage.setSessionWakeTarget(
+      session,
+      herdrIdentity,
+      params.wake_strict !== void 0 ? wakeStrict : void 0
+    );
+    const row = await storage.getSession(session);
+    if (row?.wake_identity) {
+      await supersedeStaleSessionsOnHerdrRegister(storage, row, liveness);
+    }
+  } else if (params.wake_strict !== void 0) {
+    await storage.setSessionWakeTarget(session, void 0, wakeStrict);
+  }
 }
 
 // ../core-daemon/runtime/ensure-registration.ts
@@ -11786,11 +11884,21 @@ async function handleHerdrRegisterPane(params, context) {
     identity,
     params.wake_strict !== void 0 ? parseWakeStrict(params.wake_strict) : void 0
   );
-  await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
   const session = await context.storage.getSession(session_id);
   if (!session) {
     throw new Error("herdr_register_pane failed to load session row");
   }
+  await supersedeStaleSessionsOnHerdrRegister(
+    context.storage,
+    session,
+    createSessionOwnerLiveness()
+  );
+  for (const bridge of context.bridges) {
+    if (bridge.agentId === agent) {
+      bridge.onHerdrPaneRegistered?.(session);
+    }
+  }
+  await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
   const wake_strategy = await wakeStrategyForSession(context.storage, session);
   return { ok: true, session, wake_strategy };
 }
@@ -12036,18 +12144,39 @@ var ClaudeWakeRegistry = class {
     await writeClaudeWakeTrigger(registration.wakeDir, this.now);
     return true;
   }
-  async resolveRegistrationForInbound(conversation, message) {
+  registerFromSession(session) {
+    return this.register({
+      session: session.session_id,
+      project: session.project,
+      account_label_scope: session.account_label_scope
+    });
+  }
+  async resolveRegistrationForInbound(conversation, _message) {
     if (conversation.agent !== "claude") return null;
-    const registration = this.latestForProject(conversation.project, conversation) ?? await this.hydrateLatestForProject(conversation.project, conversation);
-    if (!registration || !this.storage) return null;
-    const session = await this.storage.getSession(registration.session);
+    if (!this.storage) return null;
+    const session = await selectActiveSessionForInboundWake(
+      this.storage,
+      conversation.project,
+      "claude",
+      conversation,
+      this.sessionOwnerIsLive
+    );
     if (!session) return null;
+    const registration = this.getForSession(session.session_id) ?? this.registerFromSession(session);
     return { registration, session };
   }
   async wakeConversation(conversation, message) {
     if (conversation.agent !== "claude") return false;
-    const registration = this.latestForProject(conversation.project, conversation) ?? await this.hydrateLatestForProject(conversation.project, conversation);
-    if (!registration) return false;
+    if (!this.storage) return false;
+    const session = await selectActiveSessionForInboundWake(
+      this.storage,
+      conversation.project,
+      "claude",
+      conversation,
+      this.sessionOwnerIsLive
+    );
+    if (!session) return false;
+    const registration = this.getForSession(session.session_id) ?? this.registerFromSession(session);
     const seed = buildWakeSeed({
       comm: message?.chat.comm,
       sender: message?.sender?.display_name ?? message?.sender?.id,
@@ -12070,39 +12199,15 @@ var ClaudeWakeRegistry = class {
    */
   async hydrateLatestForProject(project, conversation) {
     if (!this.storage) return void 0;
-    const resolved = normalizeProjectPath(project);
-    const sessions = await this.storage.listSessions({
-      project: resolved,
-      agent: "claude",
-      status: "active"
-    });
-    if (sessions.length === 0) return void 0;
-    const live = sessions.filter(this.sessionOwnerIsLive);
-    const pool = live.length > 0 ? live : sessions;
-    let match = conversation ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id) : pool[0];
-    if (conversation && !match) {
-      const herdrPool = pool.filter((session) => session.wake_identity != null);
-      if (herdrPool.length > 0) {
-        match = resolveSessionForConversation(
-          herdrPool,
-          conversation,
-          (sess) => sess.session_id
-        );
-      }
-    }
-    if (conversation && !match) {
-      match = pool.find(
-        (session) => session.account_label_scope == null
-      );
-      if (!match) return void 0;
-    }
-    const latest = match;
-    if (!latest) return void 0;
-    return this.register({
-      session: latest.session_id,
-      project: resolved,
-      account_label_scope: latest.account_label_scope
-    });
+    const session = await selectActiveSessionForInboundWake(
+      this.storage,
+      project,
+      "claude",
+      conversation,
+      this.sessionOwnerIsLive
+    );
+    if (!session) return void 0;
+    return this.registerFromSession(session);
   }
   /**
    * On a miss in `writeResponseForSession`, look up the specific session
@@ -12283,6 +12388,9 @@ var ClaudeBridge = class {
   invalidateRegistrationCaches() {
     this.ownedAccountsCache = null;
   }
+  onHerdrPaneRegistered(session) {
+    this.wake.registerFromSession(session);
+  }
   async onInboundConversation(conversation, message) {
     if (conversation.agent !== this.agentId) return;
     try {
@@ -12301,7 +12409,8 @@ var ClaudeBridge = class {
           const herdr = await herdrWake(target.session, seed, {
             storage: this.options.storage,
             audit: this.options.audit,
-            clientFactory: this.options.herdrClientFactory
+            clientFactory: this.options.herdrClientFactory,
+            conversationId: conversation.conversation_id
           });
           if (herdr.ok) return;
           if (herdr.strict) return;
@@ -12528,7 +12637,8 @@ var ClaudeBridge = class {
       this.options.storage,
       session,
       params,
-      this.agentId
+      this.agentId,
+      this.sessionOwnerIsLive
     );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
@@ -13916,7 +14026,8 @@ var CodexBridge = class {
         const herdr = await herdrWake(sessionRecord, seed, {
           storage: this.options.storage,
           audit: this.options.audit,
-          clientFactory: this.options.herdrClientFactory
+          clientFactory: this.options.herdrClientFactory,
+          conversationId: conversation.conversation_id
         });
         if (herdr.ok) return;
         if (herdr.strict) return;
@@ -14285,7 +14396,8 @@ var CodexBridge = class {
       this.options.storage,
       session,
       params,
-      this.agentId
+      this.agentId,
+      this.sessionOwnerIsLive
     );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession ? this.isLocallyDeliverable(baselineSession) : false;
@@ -14706,29 +14818,23 @@ var CodexBridge = class {
   }
   async resolveSessionForConversation(conversation) {
     const project = normalizeProjectPath(conversation.project);
-    const inMemory = [...this.sessionRoutes.entries()].filter(([, route]) => route.project === project).map(([sessionId, route]) => ({
-      session_id: sessionId,
-      project: route.project,
-      agent: this.agentId,
-      account_label_scope: route.account_label_scope
-    }));
-    const fromMemory = resolveSessionForConversation(
-      inMemory,
-      conversation,
-      (sess) => sess.session_id
-    );
-    if (fromMemory) return fromMemory.session_id;
-    const sessions = await this.options.storage.listSessions({
+    const session = await selectActiveSessionForInboundWake(
+      this.options.storage,
       project,
-      agent: this.agentId,
-      status: "active"
-    });
-    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
-    const pool = live.length > 0 ? live : sessions;
-    const hydrated = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
-    if (!hydrated) return void 0;
-    this.trackSession(project, hydrated.session_id, hydrated.account_label_scope);
-    return hydrated.session_id;
+      this.agentId,
+      conversation,
+      this.sessionOwnerIsLive
+    );
+    if (!session) return void 0;
+    this.trackSession(project, session.session_id, session.account_label_scope);
+    return session.session_id;
+  }
+  onHerdrPaneRegistered(session) {
+    this.trackSession(
+      normalizeProjectPath(session.project),
+      session.session_id,
+      session.account_label_scope
+    );
   }
   async releaseSessionLease(input) {
     if (input.released) return;
@@ -15259,7 +15365,8 @@ var PiBridge = class {
       this.options.storage,
       session,
       params,
-      this.agentId
+      this.agentId,
+      this.sessionOwnerIsLive
     );
     const leaseOwner = this.options.daemonOwner ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams3(params), this.options.daemonOwner) : sessionLeaseOwnerFromParams3(params);
     const acquired = await this.options.storage.acquireSessionLease(
@@ -15324,7 +15431,8 @@ var PiBridge = class {
     const herdr = await herdrWake(sessionRecord, seed, {
       storage: this.options.storage,
       audit: this.options.audit,
-      clientFactory: this.options.herdrClientFactory
+      clientFactory: this.options.herdrClientFactory,
+      conversationId: conversation.conversation_id
     });
     if (herdr.ok) {
       this.herdrPollFallback.delete(session);
@@ -15335,16 +15443,14 @@ var PiBridge = class {
     }
   }
   async resolveSessionForConversation(conversation) {
-    const project = normalizeProjectPath(conversation.project);
-    const sessions = await this.options.storage.listSessions({
-      project,
-      agent: this.agentId,
-      status: "active"
-    });
-    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
-    const pool = live.length > 0 ? live : sessions;
-    const match = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
-    return match?.session_id;
+    const session = await selectActiveSessionForInboundWake(
+      this.options.storage,
+      conversation.project,
+      this.agentId,
+      conversation,
+      this.sessionOwnerIsLive
+    );
+    return session?.session_id;
   }
   async drainInbound(params) {
     const session = requiredString3(params.session, "session");

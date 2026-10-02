@@ -211,6 +211,9 @@ var identityCache = createProcessStartIdentityCache(probeProcessIdentities);
 // dist/core-daemon/runtime/session-owner-liveness.js
 var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
 
+// dist/core-daemon/runtime/session-end-sweep.js
+var DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1e3;
+
 // dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {
   let hash = 2166136261;

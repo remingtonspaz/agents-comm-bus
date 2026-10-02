@@ -1,6 +1,7 @@
-import type { AgentId, AuditStore, Session, SessionId, Storage } from "agents-comm-bus-core";
+import type { AgentId, AuditStore, ConversationId, Session, SessionId, Storage } from "agents-comm-bus-core";
 import type { ClaudeWakeResponsePayload } from "../bridges/claude/wake.js";
 import { HerdrClient, type HerdrIdentity, type HerdrWakeStrict } from "./herdr.js";
+import { type SessionOwnerLiveness } from "./session-owner-liveness.js";
 export type WakeMode = "auto" | "native";
 export type EffectiveWakeStrategy = "herdr" | "native";
 export declare function resolveWakeMode(storage: Storage, project: string, agent: Session["agent"]): Promise<WakeMode>;
@@ -10,6 +11,7 @@ export interface HerdrWakeDeps {
     audit?: AuditStore;
     clientFactory?: (identity: HerdrIdentity) => HerdrClient;
     now?: () => number;
+    conversationId?: ConversationId;
 }
 export declare function herdrWake(session: Session, seedText: string, deps: HerdrWakeDeps): Promise<{
     ok: true;
@@ -38,5 +40,5 @@ export declare function validateHerdrRegisterParams(params: Record<string, unkno
     ok: false;
     reason: "invalid herdr_identity";
 };
-export declare function applyHerdrWakeTargetFromRegisterParams(storage: Storage, session: SessionId, params: Record<string, unknown>, expectedAgent: AgentId): Promise<void>;
+export declare function applyHerdrWakeTargetFromRegisterParams(storage: Storage, session: SessionId, params: Record<string, unknown>, expectedAgent: AgentId, sessionOwnerIsLive?: SessionOwnerLiveness): Promise<void>;
 //# sourceMappingURL=wake-strategy.d.ts.map

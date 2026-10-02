@@ -6,6 +6,7 @@ import type {
   CommId,
   Conversation,
   Message,
+  Session,
   SessionId,
   Storage,
 } from "agents-comm-bus-core";
@@ -220,6 +221,9 @@ export interface AgentBridge {
     conversation: Conversation,
     message?: Message,
   ): Promise<void>;
+
+  /** Optional: herdr pane registered in storage (plugin IPC) — refresh bridge caches. */
+  onHerdrPaneRegistered?(session: Session): void;
 
   /** Handle an IPC method that this bridge advertised in `ipcMethods`. */
   handleIpcMethod(

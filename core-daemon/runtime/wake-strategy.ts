@@ -1,4 +1,11 @@
-import type { AgentId, AuditStore, Session, SessionId, Storage } from "agents-comm-bus-core";
+import type {
+  AgentId,
+  AuditStore,
+  ConversationId,
+  Session,
+  SessionId,
+  Storage,
+} from "agents-comm-bus-core";
 
 import { parseHerdrIdentity } from "./herdr.js";
 
@@ -10,6 +17,13 @@ import {
   validateHerdrIdentityAgent,
 } from "./herdr.js";
 import { buildWakeSeed } from "./wake-seed.js";
+import {
+  supersedeStaleSessionsOnHerdrRegister,
+} from "./wake-target-selection.js";
+import {
+  createSessionOwnerLiveness,
+  type SessionOwnerLiveness,
+} from "./session-owner-liveness.js";
 
 export type WakeMode = "auto" | "native";
 export type EffectiveWakeStrategy = "herdr" | "native";
@@ -37,6 +51,7 @@ export interface HerdrWakeDeps {
   audit?: AuditStore;
   clientFactory?: (identity: HerdrIdentity) => HerdrClient;
   now?: () => number;
+  conversationId?: ConversationId;
 }
 
 export async function herdrWake(
@@ -77,6 +92,10 @@ export async function herdrWake(
     });
     return { ok: false, reason: prompted.message, strict };
   }
+  await auditHerdrWakeSuccess(deps, session, {
+    path: "inbound_wake",
+    pane_id: identity.pane_id,
+  });
   return { ok: true };
 }
 
@@ -121,6 +140,11 @@ export async function herdrRespond(
       });
       return { ok: false, reason: sent.message, strict };
     }
+    await auditHerdrWakeSuccess(deps, session, {
+      path: "resolve_sink",
+      pane_id: identity.pane_id,
+      prompt_type: payload.prompt_type,
+    });
     return { ok: true };
   }
 
@@ -155,6 +179,11 @@ export async function herdrRespond(
       });
       return { ok: false, reason: enter.message, strict };
     }
+    await auditHerdrWakeSuccess(deps, session, {
+      path: "resolve_sink",
+      pane_id: identity.pane_id,
+      prompt_type: payload.prompt_type,
+    });
     return { ok: true };
   }
 
@@ -181,6 +210,11 @@ export async function herdrRespond(
       });
       return { ok: false, reason: enter.message, strict };
     }
+    await auditHerdrWakeSuccess(deps, session, {
+      path: "resolve_sink",
+      pane_id: identity.pane_id,
+      prompt_type: payload.prompt_type,
+    });
     return { ok: true };
   }
 
@@ -197,6 +231,32 @@ export function wakeSeedFromMessage(input: {
 
 export function parseWakeStrict(raw: unknown): HerdrWakeStrict | null {
   return raw === "herdr" ? "herdr" : null;
+}
+
+async function auditHerdrWakeSuccess(
+  deps: HerdrWakeDeps,
+  session: Session,
+  detail: {
+    path: "inbound_wake" | "resolve_sink";
+    pane_id: string;
+    prompt_type?: string;
+  },
+): Promise<void> {
+  try {
+    await deps.audit?.append({
+      timestamp: deps.now?.() ?? Date.now(),
+      kind: "agent_wake_succeeded",
+      agent: session.agent,
+      session: session.session_id,
+      conversation_id: deps.conversationId,
+      detail: {
+        strategy: "herdr",
+        ...detail,
+      },
+    });
+  } catch {
+    /* best-effort */
+  }
 }
 
 async function auditWakeDeliveryFailure(
@@ -254,17 +314,23 @@ export async function applyHerdrWakeTargetFromRegisterParams(
   session: SessionId,
   params: Record<string, unknown>,
   expectedAgent: AgentId,
+  sessionOwnerIsLive?: SessionOwnerLiveness,
 ): Promise<void> {
   const validated = validateHerdrRegisterParams(params, expectedAgent);
   if (!validated.ok) return;
   const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
   const wakeStrict = parseWakeStrict(params.wake_strict);
+  const liveness = sessionOwnerIsLive ?? createSessionOwnerLiveness();
   if (params.herdr_identity !== undefined && herdrIdentity) {
     await storage.setSessionWakeTarget(
       session,
       herdrIdentity,
       params.wake_strict !== undefined ? wakeStrict : undefined,
     );
+    const row = await storage.getSession(session);
+    if (row?.wake_identity) {
+      await supersedeStaleSessionsOnHerdrRegister(storage, row, liveness);
+    }
   } else if (params.wake_strict !== undefined) {
     await storage.setSessionWakeTarget(session, undefined, wakeStrict);
   }

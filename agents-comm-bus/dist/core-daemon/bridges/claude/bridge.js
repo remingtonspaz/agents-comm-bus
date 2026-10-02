@@ -130,6 +130,9 @@ export class ClaudeBridge {
     invalidateRegistrationCaches() {
         this.ownedAccountsCache = null;
     }
+    onHerdrPaneRegistered(session) {
+        this.wake.registerFromSession(session);
+    }
     async onInboundConversation(conversation, message) {
         if (conversation.agent !== this.agentId)
             return;
@@ -147,6 +150,7 @@ export class ClaudeBridge {
                         storage: this.options.storage,
                         audit: this.options.audit,
                         clientFactory: this.options.herdrClientFactory,
+                        conversationId: conversation.conversation_id,
                     });
                     if (herdr.ok)
                         return;
@@ -362,7 +366,7 @@ export class ClaudeBridge {
             wake_identity: null,
             wake_strict: null,
         });
-        await applyHerdrWakeTargetFromRegisterParams(this.options.storage, session, params, this.agentId);
+        await applyHerdrWakeTargetFromRegisterParams(this.options.storage, session, params, this.agentId, this.sessionOwnerIsLive);
         const baselineSession = await this.options.storage.getSession(session);
         const deliverabilityBaseline = baselineSession
             ? this.isLocallyDeliverable(baselineSession)

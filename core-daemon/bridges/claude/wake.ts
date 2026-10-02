@@ -22,6 +22,7 @@ import {
   createSessionOwnerLiveness,
   type SessionOwnerLiveness,
 } from "../../runtime/session-owner-liveness.js";
+import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
 
 export interface ClaudeWakeRegistration {
   session: SessionId;
@@ -215,17 +216,30 @@ export class ClaudeWakeRegistry {
     return true;
   }
 
+  registerFromSession(session: Session): ClaudeWakeRegistration {
+    return this.register({
+      session: session.session_id,
+      project: session.project,
+      account_label_scope: session.account_label_scope,
+    });
+  }
+
   async resolveRegistrationForInbound(
     conversation: Conversation,
-    message?: Message,
+    _message?: Message,
   ): Promise<{ registration: ClaudeWakeRegistration; session: Session } | null> {
     if (conversation.agent !== ("claude" as AgentId)) return null;
-    const registration =
-      this.latestForProject(conversation.project, conversation) ??
-      (await this.hydrateLatestForProject(conversation.project, conversation));
-    if (!registration || !this.storage) return null;
-    const session = await this.storage.getSession(registration.session);
+    if (!this.storage) return null;
+    const session = await selectActiveSessionForInboundWake(
+      this.storage,
+      conversation.project,
+      "claude" as AgentId,
+      conversation,
+      this.sessionOwnerIsLive,
+    );
     if (!session) return null;
+    const registration =
+      this.getForSession(session.session_id) ?? this.registerFromSession(session);
     return { registration, session };
   }
 
@@ -234,10 +248,34 @@ export class ClaudeWakeRegistry {
     message?: Message,
   ): Promise<boolean> {
     if (conversation.agent !== ("claude" as AgentId)) return false;
+    if (!this.storage) {
+      const registration = this.latestForProject(conversation.project, conversation);
+      if (!registration) return false;
+      const seed = buildWakeSeed({
+        comm: message?.chat.comm,
+        sender: message?.sender?.display_name ?? message?.sender?.id,
+        body: message?.text,
+      });
+      if (seed) {
+        try {
+          await writeClaudeWakeSeed(registration.wakeDir, seed);
+        } catch {
+          /* best-effort */
+        }
+      }
+      await writeClaudeWakeTrigger(registration.wakeDir, this.now);
+      return true;
+    }
+    const session = await selectActiveSessionForInboundWake(
+      this.storage,
+      conversation.project,
+      "claude" as AgentId,
+      conversation,
+      this.sessionOwnerIsLive,
+    );
+    if (!session) return false;
     const registration =
-      this.latestForProject(conversation.project, conversation) ??
-      (await this.hydrateLatestForProject(conversation.project, conversation));
-    if (!registration) return false;
+      this.getForSession(session.session_id) ?? this.registerFromSession(session);
     // AGE-65: drop the decorated inbound text as a seed BEFORE the trigger so it
     // is in place when the watcher consumes the trigger. Best-effort: a seed
     // write failure must not block the wake itself.
@@ -265,48 +303,18 @@ export class ClaudeWakeRegistry {
    */
   private async hydrateLatestForProject(
     project: string,
-    conversation?: { comm: string; account_label: string },
+    conversation?: Conversation,
   ): Promise<ClaudeWakeRegistration | undefined> {
     if (!this.storage) return undefined;
-    const resolved = normalizeProjectPath(project);
-    const sessions = await this.storage.listSessions({
-      project: resolved,
-      agent: "claude" as AgentId,
-      status: "active",
-    });
-    if (sessions.length === 0) return undefined;
-    const live = sessions.filter(this.sessionOwnerIsLive);
-    const pool = live.length > 0 ? live : sessions;
-    let match = conversation
-      ? resolveSessionForConversation(pool, conversation, (sess) => sess.session_id)
-      : pool[0];
-    if (conversation && !match) {
-      const herdrPool = pool.filter((session) => session.wake_identity != null);
-      if (herdrPool.length > 0) {
-        match = resolveSessionForConversation(
-          herdrPool,
-          conversation,
-          (sess) => sess.session_id,
-        );
-      }
-    }
-    if (conversation && !match) {
-      // Multiple legacy/unscoped rows are ambiguous by session id but share
-      // the exact same project-only wake directory. Reaching this branch also
-      // proves no labeled scope matched, so unrelated labeled rows must not
-      // veto the legacy fallback.
-      match = pool.find(
-        (session) => session.account_label_scope == null,
-      );
-      if (!match) return undefined;
-    }
-    const latest = match;
-    if (!latest) return undefined;
-    return this.register({
-      session: latest.session_id,
-      project: resolved,
-      account_label_scope: latest.account_label_scope,
-    });
+    const session = await selectActiveSessionForInboundWake(
+      this.storage,
+      project,
+      "claude" as AgentId,
+      conversation,
+      this.sessionOwnerIsLive,
+    );
+    if (!session) return undefined;
+    return this.registerFromSession(session);
   }
 
   /**

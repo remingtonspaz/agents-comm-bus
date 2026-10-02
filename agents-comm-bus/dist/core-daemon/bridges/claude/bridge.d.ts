@@ -8,7 +8,7 @@
  * `attach` to the bus + the running comm adapters; everything Claude-specific
  * stays inside this module.
  */
-import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type Message, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
+import { type AuditStore, type AccountId, type AgentId, type CommAdapter, type CommId, type Conversation, type Message, type QueryId, type Session, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -86,6 +86,7 @@ export declare class ClaudeBridge implements AgentBridge {
     detachComm(_commId: CommId, _accountId: AccountId): void;
     getRetirementBlockers(): RetirementBlockerSnapshot | null;
     invalidateRegistrationCaches(): void;
+    onHerdrPaneRegistered(session: Session): void;
     onInboundConversation(conversation: Conversation, message?: Message): Promise<void>;
     private auditWakeFailure;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {

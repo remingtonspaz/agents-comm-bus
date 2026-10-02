@@ -46,7 +46,8 @@ export declare class ClaudeWakeRegistry {
     }): ClaudeWakeRegistration | undefined;
     getForSession(session: SessionId): ClaudeWakeRegistration | undefined;
     writeResponseForSession(session: SessionId, payload: ClaudeWakeResponsePayload): Promise<boolean>;
-    resolveRegistrationForInbound(conversation: Conversation, message?: Message): Promise<{
+    registerFromSession(session: Session): ClaudeWakeRegistration;
+    resolveRegistrationForInbound(conversation: Conversation, _message?: Message): Promise<{
         registration: ClaudeWakeRegistration;
         session: Session;
     } | null>;

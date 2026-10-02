@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsForSession, resolveSessionForConversation, sessionOwnsConversation, } from "../../session-label-scope.js";
+import { accountLabelScopeFromParams, filterRegistrationsForSession, sessionOwnsConversation, } from "../../session-label-scope.js";
 import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
@@ -13,6 +13,7 @@ import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
 import { herdrSessionId, parseHerdrIdentity, } from "../../runtime/herdr.js";
 import { applyHerdrWakeTargetFromRegisterParams, effectiveWakeStrategy, herdrWake, parseWakeStrict, resolveWakeMode, validateHerdrRegisterParams, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
+import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
 const DEFAULT_TTL_SECONDS = 3600;
 const DEFAULT_CODEX_PROBE_PORT_MIN = 4500;
 const DEFAULT_CODEX_PROBE_PORT_MAX = 4600;
@@ -126,6 +127,7 @@ export class CodexBridge {
                     storage: this.options.storage,
                     audit: this.options.audit,
                     clientFactory: this.options.herdrClientFactory,
+                    conversationId: conversation.conversation_id,
                 });
                 if (herdr.ok)
                     return;
@@ -435,7 +437,7 @@ export class CodexBridge {
             wake_identity: null,
             wake_strict: null,
         });
-        await applyHerdrWakeTargetFromRegisterParams(this.options.storage, session, params, this.agentId);
+        await applyHerdrWakeTargetFromRegisterParams(this.options.storage, session, params, this.agentId, this.sessionOwnerIsLive);
         const baselineSession = await this.options.storage.getSession(session);
         const deliverabilityBaseline = baselineSession
             ? this.isLocallyDeliverable(baselineSession)
@@ -826,29 +828,14 @@ export class CodexBridge {
     }
     async resolveSessionForConversation(conversation) {
         const project = normalizeProjectPath(conversation.project);
-        const inMemory = [...this.sessionRoutes.entries()]
-            .filter(([, route]) => route.project === project)
-            .map(([sessionId, route]) => ({
-            session_id: sessionId,
-            project: route.project,
-            agent: this.agentId,
-            account_label_scope: route.account_label_scope,
-        }));
-        const fromMemory = resolveSessionForConversation(inMemory, conversation, (sess) => sess.session_id);
-        if (fromMemory)
-            return fromMemory.session_id;
-        const sessions = await this.options.storage.listSessions({
-            project,
-            agent: this.agentId,
-            status: "active",
-        });
-        const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
-        const pool = live.length > 0 ? live : sessions;
-        const hydrated = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
-        if (!hydrated)
+        const session = await selectActiveSessionForInboundWake(this.options.storage, project, this.agentId, conversation, this.sessionOwnerIsLive);
+        if (!session)
             return undefined;
-        this.trackSession(project, hydrated.session_id, hydrated.account_label_scope);
-        return hydrated.session_id;
+        this.trackSession(project, session.session_id, session.account_label_scope);
+        return session.session_id;
+    }
+    onHerdrPaneRegistered(session) {
+        this.trackSession(normalizeProjectPath(session.project), session.session_id, session.account_label_scope);
     }
     async releaseSessionLease(input) {
         if (input.released)

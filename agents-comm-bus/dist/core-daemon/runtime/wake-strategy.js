@@ -1,6 +1,8 @@
 import { parseHerdrIdentity } from "./herdr.js";
 import { HerdrClient, validateHerdrIdentityAgent, } from "./herdr.js";
 import { buildWakeSeed } from "./wake-seed.js";
+import { supersedeStaleSessionsOnHerdrRegister, } from "./wake-target-selection.js";
+import { createSessionOwnerLiveness, } from "./session-owner-liveness.js";
 export async function resolveWakeMode(storage, project, agent) {
     return storage.getWakeMode(project, agent);
 }
@@ -47,6 +49,10 @@ export async function herdrWake(session, seedText, deps) {
         });
         return { ok: false, reason: prompted.message, strict };
     }
+    await auditHerdrWakeSuccess(deps, session, {
+        path: "inbound_wake",
+        pane_id: identity.pane_id,
+    });
     return { ok: true };
 }
 export async function herdrRespond(session, payload, deps) {
@@ -85,6 +91,11 @@ export async function herdrRespond(session, payload, deps) {
             });
             return { ok: false, reason: sent.message, strict };
         }
+        await auditHerdrWakeSuccess(deps, session, {
+            path: "resolve_sink",
+            pane_id: identity.pane_id,
+            prompt_type: payload.prompt_type,
+        });
         return { ok: true };
     }
     let text = response;
@@ -115,6 +126,11 @@ export async function herdrRespond(session, payload, deps) {
             });
             return { ok: false, reason: enter.message, strict };
         }
+        await auditHerdrWakeSuccess(deps, session, {
+            path: "resolve_sink",
+            pane_id: identity.pane_id,
+            prompt_type: payload.prompt_type,
+        });
         return { ok: true };
     }
     if (payload.prompt_type === "freetext" && text) {
@@ -140,6 +156,11 @@ export async function herdrRespond(session, payload, deps) {
             });
             return { ok: false, reason: enter.message, strict };
         }
+        await auditHerdrWakeSuccess(deps, session, {
+            path: "resolve_sink",
+            pane_id: identity.pane_id,
+            prompt_type: payload.prompt_type,
+        });
         return { ok: true };
     }
     return { ok: false, reason: "unsupported_herdr_response", strict: false };
@@ -149,6 +170,24 @@ export function wakeSeedFromMessage(input) {
 }
 export function parseWakeStrict(raw) {
     return raw === "herdr" ? "herdr" : null;
+}
+async function auditHerdrWakeSuccess(deps, session, detail) {
+    try {
+        await deps.audit?.append({
+            timestamp: deps.now?.() ?? Date.now(),
+            kind: "agent_wake_succeeded",
+            agent: session.agent,
+            session: session.session_id,
+            conversation_id: deps.conversationId,
+            detail: {
+                strategy: "herdr",
+                ...detail,
+            },
+        });
+    }
+    catch {
+        /* best-effort */
+    }
 }
 async function auditWakeDeliveryFailure(deps, input) {
     try {
@@ -183,14 +222,19 @@ export function validateHerdrRegisterParams(params, expectedAgent) {
     }
     return { ok: true };
 }
-export async function applyHerdrWakeTargetFromRegisterParams(storage, session, params, expectedAgent) {
+export async function applyHerdrWakeTargetFromRegisterParams(storage, session, params, expectedAgent, sessionOwnerIsLive) {
     const validated = validateHerdrRegisterParams(params, expectedAgent);
     if (!validated.ok)
         return;
     const herdrIdentity = parseHerdrIdentity(params.herdr_identity);
     const wakeStrict = parseWakeStrict(params.wake_strict);
+    const liveness = sessionOwnerIsLive ?? createSessionOwnerLiveness();
     if (params.herdr_identity !== undefined && herdrIdentity) {
         await storage.setSessionWakeTarget(session, herdrIdentity, params.wake_strict !== undefined ? wakeStrict : undefined);
+        const row = await storage.getSession(session);
+        if (row?.wake_identity) {
+            await supersedeStaleSessionsOnHerdrRegister(storage, row, liveness);
+        }
     }
     else if (params.wake_strict !== undefined) {
         await storage.setSessionWakeTarget(session, undefined, wakeStrict);

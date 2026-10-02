@@ -3718,7 +3718,7 @@ var JsonlAuditStore = class {
 
 // dist/core-daemon/config.js
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.67";
+var DAEMON_VERSION = "0.2.68";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 var DEFAULT_BOOTSTRAP_TIMEOUT_MS = 2e4;
@@ -5847,6 +5847,9 @@ function parseAccountLabelScope(stored) {
 
 // dist/core-daemon/runtime/session-owner-liveness.js
 var DEFAULT_SESSION_OWNER_RECENCY_MS = 24 * 60 * 60 * 1e3;
+
+// dist/core-daemon/runtime/session-end-sweep.js
+var DEFAULT_SESSION_END_SWEEP_INTERVAL_MS = 60 * 60 * 1e3;
 
 // dist/core-daemon/bridges/claude/wake.js
 function hashProjectKey(projectPath) {

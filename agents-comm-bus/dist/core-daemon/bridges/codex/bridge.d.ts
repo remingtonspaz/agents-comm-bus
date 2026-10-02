@@ -1,4 +1,4 @@
-import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type SessionId, type Storage } from "agents-comm-bus-core";
+import { type AccountId, type AgentId, type AuditStore, type CommAdapter, type CommId, type Conversation, type QueryId, type Session, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession, PersistHeldCommLeaseAgentProperties, ReadHeldCommLease, RetirementBlockerSnapshot } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
@@ -126,6 +126,7 @@ export declare class CodexBridge implements AgentBridge {
     private trackSession;
     private untrackSession;
     private resolveSessionForConversation;
+    onHerdrPaneRegistered(session: Session): void;
     private releaseSessionLease;
     private ensureOwnerCheckTimer;
     private stopOwnerCheckTimerIfIdle;

@@ -51,6 +51,7 @@ import {
   wakeStrategyForSession,
 } from "./runtime/wake-strategy.js";
 import { sessionEndObservation } from "./runtime/session-end-sweep.js";
+import { supersedeStaleSessionsOnHerdrRegister } from "./runtime/wake-target-selection.js";
 import type { CommAdapterFactory } from "./runtime/comm-factory.js";
 import {
   addAdapterForRegistration,
@@ -1526,11 +1527,21 @@ export async function handleHerdrRegisterPane(
     identity,
     params.wake_strict !== undefined ? parseWakeStrict(params.wake_strict) : undefined,
   );
-  await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
   const session = await context.storage.getSession(session_id);
   if (!session) {
     throw new Error("herdr_register_pane failed to load session row");
   }
+  await supersedeStaleSessionsOnHerdrRegister(
+    context.storage,
+    session,
+    createSessionOwnerLiveness(),
+  );
+  for (const bridge of context.bridges) {
+    if (bridge.agentId === agent) {
+      bridge.onHerdrPaneRegistered?.(session);
+    }
+  }
+  await context.ensureCommsForSession(project, agent, { accountLabelScope: null });
   const wake_strategy = await wakeStrategyForSession(context.storage, session);
   return { ok: true, session, wake_strategy };
 }

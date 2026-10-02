@@ -14,6 +14,7 @@ import {
   type Query,
   type QueryId,
   type ResolvedDecision,
+  type Session,
   type SessionId,
   type Storage,
 } from "agents-comm-bus-core";
@@ -22,7 +23,6 @@ import { normalizeProjectPath } from "../../project-path.js";
 import {
   accountLabelScopeFromParams,
   filterRegistrationsForSession,
-  resolveSessionForConversation,
   sessionOwnsConversation,
 } from "../../session-label-scope.js";
 import { isSessionLocallyDeliverable } from "../../runtime/session-deliverability.js";
@@ -76,6 +76,7 @@ import {
   wakeStrategyForSession,
   type EffectiveWakeStrategy,
 } from "../../runtime/wake-strategy.js";
+import { selectActiveSessionForInboundWake } from "../../runtime/wake-target-selection.js";
 
 export interface CodexBridgeOptions {
   storage: Storage;
@@ -281,6 +282,7 @@ export class CodexBridge implements AgentBridge {
           storage: this.options.storage,
           audit: this.options.audit,
           clientFactory: this.options.herdrClientFactory,
+          conversationId: conversation.conversation_id,
         });
         if (herdr.ok) return;
         if (herdr.strict) return;
@@ -720,6 +722,7 @@ export class CodexBridge implements AgentBridge {
       session,
       params,
       this.agentId,
+      this.sessionOwnerIsLive,
     );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession
@@ -1230,32 +1233,24 @@ export class CodexBridge implements AgentBridge {
     conversation: Conversation,
   ): Promise<SessionId | undefined> {
     const project = normalizeProjectPath(conversation.project);
-    const inMemory = [...this.sessionRoutes.entries()]
-      .filter(([, route]) => route.project === project)
-      .map(([sessionId, route]) => ({
-        session_id: sessionId,
-        project: route.project,
-        agent: this.agentId,
-        account_label_scope: route.account_label_scope,
-      }));
-    const fromMemory = resolveSessionForConversation(
-      inMemory,
-      conversation,
-      (sess) => sess.session_id,
-    );
-    if (fromMemory) return fromMemory.session_id;
-
-    const sessions = await this.options.storage.listSessions({
+    const session = await selectActiveSessionForInboundWake(
+      this.options.storage,
       project,
-      agent: this.agentId,
-      status: "active",
-    });
-    const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
-    const pool = live.length > 0 ? live : sessions;
-    const hydrated = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
-    if (!hydrated) return undefined;
-    this.trackSession(project, hydrated.session_id, hydrated.account_label_scope);
-    return hydrated.session_id;
+      this.agentId,
+      conversation,
+      this.sessionOwnerIsLive,
+    );
+    if (!session) return undefined;
+    this.trackSession(project, session.session_id, session.account_label_scope);
+    return session.session_id;
+  }
+
+  onHerdrPaneRegistered(session: Session): void {
+    this.trackSession(
+      normalizeProjectPath(session.project),
+      session.session_id,
+      session.account_label_scope,
+    );
   }
 
   private async releaseSessionLease(input: CodexSessionLease): Promise<void> {

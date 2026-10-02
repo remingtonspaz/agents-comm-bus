@@ -28,6 +28,7 @@ import {
   type QueryId,
   type QueryRecord,
   type ResolvedDecision,
+  type Session,
   type SessionId,
   type Storage,
 } from "agents-comm-bus-core";
@@ -267,6 +268,10 @@ export class ClaudeBridge implements AgentBridge {
     this.ownedAccountsCache = null;
   }
 
+  onHerdrPaneRegistered(session: Session): void {
+    this.wake.registerFromSession(session);
+  }
+
   async onInboundConversation(
     conversation: Conversation,
     message?: Message,
@@ -289,6 +294,7 @@ export class ClaudeBridge implements AgentBridge {
             storage: this.options.storage,
             audit: this.options.audit,
             clientFactory: this.options.herdrClientFactory,
+            conversationId: conversation.conversation_id,
           });
           if (herdr.ok) return;
           if (herdr.strict) return;
@@ -560,6 +566,7 @@ export class ClaudeBridge implements AgentBridge {
       session,
       params,
       this.agentId,
+      this.sessionOwnerIsLive,
     );
     const baselineSession = await this.options.storage.getSession(session);
     const deliverabilityBaseline = baselineSession
