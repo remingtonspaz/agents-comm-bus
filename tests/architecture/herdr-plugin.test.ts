@@ -6,10 +6,7 @@ import test from "node:test";
 
 import { resolveClaudeSessionId } from "../../hosts/common/claude-session-id.js";
 import { claudeMcpSessionInUse } from "../../hosts/common/claude-mcp-session.js";
-import {
-  resolveCodexSessionId,
-  resolveCodexMcpSessionId,
-} from "../../hosts/common/codex-session-id.js";
+import { resolveCodexSessionId } from "../../hosts/common/codex-session-id.js";
 import {
   agentKindFromListEntry,
   buildSyncIdentity,
@@ -182,27 +179,13 @@ test("claudeMcpSessionInUse: herdr, then managed id, then mcp fallback", () => {
   );
 });
 
-test("resolveCodexSessionId hooks: herdr then hash, not managed id", () => {
-  withEnv(
-    {
-      HERDR_ENV: undefined,
-      HERDR_PANE_ID: undefined,
-      HERDR_SOCKET_PATH: undefined,
-      AGENTS_COMM_BUS_SESSION_ID: "managed",
-      CODEX_SESSION_ID: "thread-1",
-    },
-    () => {
-      const id = resolveCodexSessionId({});
-      assert.match(id, /^codex_/);
-      assert.notEqual(id, "managed");
-    },
-  );
+test("resolveCodexSessionId: herdr + managed -> herdr id", () => {
   withEnv({ ...herdrEnv, AGENTS_COMM_BUS_SESSION_ID: "managed" }, () => {
     assert.match(resolveCodexSessionId({}), /^herdr_/);
   });
 });
 
-test("resolveCodexMcpSessionId: herdr then managed then hash", () => {
+test("resolveCodexSessionId: managed only -> managed id", () => {
   withEnv(
     {
       HERDR_ENV: undefined,
@@ -211,9 +194,50 @@ test("resolveCodexMcpSessionId: herdr then managed then hash", () => {
       AGENTS_COMM_BUS_SESSION_ID: "managed",
       CODEX_SESSION_ID: "t",
     },
-    () => assert.equal(resolveCodexMcpSessionId({}), "managed"),
+    () => assert.equal(resolveCodexSessionId({}), "managed"),
   );
-  withEnv({ ...herdrEnv, AGENTS_COMM_BUS_SESSION_ID: "managed" }, () => {
-    assert.match(resolveCodexMcpSessionId({}), /^herdr_/);
-  });
+});
+
+test("resolveCodexSessionId: neither herdr nor managed -> codex_ hash", () => {
+  withEnv(
+    {
+      HERDR_ENV: undefined,
+      HERDR_PANE_ID: undefined,
+      HERDR_SOCKET_PATH: undefined,
+      AGENTS_COMM_BUS_SESSION_ID: undefined,
+      CODEX_SESSION_ID: "thread-1",
+    },
+    () => {
+      const id = resolveCodexSessionId({});
+      assert.match(id, /^codex_/);
+    },
+  );
+});
+
+const CODEX_SESSION_HOSTS = [
+  "hosts/codex/hooks/session-start.js",
+  "hosts/codex/hooks/user-prompt-submit.js",
+  "hosts/codex/hooks/permission-request.js",
+  "hosts/codex/codex-mcp-shim.js",
+];
+
+const CLAUDE_SESSION_HOOKS = [
+  "hosts/claude/hooks/user-prompt-submit.js",
+  "hosts/claude/hooks/permission-request.js",
+];
+
+test("Codex session hosts use resolveCodexSessionId without local stableSessionId", async () => {
+  for (const rel of CODEX_SESSION_HOSTS) {
+    const src = await readFile(path.join(repoRoot, rel), "utf8");
+    assert.match(src, /resolveCodexSessionId/, `${rel} must import shared resolver`);
+    assert.doesNotMatch(src, /function stableSessionId/, `${rel} must not define stableSessionId`);
+  }
+});
+
+test("Claude session hooks use resolveClaudeSessionId without local stableSessionId", async () => {
+  for (const rel of CLAUDE_SESSION_HOOKS) {
+    const src = await readFile(path.join(repoRoot, rel), "utf8");
+    assert.match(src, /resolveClaudeSessionId/, `${rel} must import shared resolver`);
+    assert.doesNotMatch(src, /function stableSessionId/, `${rel} must not define stableSessionId`);
+  }
 });

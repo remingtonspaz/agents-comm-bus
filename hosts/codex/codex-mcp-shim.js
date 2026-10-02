@@ -13,7 +13,7 @@ import {
 import { normalizeProjectPath } from "../../agents-comm-bus/dist/core-daemon/project-path.js";
 import { accountLabelScopeFromEnvSafe } from "../common/comm-labels.js";
 import { herdrWakeFieldsForRegister } from "../common/herdr-env.js";
-import { resolveCodexMcpSessionId } from "../common/codex-session-id.js";
+import { resolveCodexSessionId } from "../common/codex-session-id.js";
 
 let persistentRegistration = null;
 const codexRuntime = {
@@ -26,7 +26,7 @@ function agentInUse() {
 }
 
 function sessionInUse() {
-  return resolveCodexMcpSessionId({});
+  return resolveCodexSessionId({});
 }
 
 async function discoverCodexRuntime() {

@@ -8,37 +8,16 @@
  * pending-permission or permission-response files.
  */
 
-import crypto from 'node:crypto';
 import { AGENTS_COMM_BUS_DEGRADED_MESSAGE } from '../../common/hook-degraded.js';
 import { accountLabelScopeFromEnvSafe } from '../../common/comm-labels.js';
+import { herdrWakeFieldsForRegister } from '../../common/herdr-env.js';
+import { codexThreadIdFromHook, resolveCodexSessionId } from '../../common/codex-session-id.js';
 import { entryEnsures } from '../../common/install/entry-ensures.js';
 import { connectIpc } from '../../../agents-comm-bus/dist/core-daemon/ipc/client.js';
 import { normalizeProjectPath } from '../../../agents-comm-bus/dist/core-daemon/project-path.js';
 
 const CLIENT_VERSION = 'codex-hook-phase3';
 const DEFAULT_TTL_SECONDS = 9 * 60;
-
-function stableSessionId(hookInput) {
-  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
-    return process.env.AGENTS_COMM_BUS_SESSION_ID;
-  }
-  const raw =
-    codexThreadId(hookInput) ||
-    `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ''}`;
-  return `codex_${crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 24)}`;
-}
-
-function codexThreadId(hookInput) {
-  return (
-    hookInput?.thread_id ||
-    hookInput?.threadId ||
-    hookInput?.session_id ||
-    hookInput?.sessionId ||
-    process.env.CODEX_THREAD_ID ||
-    process.env.CODEX_SESSION_ID ||
-    ''
-  );
-}
 
 async function readStdinJson() {
   let input = '';
@@ -120,7 +99,7 @@ async function main() {
 
   const toolName = hookInput.tool_name || hookInput.toolName || 'PermissionRequest';
   const toolInput = hookInput.tool_input || hookInput.toolInput || {};
-  const session = stableSessionId(hookInput);
+  const session = resolveCodexSessionId(hookInput);
   const project = normalizeProjectPath(process.cwd());
   const metadata = {
     shimName: 'hosts/codex/hooks/permission-request.js',
@@ -139,10 +118,11 @@ async function main() {
       project,
       cwd: project,
       app_server_url: process.env.CODEX_APP_SERVER_URL,
-      thread_id: codexThreadId(hookInput) || undefined,
+      thread_id: codexThreadIdFromHook(hookInput) || undefined,
       hook: 'PermissionRequest',
       codex: hookInput,
       account_label_scope: accountLabelScopeFromEnvSafe(),
+      ...herdrWakeFieldsForRegister('codex', project),
     });
     if (!registered?.ok) {
       throw new Error(registered?.reason || 'codex session registration failed');

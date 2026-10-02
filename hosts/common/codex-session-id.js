@@ -14,19 +14,15 @@ export function codexThreadIdFromHook(hookInput) {
   );
 }
 
-export function resolveCodexSessionId(hookInput, options = {}) {
+/** All Codex hosts: herdr → AGENTS_COMM_BUS_SESSION_ID → codex_ hash. */
+export function resolveCodexSessionId(hookInput = {}) {
   const herdr = herdrSessionIdFromEnv('codex');
   if (herdr) return herdr;
-  if (options.honorManagedSessionId && process.env.AGENTS_COMM_BUS_SESSION_ID) {
+  if (process.env.AGENTS_COMM_BUS_SESSION_ID) {
     return process.env.AGENTS_COMM_BUS_SESSION_ID;
   }
   const raw =
     codexThreadIdFromHook(hookInput) ||
     `${process.cwd()}:${process.env.CODEX_APP_SERVER_URL || ''}`;
   return `codex_${crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 24)}`;
-}
-
-/** MCP shim / managed registration: herdr → AGENTS_COMM_BUS_SESSION_ID → codex_ hash. */
-export function resolveCodexMcpSessionId(hookInput = {}) {
-  return resolveCodexSessionId(hookInput, { honorManagedSessionId: true });
 }
