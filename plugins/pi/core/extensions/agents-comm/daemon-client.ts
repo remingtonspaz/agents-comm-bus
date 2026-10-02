@@ -24,6 +24,9 @@ export interface PiRegisterSessionParams {
   project: string;
   cwd: string;
   connection_id: string;
+  herdr_identity?: Record<string, unknown>;
+  wake_strict?: "herdr" | null;
+  account_label_scope?: string | null;
   host: {
     pid: number;
     label: string;
@@ -38,6 +41,7 @@ export interface PiDrainInboundParams {
   project?: string;
   comm?: string;
   limit?: number;
+  trigger?: "poll" | "prompt";
 }
 
 export interface PiUnregisterSessionParams {

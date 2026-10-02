@@ -10,6 +10,9 @@ import {
   herdrSessionIdFromEnv,
   wakeStrictFromDevMarker,
 } from "../../hosts/common/herdr-env.js";
+import {
+  herdrSessionIdFromEnv as piHerdrSessionIdFromEnv,
+} from "../../plugins/pi/core/extensions/agents-comm/herdr-session.ts";
 import { resolveCliEntry, CENTRAL_CLI, CHECKOUT_CLI_REL } from "../../plugins/herdr/plugin-lib.js";
 
 test("herdrIdentityFromEnv requires HERDR_ENV, pane id, and socket path", () => {
@@ -27,6 +30,15 @@ test("herdrIdentityFromEnv requires HERDR_ENV, pane id, and socket path", () => 
   assert.equal(herdrIdentityFromEnv("claude", { ...base, HERDR_ENV: "0" }), null);
   assert.equal(herdrIdentityFromEnv("claude", { ...base, HERDR_PANE_ID: "" }), null);
   assert.equal(herdrIdentityFromEnv("claude", { ...base, HERDR_SOCKET_PATH: "" }), null);
+});
+
+test("Pi extension herdrSessionIdFromEnv matches hosts/common/herdr-env.js", () => {
+  const env = {
+    HERDR_ENV: "1",
+    HERDR_PANE_ID: "w1:p9",
+    HERDR_SOCKET_PATH: "C:\\Users\\me\\AppData\\herdr\\session-dev.sock",
+  };
+  assert.equal(piHerdrSessionIdFromEnv(env), herdrSessionIdFromEnv("pi", env));
 });
 
 test("herdrSessionIdFromEnv matches daemon herdrSessionId", () => {

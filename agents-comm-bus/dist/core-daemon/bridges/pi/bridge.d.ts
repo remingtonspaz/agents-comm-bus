@@ -5,10 +5,12 @@
  * release. Pi has no wake watcher (the extension polls + injects itself), so
  * this bridge is simpler than Claude/Codex.
  */
-import { type AgentId, type AuditStore, type CommAdapter, type SessionId, type Storage } from "agents-comm-bus-core";
+import { type AgentId, type AuditStore, type CommAdapter, type Conversation, type Message, type SessionId, type Storage } from "agents-comm-bus-core";
 import type { MessageBus } from "../../bus.js";
 import type { AgentBridge, AgentBridgeContext, AgentBridgeFactory, DaemonSelfIdentity, EnsureCommsForSession } from "../../runtime/agent-bridge.js";
 import type { PendingInboundEntry } from "../../runtime/pending-inbound.js";
+import type { HerdrClient, HerdrIdentity } from "../../runtime/herdr.js";
+import { type EffectiveWakeStrategy } from "../../runtime/wake-strategy.js";
 import { type SessionOwnerLiveness } from "../../runtime/session-owner-liveness.js";
 export interface PiBridgeOptions {
     storage: Storage;
@@ -21,6 +23,7 @@ export interface PiBridgeOptions {
     /** AGE-81: injectable durable-owner liveness for scoped sibling precedence. */
     sessionOwnerIsLive?: SessionOwnerLiveness;
     requestScopeReconcile?: () => void;
+    herdrClientFactory?: (identity: HerdrIdentity) => HerdrClient;
 }
 export interface RegisterPiSessionResult {
     ok: boolean;
@@ -28,12 +31,15 @@ export interface RegisterPiSessionResult {
     session?: SessionId;
     project?: string;
     agent?: AgentId;
+    wake_strategy?: EffectiveWakeStrategy;
 }
 export declare class PiBridge implements AgentBridge {
     private readonly options;
     readonly agentId: AgentId;
     readonly ipcMethods: ReadonlySet<string>;
     private readonly sessionOwnerIsLive;
+    /** Non-strict herdr wake failed — allow poll drain until the next successful herdr wake. */
+    private readonly herdrPollFallback;
     constructor(options: PiBridgeOptions);
     attach(_comms: CommAdapter[]): void;
     handleIpcMethod(method: string, params: Record<string, unknown>, ctx: {
@@ -49,15 +55,11 @@ export declare class PiBridge implements AgentBridge {
     }): Promise<RegisterPiSessionResult>;
     /**
      * AGE-91: Pi is route-ready by construction once a session is registered.
-     *
-     * This is NOT a stub. Pi has no wake route and no `onInboundConversation`
-     * because its delivery is **pull-based**: the extension polls
-     * `pi_drain_inbound` with its own session id, so the drain IS the delivery.
-     * There is no daemon-local route object to check, and reporting `false`
-     * would wrongly tell a caller that a live, polling Pi session cannot be
-     * reached. Do not "fix" this by inventing a route check.
+     * Herdr wake is push-based; native delivery remains pull-based via drain.
      */
     routeReady(_session: SessionId): boolean;
+    onInboundConversation(conversation: Conversation, message?: Message): Promise<void>;
+    private resolveSessionForConversation;
     drainInbound(params: Record<string, unknown>): Promise<{
         messages: PendingInboundEntry[];
     }>;

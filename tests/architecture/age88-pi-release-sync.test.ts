@@ -557,7 +557,7 @@ describe("AGE-88 Pi release sync guard", () => {
     }
   });
 
-  it("per-comm manifests pin pi-core to the supplied 40-hex ref and version 0.1.3", () => {
+  it(`per-comm manifests pin pi-core to the supplied 40-hex ref and version ${PER_COMM_VERSION}`, () => {
     for (const comm of PI_COMMS) {
       const tree = buildPerCommReleaseTree(monorepoRoot, comm, FAKE_CORE_REF);
       const pkg = JSON.parse(tree.get("package.json")!.toString("utf8"));

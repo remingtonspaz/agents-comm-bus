@@ -13,7 +13,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { registerCommCommands } from "./commands.js";
 import { PiDaemonClient, DisconnectedError } from "./daemon-client.js";
 import { formatInboundMessages } from "./inbound-format.js";
-import { piSessionId } from "./session-id.js";
+import {
+  herdrIdentityFromEnv,
+  resolvePiDaemonSessionId,
+  wakeStrictFromDevMarker,
+} from "./herdr-session.js";
 import { registerCommTools } from "./tools.js";
 import {
   parseAgentsCommLabels,
@@ -62,6 +66,7 @@ async function pollOnce(): Promise<void> {
       session: piSession,
       project: pollCtx.cwd,
       limit: 100,
+      trigger: "poll",
     });
     if (messages.length > 0) {
       const block = formatInboundMessages(messages);
@@ -104,6 +109,33 @@ export default function agentsCommExtension(pi: ExtensionAPI): void {
   if (!lifecycleWired) {
     lifecycleWired = true;
 
+    pi.on("before_agent_start", async (_event, ctx) => {
+      if (!client || !piSession) return;
+      const project = ctx.cwd ?? pollCtx?.cwd;
+      if (!project) return;
+      try {
+        const { messages } = await client.drainPiInbound({
+          agent: "pi",
+          session: piSession,
+          project,
+          limit: 100,
+          trigger: "prompt",
+        });
+        if (messages.length === 0) return;
+        const block = formatInboundMessages(messages);
+        return {
+          message: {
+            customType: "agents-comm-inbound",
+            content: [{ type: "text", text: block }],
+            display: true,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log(`before_agent_start drain error: ${message}`);
+      }
+    });
+
     pi.on("session_start", async (_event, ctx) => {
       // Register comm tools (idempotent via getAllTools check — see tools.ts).
       // Moved here from load time so the check is accurate (stale tools from
@@ -121,7 +153,9 @@ export default function agentsCommExtension(pi: ExtensionAPI): void {
         console.warn(`[pi-agents-comm] comm commands not registered: ${message}`);
       }
 
-      piSession = piSessionId(ctx.sessionManager);
+      piSession = resolvePiDaemonSessionId(ctx.sessionManager);
+      const herdrIdentity = herdrIdentityFromEnv();
+      const wakeStrict = wakeStrictFromDevMarker(ctx.cwd);
       client = new PiDaemonClient(ctx.cwd, log);
       try {
         await client.start();
@@ -134,6 +168,8 @@ export default function agentsCommExtension(pi: ExtensionAPI): void {
           account_label_scope: serializeAccountLabelScope(
             parseAgentsCommLabels(process.env.AGENTS_COMM_LABELS),
           ),
+          ...(herdrIdentity ? { herdr_identity: herdrIdentity } : {}),
+          ...(wakeStrict ? { wake_strict: wakeStrict } : {}),
           host: {
             pid: process.pid,
             label: "pi",

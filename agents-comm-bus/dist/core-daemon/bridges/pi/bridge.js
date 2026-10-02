@@ -8,7 +8,8 @@
 import { SCHEMA_VERSION_SESSION, } from "agents-comm-bus-core";
 import { sessionLeaseOwnerWithDaemon } from "../../runtime/agent-bridge.js";
 import { normalizeProjectPath } from "../../project-path.js";
-import { accountLabelScopeFromParams, filterRegistrationsForSession, } from "../../session-label-scope.js";
+import { accountLabelScopeFromParams, filterRegistrationsForSession, resolveSessionForConversation, } from "../../session-label-scope.js";
+import { applyHerdrWakeTargetFromRegisterParams, herdrWake, validateHerdrRegisterParams, wakeSeedFromMessage, wakeStrategyForSession, } from "../../runtime/wake-strategy.js";
 import { removePendingInboundEntries } from "../../runtime/durable-inbound.js";
 import { sessionEndObservation } from "../../runtime/session-end-sweep.js";
 import { createSessionOwnerLiveness, } from "../../runtime/session-owner-liveness.js";
@@ -22,6 +23,8 @@ export class PiBridge {
     agentId = "pi";
     ipcMethods = PI_IPC_METHODS;
     sessionOwnerIsLive;
+    /** Non-strict herdr wake failed — allow poll drain until the next successful herdr wake. */
+    herdrPollFallback = new Set();
     constructor(options) {
         this.options = options;
         this.sessionOwnerIsLive =
@@ -86,6 +89,10 @@ export class PiBridge {
         }
     }
     async registerSession(params, socket) {
+        const herdrParams = validateHerdrRegisterParams(params, this.agentId);
+        if (!herdrParams.ok) {
+            return { ok: false, reason: herdrParams.reason };
+        }
         const session = requiredString(params.session, "session");
         const project = normalizeProjectPath(requiredString(params.project, "project"));
         const connectionId = requiredString(params.connection_id, "connection_id");
@@ -115,6 +122,7 @@ export class PiBridge {
             wake_identity: null,
             wake_strict: null,
         });
+        await applyHerdrWakeTargetFromRegisterParams(this.options.storage, session, params, this.agentId);
         const leaseOwner = this.options.daemonOwner
             ? await sessionLeaseOwnerWithDaemon(sessionLeaseOwnerFromParams(params), this.options.daemonOwner)
             : sessionLeaseOwnerFromParams(params);
@@ -128,20 +136,72 @@ export class PiBridge {
         });
         // AGE-38/AGE-45: after lease + close handler so inbound cannot race ahead.
         await this.ensureCommsBestEffort(project, accountLabelScope);
-        return { ok: true, session, project, agent: "pi" };
+        const afterWake = await this.options.storage.getSession(session);
+        const wake_strategy = afterWake
+            ? await wakeStrategyForSession(this.options.storage, afterWake)
+            : "native";
+        return { ok: true, session, project, agent: "pi", wake_strategy };
     }
     /**
      * AGE-91: Pi is route-ready by construction once a session is registered.
-     *
-     * This is NOT a stub. Pi has no wake route and no `onInboundConversation`
-     * because its delivery is **pull-based**: the extension polls
-     * `pi_drain_inbound` with its own session id, so the drain IS the delivery.
-     * There is no daemon-local route object to check, and reporting `false`
-     * would wrongly tell a caller that a live, polling Pi session cannot be
-     * reached. Do not "fix" this by inventing a route check.
+     * Herdr wake is push-based; native delivery remains pull-based via drain.
      */
     routeReady(_session) {
         return true;
+    }
+    async onInboundConversation(conversation, message) {
+        if (conversation.agent !== this.agentId)
+            return;
+        const session = await this.resolveSessionForConversation(conversation);
+        if (!session)
+            return;
+        const owned = await this.ownedAccountKeys(session);
+        const pendingForSession = this.options.pendingInbound.filter((entry) => owned.has(accountKey(entry)));
+        const mostRecentConversationId = pendingForSession.at(-1)?.conversation.conversation_id ??
+            conversation.conversation_id;
+        await this.options.storage.setSessionMostRecentInbound(session, mostRecentConversationId);
+        const sessionRecord = await this.options.storage.getSession(session);
+        if (!sessionRecord)
+            return;
+        const strategy = await wakeStrategyForSession(this.options.storage, sessionRecord);
+        if (strategy !== "herdr")
+            return;
+        const latest = pendingForSession.at(-1);
+        const seed = latest
+            ? wakeSeedFromMessage({
+                comm: latest.message.chat.comm,
+                sender: latest.message.sender?.display_name ?? latest.message.sender?.id,
+                body: latest.message.text,
+            })
+            : wakeSeedFromMessage({
+                comm: message?.chat.comm ?? conversation.comm,
+                sender: message?.sender?.display_name ?? message?.sender?.id,
+                body: message?.text,
+            });
+        const herdr = await herdrWake(sessionRecord, seed, {
+            storage: this.options.storage,
+            audit: this.options.audit,
+            clientFactory: this.options.herdrClientFactory,
+        });
+        if (herdr.ok) {
+            this.herdrPollFallback.delete(session);
+            return;
+        }
+        if (!herdr.strict) {
+            this.herdrPollFallback.add(session);
+        }
+    }
+    async resolveSessionForConversation(conversation) {
+        const project = normalizeProjectPath(conversation.project);
+        const sessions = await this.options.storage.listSessions({
+            project,
+            agent: this.agentId,
+            status: "active",
+        });
+        const live = sessions.filter((sess) => sess.lease_holder_connection_id != null);
+        const pool = live.length > 0 ? live : sessions;
+        const match = resolveSessionForConversation(pool, conversation, (sess) => sess.session_id);
+        return match?.session_id;
     }
     async drainInbound(params) {
         const session = requiredString(params.session, "session");
@@ -149,6 +209,15 @@ export class PiBridge {
         if (!sess)
             return { messages: [] };
         this.assertCallerProjectMatchesStored(session, sess.project, params);
+        const trigger = params.trigger === "prompt" || params.trigger === "poll"
+            ? params.trigger
+            : "poll";
+        const strategy = await wakeStrategyForSession(this.options.storage, sess);
+        if (trigger === "poll" &&
+            strategy === "herdr" &&
+            !this.herdrPollFallback.has(session)) {
+            return { messages: [] };
+        }
         const owned = await this.ownedAccountKeys(session);
         const commFilter = typeof params.comm === "string" && params.comm.length > 0 ? params.comm : null;
         const limit = typeof params.limit === "number" && Number.isInteger(params.limit) && params.limit > 0

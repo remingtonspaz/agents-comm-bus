@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import { ClaudeBridge } from "../../core-daemon/bridges/claude/bridge.js";
 import { CodexBridge } from "../../core-daemon/bridges/codex/bridge.js";
+import { PiBridge } from "../../core-daemon/bridges/pi/bridge.js";
 import { MessageBus } from "../../core-daemon/bus.js";
 import { normalizeProjectPath } from "../../core-daemon/project-path.js";
 import {
@@ -507,6 +508,161 @@ describe("herdr wake (AGE-110 phase 1)", () => {
       );
       await assert.rejects(() => readFile(join(wakeDir, "trigger-enter"), "utf8"));
       assert.equal(pendingInbound.length, 1);
+    });
+  });
+
+  it("Pi inbound with herdr identity + auto → agent prompt called", async () => {
+    await withDb(async (storage) => {
+      const pendingInbound: PendingInboundEntry[] = [];
+      const fake = new FakeHerdrExec();
+      fake.agentKind = "pi";
+      const bridge = new PiBridge({
+        storage,
+        bus: {} as never,
+        pendingInbound,
+        herdrClientFactory: (id) => fake.client(id),
+      });
+      const session = "pi-session" as SessionId;
+      const reg = { ...registration(), agent: "pi" as AgentId };
+      await storage.putAccountRegistration(reg);
+      await bridge.registerSession({
+        session,
+        project: "project-a",
+        connection_id: "pi:conn-1",
+        herdr_identity: identity({ agent: "pi" as AgentId }),
+      });
+      const conv = {
+        ...conversation(),
+        agent: "pi" as AgentId,
+        registration_id: reg.registration_id,
+      };
+      await storage.upsertConversation(conv);
+      pendingInbound.push({ message: message(), conversation: conv });
+      await bridge.onInboundConversation(conv, message());
+      assert.equal(
+        fake.calls.some((c) => c.args[0] === "agent" && c.args[1] === "prompt"),
+        true,
+      );
+      assert.equal(pendingInbound.length, 1);
+    });
+  });
+
+  it("pi_drain_inbound poll + herdr returns empty queue; prompt drains", async () => {
+    await withDb(async (storage) => {
+      const pendingInbound: PendingInboundEntry[] = [];
+      const bridge = new PiBridge({
+        storage,
+        bus: {} as never,
+        pendingInbound,
+      });
+      const session = "pi-drain" as SessionId;
+      const reg = { ...registration(), agent: "pi" as AgentId };
+      await storage.putAccountRegistration(reg);
+      await bridge.registerSession({
+        session,
+        project: "project-a",
+        connection_id: "pi:conn-drain",
+        herdr_identity: identity({ agent: "pi" as AgentId }),
+      });
+      const conv = {
+        ...conversation(),
+        agent: "pi" as AgentId,
+        registration_id: reg.registration_id,
+      };
+      await storage.upsertConversation(conv);
+      pendingInbound.push({ message: message(), conversation: conv });
+      const pollDrain = await bridge.handleIpcMethod("pi_drain_inbound", {
+        session,
+        project: "project-a",
+        trigger: "poll",
+      });
+      assert.equal(pollDrain.messages.length, 0);
+      assert.equal(pendingInbound.length, 1);
+      const promptDrain = await bridge.handleIpcMethod("pi_drain_inbound", {
+        session,
+        project: "project-a",
+        trigger: "prompt",
+      });
+      assert.equal(promptDrain.messages.length, 1);
+      assert.equal(pendingInbound.length, 0);
+    });
+  });
+
+  it("wake mode native for pi → poll drains, herdr not called", async () => {
+    await withDb(async (storage) => {
+      await storage.setWakeMode("project-a", "pi" as AgentId, "native", 1);
+      const pendingInbound: PendingInboundEntry[] = [];
+      const fake = new FakeHerdrExec();
+      fake.agentKind = "pi";
+      const bridge = new PiBridge({
+        storage,
+        bus: {} as never,
+        pendingInbound,
+        herdrClientFactory: (id) => fake.client(id),
+      });
+      const session = "pi-native" as SessionId;
+      const reg = { ...registration(), agent: "pi" as AgentId };
+      await storage.putAccountRegistration(reg);
+      await bridge.registerSession({
+        session,
+        project: "project-a",
+        connection_id: "pi:conn-native",
+        herdr_identity: identity({ agent: "pi" as AgentId }),
+      });
+      const conv = {
+        ...conversation(),
+        agent: "pi" as AgentId,
+        registration_id: reg.registration_id,
+      };
+      await storage.upsertConversation(conv);
+      pendingInbound.push({ message: message(), conversation: conv });
+      await bridge.onInboundConversation(conv, message());
+      assert.equal(fake.calls.length, 0);
+      const drained = await bridge.handleIpcMethod("pi_drain_inbound", {
+        session,
+        project: "project-a",
+        trigger: "poll",
+      });
+      assert.equal(drained.messages.length, 1);
+      assert.equal(pendingInbound.length, 0);
+    });
+  });
+
+  it("herdr wake failure (non-strict) → next poll drains fallback", async () => {
+    await withDb(async (storage) => {
+      const pendingInbound: PendingInboundEntry[] = [];
+      const fake = new FakeHerdrExec();
+      fake.agentKind = "claude";
+      const bridge = new PiBridge({
+        storage,
+        bus: {} as never,
+        pendingInbound,
+        herdrClientFactory: (id) => fake.client(id),
+      });
+      const session = "pi-fallback" as SessionId;
+      const reg = { ...registration(), agent: "pi" as AgentId };
+      await storage.putAccountRegistration(reg);
+      await bridge.registerSession({
+        session,
+        project: "project-a",
+        connection_id: "pi:conn-fb",
+        herdr_identity: identity({ agent: "pi" as AgentId }),
+      });
+      const conv = {
+        ...conversation(),
+        agent: "pi" as AgentId,
+        registration_id: reg.registration_id,
+      };
+      await storage.upsertConversation(conv);
+      pendingInbound.push({ message: message(), conversation: conv });
+      await bridge.onInboundConversation(conv, message());
+      const fallback = await bridge.handleIpcMethod("pi_drain_inbound", {
+        session,
+        project: "project-a",
+        trigger: "poll",
+      });
+      assert.equal(fallback.messages.length, 1);
+      assert.equal(pendingInbound.length, 0);
     });
   });
 

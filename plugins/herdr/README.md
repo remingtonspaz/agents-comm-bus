@@ -34,8 +34,8 @@ Set `"wakeStrict": "herdr"` in `.agents-comm-bus-dev.json` to fail closed on her
 
 ## Behavior
 
-- **startup** — `herdr agent list`, sync each claude/codex pane via `herdr-pane-sync`.
-- **pane.agent_detected** — parse event JSON (or `agent get`), sync when agent is claude or codex.
-- **pane.closed** — idempotent `herdr-pane-release` for both claude and codex identities.
+- **startup** — `herdr agent list`, sync each claude/codex/pi pane via `herdr-pane-sync`.
+- **pane.agent_detected** — parse event JSON (or `agent get`), sync when agent is claude, codex, or pi.
+- **pane.closed** — idempotent `herdr-pane-release` for claude, codex, and pi identities.
 
 Logs append JSON lines to `HERDR_PLUGIN_STATE_DIR/plugin.log` (best-effort). The plugin never spawns the daemon directly; the CLI ensures it.

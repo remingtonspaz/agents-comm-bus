@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const DEV_MARKER_NAME = '.agents-comm-bus-dev.json';
-export const SUPPORTED_AGENTS = ['claude', 'codex'];
+export const SUPPORTED_AGENTS = ['claude', 'codex', 'pi'];
 export const CENTRAL_CLI = path.join(os.homedir(), '.agents-comm-bus', 'bin', 'cli.js');
 export const CHECKOUT_CLI_REL = path.join('agents-comm-bus', 'dist', 'core-daemon', 'cli', 'index.js');
 
