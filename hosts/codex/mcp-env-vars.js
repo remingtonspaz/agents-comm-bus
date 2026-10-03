@@ -13,6 +13,15 @@ export const CODEX_MCP_ENV_VAR_NAMES = Object.freeze([
   "CODEX_APP_SERVER_URL",
   "CODEX_THREAD_ID",
   "CODEX_SESSION_ID",
+  // AGE-110: herdr pane identity. Without these the MCP shim cannot see that
+  // it runs in a herdr pane, falls back to the cwd-hash session id, and splits
+  // from the hooks + herdr plugin (which compute the herdr_ id).
+  "HERDR_ENV",
+  "HERDR_PANE_ID",
+  "HERDR_SOCKET_PATH",
+  "HERDR_WORKSPACE_ID",
+  "HERDR_TAB_ID",
+  "HERDR_BIN_PATH",
 ]);
 
 export function formatTomlEnvVars(names = CODEX_MCP_ENV_VAR_NAMES) {
