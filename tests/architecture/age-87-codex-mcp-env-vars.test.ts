@@ -126,6 +126,13 @@ describe("AGE-87 Codex MCP env_vars forwarding", () => {
       "CODEX_APP_SERVER_URL",
       "CODEX_THREAD_ID",
       "CODEX_SESSION_ID",
+      // AGE-110: the shim reads herdr pane identity via hosts/common/herdr-env.js.
+      "HERDR_ENV",
+      "HERDR_PANE_ID",
+      "HERDR_SOCKET_PATH",
+      "HERDR_WORKSPACE_ID",
+      "HERDR_TAB_ID",
+      "HERDR_BIN_PATH",
     ]);
   });
 
