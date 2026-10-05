@@ -418,9 +418,46 @@ function retireWatcher(pid, wakeDir, killWatcher, readProcessCommandLine, log2) 
 function hasPreciseWatcherSelector(cmdInfo) {
   return Boolean(cmdInfo?.hwnd || cmdInfo?.pid);
 }
+var PROCESS_CHAIN_MAX_DEPTH = 30;
+function parseProcessSnapshotLines(text) {
+  return String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const parts = line.split(":");
+    if (parts.length < 3) return null;
+    const pid = Number.parseInt(parts[0], 10);
+    const parentPid = Number.parseInt(parts[1], 10);
+    const name = parts.slice(2).join(":").trim().toLowerCase();
+    if (!Number.isFinite(pid)) return null;
+    return {
+      pid,
+      parentPid: Number.isFinite(parentPid) ? parentPid : 0,
+      name: name || null
+    };
+  }).filter(Boolean);
+}
+function buildProcessChainFromSnapshot(snapshotLines, startPid, options = {}) {
+  const maxDepth = options.maxDepth ?? PROCESS_CHAIN_MAX_DEPTH;
+  const byPid = /* @__PURE__ */ new Map();
+  for (const row of snapshotLines) {
+    byPid.set(row.pid, row);
+  }
+  const chain = [];
+  const seen = /* @__PURE__ */ new Set();
+  let cur = Number.parseInt(startPid, 10);
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    if (!Number.isFinite(cur) || cur <= 0) break;
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    const row = byPid.get(cur);
+    if (!row) break;
+    chain.push({ pid: cur, name: row.name });
+    if (!row.parentPid || row.parentPid <= 0) break;
+    cur = row.parentPid;
+  }
+  return chain;
+}
 function readProcessChainViaCim(startPid, log2 = () => {
 }) {
-  const psScript = `$ProgressPreference='SilentlyContinue';$cur=${Number.parseInt(startPid, 10)};for($i=0;$i -lt 15;$i++){$p=Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction SilentlyContinue;if(-not $p){break};Write-Output ("{0}:{1}" -f $p.ProcessId,$p.Name);if(-not $p.ParentProcessId -or $p.ParentProcessId -le 0){break};$cur=$p.ParentProcessId}`;
+  const psScript = `$ProgressPreference='SilentlyContinue';Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name |ForEach-Object { Write-Output ("{0}:{1}:{2}" -f $_.ProcessId,$_.ParentProcessId,$_.Name) }`;
   const encoded = Buffer.from(psScript, "utf16le").toString("base64");
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -429,13 +466,8 @@ function readProcessChainViaCim(startPid, log2 = () => {
         ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
         { encoding: "utf-8", windowsHide: true, timeout: 8e3 }
       );
-      const chain = result.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-        const idx = line.indexOf(":");
-        if (idx < 0) return null;
-        const pid = Number.parseInt(line.slice(0, idx), 10);
-        const name = line.slice(idx + 1).trim().toLowerCase();
-        return Number.isFinite(pid) ? { pid, name: name || null } : null;
-      }).filter(Boolean);
+      const snapshot = parseProcessSnapshotLines(result);
+      const chain = buildProcessChainFromSnapshot(snapshot, startPid);
       if (chain.length > 0) return chain;
     } catch (error) {
       log2(`readProcessChainViaCim attempt ${attempt + 1} failed: ${error.message}`);
@@ -503,6 +535,7 @@ function findCmdAncestor(log2 = () => {
     return null;
   }
 }
+var OWNER_PID_CACHE_TTL_MS = 5 * 60 * 1e3;
 function enterWatcherScriptCandidates(fromDir = __dirname) {
   return [
     // Staged plugin MCP shim: plugins/claude/<comm>/scripts/

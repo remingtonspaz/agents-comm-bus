@@ -16,7 +16,7 @@ import { ensureClaudeWakeWatcherAfterRegister } from '../../common/claude-wake-a
 import { herdrWakeFieldsForRegister } from '../../common/herdr-env.js';
 import { resolveClaudeSessionId } from '../../common/claude-session-id.js';
 import {
-  findClaudeOwnerPid,
+  resolveClaudeOwnerPidCached,
   resolveClaudeWakeDir,
   resolveProjectPath,
 } from './wake-support.js';
@@ -230,7 +230,7 @@ async function main() {
   };
 
   // Discover persistent claude.exe PID for session ownership tracking.
-  const claudePid = findClaudeOwnerPid(watcherLog);
+  const claudePid = resolveClaudeOwnerPidCached({ session, log: watcherLog });
 
   let ipc;
   try {

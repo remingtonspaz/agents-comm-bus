@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execSync, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -205,26 +206,66 @@ function hasPreciseWatcherSelector(cmdInfo) {
   return Boolean(cmdInfo?.hwnd || cmdInfo?.pid);
 }
 
-// Walk the full process ancestry from `startPid` in ONE PowerShell invocation
-// using an in-process Get-CimInstance loop. This replaces a previous per-pid
-// `wmic.exe` loop (one exe spawn per process, up to 15 per walk) that
-// intermittently failed under session-restart churn: a single transient wmic
-// hiccup truncated the walk and yielded ClaudePid=0, so the watcher fuzzy-matched
-// the wrong window and never self-exited (zombie). Stress testing measured ~56%
-// failures even with a resolvable cmd.exe -> claude.exe tree present. One PS
-// process (CIM is in-process, no per-pid exe spawn) is far more robust under
-// contention; a single retry covers a transient PS-spawn failure. EncodedCommand
-// avoids all nested-quote escaping.
+const PROCESS_CHAIN_MAX_DEPTH = 30;
+
+// Parse `ProcessId:ParentProcessId:Name` lines from a one-shot Win32_Process snapshot.
+export function parseProcessSnapshotLines(text) {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(':');
+      if (parts.length < 3) return null;
+      const pid = Number.parseInt(parts[0], 10);
+      const parentPid = Number.parseInt(parts[1], 10);
+      const name = parts.slice(2).join(':').trim().toLowerCase();
+      if (!Number.isFinite(pid)) return null;
+      return {
+        pid,
+        parentPid: Number.isFinite(parentPid) ? parentPid : 0,
+        name: name || null,
+      };
+    })
+    .filter(Boolean);
+}
+
+// Walk from `startPid` upward using a parsed snapshot table (self-first, max depth 30).
+export function buildProcessChainFromSnapshot(snapshotLines, startPid, options = {}) {
+  const maxDepth = options.maxDepth ?? PROCESS_CHAIN_MAX_DEPTH;
+  const byPid = new Map();
+  for (const row of snapshotLines) {
+    byPid.set(row.pid, row);
+  }
+
+  const chain = [];
+  const seen = new Set();
+  let cur = Number.parseInt(startPid, 10);
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    if (!Number.isFinite(cur) || cur <= 0) break;
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    const row = byPid.get(cur);
+    if (!row) break;
+    chain.push({ pid: cur, name: row.name });
+    if (!row.parentPid || row.parentPid <= 0) break;
+    cur = row.parentPid;
+  }
+  return chain;
+}
+
+// Walk ancestry from `startPid` in ONE PowerShell invocation: a single
+// Get-CimInstance snapshot of all processes, then walk ParentProcessId in JS.
+// This replaces a previous per-pid CIM loop (up to 15 sequential queries per walk)
+// that cost ~16s under herdr when no cmd.exe ancestor exists. One PS process
+// (AGE-79: in-process CIM, no per-pid exe spawn) remains the robustness fix; the
+// snapshot avoids repeating that cost on every ancestor step. EncodedCommand avoids
+// nested-quote escaping; one retry covers a transient PS-spawn failure.
 function readProcessChainViaCim(startPid, log = () => {}) {
   const psScript =
     `$ProgressPreference='SilentlyContinue';` +
-    `$cur=${Number.parseInt(startPid, 10)};` +
-    `for($i=0;$i -lt 15;$i++){` +
-    `$p=Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction SilentlyContinue;` +
-    `if(-not $p){break};` +
-    `Write-Output ("{0}:{1}" -f $p.ProcessId,$p.Name);` +
-    `if(-not $p.ParentProcessId -or $p.ParentProcessId -le 0){break};` +
-    `$cur=$p.ParentProcessId}`;
+    `Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name |` +
+    `ForEach-Object { Write-Output ("{0}:{1}:{2}" -f $_.ProcessId,$_.ParentProcessId,$_.Name) }`;
   const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -233,18 +274,8 @@ function readProcessChainViaCim(startPid, log = () => {}) {
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
         { encoding: 'utf-8', windowsHide: true, timeout: 8000 },
       );
-      const chain = result
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const idx = line.indexOf(':');
-          if (idx < 0) return null;
-          const pid = Number.parseInt(line.slice(0, idx), 10);
-          const name = line.slice(idx + 1).trim().toLowerCase();
-          return Number.isFinite(pid) ? { pid, name: name || null } : null;
-        })
-        .filter(Boolean);
+      const snapshot = parseProcessSnapshotLines(result);
+      const chain = buildProcessChainFromSnapshot(snapshot, startPid);
       if (chain.length > 0) return chain;
     } catch (error) {
       log(`readProcessChainViaCim attempt ${attempt + 1} failed: ${error.message}`);
@@ -338,10 +369,23 @@ function walkClaudePidFromChain(chain, log) {
   return null;
 }
 
+const OWNER_PID_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function claudeOwnerCachePath(session) {
+  const digest = createHash('sha256').update(String(session)).digest('hex').slice(0, 24);
+  return path.join(os.tmpdir(), 'agents-comm-bus-claude-owner', `${digest}.json`);
+}
+
 /** Owner pid for session lease — cmd.exe path in native terminals, or claude.exe under herdr. */
 export function findClaudeOwnerPid(log = () => {}, deps = {}) {
-  const cmd = findCmdAncestor(log, deps);
-  if (cmd?.claudePid) return cmd.claudePid;
+  const env = deps.env ?? process.env;
+  const findCmd = deps.findCmdAncestor ?? findCmdAncestor;
+  const isHerdr = env.HERDR_ENV === '1';
+
+  if (!isHerdr) {
+    const cmd = findCmd(log, deps);
+    if (cmd?.claudePid) return cmd.claudePid;
+  }
 
   const platform = deps.platform ?? os.platform();
   if (platform !== 'win32') return null;
@@ -355,6 +399,48 @@ export function findClaudeOwnerPid(log = () => {}, deps = {}) {
     log(`findClaudeOwnerPid error: ${error.message}`);
     return null;
   }
+}
+
+// Per-hook-session cache: avoids repeating the snapshot walk on every UserPromptSubmit /
+// PermissionRequest in the same Claude session. TTL + pidAlive (process.kill(0); EPERM
+// counts as alive) bound PID-reuse risk without a per-hit PowerShell creation-time check
+// (~0.5–0.8s), which would defeat the cache.
+export function resolveClaudeOwnerPidCached({ session, log = () => {}, deps = {} }) {
+  const nowFn = deps.now ?? (() => Date.now());
+  const pidAlive = deps.pidAlive ?? isPidAlive;
+  const fsDeps = deps.fs ?? fs;
+  const resolve = deps.resolve ?? ((chainLog, resolveDeps) => findClaudeOwnerPid(chainLog, resolveDeps));
+  const cachePath = deps.cachePath ?? claudeOwnerCachePath(session);
+
+  try {
+    const raw = fsDeps.readFileSync(cachePath, 'utf8');
+    const cached = JSON.parse(raw);
+    const ageMs = nowFn() - cached.resolvedAt;
+    if (
+      Number.isInteger(cached.pid) &&
+      cached.pid > 0 &&
+      ageMs >= 0 &&
+      ageMs < OWNER_PID_CACHE_TTL_MS &&
+      pidAlive(cached.pid)
+    ) {
+      return cached.pid;
+    }
+  } catch {
+    // miss, corrupt, or stale — re-resolve below
+  }
+
+  const pid = resolve(log, deps);
+  if (pid) {
+    try {
+      fsDeps.mkdirSync(path.dirname(cachePath), { recursive: true });
+      const tmpPath = `${cachePath}.${process.pid}.${nowFn()}.tmp`;
+      fsDeps.writeFileSync(tmpPath, `${JSON.stringify({ pid, resolvedAt: nowFn() })}\n`, 'utf8');
+      fsDeps.renameSync(tmpPath, cachePath);
+    } catch {
+      // best-effort; still return pid
+    }
+  }
+  return pid;
 }
 
 export function findClaudeWindowPid(log = () => {}) {

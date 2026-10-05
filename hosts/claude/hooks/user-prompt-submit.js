@@ -16,7 +16,7 @@ import { ensureClaudeWakeWatcherAfterRegister } from '../../common/claude-wake-a
 import { herdrWakeFieldsForRegister } from '../../common/herdr-env.js';
 import { resolveClaudeSessionId } from '../../common/claude-session-id.js';
 import {
-  findClaudeOwnerPid,
+  resolveClaudeOwnerPidCached,
   resolveClaudeWakeDir,
   resolveProjectPath,
 } from './wake-support.js';
@@ -134,7 +134,7 @@ async function main() {
   const wakeDir = resolveClaudeWakeDir(project);
   const watcherLog = (message) => process.stderr.write(`[claude-user-prompt-submit] ${message}\n`);
   const watcherOptions = { projectPath: project, wakeDir, log: watcherLog };
-  const claudePid = findClaudeOwnerPid(watcherLog);
+  const claudePid = resolveClaudeOwnerPidCached({ session, log: watcherLog });
   const metadata = {
     shimName: 'hosts/claude/hooks/user-prompt-submit.js',
     agent: 'claude',
