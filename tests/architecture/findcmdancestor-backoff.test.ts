@@ -15,6 +15,7 @@ function testDeps(
   const sleepCalls = options.sleepCalls ?? [];
   return {
     platform: "win32" as const,
+    env: {},
     backoffMs: options.backoffMs ?? [0, 500, 1000],
     readChain,
     sleep: (ms: number) => {

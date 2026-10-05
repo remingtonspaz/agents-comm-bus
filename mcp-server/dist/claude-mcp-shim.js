@@ -27727,6 +27727,11 @@ function findCmdAncestor(log2 = () => {
 }, deps = {}) {
   const platform = deps.platform ?? os4.platform();
   if (platform !== "win32") return null;
+  const env = deps.env ?? process.env;
+  if (env.HERDR_ENV === "1") {
+    log2("herdr pane: no cmd.exe console; skipping cmd ancestor walk");
+    return null;
+  }
   const backoffMs = deps.backoffMs ?? [0, 500, 1e3];
   const sleep3 = deps.sleep ?? defaultSyncSleep;
   const readChain = deps.readChain ?? ((chainLog) => {

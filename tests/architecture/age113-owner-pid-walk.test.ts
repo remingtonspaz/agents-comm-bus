@@ -67,6 +67,60 @@ describe("AGE-113 snapshot parser + chain builder", () => {
   });
 });
 
+describe("AGE-113 findCmdAncestor herdr fast path", () => {
+  it("HERDR_ENV=1 returns null without calling the chain reader", () => {
+    let readCalls = 0;
+    const result = findCmdAncestor(() => {}, {
+      platform: "win32",
+      env: { HERDR_ENV: "1" },
+      readChain: () => {
+        readCalls += 1;
+        return { pid: 1, claudePid: 2, hwnd: null };
+      },
+    });
+    assert.equal(result, null);
+    assert.equal(readCalls, 0);
+  });
+});
+
+describe("AGE-113 ensureClaudeWakeWatcherAfterRegister herdr", () => {
+  it("HERDR_ENV=1 skips ensureClaudeWakeWatcher even when lease is already held", async () => {
+    const { ensureClaudeWakeWatcherAfterRegister } = await import(
+      "../../hosts/common/claude-wake-after-register.js"
+    );
+    let ensureCalls = 0;
+    ensureClaudeWakeWatcherAfterRegister(
+      { ok: false, reason: "same-project claude session lease already held" },
+      { log: () => {} },
+      {
+        env: { HERDR_ENV: "1" },
+        ensureClaudeWakeWatcher: () => {
+          ensureCalls += 1;
+        },
+      },
+    );
+    assert.equal(ensureCalls, 0);
+  });
+
+  it("without HERDR_ENV still calls ensureClaudeWakeWatcher on lease-held register", async () => {
+    const { ensureClaudeWakeWatcherAfterRegister } = await import(
+      "../../hosts/common/claude-wake-after-register.js"
+    );
+    let ensureCalls = 0;
+    ensureClaudeWakeWatcherAfterRegister(
+      { ok: false, reason: "same-project claude session lease already held" },
+      { log: () => {} },
+      {
+        env: {},
+        ensureClaudeWakeWatcher: () => {
+          ensureCalls += 1;
+        },
+      },
+    );
+    assert.equal(ensureCalls, 1);
+  });
+});
+
 describe("AGE-113 findClaudeOwnerPid herdr skip cmd walk", () => {
   it("HERDR_ENV=1 returns claude pid without calling findCmdAncestor", () => {
     let cmdCalls = 0;
@@ -99,6 +153,7 @@ describe("AGE-113 native cmd->claude chain without HERDR_ENV", () => {
     const chain = buildProcessChainFromSnapshot(rows, 100);
     const result = findCmdAncestor(() => {}, {
       platform: "win32",
+      env: {},
       backoffMs: [0],
       readChain: () => {
         for (let i = 1; i < chain.length; i += 1) {

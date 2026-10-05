@@ -6098,6 +6098,11 @@ function findCmdAncestor(log = () => {
 }, deps = {}) {
   const platform = deps.platform ?? os3.platform();
   if (platform !== "win32") return null;
+  const env = deps.env ?? process.env;
+  if (env.HERDR_ENV === "1") {
+    log("herdr pane: no cmd.exe console; skipping cmd ancestor walk");
+    return null;
+  }
   const backoffMs = deps.backoffMs ?? [0, 500, 1e3];
   const sleep3 = deps.sleep ?? defaultSyncSleep;
   const readChain = deps.readChain ?? ((chainLog) => {
@@ -6378,9 +6383,12 @@ function ensureClaudeWakeWatcher(options = {}) {
 }
 
 // ../hosts/common/claude-wake-after-register.js
-function ensureClaudeWakeWatcherAfterRegister(registerResult, watcherOptions) {
+function ensureClaudeWakeWatcherAfterRegister(registerResult, watcherOptions, deps = {}) {
+  const env = deps.env ?? watcherOptions?.env ?? process.env;
+  if (env.HERDR_ENV === "1") return;
   if (registerResult?.wake_strategy === "herdr") return;
-  ensureClaudeWakeWatcher(watcherOptions);
+  const ensure = deps.ensureClaudeWakeWatcher ?? ensureClaudeWakeWatcher;
+  ensure(watcherOptions);
 }
 
 // ../hosts/common/herdr-env.js
