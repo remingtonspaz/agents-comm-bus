@@ -13,7 +13,7 @@ import { readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 export const PI_CORE_VERSION = "0.1.2";
-export const PER_COMM_VERSION = "0.1.4";
+export const PER_COMM_VERSION = "0.1.5";
 export const PI_COMMS = ["curl", "discord", "matrix", "telegram"];
 export const CORE_GIT_REPO = "git+https://github.com/remingtonspaz/agents-comm-bus-pi-core.git";
 
