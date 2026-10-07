@@ -306,6 +306,65 @@ describe("AGE-90 Codex deliverability-edge redrive", () => {
     }
   });
 
+  it("AGE-111: no redrive when the register comes from the UserPromptSubmit hook (it drains next)", async () => {
+    const dir = await makeTempDir("acb-age111-codex-ups-");
+    const storage = await openSqliteStorage(join(dir, "storage.db"));
+    const pendingInbound: PendingInboundEntry[] = [];
+    const entry = pendingEntry(TELEGRAM, String(BOT_TG), "conv-tg" as ConversationId, 2000);
+    pendingInbound.push(entry);
+    await storage.putAccountRegistration(registration(TELEGRAM, String(BOT_TG)));
+    await storage.upsertConversation(entry.conversation);
+
+    const { bridge, client } = makeBridge({ storage, pendingInbound });
+
+    try {
+      const result = await bridge.registerSession({
+        session: "codex-s1" as SessionId,
+        project: PROJECT,
+        connection_id: "codex:conn-1",
+        app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
+        owner_process_pid: 100,
+        owner_process_label: "codex",
+        hook: "UserPromptSubmit",
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(client.steerCalls.length, 0, "UserPromptSubmit register must not redrive");
+      assert.equal(pendingInbound.length, 1, "the message stays queued for the hook's drain");
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("AGE-111: a non-UserPromptSubmit register (e.g. SessionStart) still redrives", async () => {
+    const dir = await makeTempDir("acb-age111-codex-ss-");
+    const storage = await openSqliteStorage(join(dir, "storage.db"));
+    const pendingInbound: PendingInboundEntry[] = [];
+    const entry = pendingEntry(TELEGRAM, String(BOT_TG), "conv-tg" as ConversationId, 2000);
+    pendingInbound.push(entry);
+    await storage.putAccountRegistration(registration(TELEGRAM, String(BOT_TG)));
+    await storage.upsertConversation(entry.conversation);
+
+    const { bridge, client } = makeBridge({ storage, pendingInbound });
+
+    try {
+      await bridge.registerSession({
+        session: "codex-s1" as SessionId,
+        project: PROJECT,
+        connection_id: "codex:conn-1",
+        app_server_url: APP_SERVER_URL,
+        thread_id: "thread-1",
+        owner_process_pid: 100,
+        owner_process_label: "codex",
+        hook: "SessionStart",
+      });
+      assert.equal(client.steerCalls.length, 1);
+    } finally {
+      await storage.close();
+    }
+  });
+
   it("fires exactly one redrive across repeated hook-path registrations", async () => {
     const dir = await makeTempDir("acb-age90-repeat-");
     const storage = await openSqliteStorage(join(dir, "storage.db"));

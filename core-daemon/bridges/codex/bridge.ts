@@ -815,7 +815,11 @@ export class CodexBridge implements AgentBridge {
     const deliverabilityAfter = afterSession
       ? this.isLocallyDeliverable(afterSession)
       : false;
-    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+    // AGE-111: the UserPromptSubmit hook drains pending inbound right after this
+    // register, so a register-time redrive would re-deliver a message the same
+    // hook is about to inject. Other registration sources keep the AGE-90 redrive.
+    const drainFollowsRegister = params.hook === "UserPromptSubmit";
+    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated && !drainFollowsRegister) {
       await this.redrivePendingInbound(session);
     }
 

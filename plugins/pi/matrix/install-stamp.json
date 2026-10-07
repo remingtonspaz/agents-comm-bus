@@ -2,8 +2,8 @@
   "schema_version": 1,
   "agent": "pi",
   "comm": "matrix",
-  "plugin_version": "0.1.4",
-  "daemon_bundle_version": "0.2.69",
+  "plugin_version": "0.1.5",
+  "daemon_bundle_version": "0.2.70",
   "adapter_bundle_version": "0.2.6",
   "adapter_bundle_versions": {
     "matrix": "0.2.6"

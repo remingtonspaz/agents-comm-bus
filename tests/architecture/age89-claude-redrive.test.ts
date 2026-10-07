@@ -241,6 +241,89 @@ describe("AGE-89 Claude deliverability-edge redrive", () => {
     }
   });
 
+  it("AGE-111: no redrive when the register comes from the UserPromptSubmit hook (it drains next)", async () => {
+    const dir = await makeTempDir("acb-age111-ups-");
+    const storage = await openSqliteStorage(join(dir, "storage.db"));
+    const wakeDir = join(dir, "wake-ups");
+    const pendingInbound: PendingInboundEntry[] = [];
+    const entry = pendingEntry(TELEGRAM, String(BOT_TG), "conv-tg" as ConversationId, 2000);
+    pendingInbound.push(entry);
+    await storage.putAccountRegistration(registration(TELEGRAM, String(BOT_TG)));
+    await storage.upsertConversation(entry.conversation);
+
+    const bridge = new ClaudeBridge({
+      storage,
+      bus: {} as never,
+      pendingInbound,
+      ensureCommsForSession: async () => ({ rehydrated: true }),
+      sessionOwnerIsLive: createSessionOwnerLiveness({
+        now: () => RECENT,
+        isPidAlive: () => true,
+      }),
+    });
+
+    try {
+      const result = await bridge.registerSession({
+        session: "claude-s1" as SessionId,
+        project: PROJECT,
+        connection_id: "claude:conn-1",
+        wake_dir: wakeDir,
+        owner_process_pid: 100,
+        owner_process_label: "claude",
+        hook: "UserPromptSubmit",
+      });
+
+      assert.equal(result.ok, true);
+      assert.equal(
+        await triggerExists(join(wakeDir, "trigger-enter")),
+        false,
+        "UserPromptSubmit register must not redrive (the hook drains right after)",
+      );
+      const drained = await bridge.drainInbound({ session: "claude-s1" });
+      assert.equal(drained.length, 1, "the following drain delivers the message exactly once");
+      assert.equal(pendingInbound.length, 0);
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("AGE-111: a non-UserPromptSubmit register (e.g. PermissionRequest) still redrives", async () => {
+    const dir = await makeTempDir("acb-age111-pr-");
+    const storage = await openSqliteStorage(join(dir, "storage.db"));
+    const wakeDir = join(dir, "wake-pr");
+    const pendingInbound: PendingInboundEntry[] = [];
+    const entry = pendingEntry(TELEGRAM, String(BOT_TG), "conv-tg" as ConversationId, 2000);
+    pendingInbound.push(entry);
+    await storage.putAccountRegistration(registration(TELEGRAM, String(BOT_TG)));
+    await storage.upsertConversation(entry.conversation);
+
+    const bridge = new ClaudeBridge({
+      storage,
+      bus: {} as never,
+      pendingInbound,
+      ensureCommsForSession: async () => ({ rehydrated: true }),
+      sessionOwnerIsLive: createSessionOwnerLiveness({
+        now: () => RECENT,
+        isPidAlive: () => true,
+      }),
+    });
+
+    try {
+      await bridge.registerSession({
+        session: "claude-s1" as SessionId,
+        project: PROJECT,
+        connection_id: "claude:conn-1",
+        wake_dir: wakeDir,
+        owner_process_pid: 100,
+        owner_process_label: "claude",
+        hook: "PermissionRequest",
+      });
+      assert.equal(await triggerExists(join(wakeDir, "trigger-enter")), true);
+    } finally {
+      await storage.close();
+    }
+  });
+
   it("fires exactly one redrive across repeated hook-path registrations", async () => {
     const dir = await makeTempDir("acb-age89-repeat-");
     const storage = await openSqliteStorage(join(dir, "storage.db"));

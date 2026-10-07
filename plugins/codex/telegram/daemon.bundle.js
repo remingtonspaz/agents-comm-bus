@@ -3725,7 +3725,7 @@ import os4 from "node:os";
 
 // ../core-daemon/config.ts
 var DAEMON_NAME = "agents-comm-bus";
-var DAEMON_VERSION = "0.2.69";
+var DAEMON_VERSION = "0.2.70";
 var IPC_PROTOCOL_VERSION = "1.3.0";
 var IPC_HOST = "127.0.0.1";
 function protocolMajor(version) {
@@ -12686,7 +12686,8 @@ var ClaudeBridge = class {
     const rehydrated = await this.ensureCommsBestEffort(project, accountLabelScope);
     const afterSession = await this.options.storage.getSession(session);
     const deliverabilityAfter = afterSession ? this.isLocallyDeliverable(afterSession) : false;
-    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+    const drainFollowsRegister = params.hook === "UserPromptSubmit";
+    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated && !drainFollowsRegister) {
       await this.redrivePendingInboundCoalesced(session);
     }
     const afterWake = await this.options.storage.getSession(session);
@@ -14490,7 +14491,8 @@ var CodexBridge = class {
     );
     const afterSession = await this.options.storage.getSession(session);
     const deliverabilityAfter = afterSession ? this.isLocallyDeliverable(afterSession) : false;
-    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+    const drainFollowsRegister = params.hook === "UserPromptSubmit";
+    if (!deliverabilityBaseline && deliverabilityAfter && rehydrated && !drainFollowsRegister) {
       await this.redrivePendingInbound(session);
     }
     const persistAfterDisconnect = params.persist_after_disconnect === true;

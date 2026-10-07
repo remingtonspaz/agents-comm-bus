@@ -393,7 +393,12 @@ export class ClaudeBridge {
         const deliverabilityAfter = afterSession
             ? this.isLocallyDeliverable(afterSession)
             : false;
-        if (!deliverabilityBaseline && deliverabilityAfter && rehydrated) {
+        // AGE-111: the UserPromptSubmit hook drains pending inbound right after this
+        // register, so a register-time redrive would re-wake the agent for a message
+        // the same hook is about to inject (duplicate wake). Other registration
+        // sources (MCP shim, SessionStart, herdr pane register) keep the AGE-89 redrive.
+        const drainFollowsRegister = params.hook === "UserPromptSubmit";
+        if (!deliverabilityBaseline && deliverabilityAfter && rehydrated && !drainFollowsRegister) {
             await this.redrivePendingInboundCoalesced(session);
         }
         const afterWake = await this.options.storage.getSession(session);
